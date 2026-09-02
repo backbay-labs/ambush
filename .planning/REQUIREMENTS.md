@@ -744,21 +744,21 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### EDR Response Adapter
 
-- [ ] **EDRINT-01**: A `CrowdStrikeRtrAdapter` implements the existing `ResponseExecutor` trait and translates `ResponseAction` variants (isolate host, kill process, quarantine file) into CrowdStrike Real Time Response API calls with OAuth2 service-to-service authentication, session management, and response status tracking
-- [ ] **EDRINT-02**: The CrowdStrike adapter inherits the existing `ResilientExecutor` retry, `CircuitBreakerState` circuit-breaker, and dead-letter journaling behaviors without duplicating resilience logic
-- [ ] **EDRINT-03**: An integration test suite validates the CrowdStrike adapter against a repo-owned mock RTR API server covering session creation, command execution, result retrieval, and error/timeout handling without requiring live CrowdStrike credentials
+- [x] **EDRINT-01**: A `CrowdStrikeRtrAdapter` implements the existing `ResponseExecutor` trait and translates `ResponseAction` variants (isolate host, kill process, quarantine file) into CrowdStrike Real Time Response API calls with OAuth2 service-to-service authentication, session management, and response status tracking
+- [x] **EDRINT-02**: The CrowdStrike adapter inherits the existing `ResilientExecutor` retry, `CircuitBreakerState` circuit-breaker, and dead-letter journaling behaviors without duplicating resilience logic
+- [x] **EDRINT-03**: An integration test suite validates the CrowdStrike adapter against a repo-owned mock RTR API server covering session creation, command execution, result retrieval, and error/timeout handling without requiring live CrowdStrike credentials
 
 #### SIEM Delivery Adapter
 
-- [ ] **SIEMINT-01**: A `SplunkHecAdapter` implements the existing `ResponseExecutor` trait and delivers `DetectionFinding` payloads to Splunk HTTP Event Collector with configurable index, source, sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication via `@secret:` resolution
-- [ ] **SIEMINT-02**: The Splunk adapter batches findings within a configurable flush interval and max batch size, inherits `ResilientExecutor` retry and circuit-breaker behavior, and exposes delivery metrics (events sent, bytes delivered, errors, latency) on the existing `/metrics` surface
-- [ ] **SIEMINT-03**: An integration test suite validates the Splunk adapter against a repo-owned mock HEC endpoint covering batch delivery, CIM field mapping, authentication, and error/backpressure handling
+- [x] **SIEMINT-01**: A `SplunkHecAdapter` implements the existing `ResponseExecutor` trait and delivers `DetectionFinding` payloads to Splunk HTTP Event Collector with configurable index, source, sourcetype, CIM-compliant field mapping (src, dest, severity, action, signature), and HEC token authentication via `@secret:` resolution
+- [x] **SIEMINT-02**: The Splunk adapter batches findings within a configurable flush interval and max batch size, inherits `ResilientExecutor` retry and circuit-breaker behavior, and exposes delivery metrics (events sent, bytes delivered, errors, latency) on the existing `/metrics` surface
+- [x] **SIEMINT-03**: An integration test suite validates the Splunk adapter against a repo-owned mock HEC endpoint covering batch delivery, CIM field mapping, authentication, and error/backpressure handling
 
 #### End-to-End Deployment Proof
 
-- [ ] **E2EPROOF-01**: A repo-owned Docker Compose stack provisions the runtime with CrowdStrike RTR adapter (mocked), Splunk HEC adapter (mocked), and one telemetry source bridge, proving the full detect -> respond -> deliver loop with observable finding delivery and response receipt generation
-- [ ] **E2EPROOF-02**: The deployment proof includes a scripted scenario that injects attack telemetry, observes detection, triggers a policy-gated response action through the CrowdStrike adapter, and verifies finding delivery to the Splunk adapter with correct CIM field mapping
-- [ ] **E2EPROOF-03**: The deployment proof documents the telemetry-to-finding-to-response-to-SIEM flow in a repo-owned integration architecture diagram and validates that all adapter metrics, health endpoints, and audit receipts are populated correctly
+- [x] **E2EPROOF-01**: A repo-owned Docker Compose stack provisions the runtime with CrowdStrike RTR adapter (mocked), Splunk HEC adapter (mocked), and one telemetry source bridge, proving the full detect -> respond -> deliver loop with observable finding delivery and response receipt generation
+- [x] **E2EPROOF-02**: The deployment proof includes a scripted scenario that injects attack telemetry, observes detection, triggers a policy-gated response action through the CrowdStrike adapter, and verifies finding delivery to the Splunk adapter with correct CIM field mapping
+- [x] **E2EPROOF-03**: The deployment proof documents the telemetry-to-finding-to-response-to-SIEM flow in a repo-owned integration architecture diagram and validates that all adapter metrics, health endpoints, and audit receipts are populated correctly
 
 ### Runtime Decomposition And TCB Boundary (v1.78)
 
@@ -813,7 +813,62 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [x] **TCBOUND-04**: The layering script additionally fails if `swarm-policy` or `swarm-response` gains a dependency on the memory or correlation modules, converting v1.82's advisory-lane boundary from a runtime integration test into a build-time guarantee; a deliberately-broken fixture proves the check fires rather than passing vacuously.
   MEASURED 2026-08-13. The memory and correlation modules were located rather than assumed: `crates/swarm-runtime/src/sphinx_agent.rs` (`KnowledgeGraph*`, gated by `memory.enabled`) and `crates/swarm-runtime/src/correlation.rs` (`CorrelationEngine`, gated by `correlation.enabled`), both hosted by `swarm-runtime`. The rule is stated over the HOSTING CRATE, which is strictly stronger than a module rule while the modules stay there — with `swarm-runtime` out of the manifest, `use swarm_runtime::correlation::CorrelationEngine` is a compile error — and the two-line registry that aims it raises `LAYERING-VACUITY[guard]` if a registered module path stops existing, so the lane cannot move out from under the rule silently (fixture case 10).
   THE FIXTURE IS EXECUTABLE AND RUNS ON EVERY INVOCATION. It generates a real miniature cargo workspace (real crate names; stub path crates literally named `axum`/`clap`/`hyper`/`reqwest`, so no registry and no network), runs real `cargo metadata` over it, and runs the SAME rule engine with the SAME policy and baseline, unmodified. One control case that must exit 0 plus nine deliberately-broken variants that must each exit non-zero with a named diagnostic; four of the nine are inversions cargo itself accepts (dev cycles, build cycles, transitive transport edges). The gate was ALSO observed failing against the real tree: adding `clap` to `swarm-policy`'s `[dependencies]` and `swarm-runtime` to its `[dev-dependencies]` produced five diagnostics including `LAYERING-VIOLATION[advisory-declared] swarm-policy declares 'swarm-runtime' as a dev dependency`, and the tree was restored.
-### Assurance Foundation (v1.79)
+### Collective Cyber Reasoning (v1.79)
+
+The active v1.79 contract replaces the old executor-first queue with a collective reasoning milestone. Phase 285 is closed under a deliberately narrower, truthful assurance scope; phases 286-289 are accepted for implementation. Every metric below is evaluated against a checked-in benchmark manifest and a single-agent or pre-change control. No phase may claim a protected GitHub rule unless the repository independently proves provenance-distinct enforcement.
+
+#### Phase 285: Assurance Foundation Closure
+
+- [x] **ASSURE-01**: The combined-tree assurance bundle contains a parsed assumption registry, exact invariant-to-function mappings, negative-falsifiability entries, fixture freshness evidence, and supply-chain evidence; the local gates exit 0 on the declared commit and exit non-zero for each documented unmapped, missing-negative, stale-fixture, and dependency-policy mutation.
+- [x] **ASSURE-02**: The SBOM is generated from locked `cargo metadata` resolution, includes package identities and dependency edges, validates against the declared CycloneDX schema, and rejects an invented dependency graph, invalid component type, or missing resolve edge in negative controls.
+- [x] **ASSURE-03**: A hosted Linux run executes the local assurance gates on a fresh, credential-free checkout, publishes commit-bound machine-readable results, and records the exact runner/toolchain/input identity needed to reproduce the result.
+- [x] **ASSURE-04**: Local and hosted evidence is reviewed on the combined tree, with no P0, P1, or P2 finding left unresolved in the phase review packet; isolated worktree or script-only green output is not sufficient evidence.
+- [x] **ASSURE-05**: The assurance docs distinguish `wired`, `executed`, `passed`, and `protected-required`; the external provenance-distinct GitHub App check and repository-settings enforcement are explicitly deferred and are not required for Phase 285 acceptance.
+- [x] **ASSURE-06**: Phase 285 verification is recorded as `passed` only for ASSURE-01..05 and the stated evidence boundary; it must not claim protected-branch enforcement, distributed failover coverage, or release authorization.
+
+#### Phase 286: Collective Hypothesis Graph
+
+- [ ] **COG-01**: A versioned, serializable hypothesis graph supports typed `actor`, `asset`, `credential`, `process`, and `event` nodes plus typed causal edges. Every edge carries confidence, source evidence IDs, producer role, observation time, and schema version; malformed or unproven edges are rejected rather than silently admitted.
+- [ ] **COG-02**: A seed signal creates at least two competing attack hypotheses when the evidence is ambiguous. Hypotheses retain confidence distributions, explicit uncertainty, contradiction sets, and a decision history; no single detector classification may erase a live alternative before evidence resolution.
+- [ ] **COG-03**: Evidence-hunter, challenger, and falsifier roles claim unresolved graph edges through a durable stigmergic task ledger. Claims have leases, idempotency keys, evidence scope, and completion/failure state; a 100-task duplicate-claim fixture keeps duplicate investigation work at or below 5%.
+- [ ] **COG-04**: Process, identity, Kubernetes audit, CloudTrail, network, and threat-intelligence telemetry normalize into one evidence envelope with source lineage and clock/ordering metadata. The cross-telemetry fixture contains at least one corroborating and one conflicting signal from each source family.
+- [ ] **COG-05**: The converged incident includes a reconstructed kill chain whose every node, edge, stage assignment, and narration claim links to one or more evidence IDs. A withheld multi-stage fixture must preserve declared stage order and report missing evidence instead of inventing a link.
+- [ ] **COG-06**: Containment options are simulated and ranked by predicted blast radius, reversibility, evidence support, and required approval. Planning cannot execute a response; any selected live action must still enter the existing policy, receipt, and operator-approval path.
+- [ ] **COG-07**: Completed investigations persist strategy memories containing the hypothesis delta, evidence utility, falsified alternatives, outcome, and provenance. A replayed investigation retrieves the memory without raw telemetry and changes task prioritization deterministically when the memory is applicable.
+- [ ] **COG-08**: The benchmark reports median time to the correct causal hypothesis, attack-chain recall, false causal-edge rate, duplicate investigation work, and evidence coverage. Phase 286 passes when the collective lane beats the single-agent control by at least 20% median hypothesis time, improves chain recall by at least 10 percentage points, keeps false causal edges at or below 10%, duplicate work at or below 5%, and covers at least 90% of adjudicated evidence.
+
+#### Phase 287: Adversarial Co-evolution Arena
+
+- [ ] **ARENA-01**: Red agents compose bounded multi-stage campaigns from the catalogued tactic/technique corpus, with deterministic seeds, virtual time, event budgets, and no invented capabilities or live-target access.
+- [ ] **ARENA-02**: Blue agents investigate the generated campaign through the real Ambush ingest, hypothesis-graph, detector, policy, and containment-planning path. Arena actions run against fixtures or an isolated sandbox; red code has no response-adapter or policy-authority capability.
+- [ ] **ARENA-03**: Red mutation consumes observed blue evidence and changes ordering, timing, or tactic composition within the declared budget. A replay report must show which blue outcome caused each surviving mutation and must terminate on generation, budget, plateau, or coverage bounds.
+- [ ] **ARENA-04**: Blue synthesis emits detector and response candidates from escapes and falsified hypotheses, each with evidence lineage, affected telemetry sources, expected coverage, safety constraints, and a reproducible candidate ID.
+- [ ] **ARENA-05**: Candidates compete against historical attacks, benign controls, and counterexamples. A candidate cannot survive on aggregate catch rate alone: false positives, latency/resource budgets, containment safety, and withheld campaigns are separate scored dimensions.
+- [ ] **ARENA-06**: The arena is structurally isolated from destructive authority. Static and runtime controls fail closed if red code imports response execution, blue simulation bypasses policy, or a generated action lacks a receipt/approval boundary; the controls include a negative fixture that proves they can fail.
+- [ ] **ARENA-07**: Arena reports measure time to containment, containment blast radius, previously unseen evasions discovered, improvement over the single-agent baseline, and generalization to withheld campaigns. Acceptance requires at least 15% median containment-time improvement, no increase in median blast radius, at least one previously unseen evasion found in three consecutive seeded runs, at least 10% improvement over the single-agent baseline, and withheld-campaign performance no worse than 5% relative to the in-sample score.
+- [ ] **ARENA-08**: A fixed seed, corpus digest, scheduler, and virtual clock produce byte-identical campaign decisions and candidate lineage; wall-clock guards, maximum generations, event budgets, and teardown checks prevent an unbounded or state-leaking run.
+
+#### Phase 288: Autonomous Detector And Response Synthesis
+
+- [ ] **SYNTH-01**: The synthesis lane derives detector candidates from graph gaps, evasion escapes, and falsifier findings using typed templates or bounded mutations; each candidate names the signal features, detector family, hypothesis edges addressed, and source evidence.
+- [ ] **SYNTH-02**: The lane derives response-plan candidates only from the existing typed response library and policy vocabulary, attaching approval requirements, reversibility, blast-radius scope, and rollback expectations. It cannot invent or directly invoke a response adapter.
+- [ ] **SYNTH-03**: Candidate evaluation runs historical attacks, benign controls, counterexamples, and withheld campaigns through the real replay/detection path, with deterministic reports for catch rate, false-positive rate, latency, resource cost, and causal-evidence coverage.
+- [ ] **SYNTH-04**: Mutation, differential, and metamorphic controls prove candidate gains are not artifacts of a weakened oracle: removing a candidate rule, swapping a source adapter, or mutating an expected verdict must produce the documented regression or block the candidate.
+- [ ] **SYNTH-05**: Promotion remains fail closed and operator-reviewed. A candidate without complete evidence lineage, safety checks, reproducible evaluation, and required solver/approval artifacts is rejected; accepted candidates produce a durable review packet and never silently replace the baseline.
+- [ ] **SYNTH-06**: The synthesis report records candidate quality and safety deltas against the baseline, including attack-chain recall, false causal edges, evidence coverage, time to containment, blast radius, latency, and resource use. A candidate must improve at least one target metric by 10% while regressing none of the safety ceilings and must pass every withheld-campaign and counterexample gate.
+
+#### Phase 289: Herd Memory
+
+- [ ] **HERDMEM-01**: Investigations export typed attack abstractions, causal motifs, detector/response outcomes, and strategy utility without exporting raw telemetry, secrets, host identifiers, or operator credentials. The export schema is versioned and rejects unredacted fields.
+- [ ] **HERDMEM-02**: Every memory record carries signer/provenance lineage, source-corpus digest, confidence, expiry, and transformation history. Import rejects tampered, replayed, stale, schema-invalid, or privacy-violating records and records the refusal reason.
+- [ ] **HERDMEM-03**: A receiving swarm requires independent local corroboration before using a peer memory for prioritization. No single publisher can raise confidence or authorize containment; conflicting memories remain visible as contradictions.
+- [ ] **HERDMEM-04**: Retrieved memory changes the next investigation's task ordering only when its context matches the current graph and source evidence. The benchmark compares memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage.
+- [ ] **HERDMEM-05**: Memory retention, expiry, revocation, poisoning quarantine, and operator deletion are durable and restart-safe. Garbage collection removes expired payloads and dependent indexes without leaving actionable orphan state.
+- [ ] **HERDMEM-06**: Herd-memory acceptance requires at least 20% lower median time to correct hypothesis or 10 percentage-point higher chain recall versus the single-agent control, no increase above the Phase 286 false-edge/duplicate-work ceilings, discovery of at least one previously unseen evasion across the withheld corpus, and withheld-campaign generalization within 5% of the in-sample score.
+
+### Historical Assurance Foundation (retired 2026-08-21; not an acceptance set)
+
+The former `MAPPING-*`, `FALSIFY-*`, `DST-*`, `FUZZ-*`, `LOOM-*`, and `SUPPLY-*` definitions below are retained as historical planning notes and evidence lineage. The deterministic-simulation, fuzz, and Loom executor backlog is not carried into active v1.79 acceptance. The local mapping, negative-registry, supply-chain, SBOM, and hosted-runner work is represented by the passed `ASSURE-*` scope above. The old definitions remain useful when tracing prior work, but their unchecked boxes do not indicate current blockers.
 
 #### Fixture Determinism And Suite Health
 
@@ -824,18 +879,18 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Assumption Registry And Invariant Mapping
 
-- [ ] **MAPPING-01**: `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants.
-- [ ] **MAPPING-02**: `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and an assumption ID.
-- [ ] **MAPPING-03**: A `// INVARIANT: <Name>` source-marker convention annotates every Rust call site named in MAPPING.md.
-- [ ] **MAPPING-04**: `scripts/check-mapping.sh` fails the build when a marker has no MAPPING.md row, or a MAPPING.md row names a Rust path that no longer exists.
-- [ ] **MAPPING-05**: `scripts/check-mapping.sh` runs as a required step in `.github/workflows/ci.yml`.
+- [x] **MAPPING-01**: `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants. DELIVERED with 13. `ASSUME-STATEFUL-GATE-DETERMINISM` is limited to deterministic local policy state transitions; external adapter outcomes use `ASSUME-EXTERNAL-ADAPTER-BEHAVIOR`, and release-signer membership uses `ASSUME-GOVERNANCE-TRUST-ANCHOR`. Assumptions are many-to-many and the gate enforces complete overlapping blast-radius sets.
+- [x] **MAPPING-02**: `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `SwarmRuntime::preflight_containment`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and assumption IDs. DELIVERED with 59 mapped invariants and 5 owned omissions. `docs/assurance/universe.toml` records exact IDs/counts, mapped/omitted disjointness, and one-surface assignment. The local gate rejects deletion unless the checked-in ratchet and checker are coherently changed; that remaining trust-root problem is external, not described as immutable here.
+- [x] **MAPPING-03**: A `// INVARIANT: <Name>` source-marker convention annotates every Rust call site named in MAPPING.md.
+- [x] **MAPPING-04**: `scripts/check-mapping.sh` fails the build when a marker has no MAPPING.md row, or a MAPPING.md row names a Rust path that no longer exists. DELIVERED AT `tools/check-mapping.sh`; there is no `scripts/` directory in this repository and `tools/check-gates-wired.sh` only enumerates `tools/check-*.sh`, so the requirement's path would have made the gate invisible to the gate that catches unrun gates (same correction phase 283 recorded).
+- [ ] **MAPPING-05**: `scripts/check-mapping.sh` runs as a required step in `.github/workflows/ci.yml`. WORKFLOW WIRING DELIVERED AT `tools/check-mapping.sh`; protected provenance remains open. The current Free organization cannot pin an organization-owned required workflow, and the existing Actions App plus the local `mapping-contract` / `negative-registry-contract` contexts remain spoofable. Acceptance needs a protected dedicated external GitHub App check with a separate integration ID (or an organization-plan upgrade and admin-owned required workflow).
 
 #### Negative Falsifiability
 
-- [ ] **FALSIFY-01**: `docs/assurance/negative-registry.toml` maps each MAPPING.md invariant to a `crates/*/tests/negative_*.rs` test and the production function it targets.
-- [ ] **FALSIFY-02**: Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous.
-- [ ] **FALSIFY-03**: `scripts/check-negative-registry.sh` fails if any MAPPING.md row lacks a registry entry or names an absent test.
-- [ ] **FALSIFY-04**: `scripts/check-negative-registry.sh` is a required CI step.
+- [x] **FALSIFY-01**: `docs/assurance/negative-registry.toml` maps each MAPPING.md invariant to a `crates/*/tests/negative_*.rs` test and the production function it targets.
+- [x] **FALSIFY-02**: Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous. DELIVERED for all 59 rows: every exact built-in `#[test]` invokes a registry-bound named case with one probe; the shared synchronous protocol executes one macro-owned production call through an exact crate-root external-crate alias, mirror(None), and mirror(BrokenVariant) operation and asserts real/control denial plus broken permission. A source-digested entry/completion sentinel surrounds the future driver. A separate five-test compiled contract uses typed counters/roles. The focused Rust-syntax checker parses each distinct registered source once and locally digests the complete source files and shared protocol, including imports, helper/wrapper bodies, setup, production arguments, normalization, mirror roles, and denial/permission predicates; actual-source attacks covering dead/control-flow calls, black-box and unrelated assertions, dependency-root shadows, aliases/re-exports/globs, dead genuine calls with fabricated results, forced mirror roles, identity-selective early returns, and constant/ignored/swapped/vacuous predicates fail. The gate binds checker-owned semantic digests of the four complete crate manifests plus root execution tables, exact Cargo.lock/metadata dependency identities, pinned toolchain semantics, canonical auto-discovered integration-test and production-library source paths, and absence of explicit target overrides or custom builds. Every Cargo command uses a fresh config-free home, pinned Cargo/rustc, a sanitized PATH, and no repository/ancestor config; a gate-owned isolated-Python wrapper forces and audits one exact test-mode compile per target, including canonical source realpath/hash. Emitted test binaries run directly under a sanitized environment for exact inventory/count proof. Executable attacks cover hostile external Cargo homes, compiler/workspace wrappers, build.rustc, rustflags, linker/runner, Python module shadowing, proc-macro body erasure, path build dependencies, and same-name target redirection. These co-located checks are tamper-evident against uncoordinated edits, not an external trust anchor, and handwritten-mirror fidelity beyond the probe remains a review claim.
+- [x] **FALSIFY-03**: `scripts/check-negative-registry.sh` fails if any MAPPING.md row lacks a registry entry or names an absent test. DELIVERED AT `tools/check-negative-registry.sh`; there is no `scripts/` directory in this repository and `tools/check-gates-wired.sh` only enumerates `tools/check-*.sh`, so the requirement's path would have made the gate invisible to the gate that catches unrun gates (same correction phase 283 recorded).
+- [ ] **FALSIFY-04**: `scripts/check-negative-registry.sh` is a required CI step. WORKFLOW WIRING DELIVERED AT `tools/check-negative-registry.sh`; the same protected-provenance acceptance as MAPPING-05 remains open and requires the external check anchor described there.
 
 #### Deterministic Simulation Testing
 
@@ -859,10 +914,13 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Supply-Chain Hardening
 
-- [ ] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition.
-- [ ] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, and the `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift.
+- [x] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition. Also an `expires` date: an exception whose deadline has passed FAILS `tools/check-supply-chain.sh` (constructed and observed), and the last-checked..expires window is capped at 180 days. `[[bans.skip]]` entries carry `last-checked` and `pinned-by`/`clears-when` under the same parser. Selectors split at the final `@`; only non-empty name and exact SemVer syntax are checked locally, while exact Cargo.lock name matching authoritatively accepts Cargo-valid leading-underscore and Unicode-XID names. Executable fixtures require a full-text lock match including `+build`, refuse absent names, reject same-name same-precedence ambiguity for every selector (including registry+path same-version and stable-plus-build rows), list source/path identity, retain stable/prerelease/build/name pass controls, and prove a first-run locked resolution rejects a disposable path-dependency version change whose lock row is stale without changing its bytes.
+- [x] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification. Before parsing Cargo.lock it runs `cargo metadata --locked --format-version 1`; its lock cross-check then owns exact full textual selector identity, and `cargo deny --locked check` plus denied `unmatched-skip` and `unnecessary-skip` lints and ordinary duplicate errors own applicability in the same locked graph. The gate also deduplicates the `cargo audit --ignore` list against `deny.toml` by DERIVATION rather than comparison: it reads `[advisories] ignore` and builds the flags, holds no id of its own, and fails if a RustSec id appears on any other enforcement surface. Cargo-audit has no locked mode, so the gate snapshots Cargo.lock and fails if any scanner rewrites it.
+  The independently locked `tools/negative-registry-ast` executable is covered explicitly: locked metadata and lock immutability, a separate zero-waiver deny policy, cargo-deny, cargo-audit, and enforcement-surface inventory all run in the same gate.
 
-### Red Swarm (v1.80)
+### Historical Red Swarm Scope (retired 2026-08-21; not an acceptance set)
+
+The former OPFOR/ATKSCORE/COEVOLVE/ARMSCI definitions are retained below for provenance only. They are superseded by the ARENA/SYNTH requirements in active v1.79 and do not create queued v1.80 acceptance.
 
 #### Red Operator Genome And Target Graph
 
@@ -919,7 +977,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [ ] **SAFEP-04**: `formal/tla/PartitionContingency.tla` models the four partition states, lease issuance and redemption with blast-radius cap, and reconciliation on heal, with named invariants.
 - [ ] **SAFEP-05**: At least 3 negative-falsifiability entries produce Apalache violations, each naming the runtime regression test pinning the same defect.
 
-#### Z3-Backed Promotion Gate
+#### Historical Z3-Backed Promotion Gate (Phase 322; completed in v1.78.1)
 
 - [x] **ZGATE-01**: `require_solver_result_for_promotion` is added to config, distinct from `evolution.assurance.require_solver_summary`, defaulting to `true` in the curated ruleset. SHIPPED 99733a0. "Defaults true in the curated ruleset" can only mean "a ruleset that omits the key resolves to true" — `rulesets/default.yaml` is frozen by the signed attestation and cannot carry the key — so the serde default is the mechanism, pinned by `tracked_default_ruleset_resolves_the_promotion_solver_gate_to_enabled`.
 - [x] **ZGATE-02**: `crates/swarm-runtime/src/promotion.rs` rejects a candidate whose `solver_summary` is `None` when the gate is enabled; today `promotion.rs` never references `solver_summary` at all (verified: 0 occurrences). PATH CORRECTED 2026-08-13: `crates/swarm-evolution/src/promotion.rs` does not exist and never did — that crate owns four modules and re-exports `promotion` from `swarm-runtime` (`swarm-evolution/src/lib.rs:36-39`). The 0-occurrence measurement is correct for the real file, which is 2,901 lines and also has 0 occurrences of `z3`. SHIPPED 99733a0 as `ProductionPromotionError::SolverResultMissing`.
@@ -961,7 +1019,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - [ ] **TRIAGE-05**: New signed record types go through the existing agent signing paths, with signature round-trip coverage.
 ### Distributed Governance (v1.83)
 
-#### BFT Correctness Repair
+#### Historical BFT Correctness Repair (Phase 321; deliberate partial)
 
 - [x] **BFT-01**: `recommended_max_faulty` in `crates/swarm-consensus/src/lib.rs:65` is corrected from `(committee_size - 1) / 2` to `(committee_size - 1) / 3` to match the module's own documented 2f+1-of-3f+1 model; a regression table asserts `recommended_max_faulty(4)==1`, `(7)==2`, `(10)==3`, `(13)==4`.
 - [x] **BFT-02**: A round with a correctly sized `3f+1` committee still reaches `commits.len() == committee.threshold()` after excluding the maximum tolerable number of Byzantine members; today `ConsensusCommittee::threshold()` never shrinks after `exclude_sender`, so ejecting one bad actor can strand a round below its own threshold, and the existing Byzantine test never asserts the round still commits.
@@ -998,7 +1056,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 ### Herd Immunity (v1.84)
 
-#### Reversible Quarantine Execution
+#### Historical Reversible Quarantine Execution (Phase 320; completed in v1.78.1)
 
 - [x] **QRT-01**: `crates/swarm-response` gains a real executor for `QuarantineFile`, `SuspendProcess`, `IsolateHost`, and `TerminateUserSession` that persists a quarantine lease carrying blast radius, rollback plan, governance receipt, and expiry.
   UNCHECKED 2026-08-13, was marked `[x]` in error. 4d03543 added the TYPES (`ContainmentLease`, `ContainmentLedger`, `RollbackExecutor`, `RollbackReceipt`) and nothing that uses them: `rg -l 'ContainmentLease|ContainmentLedger|RollbackExecutor|RollbackReceipt|RollbackTrigger'` returns exactly `crates/swarm-response/src/lib.rs` (the re-export at :35-38) and `crates/swarm-response/src/rollback.rs` (the definitions plus their own `#[cfg(test)]` tests). Zero production code constructs a lease, so "persists a quarantine lease" is unmet for all four actions. The original trailing clause ("no rollback executor exists anywhere in `swarm-response`, verified: zero non-preview rollback references") was true before 4d03543 and is now false; the accurate measurement is that rollback types exist and are constructed only in tests.
@@ -1016,6 +1074,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
   ONE FUNCTION, TWO TRIGGERS, STRUCTURALLY. `ContainmentSweep` now carries the governance authority as a FIELD, so `ContainmentSweep::release` (manual) and `ContainmentSweep::sweep` (TTL) read the same store, executor, mode and authority, and both call `swarm_runtime::containment::release_lease`. Manual and automatic differ in one argument, the `RollbackTrigger`. `swarm_detect` builds ONE `Arc<ContainmentSweep>` and gives it to both the TTL task and the router.
   SIGNING IS THE SAME PATH, AND THE TEST PROVES IT RATHER THAN ASSERTING IT. `GovernanceAuthority` gained `attest_release` (ADR 0010 states why the seal's bar is met: opaque `serde_json::Value` in and out, so no `swarm-consensus` edge is added to the TCB crate `swarm-policy`; no authorization verdict; still exactly one implementer). `GovernancePolicy::attest_release` holds the same mutex, keyring, `simulate_governance_commit`, `previous_commit_hash`, `receipt_counter` and `persist_locked` as `issue_governance_receipt`. The integration test asserts the TTL release's attestation names the MANUAL release's `commit_hash` as its `previous_commit_hash` — one chain, which a second signer could not produce.
   TAMPERING IS REFUSED BY TWO INDEPENDENT CHECKS. `verify_release_attestation` checks the ed25519 detached signature via `ConsensusGovernanceReceipt::verify` AND that the attestation's `proposal_id` equals `sha256(canonical(receipt-with-attestation-cleared))`. Measured with the second check disabled: a receipt whose `steps[0].status` was rewritten `Reversed` -> `Failed` verified against a genuine signature. Nine single-field mutations, a stripped attestation, and a genuine attestation lifted from a different release are each refused with a distinct error.
+  A THIRD CHECK LANDED 2026-08-14 (task #27, ADR 0011), and the two above did not cover what it covers. Both were closed over the receipt -- the signature is verified against `signature.public_key_hex`, a FIELD OF THE RECEIPT -- so a full re-attestation passed: measured on cf48f7a, a receipt whose `steps[0].status` was rewritten `Reversed` -> `Failed` and then re-signed end to end by `SigningKey::from_bytes(&[251; 32])` verified `Ok`. `verify_release_attestation` now also requires the signing key to be one of `GovernanceAuthority::governor_public_keys()`, and refuses (rather than falling back) when no authority is available. `attestation_verified: true` on the release route therefore now means "a governor this process recognizes signed this exact body". Chain linkage remains unchecked; see ADR 0011's Consequences.
   Six mutants were run against the suite and each was caught: dropping `.with_governance(..)`; disabling the subject binding; letting an unattested receipt through; attesting only the expiry trigger; moving the expiry predicate by 1s (caught by the 5_999/6_001 boundary); and closing a lease whose inverse reported `Failed`.
   Open follow-up, not blocking: the routes are unavailable when the daemon is down, and `LocalOperatorSurface` still has none. Both are consequences recorded in ADR 0010.
   The original deferral note, kept for the record:
@@ -1479,48 +1538,40 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | FIXTURE-02 | Phase 284 | Satisfied |
 | FIXTURE-03 | Phase 284 | Satisfied |
 | FIXTURE-04 | Phase 284 | Satisfied |
-| MAPPING-01 | Phase 285 | Pending |
-| MAPPING-02 | Phase 285 | Pending |
-| MAPPING-03 | Phase 285 | Pending |
-| MAPPING-04 | Phase 285 | Pending |
-| MAPPING-05 | Phase 285 | Pending |
-| FALSIFY-01 | Phase 285 | Pending |
-| FALSIFY-02 | Phase 285 | Pending |
-| FALSIFY-03 | Phase 285 | Pending |
-| FALSIFY-04 | Phase 285 | Pending |
-| DST-01 | Phase 286 | Pending |
-| DST-02 | Phase 286 | Pending |
-| DST-03 | Phase 286 | Pending |
-| DST-04 | Phase 286 | Pending |
-| DST-05 | Phase 286 | Pending |
-| DST-06 | Phase 286 | Pending |
-| FUZZ-01 | Phase 287 | Pending |
-| FUZZ-02 | Phase 287 | Pending |
-| FUZZ-03 | Phase 287 | Pending |
-| FUZZ-04 | Phase 287 | Pending |
-| LOOM-01 | Phase 287 | Pending |
-| LOOM-02 | Phase 287 | Pending |
-| LOOM-03 | Phase 287 | Pending |
-| LOOM-04 | Phase 287 | Pending |
-| SUPPLY-01 | Phase 287 | Pending |
-| SUPPLY-02 | Phase 287 | Pending |
-| OPFOR-01 | Phase 288 | Pending |
-| OPFOR-02 | Phase 288 | Pending |
-| OPFOR-03 | Phase 288 | Pending |
-| OPFOR-04 | Phase 288 | Pending |
-| ATKSCORE-01 | Phase 289 | Pending |
-| ATKSCORE-02 | Phase 289 | Pending |
-| ATKSCORE-03 | Phase 289 | Pending |
-| ATKSCORE-04 | Phase 289 | Pending |
-| COEVOLVE-01 | Phase 290 | Pending |
-| COEVOLVE-02 | Phase 290 | Pending |
-| COEVOLVE-03 | Phase 290 | Pending |
-| COEVOLVE-04 | Phase 290 | Pending |
-| ARMSCI-01 | Phase 291 | Pending |
-| ARMSCI-02 | Phase 291 | Pending |
-| ARMSCI-03 | Phase 291 | Pending |
-| ARMSCI-04 | Phase 291 | Pending |
-| ARMSCI-05 | Phase 291 | Pending |
+| ASSURE-01 | Phase 285 | Satisfied (revised scope) |
+| ASSURE-02 | Phase 285 | Satisfied (revised scope) |
+| ASSURE-03 | Phase 285 | Satisfied (revised scope) |
+| ASSURE-04 | Phase 285 | Satisfied (revised scope) |
+| ASSURE-05 | Phase 285 | Satisfied (external App enforcement deferred) |
+| ASSURE-06 | Phase 285 | Satisfied (scope verification only) |
+| COG-01 | Phase 286 | Pending |
+| COG-02 | Phase 286 | Pending |
+| COG-03 | Phase 286 | Pending |
+| COG-04 | Phase 286 | Pending |
+| COG-05 | Phase 286 | Pending |
+| COG-06 | Phase 286 | Pending |
+| COG-07 | Phase 286 | Pending |
+| COG-08 | Phase 286 | Pending |
+| ARENA-01 | Phase 287 | Pending |
+| ARENA-02 | Phase 287 | Pending |
+| ARENA-03 | Phase 287 | Pending |
+| ARENA-04 | Phase 287 | Pending |
+| ARENA-05 | Phase 287 | Pending |
+| ARENA-06 | Phase 287 | Pending |
+| ARENA-07 | Phase 287 | Pending |
+| ARENA-08 | Phase 287 | Pending |
+| SYNTH-01 | Phase 288 | Pending |
+| SYNTH-02 | Phase 288 | Pending |
+| SYNTH-03 | Phase 288 | Pending |
+| SYNTH-04 | Phase 288 | Pending |
+| SYNTH-05 | Phase 288 | Pending |
+| SYNTH-06 | Phase 288 | Pending |
+| HERDMEM-01 | Phase 289 | Pending |
+| HERDMEM-02 | Phase 289 | Pending |
+| HERDMEM-03 | Phase 289 | Pending |
+| HERDMEM-04 | Phase 289 | Pending |
+| HERDMEM-05 | Phase 289 | Pending |
+| HERDMEM-06 | Phase 289 | Pending |
 | DCORE-01 | Phase 292 | Pending |
 | DCORE-02 | Phase 292 | Pending |
 | DCORE-03 | Phase 292 | Pending |
@@ -1531,11 +1582,11 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | KANI-03 | Phase 293 | Pending |
 | KANI-04 | Phase 293 | Pending |
 | KANI-05 | Phase 293 | Pending |
-| SAFEP-01 | Phase 294 | Pending |
-| SAFEP-02 | Phase 294 | Pending |
-| SAFEP-03 | Phase 294 | Pending |
-| SAFEP-04 | Phase 294 | Pending |
-| SAFEP-05 | Phase 294 | Pending |
+| SAFEP-01 | Phase 292 | Pending |
+| SAFEP-02 | Phase 292 | Pending |
+| SAFEP-03 | Phase 292 | Pending |
+| SAFEP-04 | Phase 292 | Pending |
+| SAFEP-05 | Phase 292 | Pending |
 | ZGATE-01 | Phase 322 | Satisfied |
 | ZGATE-02 | Phase 322 | Satisfied |
 | ZGATE-03 | Phase 322 | Satisfied |
@@ -1681,10 +1732,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.75 complete: 10 requirements satisfied across phases 268-271
 - v1.76 complete: 9 requirements satisfied across phases 272-275
 - v1.77 complete: 9 requirements satisfied across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
-- v1.78 in progress: 17 requirements across phases 280-283 (GATEFIX-01-04 Satisfied 2026-08-11; TCBOUND-01-04 Satisfied 2026-08-13) (GATEFIX-01-04 -> Phase 280; INCFIX-01-03 -> Phase 281; SPLIT-01-06 -> Phase 282; TCBOUND-01-04 -> Phase 283)
-- v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
-- v1.79 queued: 25 requirements across phases 284-287 (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
-- v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
+- v1.78 complete as scoped: phases 280-283 shipped; GATEFIX-01-04 and TCBOUND-01-04 are satisfied, while phase 282's measured SPLIT remainder remains explicit rather than silently claimed
+- v1.78.1 closed locally with a deliberate partial: phases 320 and 322 complete; phase 321's substrate exchange and networked round are deferred to v1.83 rather than claimed
+- v1.79 active: 34 requirements across phases 284-289; Phase 285 is passed under the revised ASSURE-01..06 scope, and COG/ARENA/SYNTH/HERDMEM are accepted for implementation
+- v1.80 historical only: the former OPFOR/ATKSCORE/COEVOLVE/ARMSCI block (phases 288-291) is superseded by active v1.79 ARENA/SYNTH and creates no queued acceptance set
 - v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
 - v1.83 queued: 14 requirements across phases 301-303 (VRF-01-05 -> Phase 301; REVOKE-01-05 -> Phase 302; DISTGOV-01-04 -> Phase 303)
@@ -1695,4 +1746,4 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 ---
 *Requirements defined: 2026-04-05*
-*Last updated: 2026-08-10 - Merged v1.75-v1.77 completion from feat/milestones-v1.74-v1.77; v1.78-v1.87 requirements mapped to phases 280-322*
+*Last updated: 2026-08-21 - Reset v1.79 around Collective Cyber Reasoning and explicitly deferred the external GitHub App enforcement gate*

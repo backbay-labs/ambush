@@ -13,12 +13,11 @@ use swarm_core::agent::SwarmModeState;
 use swarm_core::config::RuntimeMode;
 use swarm_core::pheromone::EscalationRecord;
 use swarm_core::types::{AgentId, ResponseAction};
-use swarm_crypto::Ed25519Signer;
 use swarm_crypto::{MerkleProof, MerkleTree, canonical_json_bytes};
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::{ActionRequest, ApprovalContext};
 use swarm_runtime::approval::{
-    ApprovalError, ApprovalReceiptPackReport, ApprovalVerdictStatus, verify_receipt_pack,
+    ApprovalReceiptPackReport, ApprovalVerdictStatus, verify_receipt_pack,
 };
 use swarm_runtime::providence::ProvidenceContextScope;
 use swarm_runtime::replay::{
@@ -218,9 +217,6 @@ pub struct FirstRunWizardRequest {
     pub scenario_path: Option<String>,
     #[serde(default)]
     pub pace_ms: u64,
-    pub voter_signing_key_env: String,
-    pub evidence_signer_id: String,
-    pub evidence_signing_key_env: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,17 +305,8 @@ pub enum FirstRunWizardError {
     #[error("demo mode is disabled for the first-run wizard")]
     DemoModeDisabled,
 
-    #[error("approval harness is not configured for the first-run wizard")]
-    ApprovalHarnessNotConfigured,
-
-    #[error(transparent)]
-    Approval(#[from] ApprovalError),
-
     #[error(transparent)]
     InvalidEvent(#[from] super::IngestRequestError),
-
-    #[error("approval voter signing key env `{env_name}` is missing or empty")]
-    MissingVoterSigningKey { env_name: String },
 
     #[error("first-run scenario `{path}` could not be loaded: {source}")]
     ScenarioLoad {
@@ -333,12 +320,6 @@ pub enum FirstRunWizardError {
 
     #[error("first-run replay failed at step {step_index}: {reason}")]
     ReplayFailed { step_index: usize, reason: String },
-
-    #[error("first-run wizard did not create an approval decision for run `{run_id}`")]
-    MissingApproval { run_id: String },
-
-    #[error("approval set `{approval_set_id}` does not have a ledger")]
-    MissingApprovalLedger { approval_set_id: String },
 
     #[error("demo run `{run_id}` was not found")]
     DemoRunNotFound { run_id: String },
@@ -485,7 +466,7 @@ fn built_in_first_run_event() -> Result<TelemetryEvent, FirstRunWizardError> {
     Ok(super::validate_and_parse(json!({
         "source": "synthetic",
         "event_id": "evt-first-run-1",
-        "timestamp": 1_700_000_000_000i64,
+        "timestamp": super::now_ms(),
         "host_id": "host-first-run",
         "payload": {
             "kind": "process_start",
@@ -670,80 +651,6 @@ pub async fn run_first_run_wizard(
     state.mark_demo_completed(&run_id);
 
     let run = load_demo_run_report(&state, &run_id)?;
-    let approval =
-        run.approvals
-            .first()
-            .cloned()
-            .ok_or_else(|| FirstRunWizardError::MissingApproval {
-                run_id: run_id.clone(),
-            })?;
-    let harness = state
-        .approval_harness
-        .as_ref()
-        .cloned()
-        .ok_or(FirstRunWizardError::ApprovalHarnessNotConfigured)?;
-    let voter_secret = std::env::var(&request.voter_signing_key_env)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| FirstRunWizardError::MissingVoterSigningKey {
-            env_name: request.voter_signing_key_env.clone(),
-        })?;
-    let voter = Ed25519Signer::from_secret_material(&voter_secret);
-    harness.append_vote(&approval.approval_set_id, &state.operator_id(), &voter)?;
-
-    let approval_ledger_id = harness
-        .list_ledgers(Some(&approval.approval_set_id))?
-        .ledgers
-        .into_iter()
-        .next()
-        .map(|ledger| ledger.ledger_id)
-        .ok_or_else(|| FirstRunWizardError::MissingApprovalLedger {
-            approval_set_id: approval.approval_set_id.clone(),
-        })?;
-    let verdict = harness.create_verdict(&approval.approval_set_id, &approval_ledger_id)?;
-    let receipt_pack = harness.export_receipt_pack(
-        &verdict.report.verdict_id,
-        &request.evidence_signer_id,
-        &request.evidence_signing_key_env,
-    )?;
-
-    let context = ApprovalContext {
-        live_mode: state.current_runtime_mode() == RuntimeMode::LiveResponse,
-        receipt_chain: vec![receipt_pack.report.pack_id.clone()],
-        correlation_id: Some(run_id.clone()),
-        now_ms: now_ms(),
-    };
-    let pending = state
-        .take_pending_demo_approval(&approval.approval_set_id)
-        .ok_or_else(|| FirstRunWizardError::MissingApproval {
-            run_id: run_id.clone(),
-        })?;
-    let stack = state.stack.load_full();
-    let runtime = state.request_runtime.load_full();
-    let execution = runtime
-        .audit_authorize_and_execute_human_approved_instrumented(
-            &pending.detection,
-            &pending.request,
-            &context,
-        )
-        .await
-        .map_err(|error| FirstRunWizardError::ReplayFailed {
-            step_index: approval.step_index,
-            reason: error.to_string(),
-        })?;
-    let audit = execution.audit.clone();
-    if let Err(error) = state.complete_demo_approval(&pending, receipt_pack.report.clone(), audit) {
-        return Err(FirstRunWizardError::ReplayFailed {
-            step_index: approval.step_index,
-            reason: error.to_string(),
-        });
-    }
-    if let Ok(Some(outcome)) = stack.correlate_hunt(&pending.request.hunt_id.0) {
-        state.update_demo_incident(&pending.run_id, outcome.incident);
-    }
-
-    let run = load_demo_run_report(&state, &run_id)?;
     let incident_id = run
         .final_incident
         .as_ref()
@@ -775,17 +682,15 @@ pub async fn run_first_run_wizard(
                 name: "synthetic_detection".to_string(),
                 status: "completed".to_string(),
                 details: format!(
-                    "replayed {} synthetic event(s) through scenario `{}`",
+                    "replayed {} synthetic event(s) through scenario `{}` in detect-only rehearsal mode",
                     total_steps, run.scenario_name
                 ),
             },
             FirstRunWizardStep {
-                name: "approval".to_string(),
+                name: "governance_boundary".to_string(),
                 status: "completed".to_string(),
-                details: format!(
-                    "created approval set `{}` and exported receipt pack `{}`",
-                    approval.approval_set_id, receipt_pack.report.pack_id
-                ),
+                details: "rehearsed the governed action in detect-only mode; no human receipt or live dispatcher admission was minted"
+                    .to_string(),
             },
             FirstRunWizardStep {
                 name: "proof_export".to_string(),
@@ -797,10 +702,10 @@ pub async fn run_first_run_wizard(
             },
         ],
         artifacts: FirstRunWizardArtifacts {
-            approval_set_id: Some(approval.approval_set_id),
-            approval_ledger_id: Some(approval_ledger_id),
-            verdict_id: Some(verdict.report.verdict_id),
-            receipt_pack_id: Some(receipt_pack.report.pack_id),
+            approval_set_id: None,
+            approval_ledger_id: None,
+            verdict_id: None,
+            receipt_pack_id: None,
             incident_id: Some(incident_id),
             proof_merkle_root: Some(proof.merkle_root.clone()),
         },

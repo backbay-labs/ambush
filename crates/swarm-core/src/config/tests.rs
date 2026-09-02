@@ -2,19 +2,25 @@ use super::{
     AuditConfig, AuditdBridgeConfig, BundleStoreConfig, CanaryConfig, CloudTrailBridgeConfig,
     CorrelationConfig, DeceptionConfig, DeceptionMonitoringConfig, DeceptionPlacementStrategy,
     DeceptionPlaybookConfig, DeceptionPlaybookEntry, EvolutionAssuranceCoverageOverrideConfig,
-    EvolutionConfig, EvolutionFitnessWeightsConfig, InvestigationConfig, JsonFileSourceConfig,
-    NotificationChannelConfig, OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig,
-    PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig,
-    PlatformApiScope, PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
-    PolicyTimeWindowConfig, PromotionConfig, RequestSignatureConfig, ResponsePlaybookBranch,
-    ResponsePlaybookCondition, ResponsePlaybookConfig, ResponsePlaybookRule,
-    RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings, SecretString, SentinelBridgeConfig,
-    SwarmConfig, SysmonBridgeConfig, TelemetryBridgeConfig, TelemetrySourceConfig,
-    TemporalEventWindowConfig, WindowsEventLogBridgeConfig,
+    EvolutionConfig, EvolutionFitnessWeightsConfig, HypothesisGraphConfig, InvestigationConfig,
+    JsonFileSourceConfig, NotificationChannelConfig, OperatorPrincipalConfig, OperatorScope,
+    OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig,
+    PlatformApiKeyConfig, PlatformApiScope, PolicyActionSelector, PolicyConfig, PolicyRuleConfig,
+    PolicyRuleDecision, PolicyTimeWindowConfig, PromotionConfig, RequestSignatureConfig,
+    ResponsePlaybookBranch, ResponsePlaybookCondition, ResponsePlaybookConfig,
+    ResponsePlaybookRule, RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings, SecretString,
+    SentinelBridgeConfig, SwarmConfig, SysmonBridgeConfig, TelemetryBridgeConfig,
+    TelemetrySourceConfig, TemporalEventWindowConfig, WindowsEventLogBridgeConfig,
 };
 use crate::ThreatClass;
 use crate::agent::SwarmMode;
 use crate::types::{ResponseAction, Severity};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+use swarm_crypto::{
+    DetachedSignature, canonical_json_bytes, sha256_hex, verify_detached_signature,
+};
 use zeroize::Zeroize;
 
 fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
@@ -72,6 +78,7 @@ fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
             recent_decisions_limit: 20,
         },
         investigation: InvestigationConfig::default(),
+        hypothesis_graph: HypothesisGraphConfig::default(),
         correlation: CorrelationConfig::default(),
         canary: CanaryConfig::default(),
         promotion: PromotionConfig::default(),
@@ -83,6 +90,198 @@ fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
         operator: OperatorSurfaceConfig::default(),
         tls: None,
     }
+}
+
+#[test]
+fn hypothesis_graph_config_defaults_are_disabled_and_bounded() {
+    let config: HypothesisGraphConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(!config.enabled);
+    assert_eq!(config.max_nodes, 256);
+    assert_eq!(config.max_edges, 512);
+    assert_eq!(config.max_evidence_bytes, 1_048_576);
+    assert_eq!(config.max_lease_ms, 300_000);
+    assert_eq!(config.max_benchmark_work_units, 10_000);
+    assert_eq!(config.max_memory_ttl_ticks, 86_400_000);
+    assert_eq!(config.max_work_units_per_tick, 10_000);
+    assert_eq!(config.max_claims_per_tick, 128);
+    assert!(config.validate_reasoning_limits().is_ok());
+    assert!(config.resource_limits().validate().is_ok());
+}
+
+#[test]
+fn hypothesis_graph_config_unknown_fields_fail_closed() {
+    let result = serde_json::from_value::<HypothesisGraphConfig>(serde_json::json!({
+        "enabled": false,
+        "unexpected": true,
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn hypothesis_graph_config_direct_deserialize_validates_all_limits() {
+    let mut zero_resource = serde_json::to_value(HypothesisGraphConfig::default()).unwrap();
+    zero_resource["max_nodes"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<HypothesisGraphConfig>(zero_resource).is_err());
+
+    let mut zero_reasoning = serde_json::to_value(HypothesisGraphConfig::default()).unwrap();
+    zero_reasoning["max_memory_ttl_ticks"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<HypothesisGraphConfig>(zero_reasoning).is_err());
+
+    let mut contradictory = serde_json::to_value(HypothesisGraphConfig::default()).unwrap();
+    contradictory["max_nodes"] = serde_json::json!(64);
+    contradictory["max_edges"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<HypothesisGraphConfig>(contradictory).is_err());
+}
+
+#[test]
+fn hypothesis_graph_config_rejects_zero_and_contradictory_limits() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_nodes = 0;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `hypothesis_graph`: invalid resource limit `max_nodes`: must be between 1 and 4096"
+    );
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_nodes = 64;
+    config.hypothesis_graph.max_edges = 1;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `hypothesis_graph`: invalid resource limit `max_edges`: must accommodate a spanning graph"
+    );
+}
+
+#[test]
+fn hypothesis_graph_config_round_trips_all_limits() {
+    let expected = HypothesisGraphConfig {
+        enabled: true,
+        max_nodes: 64,
+        max_edges: 128,
+        max_evidence_references_per_edge: 4,
+        max_hypotheses: 8,
+        max_contradictions: 16,
+        max_decisions: 16,
+        max_tasks: 64,
+        max_lease_ms: 60_000,
+        max_retries: 2,
+        max_memory_records: 32,
+        max_graph_depth: 16,
+        max_graph_fan_out: 8,
+        max_benchmark_work_units: 2_000,
+        ..HypothesisGraphConfig::default()
+    };
+    let encoded = serde_json::to_value(&expected).unwrap();
+    let decoded: HypothesisGraphConfig = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded, expected);
+    assert!(decoded.resource_limits().validate().is_ok());
+}
+
+#[test]
+fn hypothesis_graph_config_rejects_unbounded_reasoning_limits() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_memory_ttl_ticks = 0;
+    assert!(config.validate().is_err());
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_work_units_per_tick = u32::MAX;
+    assert!(config.validate().is_err());
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_claims_per_tick = u16::MAX;
+    assert!(config.validate().is_err());
+}
+
+#[test]
+fn hypothesis_graph_deployment_limits_bind_scheduler_budget() {
+    use crate::hypothesis_graph::{GraphLogicalTime, SchedulerBudget};
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.max_work_units_per_tick = 10;
+    config.hypothesis_graph.max_claims_per_tick = 2;
+    let budget =
+        SchedulerBudget::new_with_config(&config.hypothesis_graph, GraphLogicalTime::new(1))
+            .unwrap();
+    assert!(budget.validate_with_limits(10, 2).is_ok());
+    assert!(budget.validate_with_limits(9, 2).is_err());
+    assert!(budget.validate_with_limits(10, 1).is_err());
+    assert!(budget.validate_for_config(&config.hypothesis_graph).is_ok());
+
+    let mut narrower = config.hypothesis_graph.clone();
+    narrower.max_work_units_per_tick = 9;
+    assert!(budget.validate_for_config(&narrower).is_err());
+    let mut application_budget = budget.clone();
+    let before = serde_json::to_vec(&application_budget).unwrap();
+    assert!(application_budget.admit(&narrower, 1, 1).is_err());
+    assert_eq!(serde_json::to_vec(&application_budget).unwrap(), before);
+
+    let wider_config = crate::config::HypothesisGraphConfig {
+        max_work_units_per_tick: 11,
+        max_claims_per_tick: 2,
+        ..Default::default()
+    };
+    let global_budget =
+        SchedulerBudget::new_with_config(&wider_config, GraphLogicalTime::new(1)).unwrap();
+    let encoded = serde_json::to_string(&global_budget).unwrap();
+    assert!(SchedulerBudget::deserialize_with_config(&encoded, &config.hypothesis_graph).is_err());
+    assert!(
+        global_budget
+            .validate_with_limits(
+                config.hypothesis_graph.max_work_units_per_tick,
+                config.hypothesis_graph.max_claims_per_tick,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn signed_default_ruleset_hash_and_signature_remain_verified() {
+    #[derive(Debug, Deserialize, Serialize)]
+    struct SignedRuleset {
+        statement: RulesetStatement,
+        signature: DetachedSignature,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct RulesetStatement {
+        version: u32,
+        issued_at_ms: i64,
+        config_file_name: String,
+        sha256: String,
+        size_bytes: u64,
+    }
+
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("swarm-core lives two levels below the repository root");
+    let config_path = repo_root.join("rulesets/default.yaml");
+    let sidecar_path = repo_root.join("rulesets/default.yaml.sig.json");
+    let config_bytes = fs::read(&config_path).unwrap();
+    let sidecar: SignedRuleset = serde_json::from_slice(&fs::read(&sidecar_path).unwrap()).unwrap();
+
+    assert_eq!(sidecar.statement.version, 1);
+    assert!(sidecar.statement.issued_at_ms > 0);
+    assert_eq!(sidecar.statement.config_file_name, "default.yaml");
+    assert_eq!(sidecar.statement.sha256, sha256_hex(&config_bytes));
+    assert_eq!(sidecar.statement.size_bytes, config_bytes.len() as u64);
+    assert_eq!(
+        sidecar.signature.key_id,
+        "854cb2ac6a51da46daf5bdbb0d5b34d9831e5aa60290b94ea2f810f5999f2521"
+    );
+    assert_eq!(
+        sidecar.signature.public_key_hex,
+        "25e6e1874dbaedbf86dd50afcadeb0067d973c35e88dbf6ea3c3dc30281753f5"
+    );
+    let statement_bytes = canonical_json_bytes(&sidecar.statement).unwrap();
+    verify_detached_signature(&statement_bytes, &sidecar.signature).unwrap();
 }
 
 #[test]
@@ -265,8 +464,66 @@ fn operator_surface_requires_http_runtime_base_url_when_enabled() {
     let error = config.validate().unwrap_err();
     assert_eq!(
         error.to_string(),
-        "invalid field `operator_surface.runtime_base_url`: must start with http:// or https://"
+        "invalid field `operator_surface.runtime_base_url`: must be a valid HTTPS URL, or HTTP on exact loopback (localhost, 127.0.0.0/8, or ::1)"
     );
+}
+
+#[test]
+fn operator_runtime_base_url_allows_https_and_exact_http_loopback() {
+    for runtime_base_url in [
+        "https://detect.example",
+        "http://localhost:9090",
+        "http://127.0.0.1:9090",
+        "http://127.255.255.254:9090",
+        "http://[::1]:9090",
+    ] {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.runtime_base_url = runtime_base_url.to_string();
+
+        assert!(
+            config.validate().is_ok(),
+            "expected `{runtime_base_url}` to be accepted"
+        );
+    }
+}
+
+#[test]
+fn operator_runtime_base_url_rejects_plaintext_non_loopback_and_spoofed_authorities() {
+    for runtime_base_url in [
+        "http://detect.example",
+        "http://192.168.1.10:9090",
+        "http://10.0.0.1:9090",
+        "http://169.254.1.1:9090",
+        "http://0.0.0.0:9090",
+        "http://[::]:9090",
+        "http://[fe80::1]:9090",
+        "http://localhost.example:9090",
+        "http://localhost.:9090",
+        "http://@localhost:9090",
+        "http://operator:secret@localhost:9090",
+        "http://localhost@detect.example:9090",
+        "https://operator@detect.example",
+        "https://detect.example?redirect=http://attacker.example",
+        "https://detect.example#ignored-callback-route",
+        "http://localhost:9090?mode=preview",
+        "http://127.0.0.1:9090#fragment",
+    ] {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.runtime_base_url = runtime_base_url.to_string();
+
+        let error = config
+            .validate()
+            .expect_err("bearer-bearing runtime URL must fail closed");
+        assert_eq!(
+            error.to_string(),
+            "invalid field `operator_surface.runtime_base_url`: must be a valid HTTPS URL, or HTTP on exact loopback (localhost, 127.0.0.0/8, or ::1)",
+            "unexpected validation result for `{runtime_base_url}`"
+        );
+    }
 }
 
 #[test]

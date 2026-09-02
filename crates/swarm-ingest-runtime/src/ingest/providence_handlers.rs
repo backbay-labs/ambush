@@ -20,7 +20,7 @@ use swarm_core::types::{
     SwarmProvidenceRuntimeBridgeHealth, SwarmProvidenceRuntimeContext,
     SwarmProvidenceWebhookContract,
 };
-use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
+use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex, sha256_hex};
 use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate};
 use swarm_response::notification::AggregatedNotification;
 use swarm_runtime::kitten_agent::route_feedback_signal;
@@ -140,7 +140,10 @@ pub(crate) async fn providence_feedback_handler(
     let target = resolve_feedback_target(&lookup, request.finding_id.as_deref())
         .map_err(ProvidenceFeedbackError::not_found)?;
     let target = enrich_feedback_target(&state, &lookup, &target)?;
-    let received_at_ms = now_ms();
+    let received_at_ms = state
+        .next_providence_feedback_timestamp_ms()
+        .await
+        .map_err(ProvidenceFeedbackError::internal)?;
     let feedback_id = format!(
         "providence-feedback:{}:{}",
         super::sanitize_id(&request.incident_id),
@@ -164,19 +167,22 @@ pub(crate) async fn providence_feedback_handler(
         soar_lineage: None,
         payload: payload_value,
         outcome: applied.outcome.clone(),
+        soar_claim_lease: None,
     };
-    let mut incident = lookup.incident.clone();
-    incident.feedback_audit_entries.push(audit_entry);
-    incident.upsert_false_positive_measurement(false_positive_measurement(
-        &request,
-        &target,
-        &feedback_id,
-        received_at_ms,
-    ));
     state
         .current_incident_store()
-        .persist(&incident)
-        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+        .record_feedback_outcome(
+            &request.incident_id,
+            audit_entry,
+            false_positive_measurement(&request, &target, &feedback_id, received_at_ms),
+        )
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            ProvidenceFeedbackError::not_found(format!(
+                "incident `{}` disappeared before feedback was recorded",
+                request.incident_id
+            ))
+        })?;
 
     Ok((
         StatusCode::OK,
@@ -350,6 +356,7 @@ pub(crate) async fn apply_providence_feedback(
                 .await
                 .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
             let signal = SwarmFeedbackSignal {
+                operation_id: Some(feedback_id.to_string()),
                 action: request.action,
                 incident_id: request.incident_id.clone(),
                 finding_id: request
@@ -416,19 +423,47 @@ pub(crate) async fn apply_providence_feedback(
                 .deposit(deposit)
                 .await
                 .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
-            let replay = state
-                .current_replay_store()
-                .load_by_hunt_id(&target.hunt_id)
-                .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
-                .ok_or_else(|| {
-                    ProvidenceFeedbackError::not_found(format!(
-                        "replay bundle for hunt `{}` was not found",
-                        target.hunt_id
-                    ))
-                })?;
+            let replay_store = state.current_replay_store();
+            let replay = match (
+                target.replay_bundle_id.as_deref(),
+                target.replay_bundle_digest.as_deref(),
+            ) {
+                (Some(bundle_id), Some(expected_digest)) => {
+                    let replay = replay_store
+                        .load_by_bundle_id(bundle_id)
+                        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+                        .ok_or_else(|| {
+                            ProvidenceFeedbackError::not_found(format!(
+                                "claimed replay bundle `{bundle_id}` was not found"
+                            ))
+                        })?;
+                    let encoded = serde_json::to_vec(&replay.bundle)
+                        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+                    if sha256_hex(&encoded) != expected_digest {
+                        return Err(ProvidenceFeedbackError::internal(format!(
+                            "claimed replay bundle `{bundle_id}` no longer matches its immutable digest"
+                        )));
+                    }
+                    replay
+                }
+                (None, None) => replay_store
+                    .load_by_hunt_id(&target.hunt_id)
+                    .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+                    .ok_or_else(|| {
+                        ProvidenceFeedbackError::not_found(format!(
+                            "replay bundle for hunt `{}` was not found",
+                            target.hunt_id
+                        ))
+                    })?,
+                _ => {
+                    return Err(ProvidenceFeedbackError::internal(
+                        "feedback target has an incomplete immutable replay binding",
+                    ));
+                }
+            };
             let submitted = state
                 .current_investigation()
-                .submit(&replay.bundle)
+                .submit_idempotent(&replay.bundle, feedback_id, recorded_at_ms)
                 .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
             Ok(ProvidenceFeedbackApplicationResult {
                 outcome: json!({
@@ -464,10 +499,26 @@ pub(crate) fn enrich_feedback_target(
         .load_by_hunt_id(&target.hunt_id)
         .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
     {
+        let encoded = serde_json::to_vec(&replay.bundle)
+            .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+        enriched.replay_bundle_id = Some(replay.record.bundle_id.clone());
+        enriched.replay_bundle_digest = Some(sha256_hex(&encoded));
+        enriched.event_id = replay.bundle.event.event_id.clone();
         enriched.host_id = replay.bundle.event.host_id.clone().or(enriched.host_id);
         enriched.strategy_id = Some(replay.bundle.audit.detection.strategy_id.clone());
+        enriched.evidence_timestamp = Some(normalize_feedback_evidence_timestamp(
+            replay.bundle.event.timestamp,
+        ));
     }
     Ok(enriched)
+}
+
+fn normalize_feedback_evidence_timestamp(timestamp: i64) -> i64 {
+    if timestamp.unsigned_abs() < 100_000_000_000 {
+        timestamp
+    } else {
+        timestamp.div_euclid(1_000)
+    }
 }
 
 pub(crate) fn false_positive_measurement(
@@ -527,11 +578,12 @@ async fn signed_providence_feedback_deposit(
             "analyst_id": request.analyst_id,
             "reason": request.reason,
             "observed_at_ms": recorded_at_ms,
+            "governed_evidence_timestamp": target.evidence_timestamp,
         }),
         threat_class: target.threat_class.clone(),
         severity: target.severity,
         confidence,
-        timestamp: recorded_at_ms,
+        timestamp: recorded_at_ms.div_euclid(1_000),
         decay_half_life: policy.half_life_secs,
         agent_id: AgentId::from_verifying_key(&state.signing_key.verifying_key()),
         agent_identity: AgentId::from_verifying_key(&state.signing_key.verifying_key()).0,
@@ -569,7 +621,7 @@ fn providence_feedback_evidence(deposit: &PheromoneDeposit) -> ProvidenceFeedbac
             .indicator
             .get("observed_at_ms")
             .and_then(Value::as_i64)
-            .unwrap_or(deposit.timestamp),
+            .unwrap_or_else(|| deposit.timestamp.saturating_mul(1_000)),
         signature_hex: hex::encode(&deposit.signature),
     }
 }

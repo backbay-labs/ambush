@@ -737,7 +737,8 @@ async fn autonomous_mutation_spec_generates_bounded_variants_from_population_win
     let queue_dir = root.join("queue");
     let base_experiment = copy_experiment_fixture(&root, "office-control-autonomous");
 
-    let config = sample_config();
+    let mut config = sample_config();
+    config.evolution.max_variants_per_cycle = 3;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
         .evaluate_verification_path(&base_experiment, &verification_dir)
@@ -807,6 +808,16 @@ async fn autonomous_mutation_spec_generates_bounded_variants_from_population_win
             ..EvolutionDraftMaterializationRequest::default()
         })
         .unwrap();
+    assert_ne!(
+        control_materialization.report.materialization_id,
+        crossover_materialization.report.materialization_id,
+        "back-to-back materializations of one draft must not alias"
+    );
+    assert_ne!(
+        control_materialization.report.experiment_path,
+        crossover_materialization.report.experiment_path,
+        "back-to-back materializations must not overwrite one experiment manifest"
+    );
 
     let population_store = FileEvolutionPopulationStore::open_signed(
         &population_dir,
@@ -822,6 +833,7 @@ async fn autonomous_mutation_spec_generates_bounded_variants_from_population_win
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 3,
@@ -1031,6 +1043,7 @@ async fn autonomous_mutation_spec_generates_behavioral_anomaly_variants() {
     let mut config = sample_config();
     config.detection.strategy = "behavioral_anomaly".to_string();
     config.detection.strategies.clear();
+    config.evolution.max_variants_per_cycle = 3;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
         .evaluate_verification_path(&base_experiment, &verification_dir)
@@ -1167,6 +1180,7 @@ async fn autonomous_mutation_spec_generates_behavioral_anomaly_variants() {
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 3,
@@ -1321,6 +1335,7 @@ async fn autonomous_mutation_spec_generates_fileless_execution_variants() {
     let mut config = sample_config();
     config.detection.strategy = "fileless_execution".to_string();
     config.detection.strategies.clear();
+    config.evolution.max_variants_per_cycle = 3;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
         .evaluate_verification_path(&base_experiment, &verification_dir)
@@ -1455,6 +1470,7 @@ async fn autonomous_mutation_spec_generates_fileless_execution_variants() {
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 3,
@@ -1609,6 +1625,7 @@ async fn autonomous_mutation_spec_generates_dns_exfiltration_variants() {
     let mut config = sample_config();
     config.detection.strategy = "dns_exfiltration".to_string();
     config.detection.strategies.clear();
+    config.evolution.max_variants_per_cycle = 3;
     let replay = DefaultReplayHarness::from_config("inline", config.clone(), &replay_dir).unwrap();
     let verification = replay
         .evaluate_verification_path(&base_experiment, &verification_dir)
@@ -1740,6 +1757,7 @@ async fn autonomous_mutation_spec_generates_dns_exfiltration_variants() {
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 3,
@@ -2492,6 +2510,25 @@ fn population_state_persisted_with_the_removed_speed_objective_still_loads() {
 fn tracked_default_ruleset_still_loads_with_its_speed_weight() {
     let config = sample_config();
     assert_eq!(config.evolution.fitness_weights.speed, 0.15);
+    config.validate().unwrap();
+}
+
+/// The signed curated ruleset predates collective graph configuration. Its
+/// omission must resolve to the complete fail-safe disabled shape without
+/// changing the attested ruleset bytes.
+#[test]
+fn tracked_default_ruleset_resolves_hypothesis_graph_to_disabled_defaults() {
+    let raw = std::fs::read_to_string(repo_root().join("rulesets/default.yaml")).unwrap();
+    assert!(
+        !raw.contains("hypothesis_graph:"),
+        "the signed curated ruleset must remain byte-for-byte unchanged"
+    );
+
+    let config = sample_config();
+    assert!(!config.hypothesis_graph.enabled);
+    assert_eq!(config.hypothesis_graph.max_nodes, 256);
+    assert_eq!(config.hypothesis_graph.max_edges, 512);
+    assert_eq!(config.hypothesis_graph.max_benchmark_work_units, 10_000);
     config.validate().unwrap();
 }
 

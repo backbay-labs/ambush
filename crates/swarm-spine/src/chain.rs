@@ -76,18 +76,22 @@ pub fn verify_chain_link(
     envelope: &Value,
     known_head: Option<&IssuerChainHead>,
 ) -> SpineResult<ChainLinkVerdict> {
+    // INVARIANT: SPINE-CHAIN-ISSUER-FIELD-REQUIRED
     let envelope_issuer = envelope
         .get("issuer")
         .and_then(Value::as_str)
         .ok_or(SpineError::MissingField("issuer"))?;
+    // INVARIANT: SPINE-CHAIN-SEQ-FIELD-REQUIRED
     let seq = envelope
         .get("seq")
         .and_then(Value::as_u64)
         .ok_or(SpineError::MissingField("seq"))?;
+    // INVARIANT: SPINE-CHAIN-PREV-FIELD-REQUIRED
     let prev_hash = envelope
         .get("prev_envelope_hash")
         .ok_or(SpineError::MissingField("prev_envelope_hash"))?;
 
+    // INVARIANT: SPINE-CHAIN-PREV-TYPE-VALID
     let prev_hash_str = if prev_hash.is_null() {
         None
     } else {
@@ -100,11 +104,13 @@ pub fn verify_chain_link(
 
     match known_head {
         None => {
+            // INVARIANT: SPINE-CHAIN-FIRST-SEQ
             if seq != 1 {
                 return Ok(ChainLinkVerdict::InvalidChainHead {
                     reason: format!("first envelope must have seq=1, got seq={seq}"),
                 });
             }
+            // INVARIANT: SPINE-CHAIN-FIRST-PREV-NULL
             if prev_hash_str.is_some() {
                 return Ok(ChainLinkVerdict::InvalidChainHead {
                     reason: "first envelope must have null prev_envelope_hash".to_string(),
@@ -115,6 +121,7 @@ pub fn verify_chain_link(
         Some(head) => {
             let envelope_issuer_norm = normalize_issuer_for_compare(envelope_issuer);
             let head_issuer_norm = normalize_issuer_for_compare(&head.issuer);
+            // INVARIANT: SPINE-CHAIN-ISSUER-BOUND
             if envelope_issuer_norm != head_issuer_norm {
                 return Ok(ChainLinkVerdict::InvalidChainHead {
                     reason: format!(
@@ -124,11 +131,13 @@ pub fn verify_chain_link(
                 });
             }
 
+            // INVARIANT: SPINE-CHAIN-HEAD-NOT-OVERFLOWED
             let Some(expected_seq) = head.seq.checked_add(1) else {
                 return Ok(ChainLinkVerdict::InvalidChainHead {
                     reason: format!("known head sequence overflow for issuer {}", head.issuer),
                 });
             };
+            // INVARIANT: SPINE-CHAIN-SEQ-MONOTONIC
             if seq != expected_seq {
                 return Ok(ChainLinkVerdict::SequenceMismatch {
                     expected_seq,
@@ -137,6 +146,7 @@ pub fn verify_chain_link(
             }
 
             let actual_prev_hash = prev_hash_str.unwrap_or("");
+            // INVARIANT: SPINE-CHAIN-PREV-HASH-BOUND
             if actual_prev_hash != head.envelope_hash {
                 return Ok(ChainLinkVerdict::HashMismatch {
                     expected_prev_hash: head.envelope_hash.clone(),

@@ -9,6 +9,8 @@ members = [
     "crates/swarm-ingest-sentinel",
     "crates/swarm-pheromone",
     "crates/swarm-policy",
+    "crates/swarm-governance",
+    "crates/swarm-governance-witness",
     "crates/swarm-response",
     "crates/swarm-runtime",
     "crates/swarm-agents",
@@ -39,6 +41,8 @@ swarm-ingest-taxii = { version = "0.1.0", path = "crates/swarm-ingest-taxii" }
 swarm-ingest-sentinel = { version = "0.1.0", path = "crates/swarm-ingest-sentinel" }
 swarm-pheromone = { version = "0.1.0", path = "crates/swarm-pheromone" }
 swarm-policy = { version = "0.1.0", path = "crates/swarm-policy" }
+swarm-governance = { version = "0.1.0", path = "crates/swarm-governance" }
+swarm-governance-witness = { version = "0.1.0", path = "crates/swarm-governance-witness" }
 swarm-response = { version = "0.1.0", path = "crates/swarm-response" }
 swarm-runtime = { version = "0.1.0", path = "crates/swarm-runtime" }
 swarm-agents = { version = "0.1.0", path = "crates/swarm-agents" }
@@ -58,6 +62,7 @@ tokio-stream = "0.1"
 async-trait = "0.1"
 futures-util = "0.3"
 async-nats = "0.47"
+rustls-pemfile = "2"
 axum = "0.8"
 http = "1"
 tower = { version = "0.5", features = ["util"] }
@@ -69,12 +74,15 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 notify = "7"
 arc-swap = "1"
 sysinfo = "0.33"
+libc = "0.2"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 base64 = "0.22"
+url = "2"
+percent-encoding = "2"
 
 # Crypto
 ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }

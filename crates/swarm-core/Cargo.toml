@@ -18,6 +18,7 @@ tracing.workspace = true
 anyhow.workspace = true
 hex.workspace = true
 http.workspace = true
+url.workspace = true
 swarm-crypto.workspace = true
 zeroize.workspace = true
 

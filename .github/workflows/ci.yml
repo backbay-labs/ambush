@@ -8,39 +8,1065 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
-  CARGO_TARGET_DIR: target/ci
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci
 
 jobs:
-  fmt:
-    runs-on: ubuntu-latest
+  phase285-workspace-tests:
+    name: phase285-workspace-tests (${{ github.sha }})
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        working-directory: .
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
 
-      - name: Cache cargo home
-        uses: actions/cache@v4
+      - name: Cache Cargo sources
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
+          toolchain: stable
+
+      - name: Populate the locked Cargo source cache
+        run: cargo fetch --locked
+
+      - name: Install uv for the generated-client smoke test
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+
+      - name: Run ordinary workspace tests as the final candidate step
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-workspace-tests-target
+          CARGO_INCREMENTAL: "0"
+        run: |
+          cargo test --workspace --locked --offline
+
+  phase285-wave0-contract:
+    name: phase285-wave0-contract (${{ github.sha }})
+    runs-on: ubuntu-24.04
+    # This is a CI self-consistency boundary, not a hostile sandbox. Intentional
+    # same-UID privilege or Docker-daemon abuse, mutate-use-restore inside one
+    # child invocation, and compromised hosted toolchain/cache infrastructure
+    # remain outside the local frozen-tree manifest threat model. Live external
+    # assurance is separately required.
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        working-directory: .
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo sources
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-sources-v1-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Hydrate the complete locked Cargo source closure
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-source-hydration-target
+          CARGO_INCREMENTAL: "0"
+        run: |
+          cargo fetch --locked
+          cargo test -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --no-run
+          python3 -I - "$CARGO_TARGET_DIR" "$RUNNER_TEMP" <<'PY'
+          import os
+          import pathlib
+          import shutil
+          import stat
+          import sys
+
+          target = pathlib.Path(sys.argv[1])
+          runner_temp = pathlib.Path(sys.argv[2]).resolve(strict=True)
+          metadata = target.lstat()
+          if (
+              not target.is_absolute()
+              or target.parent.resolve(strict=True) != runner_temp
+              or target.name != "phase285-source-hydration-target"
+              or stat.S_ISLNK(metadata.st_mode)
+              or not stat.S_ISDIR(metadata.st_mode)
+          ):
+              raise SystemExit("phase285_source_hydration[target-identity]")
+          shutil.rmtree(target)
+          if os.path.lexists(target):
+              raise SystemExit("phase285_source_hydration[target-residue]")
+          print("phase285_source_hydration closure=governance-witness-all-targets-all-features target_residue=0 passed=1")
+          PY
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      - name: Run the isolated Phase 285 assurance monolith as the final candidate step
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/phase285-assurance-target
+          CARGO_INCREMENTAL: "0"
+          GIT_NO_REPLACE_OBJECTS: "1"
+          GIT_OPTIONAL_LOCKS: "0"
+        run: |
+          phase285_assurance_main() {
+          set -euo pipefail
+          PHASE285_TARGET_ROOT="$CARGO_TARGET_DIR"
+          PHASE285_CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          PHASE285_DOCKER_CONFIG="$RUNNER_TEMP/phase285-docker-config"
+          unset BASH_ENV ENV CDPATH PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONINSPECT
+          unset RUSTFLAGS RUSTDOCFLAGS RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
+          unset SHELLCHECK_OPTS CLIPPY_CONF_DIR
+          unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG
+          while IFS= read -r phase285_git_variable; do
+            unset "$phase285_git_variable"
+          done < <(compgen -A variable GIT_)
+          while IFS= read -r phase285_cargo_variable; do
+            case "$phase285_cargo_variable" in
+              CARGO_TERM_COLOR) ;;
+              CARGO_*) unset "$phase285_cargo_variable" ;;
+            esac
+          done < <(compgen -A variable CARGO_)
+          CARGO_HOME="$PHASE285_CARGO_HOME"
+          CARGO_INCREMENTAL=0
+          RUSTFLAGS=
+          RUSTDOCFLAGS=
+          RUSTC_WRAPPER=
+          RUSTC_WORKSPACE_WRAPPER=
+          SHELLCHECK_OPTS=
+          GIT_NO_REPLACE_OBJECTS=1
+          GIT_OPTIONAL_LOCKS=0
+          GIT_CONFIG_GLOBAL=/dev/null
+          GIT_CONFIG_SYSTEM=/dev/null
+          GIT_CONFIG_NOSYSTEM=1
+          GIT_ATTR_NOSYSTEM=1
+          DOCKER_CONFIG="$PHASE285_DOCKER_CONFIG"
+          /usr/bin/python3 -I - "$PHASE285_TARGET_ROOT" "$DOCKER_CONFIG" <<'PY'
+          import os
+          import pathlib
+          import stat
+          import sys
+
+          for label, text in zip(("target-root", "docker-config"), sys.argv[1:]):
+              path = pathlib.Path(text)
+              if not path.is_absolute() or os.path.lexists(path):
+                  raise SystemExit(f"phase285_assurance_setup[{label}:not-fresh-absolute]")
+              path.mkdir(mode=0o700)
+              metadata = path.lstat()
+              if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                  raise SystemExit(f"phase285_assurance_setup[{label}:type]")
+              if stat.S_IMODE(metadata.st_mode) != 0o700:
+                  raise SystemExit(f"phase285_assurance_setup[{label}:mode]")
+          PY
+          export CARGO_HOME CARGO_INCREMENTAL RUSTFLAGS RUSTDOCFLAGS RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER SHELLCHECK_OPTS
+          export GIT_NO_REPLACE_OBJECTS GIT_OPTIONAL_LOCKS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_ATTR_NOSYSTEM DOCKER_CONFIG
+          readonly HOME CARGO_HOME CARGO_INCREMENTAL RUSTFLAGS RUSTDOCFLAGS RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER SHELLCHECK_OPTS GIT_NO_REPLACE_OBJECTS GIT_OPTIONAL_LOCKS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_ATTR_NOSYSTEM DOCKER_CONFIG PHASE285_TARGET_ROOT PHASE285_CARGO_HOME PHASE285_DOCKER_CONFIG
+          PHASE285_BASH=/bin/bash
+          PHASE285_GIT=/usr/bin/git
+          PHASE285_PYTHON=/usr/bin/python3
+          PHASE285_SHASUM=/usr/bin/shasum
+          PHASE285_AWK=/usr/bin/awk
+          PHASE285_MKTEMP=/usr/bin/mktemp
+          PHASE285_CONNZ_CURL_BIN=/usr/bin/curl
+          export PHASE285_CONNZ_CURL_BIN
+          PHASE285_RUSTUP="$(command -v rustup)"
+          PHASE285_CARGO="$("$PHASE285_RUSTUP" which cargo)"
+          PHASE285_RUSTC="$("$PHASE285_RUSTUP" which rustc)"
+          PHASE285_RUSTFMT="$("$PHASE285_RUSTUP" which rustfmt)"
+          PHASE285_CARGO_CLIPPY="$("$PHASE285_RUSTUP" which cargo-clippy)"
+          PHASE285_CLIPPY_DRIVER="$("$PHASE285_RUSTUP" which clippy-driver)"
+          PHASE285_SYSROOT="$("$PHASE285_RUSTC" --print sysroot)"
+          PHASE285_GO="$(command -v go)"
+          PHASE285_SHELLCHECK="$(command -v shellcheck)"
+          PHASE285_DOCKER="$(command -v docker)"
+          PHASE285_ACTIONLINT="$($PHASE285_GO env GOPATH)/bin/actionlint"
+          capture_candidate_baseline() {
+            /usr/bin/python3 -I - "$GITHUB_SHA" "$PHASE285_CARGO_HOME" "$PHASE285_DOCKER_CONFIG" "$PHASE285_TARGET_ROOT" "$PHASE285_SYSROOT" \
+              bash "$PHASE285_BASH" \
+              git "$PHASE285_GIT" \
+              python3 "$PHASE285_PYTHON" \
+              shasum "$PHASE285_SHASUM" \
+              awk "$PHASE285_AWK" \
+              mktemp "$PHASE285_MKTEMP" \
+              curl "$PHASE285_CONNZ_CURL_BIN" \
+              rustup "$PHASE285_RUSTUP" \
+              cargo "$PHASE285_CARGO" \
+              rustc "$PHASE285_RUSTC" \
+              rustfmt "$PHASE285_RUSTFMT" \
+              cargo-clippy "$PHASE285_CARGO_CLIPPY" \
+              clippy-driver "$PHASE285_CLIPPY_DRIVER" \
+              go "$PHASE285_GO" \
+              shellcheck "$PHASE285_SHELLCHECK" \
+              docker "$PHASE285_DOCKER" \
+              actionlint "$PHASE285_ACTIONLINT" <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import stat
+          import subprocess
+          import sys
+
+          expected_sha = sys.argv[1]
+          cargo_home = pathlib.Path(sys.argv[2])
+          docker_config = pathlib.Path(sys.argv[3])
+          target_root = pathlib.Path(sys.argv[4])
+          sysroot = pathlib.Path(sys.argv[5])
+          tool_arguments = sys.argv[6:]
+          if len(tool_arguments) % 2:
+              raise SystemExit("candidate_baseline[tool-arguments]")
+          tool_paths = dict(zip(tool_arguments[::2], tool_arguments[1::2]))
+          if len(tool_paths) != len(tool_arguments) // 2:
+              raise SystemExit("candidate_baseline[duplicate-tool]")
+          git_root = pathlib.Path(".git")
+          git_root_metadata = git_root.lstat()
+          if stat.S_ISLNK(git_root_metadata.st_mode) or not stat.S_ISDIR(
+              git_root_metadata.st_mode
+          ):
+              raise SystemExit("candidate_baseline[git-not-real-directory]")
+          cargo_home_metadata = cargo_home.lstat()
+          if stat.S_ISLNK(cargo_home_metadata.st_mode) or not stat.S_ISDIR(
+              cargo_home_metadata.st_mode
+          ):
+              raise SystemExit("candidate_baseline[cargo-home-not-real-directory]")
+
+          def recursive_inventory(root):
+              entries = [[".", "directory", root.lstat().st_mode, None]]
+              for directory, names, files in os.walk(
+                  root, topdown=True, followlinks=False
+              ):
+                  names[:] = sorted(names)
+                  files = sorted(files)
+                  retained_names = []
+                  for name in names:
+                      path = pathlib.Path(directory) / name
+                      relative = path.relative_to(root).as_posix()
+                      metadata = path.lstat()
+                      if stat.S_ISLNK(metadata.st_mode):
+                          entries.append(
+                              [relative, "symlink", metadata.st_mode, os.readlink(path)]
+                          )
+                      elif stat.S_ISDIR(metadata.st_mode):
+                          entries.append([relative, "directory", metadata.st_mode, None])
+                          retained_names.append(name)
+                      else:
+                          raise SystemExit(
+                              f"candidate_baseline[git-nondirectory:{relative}]"
+                          )
+                  names[:] = retained_names
+                  for name in files:
+                      path = pathlib.Path(directory) / name
+                      relative = path.relative_to(root).as_posix()
+                      metadata = path.lstat()
+                      if stat.S_ISLNK(metadata.st_mode):
+                          value = os.readlink(path)
+                          kind = "symlink"
+                      elif stat.S_ISREG(metadata.st_mode):
+                          value = hashlib.sha256(path.read_bytes()).hexdigest()
+                          kind = "file"
+                      else:
+                          raise SystemExit(
+                              f"candidate_baseline[git-nonregular:{relative}]"
+                          )
+                      entries.append([relative, kind, metadata.st_mode, value])
+              return sorted(entries)
+
+          def directory_control(path, label, required):
+              if not path.exists() and not path.is_symlink():
+                  if required:
+                      raise SystemExit(f"candidate_baseline[{label}:absent]")
+                  return {"state": "absent"}
+              metadata = path.lstat()
+              if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                  raise SystemExit(f"candidate_baseline[{label}:type]")
+              return {
+                  "entries": recursive_inventory(path),
+                  "identity": [metadata.st_dev, metadata.st_ino, metadata.st_mode],
+                  "path": str(path),
+                  "state": "directory",
+              }
+
+          def ancestor_cargo_controls(root):
+              controls = []
+              ancestor = root.resolve(strict=True).parent
+              while True:
+                  cargo_directory = ancestor / ".cargo"
+                  if cargo_directory.exists() or cargo_directory.is_symlink():
+                      directory_metadata = cargo_directory.lstat()
+                      if stat.S_ISLNK(directory_metadata.st_mode) or not stat.S_ISDIR(
+                          directory_metadata.st_mode
+                      ):
+                          raise SystemExit(
+                              f"candidate_baseline[ancestor-cargo-directory:{cargo_directory}]"
+                          )
+                  for name in ("config", "config.toml"):
+                      path = cargo_directory / name
+                      label = str(path)
+                      if not path.exists() and not path.is_symlink():
+                          controls.append([label, "absent", None, None])
+                          continue
+                      metadata = path.lstat()
+                      if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(
+                          metadata.st_mode
+                      ):
+                          raise SystemExit(
+                              f"candidate_baseline[ancestor-cargo-control:{label}]"
+                          )
+                      controls.append(
+                          [
+                              label,
+                              "file",
+                              metadata.st_mode,
+                              hashlib.sha256(path.read_bytes()).hexdigest(),
+                          ]
+                      )
+                  if ancestor == ancestor.parent:
+                      break
+                  ancestor = ancestor.parent
+              return controls
+
+          git_inventory = recursive_inventory(git_root)
+          cargo_source_trees = {
+              "git": directory_control(cargo_home / "git", "cargo-git", False),
+              "registry": directory_control(
+                  cargo_home / "registry", "cargo-registry", False
+              ),
+          }
+          sysroot_control = directory_control(sysroot, "sysroot", True)
+          cargo_ancestor_controls = ancestor_cargo_controls(pathlib.Path.cwd())
+          docker_config_metadata = docker_config.lstat()
+          if stat.S_ISLNK(docker_config_metadata.st_mode) or not stat.S_ISDIR(
+              docker_config_metadata.st_mode
+          ):
+              raise SystemExit("candidate_baseline[docker-config-not-real-directory]")
+          docker_config_inventory = recursive_inventory(docker_config)
+          target_root_metadata = target_root.lstat()
+          if stat.S_ISLNK(target_root_metadata.st_mode) or not stat.S_ISDIR(
+              target_root_metadata.st_mode
+          ):
+              raise SystemExit("candidate_baseline[target-root-not-real-directory]")
+          if stat.S_IMODE(target_root_metadata.st_mode) != 0o700:
+              raise SystemExit("candidate_baseline[target-root-mode]")
+          cargo_controls = []
+          for name in ("config", "config.toml", "credentials", "credentials.toml"):
+              path = cargo_home / name
+              if not path.exists() and not path.is_symlink():
+                  cargo_controls.append([name, "absent", None, None])
+                  continue
+              metadata = path.lstat()
+              if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                  raise SystemExit(f"candidate_baseline[cargo-control-type:{name}]")
+              cargo_controls.append(
+                  [
+                      name,
+                      "file",
+                      metadata.st_mode,
+                      hashlib.sha256(path.read_bytes()).hexdigest(),
+                  ]
+              )
+          head_sha = subprocess.check_output(
+              ["/usr/bin/git", "rev-parse", "--verify", "HEAD"], text=True
+          ).strip()
+          if head_sha != expected_sha:
+              raise SystemExit(f"candidate_baseline[head:{head_sha}:expected:{expected_sha}]")
+          resolved_sha = subprocess.check_output(
+              ["/usr/bin/git", "rev-parse", "--verify", f"{expected_sha}^{{commit}}"],
+              text=True,
+          ).strip()
+          if resolved_sha != expected_sha:
+              raise SystemExit(
+                  f"candidate_baseline[object:{resolved_sha}:expected:{expected_sha}]"
+              )
+          tree_sha = subprocess.check_output(
+              ["/usr/bin/git", "rev-parse", "--verify", f"{expected_sha}^{{tree}}"],
+              text=True,
+          ).strip()
+          object_format = subprocess.check_output(
+              ["/usr/bin/git", "rev-parse", "--show-object-format"], text=True
+          ).strip()
+          if object_format not in {"sha1", "sha256"}:
+              raise SystemExit(f"candidate_baseline[object-format:{object_format}]")
+          raw = subprocess.check_output(
+              ["/usr/bin/git", "ls-tree", "-rz", "--full-tree", expected_sha]
+          )
+          expected = []
+          expected_directories = {"."}
+          for record in raw.split(b"\0"):
+              if not record:
+                  continue
+              header, path_bytes = record.split(b"\t", 1)
+              mode, kind, object_id = header.decode("ascii").split(" ")
+              path = os.fsdecode(path_bytes)
+              if kind != "blob" or mode not in {"100644", "100755", "120000"}:
+                  raise SystemExit(f"candidate_baseline[unsupported:{mode}:{kind}:{path}]")
+              expected.append([path, mode, object_id])
+              parent = os.path.dirname(path)
+              while parent:
+                  expected_directories.add(parent)
+                  parent = os.path.dirname(parent)
+          if len({entry[0] for entry in expected}) != len(expected):
+              raise SystemExit("candidate_baseline[duplicate-path]")
+          tools = []
+          for label, invocation_text in sorted(tool_paths.items()):
+              invocation = pathlib.Path(invocation_text)
+              if not invocation.is_absolute():
+                  raise SystemExit(f"candidate_baseline[tool-relative:{label}]")
+              invocation_metadata = invocation.lstat()
+              resolved = invocation.resolve(strict=True)
+              resolved_metadata = resolved.lstat()
+              if (
+                  not stat.S_ISREG(resolved_metadata.st_mode)
+                  or not resolved_metadata.st_mode & 0o111
+              ):
+                  raise SystemExit(f"candidate_baseline[tool-nonregular:{label}]")
+              tools.append(
+                  {
+                      "invocation": str(invocation),
+                      "invocation_link": (
+                          os.readlink(invocation)
+                          if stat.S_ISLNK(invocation_metadata.st_mode)
+                          else None
+                      ),
+                      "invocation_mode": invocation_metadata.st_mode,
+                      "label": label,
+                      "resolved": str(resolved),
+                      "resolved_mode": resolved_metadata.st_mode,
+                      "resolved_sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+                  }
+              )
+          payload = json.dumps(
+              {
+                  "directories": sorted(expected_directories),
+                  "files": expected,
+                  "git": git_inventory,
+                  "object_format": object_format,
+                  "cargo_controls": cargo_controls,
+                  "cargo_ancestor_controls": cargo_ancestor_controls,
+                  "cargo_home": str(cargo_home),
+                  "cargo_source_trees": cargo_source_trees,
+                  "docker_config": str(docker_config),
+                  "docker_config_inventory": docker_config_inventory,
+                  "target_root": str(target_root),
+                  "target_root_identity": [
+                      target_root_metadata.st_dev,
+                      target_root_metadata.st_ino,
+                      target_root_metadata.st_mode,
+                  ],
+                  "sysroot": sysroot_control,
+                  "sha": expected_sha,
+                  "tools": tools,
+                  "tree": tree_sha,
+              },
+              ensure_ascii=True,
+              separators=(",", ":"),
+              sort_keys=True,
+          ).encode("ascii")
+          print(tree_sha)
+          print(base64.b64encode(payload).decode("ascii"))
+          print(hashlib.sha256(payload).hexdigest())
+          PY
+          }
+          PHASE285_CAPTURED_BASELINE="$(capture_candidate_baseline)"
+          {
+            IFS= read -r PHASE285_CANDIDATE_TREE
+            IFS= read -r PHASE285_CANDIDATE_BASELINE
+            IFS= read -r PHASE285_CANDIDATE_BASELINE_SHA256
+          } <<< "$PHASE285_CAPTURED_BASELINE"
+          unset PHASE285_CAPTURED_BASELINE
+          PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PHASE285_CARGO%/*}:${PHASE285_RUSTUP%/*}:${PHASE285_GO%/*}:${PHASE285_ACTIONLINT%/*}:${PHASE285_SHELLCHECK%/*}:${PHASE285_DOCKER%/*}"
+          RUSTC="$PHASE285_RUSTC"
+          RUSTFMT="$PHASE285_RUSTFMT"
+          CLIPPY_DRIVER="$PHASE285_CLIPPY_DRIVER"
+          CLIPPY_CONF_DIR="$PWD"
+          export PATH RUSTC RUSTFMT CLIPPY_DRIVER CLIPPY_CONF_DIR
+          readonly PATH RUSTC RUSTFMT CLIPPY_DRIVER CLIPPY_CONF_DIR PHASE285_BASH PHASE285_GIT PHASE285_PYTHON PHASE285_SHASUM PHASE285_AWK PHASE285_MKTEMP PHASE285_CONNZ_CURL_BIN PHASE285_RUSTUP PHASE285_CARGO PHASE285_RUSTC PHASE285_RUSTFMT PHASE285_CARGO_CLIPPY PHASE285_CLIPPY_DRIVER PHASE285_SYSROOT PHASE285_GO PHASE285_SHELLCHECK PHASE285_DOCKER PHASE285_ACTIONLINT PHASE285_CANDIDATE_TREE PHASE285_CANDIDATE_BASELINE PHASE285_CANDIDATE_BASELINE_SHA256
+          PHASE285_ACTIVE_TARGET=
+          PHASE285_ACTIVE_TARGET_IDENTITY=
+          verify_candidate_inventory() {
+            /usr/bin/python3 -I - "$PHASE285_CANDIDATE_BASELINE_SHA256" "$GITHUB_SHA" "$PHASE285_ACTIVE_TARGET" "$PHASE285_ACTIVE_TARGET_IDENTITY" 3<<< "$PHASE285_CANDIDATE_BASELINE" <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import stat
+          import sys
+
+          expected_digest = sys.argv[1]
+          github_sha = sys.argv[2]
+          active_target_text = sys.argv[3]
+          active_target_identity = sys.argv[4]
+          encoded = os.fdopen(3, encoding="ascii").read().strip()
+          payload = base64.b64decode(encoded, validate=True)
+          if hashlib.sha256(payload).hexdigest() != expected_digest:
+              raise SystemExit("candidate_inventory[baseline-digest]")
+          baseline = json.loads(payload)
+          if baseline["sha"] != github_sha:
+              raise SystemExit(
+                  f"candidate_inventory[baseline-sha:{baseline['sha']}:expected:{github_sha}]"
+              )
+          object_format = baseline["object_format"]
+          if object_format not in {"sha1", "sha256"}:
+              raise SystemExit(f"candidate_inventory[object-format:{object_format}]")
+          algorithm = getattr(hashlib, object_format)
+          expected = {
+              path: (mode, object_id)
+              for path, mode, object_id in baseline["files"]
+          }
+          if len(expected) != len(baseline["files"]):
+              raise SystemExit("candidate_inventory[duplicate-path]")
+          expected_directories = set(baseline["directories"])
+          root = pathlib.Path.cwd().resolve(strict=True)
+
+          def recursive_inventory(inventory_root):
+              entries = [[".", "directory", inventory_root.lstat().st_mode, None]]
+              for directory, names, files in os.walk(
+                  inventory_root, topdown=True, followlinks=False
+              ):
+                  names[:] = sorted(names)
+                  files = sorted(files)
+                  retained_names = []
+                  for name in names:
+                      path = pathlib.Path(directory) / name
+                      relative = path.relative_to(inventory_root).as_posix()
+                      metadata = path.lstat()
+                      if stat.S_ISLNK(metadata.st_mode):
+                          entries.append(
+                              [relative, "symlink", metadata.st_mode, os.readlink(path)]
+                          )
+                      elif stat.S_ISDIR(metadata.st_mode):
+                          entries.append([relative, "directory", metadata.st_mode, None])
+                          retained_names.append(name)
+                      else:
+                          raise SystemExit(
+                              f"candidate_inventory[git-nondirectory:{relative}]"
+                          )
+                  names[:] = retained_names
+                  for name in files:
+                      path = pathlib.Path(directory) / name
+                      relative = path.relative_to(inventory_root).as_posix()
+                      metadata = path.lstat()
+                      if stat.S_ISLNK(metadata.st_mode):
+                          value = os.readlink(path)
+                          kind = "symlink"
+                      elif stat.S_ISREG(metadata.st_mode):
+                          value = hashlib.sha256(path.read_bytes()).hexdigest()
+                          kind = "file"
+                      else:
+                          raise SystemExit(
+                              f"candidate_inventory[git-nonregular:{relative}]"
+                          )
+                      entries.append([relative, kind, metadata.st_mode, value])
+              return sorted(entries)
+
+          def directory_control(path, label):
+              if not path.exists() and not path.is_symlink():
+                  return {"state": "absent"}
+              metadata = path.lstat()
+              if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                  raise SystemExit(f"candidate_inventory[{label}:type]")
+              return {
+                  "entries": recursive_inventory(path),
+                  "identity": [metadata.st_dev, metadata.st_ino, metadata.st_mode],
+                  "path": str(path),
+                  "state": "directory",
+              }
+
+          def ancestor_cargo_controls(inventory_root):
+              controls = []
+              ancestor = inventory_root.resolve(strict=True).parent
+              while True:
+                  cargo_directory = ancestor / ".cargo"
+                  if cargo_directory.exists() or cargo_directory.is_symlink():
+                      directory_metadata = cargo_directory.lstat()
+                      if stat.S_ISLNK(directory_metadata.st_mode) or not stat.S_ISDIR(
+                          directory_metadata.st_mode
+                      ):
+                          raise SystemExit(
+                              f"candidate_inventory[ancestor-cargo-directory:{cargo_directory}]"
+                          )
+                  for name in ("config", "config.toml"):
+                      path = cargo_directory / name
+                      label = str(path)
+                      if not path.exists() and not path.is_symlink():
+                          controls.append([label, "absent", None, None])
+                          continue
+                      metadata = path.lstat()
+                      if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(
+                          metadata.st_mode
+                      ):
+                          raise SystemExit(
+                              f"candidate_inventory[ancestor-cargo-control:{label}]"
+                          )
+                      controls.append(
+                          [
+                              label,
+                              "file",
+                              metadata.st_mode,
+                              hashlib.sha256(path.read_bytes()).hexdigest(),
+                          ]
+                      )
+                  if ancestor == ancestor.parent:
+                      break
+                  ancestor = ancestor.parent
+              return controls
+
+          git_root = root / ".git"
+          git_root_metadata = git_root.lstat()
+          if stat.S_ISLNK(git_root_metadata.st_mode) or not stat.S_ISDIR(
+              git_root_metadata.st_mode
+          ):
+              raise SystemExit("candidate_inventory[git-not-real-directory]")
+          if recursive_inventory(git_root) != baseline["git"]:
+              raise SystemExit("candidate_inventory[git-control-plane]")
+          cargo_home = pathlib.Path(baseline["cargo_home"])
+          cargo_home_metadata = cargo_home.lstat()
+          if stat.S_ISLNK(cargo_home_metadata.st_mode) or not stat.S_ISDIR(
+              cargo_home_metadata.st_mode
+          ):
+              raise SystemExit("candidate_inventory[cargo-home-not-real-directory]")
+          observed_cargo_controls = []
+          for name in ("config", "config.toml", "credentials", "credentials.toml"):
+              path = cargo_home / name
+              if not path.exists() and not path.is_symlink():
+                  observed_cargo_controls.append([name, "absent", None, None])
+                  continue
+              metadata = path.lstat()
+              if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                  raise SystemExit(f"candidate_inventory[cargo-control-type:{name}]")
+              observed_cargo_controls.append(
+                  [
+                      name,
+                      "file",
+                      metadata.st_mode,
+                      hashlib.sha256(path.read_bytes()).hexdigest(),
+                  ]
+              )
+          if observed_cargo_controls != baseline["cargo_controls"]:
+              raise SystemExit("candidate_inventory[cargo-controls]")
+          observed_cargo_source_trees = {
+              "git": directory_control(cargo_home / "git", "cargo-git"),
+              "registry": directory_control(
+                  cargo_home / "registry", "cargo-registry"
+              ),
+          }
+          if observed_cargo_source_trees != baseline["cargo_source_trees"]:
+              deltas = {}
+              for source_kind in ("git", "registry"):
+                  expected_tree = baseline["cargo_source_trees"][source_kind]
+                  observed_tree = observed_cargo_source_trees[source_kind]
+                  if expected_tree == observed_tree:
+                      continue
+                  expected_entries = {
+                      entry[0]: entry[1:] for entry in expected_tree.get("entries", [])
+                  }
+                  observed_entries = {
+                      entry[0]: entry[1:] for entry in observed_tree.get("entries", [])
+                  }
+                  deltas[source_kind] = {
+                      "state": [expected_tree.get("state"), observed_tree.get("state")],
+                      "missing": sorted(set(expected_entries) - set(observed_entries))[:8],
+                      "extra": sorted(set(observed_entries) - set(expected_entries))[:8],
+                      "changed": sorted(
+                          path
+                          for path in set(expected_entries) & set(observed_entries)
+                          if expected_entries[path] != observed_entries[path]
+                      )[:8],
+                  }
+              raise SystemExit(
+                  "candidate_inventory[cargo-source-trees:"
+                  + json.dumps(deltas, sort_keys=True, separators=(",", ":"))
+                  + "]"
+              )
+          if ancestor_cargo_controls(root) != baseline["cargo_ancestor_controls"]:
+              raise SystemExit("candidate_inventory[ancestor-cargo-controls]")
+          sysroot_path = pathlib.Path(baseline["sysroot"]["path"])
+          if directory_control(sysroot_path, "sysroot") != baseline["sysroot"]:
+              raise SystemExit("candidate_inventory[sysroot]")
+          docker_config = pathlib.Path(baseline["docker_config"])
+          docker_config_metadata = docker_config.lstat()
+          if stat.S_ISLNK(docker_config_metadata.st_mode) or not stat.S_ISDIR(
+              docker_config_metadata.st_mode
+          ):
+              raise SystemExit("candidate_inventory[docker-config-not-real-directory]")
+          if recursive_inventory(docker_config) != baseline["docker_config_inventory"]:
+              raise SystemExit("candidate_inventory[docker-config]")
+          target_root = pathlib.Path(baseline["target_root"])
+          target_root_metadata = target_root.lstat()
+          observed_target_root_identity = [
+              target_root_metadata.st_dev,
+              target_root_metadata.st_ino,
+              target_root_metadata.st_mode,
+          ]
+          if (
+              stat.S_ISLNK(target_root_metadata.st_mode)
+              or not stat.S_ISDIR(target_root_metadata.st_mode)
+              or stat.S_IMODE(target_root_metadata.st_mode) != 0o700
+              or observed_target_root_identity != baseline["target_root_identity"]
+          ):
+              raise SystemExit("candidate_inventory[target-root-identity]")
+          target_children = sorted(target_root.iterdir(), key=lambda path: path.name)
+          if active_target_text:
+              active_target = pathlib.Path(active_target_text)
+              if not active_target.is_absolute() or active_target.parent != target_root:
+                  raise SystemExit("candidate_inventory[active-target-confinement]")
+              if target_children != [active_target]:
+                  raise SystemExit("candidate_inventory[active-target-child-set]")
+              active_metadata = active_target.lstat()
+              observed_active_identity = (
+                  f"{active_metadata.st_dev}:{active_metadata.st_ino}:"
+                  f"{active_metadata.st_mode}"
+              )
+              if (
+                  stat.S_ISLNK(active_metadata.st_mode)
+                  or not stat.S_ISDIR(active_metadata.st_mode)
+                  or stat.S_IMODE(active_metadata.st_mode) != 0o700
+                  or observed_active_identity != active_target_identity
+              ):
+                  raise SystemExit("candidate_inventory[active-target-identity]")
+          elif active_target_identity or target_children:
+              raise SystemExit("candidate_inventory[inactive-target-root-not-empty]")
+          for tool in baseline["tools"]:
+              invocation = pathlib.Path(tool["invocation"])
+              invocation_metadata = invocation.lstat()
+              if invocation_metadata.st_mode != tool["invocation_mode"]:
+                  raise SystemExit(f"candidate_inventory[tool-mode:{tool['label']}]")
+              invocation_link = (
+                  os.readlink(invocation)
+                  if stat.S_ISLNK(invocation_metadata.st_mode)
+                  else None
+              )
+              if invocation_link != tool["invocation_link"]:
+                  raise SystemExit(f"candidate_inventory[tool-link:{tool['label']}]")
+              resolved = invocation.resolve(strict=True)
+              if str(resolved) != tool["resolved"]:
+                  raise SystemExit(f"candidate_inventory[tool-resolved:{tool['label']}]")
+              resolved_metadata = resolved.lstat()
+              if (
+                  resolved_metadata.st_mode != tool["resolved_mode"]
+                  or hashlib.sha256(resolved.read_bytes()).hexdigest()
+                  != tool["resolved_sha256"]
+              ):
+                  raise SystemExit(f"candidate_inventory[tool-bytes:{tool['label']}]")
+          observed = set()
+          observed_directories = {"."}
+          for directory, names, files in os.walk(root, topdown=True, followlinks=False):
+              relative_directory = pathlib.Path(directory).relative_to(root)
+              names[:] = sorted(name for name in names if not (relative_directory == pathlib.Path(".") and name == ".git"))
+              for name in names:
+                  path = pathlib.Path(directory) / name
+                  if path.is_symlink():
+                      raise SystemExit(f"candidate_inventory[symlink-directory:{path.relative_to(root)}]")
+                  observed_directories.add(path.relative_to(root).as_posix())
+              for name in sorted(files):
+                  observed.add((pathlib.Path(directory) / name).relative_to(root).as_posix())
+          if observed != set(expected):
+              raise SystemExit(
+                  f"candidate_inventory[path-set:missing={sorted(set(expected)-observed)}:extra={sorted(observed-set(expected))}]"
+              )
+          if observed_directories != expected_directories:
+              raise SystemExit(
+                  f"candidate_inventory[directory-set:missing={sorted(expected_directories-observed_directories)}:extra={sorted(observed_directories-expected_directories)}]"
+              )
+          for path, (mode, object_id) in sorted(expected.items()):
+              candidate = root / path
+              metadata = candidate.lstat()
+              if mode == "120000":
+                  if not stat.S_ISLNK(metadata.st_mode):
+                      raise SystemExit(f"candidate_inventory[type:{path}]")
+                  payload = os.fsencode(os.readlink(candidate))
+              else:
+                  if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                      raise SystemExit(f"candidate_inventory[type:{path}]")
+                  executable = bool(metadata.st_mode & 0o111)
+                  if executable != (mode == "100755"):
+                      raise SystemExit(f"candidate_inventory[mode:{path}]")
+                  payload = candidate.read_bytes()
+              framed = b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload
+              if algorithm(framed).hexdigest() != object_id:
+                  raise SystemExit(f"candidate_inventory[bytes:{path}]")
+          print(
+              f"phase285_candidate_inventory sha={baseline['sha']} tree={baseline['tree']} "
+              f"baseline={expected_digest} files={len(expected)} "
+              f"directories={len(expected_directories)} tools={len(baseline['tools'])} "
+              f"git_entries={len(baseline['git'])} cargo_controls=4 docker_config=empty "
+              f"cargo_ancestor_controls={len(baseline['cargo_ancestor_controls'])} "
+              f"sysroot_entries={len(baseline['sysroot']['entries'])} "
+              f"target_root_identity=exact bytes_modes_tools_git_cargo_docker_sysroot=exact passed=1"
+          )
+          PY
+          }
+          verify_candidate_inventory_on_exit() {
+            local prior_status=$?
+            trap - EXIT
+            verify_candidate_inventory || prior_status=1
+            if test -n "$PHASE285_ACTIVE_TARGET"; then
+              cleanup_assurance_target || prior_status=1
+            fi
+            exit "$prior_status"
+          }
+          run_assured() {
+            local command_status=0 verification_status=0 cleanup_status=0
+            verify_candidate_inventory || return $?
+            allocate_assurance_target || return $?
+            "$@" || command_status=$?
+            verify_candidate_inventory || verification_status=$?
+            cleanup_assurance_target || cleanup_status=$?
+            if test "$verification_status" -ne 0; then
+              return "$verification_status"
+            fi
+            if test "$cleanup_status" -ne 0; then
+              return "$cleanup_status"
+            fi
+            return "$command_status"
+          }
+          run_assured_expect_status() {
+            local expected_status="$1" command_status=0 verification_status=0 cleanup_status=0
+            shift
+            verify_candidate_inventory || return $?
+            allocate_assurance_target || return $?
+            "$@" || command_status=$?
+            verify_candidate_inventory || verification_status=$?
+            cleanup_assurance_target || cleanup_status=$?
+            if test "$verification_status" -ne 0; then
+              return "$verification_status"
+            fi
+            if test "$cleanup_status" -ne 0; then
+              return "$cleanup_status"
+            fi
+            test "$command_status" -eq "$expected_status"
+          }
+          allocate_assurance_target() {
+            local created_target
+            test -z "$PHASE285_ACTIVE_TARGET" || {
+              echo "Phase 285 assurance target already active" >&2
+              return 2
+            }
+            case "$PHASE285_TARGET_ROOT" in
+              /*) ;;
+              *) echo "Phase 285 assurance target root is not absolute" >&2; return 2 ;;
+            esac
+            case "$PHASE285_TARGET_ROOT/" in
+              "$PWD/"*) echo "Phase 285 assurance target root overlaps checkout" >&2; return 2 ;;
+            esac
+            case "$PWD/" in
+              "$PHASE285_TARGET_ROOT/"*) echo "Phase 285 checkout overlaps assurance target root" >&2; return 2 ;;
+            esac
+            created_target="$("$PHASE285_MKTEMP" -d "$PHASE285_TARGET_ROOT/command.XXXXXXXX")"
+            PHASE285_ACTIVE_TARGET_IDENTITY="$(
+              /usr/bin/python3 -I - "$created_target" <<'PY'
+          import pathlib
+          import stat
+          import sys
+
+          target = pathlib.Path(sys.argv[1])
+          metadata = target.lstat()
+          if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+              raise SystemExit("phase285_assurance_target[type]")
+          if stat.S_IMODE(metadata.st_mode) != 0o700:
+              raise SystemExit("phase285_assurance_target[mode]")
+          print(f"{metadata.st_dev}:{metadata.st_ino}:{metadata.st_mode}")
+          PY
+            )"
+            PHASE285_ACTIVE_TARGET="$created_target"
+            CARGO_TARGET_DIR="$created_target"
+            export CARGO_TARGET_DIR
+            echo "phase285_assurance_target allocated=${created_target##*/}"
+          }
+          cleanup_assurance_target() {
+            test -n "$PHASE285_ACTIVE_TARGET" || {
+              echo "Phase 285 assurance target is not active" >&2
+              return 2
+            }
+            /usr/bin/python3 -I - "$PHASE285_TARGET_ROOT" "$PHASE285_ACTIVE_TARGET" "$PHASE285_ACTIVE_TARGET_IDENTITY" <<'PY'
+          import os
+          import pathlib
+          import shutil
+          import stat
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          target = pathlib.Path(sys.argv[2])
+          expected_identity = sys.argv[3]
+          root_metadata = root.lstat()
+          target_metadata = target.lstat()
+          if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
+              raise SystemExit("phase285_assurance_cleanup[root-type]")
+          if not target.is_absolute() or target.parent != root:
+              raise SystemExit("phase285_assurance_cleanup[confinement]")
+          if not target.name.startswith("command."):
+              raise SystemExit("phase285_assurance_cleanup[name]")
+          if stat.S_ISLNK(target_metadata.st_mode) or not stat.S_ISDIR(target_metadata.st_mode):
+              raise SystemExit("phase285_assurance_cleanup[target-type]")
+          if stat.S_IMODE(target_metadata.st_mode) != 0o700:
+              raise SystemExit("phase285_assurance_cleanup[target-mode]")
+          observed_identity = (
+              f"{target_metadata.st_dev}:{target_metadata.st_ino}:"
+              f"{target_metadata.st_mode}"
+          )
+          if observed_identity != expected_identity:
+              raise SystemExit("phase285_assurance_cleanup[target-identity]")
+          shutil.rmtree(target)
+          if os.path.lexists(target):
+              raise SystemExit("phase285_assurance_cleanup[residue]")
+          PY
+            echo "phase285_assurance_target removed=${PHASE285_ACTIVE_TARGET##*/}"
+            PHASE285_ACTIVE_TARGET=
+            PHASE285_ACTIVE_TARGET_IDENTITY=
+            unset CARGO_TARGET_DIR
+            verify_candidate_inventory
+          }
+          verify_integrity_roots() {
+            local observed_launcher_sha observed_manifest_sha
+            observed_launcher_sha="$(/usr/bin/shasum -a 256 tools/check-phase285-witness-integrity.sh | /usr/bin/awk '{print $1}')"
+            observed_manifest_sha="$(/usr/bin/shasum -a 256 tools/fixtures/phase285-witness-integrity.json | /usr/bin/awk '{print $1}')"
+            test "$observed_launcher_sha" = "$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256" || {
+              echo "Phase 285 integrity launcher root mismatch" >&2
+              return 1
+            }
+            test "$observed_manifest_sha" = "$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256" || {
+              echo "Phase 285 integrity manifest root mismatch" >&2
+              return 1
+            }
+          }
+          trap verify_candidate_inventory_on_exit EXIT
+
+          PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256=e59ba9f62bf126bccdf8c0d3331b54adae9e74f8fe1ee6e31d43e3dec9ca66b1
+          PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256=24e0e3dddd9d2bf1ee4516cf466a389e785e3c769f65ff5b9b3a1ef85c2c541c
+          export PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256
+          readonly PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256 PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256
+          verify_integrity_roots
+          run_assured /bin/bash tools/check-phase285-witness-integrity.sh --integrity-self-test
+          run_assured /bin/bash tools/check-phase285-witness-integrity.sh response-failure-wire
+          run_assured /bin/bash tools/check-phase285-witness-integrity.sh candidate-verifier
+          run_assured /bin/bash tools/check-phase285-witness-integrity.sh protocol-checkpoint
+          run_assured /bin/bash tools/check-phase285-witness-integrity.sh atomic-store-contract
+          run_assured /bin/bash tools/check-phase285-witness-integrity.sh in-memory-differential
+          run_assured /bin/bash tools/check-phase285-witness-integrity.sh typed-proxy
+          run_assured /bin/bash tools/check-phase285-witness-integrity.sh transport-layering
+
+          run_assured /bin/bash tools/check-witness-dependency-closure.sh --library-only
+          run_assured /bin/bash tools/check-witness-dependency-closure.sh --current-targets
+
+          run_assured /bin/bash tools/with-nats-jetstream.sh --relay-service-checkpoint /usr/bin/env PHASE285_CONNZ_CURL_BIN="$PHASE285_CONNZ_CURL_BIN" PHASE285_SERVICE_CHECKPOINT_TREE="$PHASE285_CANDIDATE_TREE" PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256="$PHASE285_WITNESS_INTEGRITY_LAUNCHER_SHA256" PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256="$PHASE285_WITNESS_INTEGRITY_MANIFEST_SHA256" /bin/bash tools/check-phase285-witness-integrity.sh --focused-service-checkpoint-ci-harness
+
+          run_assured "$PHASE285_CARGO" clippy -p swarm-governance -p swarm-governance-witness --all-targets --all-features --locked --offline -- -D warnings
+          run_assured "$PHASE285_SHELLCHECK" --norc tools/check-gates-wired.sh tools/check-negative-registry.sh tools/check-phase285-witness-conformance.sh tools/check-phase285-witness-integrity.sh tools/check-witness-dependency-closure.sh tools/with-nats-jetstream.sh
+          run_assured "$PHASE285_ACTIONLINT" .github/workflows/ci.yml
+
+          run_assured /bin/bash tools/check-phase285-witness-conformance.sh --self-test
+          run_assured /bin/bash tools/check-phase285-deployment.sh --self-test
+          run_assured /bin/bash tools/check-phase285-closure.sh --self-test
+          run_assured /bin/bash tools/check-phase285-evidence.sh --self-test
+          run_assured /bin/bash tools/check-phase285-plan-schema.sh --self-test
+          run_assured /bin/bash tools/check-gates-wired.sh --phase285-self-test
+          if test -x tools/check-phase285-governance-persistence.sh; then
+            run_assured /bin/bash tools/check-phase285-governance-persistence.sh --self-test
+          elif run_assured_expect_status 127 /bin/bash tools/check-phase285-governance-persistence.sh --self-test; then
+            echo "missing target confirmed: Plan 05A owns tools/check-phase285-governance-persistence.sh"
+          else
+            echo "absent governance checker status or assured inventory differed" >&2
+            exit 1
+          fi
+          }
+          readonly -f phase285_assurance_main
+          phase285_assurance_main
+
+  # Phase 285 runs these gates on separate fresh hosted runners. Each job has
+  # only the pinned credential-free checkout before the gate, and its explicit
+  # custom shell makes /usr/bin/env the first child instead of a PATH-resolved
+  # default Bash. This prevents earlier repository commands, caches,
+  # GITHUB_ENV, or GITHUB_PATH from affecting either gate's bootstrap.
+  # Two warm local clean-launch runs of the preceding 179-self-test registry gate
+  # took 89.73s and 78.19s wall clock (38.51/38.17s user, 16.18/15.26s sys) on
+  # Darwin 25.4.0 arm64 with rustc 1.97.1 on 2026-08-15. The current gate adds four
+  # lexical workflow-name mutations and fourteen governance-assurance mutations; it
+  # also executes the exact 94-case single-governor gate inside the protected
+  # contract. These are local observations, not a CI estimate; compiled
+  # actual-source mutations dominate.
+  mapping-contract:
+    name: mapping-contract (${{ github.sha }})
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Check the invariant map against the source markers
+        shell: /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: tools/check-mapping.sh
+
+  negative-registry-contract:
+    name: negative-registry-contract (${{ github.sha }})
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Check every mapped invariant has a falsifying negative test
+        shell: /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: tools/check-negative-registry.sh
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Cache cargo home
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-sources-v1-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt --all -- --check
 
   panic-contract:
     runs-on: ubuntu-latest
@@ -56,19 +1082,16 @@ jobs:
           fetch-depth: 0
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -144,9 +1167,10 @@ jobs:
       # to fail is the eleventh entry in .planning/STATE.md's defect catalogue.
       # Every invocation generates a real miniature cargo workspace, runs the
       # SAME rule engine with the SAME policy and baseline over it, proves the
-      # clean fixture exits 0, then breaks it nine ways and proves each break is
-      # caught with the right diagnostic. Four of the nine are cases cargo
-      # itself accepts (dev cycles, build cycles, transitive transport edges),
+      # clean fixture exits 0, then breaks it ten ways and proves each break is
+      # caught with the right diagnostic. Five of the ten are cases cargo
+      # itself accepts (dev/build cycles, a normal allow-list escape, and
+      # transitive transport edges),
       # so they are violations nothing else in this pipeline would reject.
       - name: Check the trusted-computing-base layering boundary
         run: bash tools/check-workspace-layering.sh
@@ -159,18 +1183,20 @@ jobs:
       # This is the WEAKEST of the three mechanisms and its header says so. The
       # type (`LocalGovernorKey`, no `SigningKey` accessor) and the test
       # (`register_governor` returns Err on a second distinct key) are the
-      # guarantee; this is a lexical backstop over the three files that make up
-      # the governance signing path, and it enumerates four things it cannot
-      # see -- including two `GovernancePolicy` instances in one process, which
-      # nothing here closes.
+      # guarantee; this gate scans the three governance signing paths and pins
+      # the shipped opaque-handle source, impl, and public-API inventories. It
+      # still cannot prove that no other `GovernancePolicy` instance exists in a
+      # process; the shipped builder's same-Arc identity test covers its concrete
+      # dispatcher/ingest/containment/resume composition.
       #
       # It runs a FIXTURE on every invocation before it touches the real tree:
-      # six planted violations that must be caught and three controls that must
-      # not be, including a keyring inside `#[cfg(test)]` and one named only in
+      # fifty-two planted violations that must be caught and six controls that
+      # must not be, including a keyring inside `#[cfg(test)]` and one named only in
       # a comment. Three identifier-grep sweeps in this repository's history
       # declared themselves complete and were wrong; a grep that has never been
-      # observed to fail is not evidence. No toolchain needed beyond awk, so it
-      # belongs in this job with the other fast static checks.
+      # observed to fail is not evidence. Its compiler red also proves the
+      # crate-level unsafe-code prohibition; this job already installs the pinned
+      # Rust toolchain.
       - name: Check no production path holds a governor keyring
         run: bash tools/check-single-governor-key.sh
 
@@ -181,27 +1207,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -210,35 +1225,22 @@ jobs:
         run: cargo build --workspace --all-targets
 
   clippy:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -249,35 +1251,22 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -290,7 +1279,7 @@ jobs:
       # job. A smoke test for a shipped artifact that never runs in CI is not a
       # gate, so the toolchain is installed rather than the test skipped.
       - name: Install uv (python toolchain for the generated-client smoke test)
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
 
       - name: Run tests (workspace, parallel)
         run: cargo test --workspace --exclude swarm-runtime --exclude swarm-ingest-runtime
@@ -367,40 +1356,27 @@ jobs:
   # than needing libz3-dev or a source build. Measured in this worktree: a cold
   # `cargo check -p swarm-runtime --features z3 --all-targets` finished in 58s and
   # the test run in 1m06s. The download is a network fetch at build time; it is
-  # cached with the other build artifacts by the same key the sibling jobs use.
-  # If GitHub releases ever becomes unreachable this job fails loudly, which is
-  # the correct failure -- silently not compiling the solver is what this job
-  # exists to end.
+  # not preserved: this lane restores registry/git sources only, then uses a cold,
+  # uncached target directory and downloads the solver again. If GitHub releases
+  # ever becomes unreachable this job fails loudly, which is the correct failure
+  # -- silently not compiling the solver is what this job exists to end.
   solver-z3:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-z3-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-z3-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -431,19 +1407,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -452,35 +1425,22 @@ jobs:
         run: bash tools/check-fixture-freshness.sh
 
   platform-contract:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -489,7 +1449,7 @@ jobs:
       # `uvx --from openapi-spec-validator`, so it needs uv on PATH for the same
       # reason 64cb1be installed it in the test job.
       - name: Install uv (uvx runs the OpenAPI validator)
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
 
       # Task #15. This script existed and no workflow ran it. Nothing else in
       # the repo checks that docs/openapi/v2-platform-openapi.json is valid
@@ -506,35 +1466,22 @@ jobs:
         run: bash tools/check-platform-openapi.sh
 
   proof-surfaces:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -577,35 +1524,22 @@ jobs:
         run: bash tools/check-worktree-clean.sh "the proof-surface run"
 
   jetstream:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -614,35 +1548,22 @@ jobs:
         run: bash tools/with-nats-jetstream.sh cargo test -p swarm-pheromone --test jetstream --test multi_instance -- --ignored
 
   benchmark:
-    needs:
-      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
-
-      - name: Restore shared target cache
-        uses: actions/cache@v4
-        with:
-          path: target/ci
-          key: cargo-target-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -662,33 +1583,46 @@ jobs:
 
   supply-chain:
     runs-on: ubuntu-latest
+    env:
+      CARGO_DENY_VERSION: "0.19.4"
+      CARGO_AUDIT_VERSION: "0.22.0"
+      CARGO_CYCLONEDX_VERSION: "0.5.9"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Cache cargo home
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-home-${{ runner.os }}-
+            cargo-home-sources-v1-${{ runner.os }}-deny-${{ env.CARGO_DENY_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        run: command -v cargo-deny >/dev/null || cargo install cargo-deny --locked
+        run: |
+          cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked --force
+          cargo-deny --version
 
       - name: Install cargo-audit
-        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
+        run: |
+          cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked --force
+          cargo-audit --version
+
+      - name: Install cargo-cyclonedx
+        run: |
+          CYCLONEDX_INSTALL_ROOT="${RUNNER_TEMP}/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}"
+          cargo install cargo-cyclonedx --version "${CARGO_CYCLONEDX_VERSION}" --locked --force --root "${CYCLONEDX_INSTALL_ROOT}"
+          CARGO_CYCLONEDX_BIN="${CYCLONEDX_INSTALL_ROOT}/bin/cargo-cyclonedx"
+          test "$("${CARGO_CYCLONEDX_BIN}" cyclonedx --version)" = "cargo-cyclonedx-cyclonedx ${CARGO_CYCLONEDX_VERSION}"
+          printf 'CARGO_CYCLONEDX_BIN=%s\n' "${CARGO_CYCLONEDX_BIN}" >>"${GITHUB_ENV}"
 
       - name: Run supply-chain checks
         run: bash tools/check-supply-chain.sh

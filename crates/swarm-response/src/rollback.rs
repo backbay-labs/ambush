@@ -183,10 +183,14 @@ pub fn resolve_inverse(
         (
             ResponseAction::TerminateUserSession { .. },
             ResponseRollbackStepKind::ReauthenticateUserSession,
-        ) => Err(InverseGap::Irreversible {
-            reason: "a terminated session cannot be resumed; the principal can only establish a \
-                     fresh session",
-        }),
+        ) => {
+            // INVARIANT: RESPONSE-IRREVERSIBLE-INVERSE-REFUSED
+            Err(InverseGap::Irreversible {
+                reason: "a terminated session cannot be resumed; the principal can only establish a \
+                         fresh session",
+            })
+        }
+        // INVARIANT: RESPONSE-UNMAPPED-INVERSE-REFUSED
         _ => Err(InverseGap::Unmapped),
     }
 }
@@ -351,6 +355,9 @@ impl RollbackReceipt {
         completed_at_ms: i64,
         steps: Vec<RollbackStepOutcome>,
     ) -> Self {
+        // INVARIANT: RESPONSE-EMPTY-ROLLBACK-NOT-SUCCESS
+        // INVARIANT: RESPONSE-ENFORCED-SIMULATION-NOT-SUCCESS
+        // INVARIANT: RESPONSE-PARTIAL-ROLLBACK-NOT-SUCCESS
         let status = Self::derive_status(&steps, mode);
         let reversed = steps.iter().filter(|step| step.status.restored()).count();
         Self {
@@ -431,6 +438,7 @@ impl RollbackExecutor for SandboxRollbackExecutor {
         mode: ExecutionMode,
         completed_at_ms: i64,
     ) -> Result<RollbackReceipt, ResponseError> {
+        // INVARIANT: RESPONSE-ROLLBACK-REQUIRES-STEPS
         require_steps(lease, mode)?;
 
         let steps = lease
@@ -438,6 +446,7 @@ impl RollbackExecutor for SandboxRollbackExecutor {
             .steps
             .iter()
             .map(|step| match resolve_inverse(lease.action(), step.kind) {
+                // INVARIANT: RESPONSE-SANDBOX-NEVER-REVERSES
                 Ok(inverse) => RollbackStepOutcome {
                     kind: step.kind,
                     status: RollbackStepStatus::Simulated,

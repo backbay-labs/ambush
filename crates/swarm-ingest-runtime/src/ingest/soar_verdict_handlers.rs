@@ -15,9 +15,13 @@ use swarm_core::types::{
 };
 use swarm_runtime::providence::resolve_feedback_target;
 use swarm_runtime::runtime_events::now_ms;
-use swarm_spine::{AnalystFeedbackAuditEntry, IncidentStore};
+use swarm_spine::{
+    AnalystFeedbackAuditEntry, IncidentStore, SoarVerdictClaimLease, SoarVerdictClaimResult,
+};
+use uuid::Uuid;
 
 pub(crate) const SOAR_VERDICT_CHANNEL: &str = "soar_verdict_webhook";
+const SOAR_VERDICT_CLAIM_LEASE_MS: i64 = 30_000;
 
 #[derive(Debug, Serialize)]
 pub(super) struct SoarVerdictResponse {
@@ -66,7 +70,7 @@ pub(crate) async fn soar_verdict_handler(
         source_case_id: request.source_case_id.clone(),
         source_case_url: request.source_case_url.clone(),
     };
-    validate_soar_verdict_request(&request).or_else(|error| {
+    if let Err(error) = validate_soar_verdict_request(&request) {
         persist_rejected_soar_verdict(
             &state,
             &lookup.incident,
@@ -75,45 +79,11 @@ pub(crate) async fn soar_verdict_handler(
             payload_value.clone(),
             Some(verdict_lineage.clone()),
             &error.error,
-        )?;
-        Err(error)
-    })?;
-
-    if lookup.incident.feedback_audit_entries.iter().any(|entry| {
-        entry.soar_lineage.as_ref().is_some_and(|lineage| {
-            lineage.source_system == request.source_system
-                && lineage.source_verdict_id == request.source_verdict_id
-        })
-    }) {
-        persist_rejected_soar_verdict(
-            &state,
-            &lookup.incident,
-            &request,
-            signature,
-            payload_value,
-            Some(verdict_lineage),
-            "duplicate source verdict",
-        )?;
-        return Err(ProvidenceFeedbackError {
-            status: StatusCode::CONFLICT,
-            error: format!(
-                "source verdict `{}` from `{}` was already applied",
-                request.source_verdict_id,
-                soar_source_slug(request.source_system)
-            ),
-        });
+        )
+        .await?;
+        return Err(error);
     }
 
-    let target = resolve_feedback_target(&lookup, request.finding_id.as_deref())
-        .map_err(ProvidenceFeedbackError::not_found)?;
-    let target = enrich_feedback_target(&state, &lookup, &target)?;
-    let received_at_ms = now_ms();
-    let feedback_id = format!(
-        "soar-verdict:{}:{}:{}",
-        soar_source_slug(request.source_system),
-        super::sanitize_id(&request.source_verdict_id),
-        received_at_ms
-    );
     let normalized = SwarmProvidenceFeedbackRequest {
         action: request.action,
         incident_id: request.incident_id.clone(),
@@ -121,38 +91,141 @@ pub(crate) async fn soar_verdict_handler(
         analyst_id: request.analyst_id.clone(),
         reason: request.reason.clone(),
     };
+    let prior_claim = state
+        .current_incident_store()
+        .load_soar_verdict_claim(request.source_system, &request.source_verdict_id)
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+    // A rolling upgrade must retain the identifier already bound to this
+    // external verdict. Older releases used a sanitized source identifier;
+    // changing it during an exact retry would turn the same request into an
+    // idempotency conflict and could repeat downstream work.
+    let feedback_id = match prior_claim.as_ref() {
+        Some(entry) if !entry.feedback_id.trim().is_empty() => entry.feedback_id.clone(),
+        Some(_) => {
+            return Err(ProvidenceFeedbackError::internal(
+                "durable SOAR claim has an empty feedback identifier",
+            ));
+        }
+        None => soar_feedback_id(request.source_system, &request.source_verdict_id)?,
+    };
+    let prior_target = prior_claim
+        .as_ref()
+        .and_then(|entry| claimed_feedback_target(entry).ok());
+    let current_target = || {
+        let target = resolve_feedback_target(&lookup, request.finding_id.as_deref())
+            .map_err(ProvidenceFeedbackError::not_found)?;
+        enrich_feedback_target(&state, &lookup, &target)
+    };
+    let claim_target = match prior_target {
+        Some(target) => Some(target),
+        None => match current_target() {
+            Ok(target) => Some(target),
+            Err(_) if prior_claim.is_some() => None,
+            Err(error) => return Err(error),
+        },
+    };
+    let claim_outcome = claim_target.as_ref().map_or_else(
+        || json!({"status": "applying"}),
+        |target| json!({"status": "applying", "target": target}),
+    );
+    let claim_observed_at_ms = now_ms();
+    let claimed = AnalystFeedbackAuditEntry {
+        feedback_id: feedback_id.clone(),
+        received_at_ms: claim_observed_at_ms,
+        action: request.action,
+        analyst_id: request.analyst_id.clone(),
+        incident_id: request.incident_id.clone(),
+        // Request identity retains the caller's exact optional field. The
+        // resolved finding is frozen separately in the target snapshot below.
+        finding_id: request.finding_id.clone(),
+        reason: request.reason.clone(),
+        request_signature: signature.clone(),
+        evidence: None,
+        soar_lineage: Some(verdict_lineage.clone()),
+        payload: payload_value.clone(),
+        outcome: claim_outcome,
+        soar_claim_lease: Some(SoarVerdictClaimLease {
+            token: Uuid::new_v4().to_string(),
+            issued_at_ms: Some(claim_observed_at_ms),
+            expires_at_ms: claim_observed_at_ms
+                .checked_add(SOAR_VERDICT_CLAIM_LEASE_MS)
+                .ok_or_else(|| {
+                    ProvidenceFeedbackError::internal("SOAR claim lease timestamp overflow")
+                })?,
+        }),
+    };
+    let claim = state
+        .current_incident_store()
+        .claim_soar_verdict(&request.incident_id, claimed)
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            ProvidenceFeedbackError::not_found(format!(
+                "incident `{}` disappeared before the SOAR verdict was claimed",
+                request.incident_id
+            ))
+        })?;
+    let claimed_entry = match claim {
+        SoarVerdictClaimResult::Claimed(entry) => entry,
+        SoarVerdictClaimResult::CompletedExact(entry) => {
+            return completed_soar_verdict_response(entry);
+        }
+        SoarVerdictClaimResult::PendingExact(entry) => {
+            return wait_for_soar_verdict_completion(
+                &state,
+                &request.incident_id,
+                &entry.feedback_id,
+            )
+            .await;
+        }
+        SoarVerdictClaimResult::Conflict => {
+            return Err(ProvidenceFeedbackError {
+                status: StatusCode::CONFLICT,
+                error: format!(
+                    "source verdict `{}` from `{}` conflicts with its durable claim",
+                    request.source_verdict_id,
+                    soar_source_slug(request.source_system)
+                ),
+            });
+        }
+    };
+    let received_at_ms = claimed_entry.received_at_ms;
+    let target = claimed_feedback_target(&claimed_entry)?;
+    let claim_lease = claimed_entry.soar_claim_lease.clone();
     let applied =
         apply_providence_feedback(&state, &normalized, &target, &feedback_id, received_at_ms)
             .await?;
 
-    let mut incident = lookup.incident.clone();
-    incident
-        .feedback_audit_entries
-        .push(AnalystFeedbackAuditEntry {
-            feedback_id: feedback_id.clone(),
-            received_at_ms,
-            action: request.action,
-            analyst_id: request.analyst_id.clone(),
-            incident_id: request.incident_id.clone(),
-            finding_id: request
-                .finding_id
-                .clone()
-                .or(Some(target.finding_id.clone())),
-            reason: request.reason.clone(),
-            request_signature: signature,
-            evidence: Some(applied.evidence),
-            soar_lineage: Some(verdict_lineage.clone()),
-            payload: payload_value,
-            outcome: applied.outcome.clone(),
-        });
+    let audit_entry = AnalystFeedbackAuditEntry {
+        feedback_id: feedback_id.clone(),
+        received_at_ms,
+        action: request.action,
+        analyst_id: request.analyst_id.clone(),
+        incident_id: request.incident_id.clone(),
+        finding_id: request
+            .finding_id
+            .clone()
+            .or(Some(target.finding_id.clone())),
+        reason: request.reason.clone(),
+        request_signature: signature,
+        evidence: Some(applied.evidence),
+        soar_lineage: Some(verdict_lineage.clone()),
+        payload: payload_value,
+        outcome: applied.outcome.clone(),
+        soar_claim_lease: claim_lease,
+    };
     let mut measurement =
         false_positive_measurement(&normalized, &target, &feedback_id, received_at_ms);
     measurement.soar_lineage = Some(verdict_lineage.clone());
-    incident.upsert_false_positive_measurement(measurement);
     state
         .current_incident_store()
-        .persist(&incident)
-        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+        .record_feedback_outcome(&request.incident_id, audit_entry, measurement)
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            ProvidenceFeedbackError::not_found(format!(
+                "incident `{}` disappeared before the SOAR verdict was recorded",
+                request.incident_id
+            ))
+        })?;
 
     Ok((
         StatusCode::OK,
@@ -166,6 +239,94 @@ pub(crate) async fn soar_verdict_handler(
         }),
     )
         .into_response())
+}
+
+fn soar_feedback_id(
+    source_system: SoarSourceSystem,
+    source_verdict_id: &str,
+) -> Result<String, ProvidenceFeedbackError> {
+    let identity = serde_json::to_vec(&(
+        "swarm-soar-feedback-id-v1",
+        source_system,
+        source_verdict_id,
+    ))
+    .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?;
+    Ok(format!(
+        "soar-verdict:{}:{}",
+        soar_source_slug(source_system),
+        swarm_crypto::sha256_hex(&identity)
+    ))
+}
+
+fn claimed_feedback_target(
+    entry: &AnalystFeedbackAuditEntry,
+) -> Result<swarm_runtime::providence::ProvidenceFeedbackTarget, ProvidenceFeedbackError> {
+    let target = entry.outcome.get("target").cloned().ok_or_else(|| {
+        ProvidenceFeedbackError::internal(
+            "claimed SOAR verdict is missing its immutable feedback target",
+        )
+    })?;
+    serde_json::from_value(target)
+        .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))
+}
+
+fn completed_soar_verdict_response(
+    entry: AnalystFeedbackAuditEntry,
+) -> Result<Response, ProvidenceFeedbackError> {
+    let lineage = entry.soar_lineage.ok_or_else(|| {
+        ProvidenceFeedbackError::internal("completed SOAR verdict is missing source lineage")
+    })?;
+    if entry.evidence.is_none() {
+        return Err(ProvidenceFeedbackError::internal(
+            "completed SOAR verdict is missing signed evidence",
+        ));
+    }
+    Ok((
+        StatusCode::OK,
+        ResponseJson(SoarVerdictResponse {
+            feedback_id: entry.feedback_id,
+            incident_id: entry.incident_id,
+            finding_id: entry.finding_id,
+            source_system: lineage.source_system,
+            source_verdict_id: lineage.source_verdict_id,
+            outcome: entry.outcome,
+        }),
+    )
+        .into_response())
+}
+
+async fn wait_for_soar_verdict_completion(
+    state: &IngestState,
+    incident_id: &str,
+    feedback_id: &str,
+) -> Result<Response, ProvidenceFeedbackError> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id(incident_id)
+            .map_err(|error| ProvidenceFeedbackError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ProvidenceFeedbackError::not_found(format!(
+                    "incident `{incident_id}` disappeared while its SOAR verdict was in progress"
+                ))
+            })?;
+        if let Some(entry) = lookup
+            .incident
+            .feedback_audit_entries
+            .into_iter()
+            .find(|entry| entry.feedback_id == feedback_id)
+            && entry.evidence.is_some()
+        {
+            return completed_soar_verdict_response(entry);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ProvidenceFeedbackError::service_unavailable(format!(
+                "source verdict claim `{feedback_id}` remains in progress"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 }
 
 fn soar_verdict_channel(
@@ -206,7 +367,7 @@ fn validate_soar_verdict_request(
     Ok(())
 }
 
-fn persist_rejected_soar_verdict(
+async fn persist_rejected_soar_verdict(
     state: &IngestState,
     incident: &swarm_spine::CorrelatedIncident,
     request: &SwarmSoarVerdictRequest,
@@ -215,7 +376,10 @@ fn persist_rejected_soar_verdict(
     verdict_lineage: Option<SoarVerdictLineage>,
     reason: &str,
 ) -> Result<(), ProvidenceFeedbackError> {
-    let received_at_ms = now_ms();
+    let received_at_ms = state
+        .next_providence_feedback_timestamp_ms()
+        .await
+        .map_err(ProvidenceFeedbackError::internal)?;
     let feedback_id = format!(
         "soar-verdict-rejected:{}:{}:{}",
         soar_source_slug(request.source_system),
@@ -241,6 +405,7 @@ fn persist_rejected_soar_verdict(
                 "status": "rejected",
                 "reason": reason,
             }),
+            soar_claim_lease: None,
         });
     state
         .current_incident_store()
@@ -254,5 +419,21 @@ fn soar_source_slug(source_system: SoarSourceSystem) -> &'static str {
         SoarSourceSystem::SplunkSoar => "splunk_soar",
         SoarSourceSystem::SentinelSoar => "sentinel_soar",
         SoarSourceSystem::ChronicleSoar => "chronicle_soar",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::soar_feedback_id;
+    use swarm_core::types::SoarSourceSystem;
+
+    #[test]
+    fn feedback_ids_do_not_collide_when_sanitized_source_ids_would()
+    -> Result<(), super::ProvidenceFeedbackError> {
+        let slash = soar_feedback_id(SoarSourceSystem::SplunkSoar, "case/a")?;
+        let question = soar_feedback_id(SoarSourceSystem::SplunkSoar, "case?a")?;
+        assert_ne!(slash, question);
+        assert_eq!(slash.len(), question.len());
+        Ok(())
     }
 }

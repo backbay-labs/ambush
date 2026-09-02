@@ -36,6 +36,9 @@ pub struct SwarmConfig {
     /// Async investigation settings layered on top of the hot path.
     #[serde(default)]
     pub investigation: InvestigationConfig,
+    /// Bounded, disabled-by-default collective hypothesis graph settings.
+    #[serde(default)]
+    pub hypothesis_graph: HypothesisGraphConfig,
     /// Correlation settings for assembling reviewable incidents.
     #[serde(default)]
     pub correlation: CorrelationConfig,

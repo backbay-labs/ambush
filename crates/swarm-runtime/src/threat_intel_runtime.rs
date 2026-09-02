@@ -357,6 +357,7 @@ mod tests {
                 recent_decisions_limit: 20,
             },
             investigation: InvestigationConfig::default(),
+            hypothesis_graph: Default::default(),
             correlation: CorrelationConfig::default(),
             canary: Default::default(),
             promotion: PromotionConfig::default(),

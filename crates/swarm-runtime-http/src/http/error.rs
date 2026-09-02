@@ -375,6 +375,8 @@ pub(super) fn map_approval_error(error: ApprovalError) -> OperatorApiError {
             OperatorApiError::not_found(format!("approval set `{set_id}` does not have a ledger"))
         }
         ApprovalError::AmbiguousLedgerForSet { .. }
+        | ApprovalError::AmbiguousApprovalEvidence { .. }
+        | ApprovalError::ApprovalEvidenceConflict { .. }
         | ApprovalError::InvalidApprovalSetRequest { .. }
         | ApprovalError::InvalidVerdictRequest { .. }
         | ApprovalError::InvalidReceiptPack { .. }
@@ -391,6 +393,8 @@ pub(super) fn map_approval_error(error: ApprovalError) -> OperatorApiError {
         | ApprovalError::LedgerStore(_)
         | ApprovalError::VerdictStore(_)
         | ApprovalError::ReceiptPackStore(_)
+        | ApprovalError::StoreLock { .. }
+        | ApprovalError::LedgerRecoveryConflict { .. }
         | ApprovalError::Crypto(_)
         | ApprovalError::Spine(_) => OperatorApiError::internal(error.to_string()),
     }

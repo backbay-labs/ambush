@@ -1954,6 +1954,7 @@ mod tests {
     };
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+    const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
 
     fn evidence_paths(root: &std::path::Path) -> EvidenceHarnessPaths {
         EvidenceHarnessPaths {
@@ -2005,7 +2006,7 @@ mod tests {
                 profiles: DetectorProfilesConfig::default(),
             },
             pheromone: PheromoneConfig {
-                default_half_life_secs: 3600.0,
+                default_half_life_secs: TEST_LIVE_HALF_LIFE_SECS,
                 evaporation_threshold: 0.01,
                 min_sources_for_escalation: 2,
                 alert_threshold: 2.0,
@@ -2039,6 +2040,7 @@ mod tests {
                 },
                 ..InvestigationConfig::default()
             },
+            hypothesis_graph: Default::default(),
             correlation: CorrelationConfig {
                 enabled: true,
                 time_window_ms: 60_000,

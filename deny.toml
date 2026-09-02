@@ -2,12 +2,54 @@
 targets = []
 all-features = false
 
+# EXCEPTION METADATA CONTRACT -- ENFORCED, NOT SUGGESTED
+#
+# Every waiver in this file, in either of the two places one can be written,
+# carries structured metadata that tools/check-supply-chain.sh parses and fails
+# the build over:
+#
+#   [advisories] ignore
+#     reason = "last-checked <YYYY-MM-DD>; expires <YYYY-MM-DD>; \
+#               blast-radius: <what this exposes>; clears-when: <the event that ends it>"
+#
+#   [[bans.skip]]
+#     crate = "<crate>@<SemVer 2.0>"
+#     reason = "last-checked <YYYY-MM-DD>; pinned-by: <who holds the old major>; \
+#               clears-when: <the event that ends it>"
+#
+# It sits inside `reason` because cargo-deny 0.19.4 accepts no other key --
+# `expires = "..."` as a real TOML field is `error[unexpected-keys]: found 1
+# unexpected keys, expected: ["id", "reason"]`, exit 1 (measured 2026-08-14).
+#
+# An advisory exception past its `expires` date FAILS the gate, and the
+# last-checked..expires window is capped at 180 days, so a deadline cannot be
+# written far enough out to stop being one. A duplicate waiver below carries no
+# expiry because two checks make an exact `crate@SemVer` pin self-invalidating.
+# A locked Cargo metadata resolution first proves Cargo.lock is current for the
+# manifests; stale lock evidence is refused before this file or the lock inventory
+# is trusted. The metadata stage then owns full textual identity: it splits at the
+# final `@`, requires a non-empty name plus valid exact SemVer 2.0, and makes
+# Cargo.lock exact-name matching authoritative. That admits Cargo-valid leading-
+# underscore and Unicode-XID names without maintaining a second package-name
+# grammar. Every selector fails when multiple lock rows have its exact name and
+# build-stripped core+prerelease identity, because cargo-deny cannot distinguish
+# registry/path identity or build variants. The error lists each source; source-
+# less rows are labeled path/local with Cargo.lock's filesystem-path omission
+# stated. Cargo-deny then runs with `--locked` and owns duplicate applicability in
+# its scanned graph. Cargo-audit has no locked option, so the gate byte-compares
+# Cargo.lock afterward and fails any rewrite. See the script header for fixtures.
+#
+# The gate also runs `cargo deny --locked check -D advisory-not-detected -D
+# unmatched-skip -D unnecessary-skip`, which turns default stale-waiver warnings
+# into errors. A waiver here that is no longer needed fails the build; it does not
+# linger as a warning nobody reads.
+
 [advisories]
 db-path = "$CARGO_HOME/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
-  { id = "RUSTSEC-2024-0384", reason = "notify v7 still pulls instant transitively and there is no safe replacement available in the current major line" },
-  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is still used transitively by the shipped rustls stack and the upstream replacement requires a coordinated dependency migration" },
+  { id = "RUSTSEC-2024-0384", reason = "last-checked 2026-08-14; expires 2026-11-12; blast-radius: unmaintained-only advisory, no vulnerability and no patched release exists. instant 0.1.13 reaches us on one path, notify 7 -> notify-types 1 -> instant, pulled by swarm-runtime-http and used by swarm_detect's secret-reload file watcher; no swarm crate names instant, and on every target this project ships (instant/src/native.rs) it is `pub type Instant = std::time::Instant`, so no distinct code runs; clears-when: notify-types stops depending on instant, or swarm-runtime-http's secret watcher moves off notify -- at which point `-D advisory-not-detected` fails this entry and it must be deleted" },
+  { id = "RUSTSEC-2025-0134", reason = "last-checked 2026-08-14; expires 2026-11-12; blast-radius: unmaintained-only advisory, no patched release exists, and FIRST-PARTY rather than a transitive pin -- crates/swarm-runtime-http/src/serve.rs:222 and :230 call rustls_pemfile::certs and ::private_key to load the operator's own TLS certificate, key and optional client-CA bundle from local files at listener startup, so the parser is reachable from operator-controlled files rather than from network input; clears-when: those two call sites move to rustls_pki_types::pem::PemObject, the replacement the advisory names and which is already on the graph as rustls-pki-types 1.14.1, and rustls-pemfile leaves crates/swarm-runtime-http/Cargo.toml" },
 ]
 
 [licenses]
@@ -37,13 +79,21 @@ highlight = "all"
 #
 # `cargo deny check bans -A duplicate`, which tools/check-supply-chain.sh used to
 # pass, suppresses EVERY duplicate forever -- including ones that do not exist
-# yet. It cannot be made to fail, so it is not a gate. A version-pinned
-# `[[bans.skip]]` breaks the moment a NEW duplicate appears or a skipped one moves
-# version, which is the entire point of the check. Each entry names the dependency
-# that pins the old major so it can be retired when that dependency moves.
+# yet. It cannot be made to fail, so it is not a gate. Only an exact
+# `<crate>@<SemVer 2.0>` `[[bans.skip]]` is accepted, including valid prerelease
+# and build metadata; wildcard, range, operator, partial, and invalid SemVer specs
+# are rejected before cargo-deny runs. The exact full version must exist in
+# Cargo.lock before cargo-deny checks whether it is an applicable duplicate. A
+# moved version, an uncovered NEW duplicate, or a version that remains locked but
+# ceases to be duplicated therefore fails in the layer that owns that question.
+# Each entry names the dependency that pins the old major so it can be retired
+# when that dependency moves.
 #
-# Reviewed 2026-08-11 (phase 280 / GATEFIX-04). Re-review whenever any named
-# pinning dependency is upgraded.
+# Reviewed 2026-08-11 (phase 280 / GATEFIX-04). Every `pinned-by` clause below was
+# re-traced with `cargo tree -i <crate>@<version> --target all -e normal
+# --workspace` on 2026-08-14 and now names the crate the trace found, which four
+# of them ("held by a transitive dependency") did not. Re-review whenever any
+# named pinning dependency is upgraded.
 #
 # THIS GATE HAS TWO MEASURED LIMITATIONS, NOT ONE. Both are recorded here so the
 # duplicate coverage is not read as complete.
@@ -79,8 +129,12 @@ highlight = "all"
 #   z3 0.20 -> (build) z3-sys 0.11 -> zip 8.6 -> {hmac 0.13, pbkdf2 0.13, sha1 0.11}
 #   -> digest 0.11 / crypto-common 0.2 / block-buffer 0.12 / const-oid 0.10,
 # against the digest 0.10 generation the rest of the workspace uses via sha2 0.10 /
-# ed25519-dalek 2.x. The 19 skips below all still match under all-features (zero
+# ed25519-dalek 2.x. The skips below all still match under all-features (zero
 # `unmatched-skip` warnings), so this is purely additional, uncovered surface.
+# (This paragraph said "the 19 skips below" until 2026-08-14. There are 20, and
+# there were 20 when it was written. tools/check-supply-chain.sh now prints the
+# count it actually parsed, which is how the miscount was noticed -- a hand-typed
+# count in a comment is the same defect class as a gate printing one.)
 #
 # WHY IT IS NOT CLOSED HERE BY WIDENING THE GRAPH. `all-features = true` also
 # fails the LICENSE check on the same z3 build subgraph, for two crates that are
@@ -100,7 +154,7 @@ highlight = "all"
 # a duplicate-dependency cleanup is exactly the move this file refuses elsewhere,
 # so it is disclosed rather than taken. Closing it means one decision about what
 # the project will ship under, after which `all-features = true` plus five
-# version-pinned skips for the crates named above is a mechanical follow-up.
+# exact-version skips for the crates named above is a mechanical follow-up.
 #
 # ATTEMPTED AND DELIBERATELY REVERTED: migrating our own swarm-ingest-tetragon
 # from tonic/prost 0.13 to 0.14 (plus tonic-prost / tonic-prost-build) does
@@ -113,13 +167,13 @@ highlight = "all"
 # work, with the exact blocker recorded here.
 skip = [
   # --- Transitive on the runtime graph, pinned by an upstream crate's old major ---
-  { crate = "thiserror@1.0.69", reason = "async-nats 0.47 and x509-parser 0.16 (asn1-rs 0.6) still pin thiserror 1.x" },
-  { crate = "thiserror-impl@1.0.69", reason = "proc-macro half of thiserror 1.x above" },
-  { crate = "rand@0.8.6", reason = "async-nats 0.47 (nkeys, nuid, tokio-websockets) pins the rand 0.8 family" },
-  { crate = "rand_chacha@0.3.1", reason = "rand 0.8 family above" },
-  { crate = "rand_core@0.6.4", reason = "ed25519-dalek 2.x pins rand_core 0.6; our workspace pin matches it deliberately" },
-  { crate = "getrandom@0.2.17", reason = "backs rand_core 0.6 above" },
-  { crate = "getrandom@0.3.4", reason = "backs the rand 0.9 family pulled in by quinn-proto 0.11.16" },
+  { crate = "thiserror@1.0.69", reason = "last-checked 2026-08-14; pinned-by: async-nats 0.47 and x509-parser 0.16 (through asn1-rs 0.6, der-parser 9 and oid-registry 0.7) still depend on thiserror 1.x; clears-when: both of those move to thiserror 2.x, which is the version the rest of the workspace already resolves to" },
+  { crate = "thiserror-impl@1.0.69", reason = "last-checked 2026-08-14; pinned-by: thiserror 1.0.69 above, whose proc-macro half this is; it has no other reverse dependency; clears-when: the thiserror@1.0.69 waiver clears" },
+  { crate = "rand@0.8.6", reason = "last-checked 2026-08-14; pinned-by: async-nats 0.47 directly and through nkeys 0.4, nuid 0.5 and tokio-websockets 0.10, all on the rand 0.8 family; clears-when: async-nats and its three helper crates move to rand 0.9, the version quinn-proto already pulls" },
+  { crate = "rand_chacha@0.3.1", reason = "last-checked 2026-08-14; pinned-by: rand 0.8.6 above, its only reverse dependency on this graph; clears-when: the rand@0.8.6 waiver clears" },
+  { crate = "rand_core@0.6.4", reason = "last-checked 2026-08-14; pinned-by: ed25519-dalek 2.2, which our signing path depends on, plus the rand 0.8 family and signatory 0.27 (via nkeys); swarm-crypto, swarm-agents, swarm-runtime, swarm-ingest-runtime and swarm-runtime-http pin rand_core 0.6 deliberately to match ed25519-dalek's RNG traits; clears-when: ed25519-dalek moves to rand_core 0.9 and our workspace pin follows it" },
+  { crate = "getrandom@0.2.17", reason = "last-checked 2026-08-14; pinned-by: rand_core 0.6.4 above, nkeys 0.4 and ring 0.17 (which itself is held by async-nats, rustls 0.23, rustls-webpki and tokio-websockets); clears-when: all three of those move to getrandom 0.3, the version the rand 0.9 family uses" },
+  { crate = "getrandom@0.3.4", reason = "last-checked 2026-08-14; pinned-by: rand_core 0.9.5 under the rand 0.9 family that quinn-proto 0.11.16 brings in, against the getrandom 0.4 that uuid 1.23 resolves to; clears-when: the rand 0.9 family moves to getrandom 0.4 and one getrandom major covers the whole graph" },
 
   # SECURITY REVIEW ITEM -- escalated rather than silently skipped.
   # Two independent sets of TLS trust anchors are on the graph: webpki-roots 1.0.7
@@ -128,23 +182,23 @@ skip = [
   # snapshots of the Mozilla root program, so the NATS client and the HTTP client
   # can disagree about which CAs are trusted. Accepted for now only because
   # collapsing it requires an async-nats upgrade. This is a standing action item.
-  { crate = "webpki-roots@0.26.11", reason = "SECURITY REVIEW ITEM: second TLS trust-anchor set, pinned by async-nats 0.47 -> tokio-websockets 0.10; collapse when async-nats moves to webpki-roots 1.x" },
+  { crate = "webpki-roots@0.26.11", reason = "last-checked 2026-08-14; pinned-by: tokio-websockets 0.10 under async-nats 0.47, reached from swarm-pheromone; SECURITY REVIEW ITEM -- this is a second set of TLS trust anchors alongside webpki-roots 1.0.7, so the NATS client and the HTTP client can disagree about which CAs are trusted, which is not an ordinary duplicate; clears-when: async-nats moves to a release whose tokio-websockets uses webpki-roots 1.x, leaving one trust-anchor set on the graph" },
 
   # --- Target-gated: Windows / wasm / UEFI support that does not build on the CI target ---
-  { crate = "windows-core@0.57.0", reason = "target-gated; older windows-* stack held by a transitive dependency" },
-  { crate = "windows-implement@0.57.0", reason = "target-gated; windows-core 0.57 family" },
-  { crate = "windows-interface@0.57.0", reason = "target-gated; windows-core 0.57 family" },
-  { crate = "windows-result@0.1.2", reason = "target-gated; windows-core 0.57 family" },
-  { crate = "windows-sys@0.52.0", reason = "target-gated; older windows-sys major held by a transitive dependency" },
-  { crate = "wit-bindgen@0.51.0", reason = "target-gated; wasm32-wasi bindings only" },
-  { crate = "r-efi@5.3.0", reason = "target-gated; UEFI target support only" },
-  { crate = "bitflags@1.3.2", reason = "target-gated; transitive dependency on bitflags 1.x" },
+  { crate = "windows-core@0.57.0", reason = "last-checked 2026-08-14; pinned-by: sysinfo 0.33 -> windows 0.57, reached from swarm-runtime and swarm-ingest-runtime; target-gated, so it is compiled on no target this project ships; clears-when: sysinfo moves to a release built on the windows 0.6x family" },
+  { crate = "windows-implement@0.57.0", reason = "last-checked 2026-08-14; pinned-by: windows-core 0.57.0 above, whose proc-macro support crate this is; target-gated; clears-when: the windows-core@0.57.0 waiver clears" },
+  { crate = "windows-interface@0.57.0", reason = "last-checked 2026-08-14; pinned-by: windows-core 0.57.0 above, whose proc-macro support crate this is; target-gated; clears-when: the windows-core@0.57.0 waiver clears" },
+  { crate = "windows-result@0.1.2", reason = "last-checked 2026-08-14; pinned-by: windows-core 0.57.0 above, its only reverse dependency on this graph; target-gated; clears-when: the windows-core@0.57.0 waiver clears" },
+  { crate = "windows-sys@0.52.0", reason = "last-checked 2026-08-14; pinned-by: notify 7 (from swarm-runtime-http), ring 0.17 and socket2 0.5 (from tonic 0.13), all still on the windows-sys 0.52 major; target-gated; clears-when: those three move to the windows-sys 0.5x major the rest of the graph resolves to" },
+  { crate = "wit-bindgen@0.51.0", reason = "last-checked 2026-08-14; pinned-by: wasip3 0.4 under getrandom 0.4 (from uuid 1.23); wasm32-wasi bindings only, compiled on no target this project ships; clears-when: getrandom's wasi backend stops pinning this wit-bindgen major" },
+  { crate = "r-efi@5.3.0", reason = "last-checked 2026-08-14; pinned-by: getrandom 0.3.4 under the rand 0.9 family; UEFI target support only, compiled on no target this project ships; clears-when: the getrandom@0.3.4 waiver clears" },
+  { crate = "bitflags@1.3.2", reason = "last-checked 2026-08-14; pinned-by: inotify 0.10 under notify 7, reached from swarm-runtime-http; clears-when: inotify moves to bitflags 2.x, the major the rest of the graph uses" },
 
   # --- Our own old major, collapsible but blocked; see the note above ---
-  { crate = "prost@0.13.5", reason = "swarm-ingest-tetragon pins prost/tonic 0.13; opentelemetry-otlp 0.31 brings 0.14. Collapsible, blocked on the Zlib-licensed foldhash that prost-build 0.14 pulls in" },
-  { crate = "prost-derive@0.13.5", reason = "proc-macro half of prost 0.13 above" },
-  { crate = "tonic@0.13.1", reason = "swarm-ingest-tetragon pins tonic 0.13; opentelemetry-proto 0.31 brings 0.14. Same blocker as prost above" },
-  { crate = "socket2@0.5.10", reason = "held by tonic 0.13's transport stack; collapses with the tonic 0.14 migration above" },
+  { crate = "prost@0.13.5", reason = "last-checked 2026-08-14; pinned-by: our own swarm-ingest-tetragon, which pins prost/tonic 0.13 for the Tetragon gRPC client, while opentelemetry-otlp 0.31 brings prost 0.14; clears-when: swarm-ingest-tetragon migrates to prost/tonic 0.14 -- attempted and reverted, blocked on the Zlib-licensed foldhash that prost-build 0.14 pulls in, see the note above" },
+  { crate = "prost-derive@0.13.5", reason = "last-checked 2026-08-14; pinned-by: prost 0.13.5 above, whose proc-macro half this is; clears-when: the prost@0.13.5 waiver clears" },
+  { crate = "tonic@0.13.1", reason = "last-checked 2026-08-14; pinned-by: our own swarm-ingest-tetragon, while opentelemetry-proto 0.31 brings tonic 0.14; clears-when: the same swarm-ingest-tetragon migration as prost above, under the same license blocker" },
+  { crate = "socket2@0.5.10", reason = "last-checked 2026-08-14; pinned-by: tonic 0.13's transport stack, against the socket2 0.6 the rest of the graph resolves to; clears-when: the tonic@0.13.1 waiver clears, which collapses this with it" },
 ]
 
 [sources]

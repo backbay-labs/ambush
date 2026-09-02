@@ -42,6 +42,7 @@ use axum::routing::{get, post};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use swarm_core::config::{OperatorSurfacePaths, SwarmConfig};
 use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_evolution::evidence::{DefaultEvidenceHarness, OperatorEvidenceReadService};
@@ -100,6 +101,9 @@ pub enum OperatorHttpError {
 
     #[error("operator surface server exited: {0}")]
     Serve(#[from] ServeError),
+
+    #[error("failed to build the operator callback HTTP client: {0}")]
+    CallbackClient(#[source] reqwest::Error),
 }
 
 #[derive(Clone)]
@@ -121,7 +125,12 @@ pub(super) struct OperatorHttpState {
     pub(super) workbench: Option<Arc<DefaultReviewWorkbenchHarness>>,
     pub(super) approval: Option<Arc<DefaultApprovalHarness>>,
     pub(super) prometheus: Option<CriticalPathMetrics>,
+    pub(super) callback_client: reqwest::Client,
     pub(super) runtime_base_url: String,
+    /// Serializes access to the file-backed approval stores. Their report and
+    /// index files are updated separately, so readers and every mutation share
+    /// one bounded surface-wide lock. Network callbacks happen after release.
+    pub(super) approval_store_lock: Arc<tokio::sync::Mutex<()>>,
     pub(super) max_list_results: usize,
     pub(super) approval_receipt_signer_id: String,
     pub(super) approval_receipt_signing_key_env: String,
@@ -141,7 +150,7 @@ impl LocalOperatorSurface {
         Self::from_config(path, config)
     }
 
-    /// Build the local operator surface from an already validated config.
+    /// Build the local operator surface from config supplied by a caller.
     pub fn from_config(
         config_path: impl Into<PathBuf>,
         config: SwarmConfig,
@@ -160,9 +169,17 @@ impl LocalOperatorSurface {
 
     fn from_config_with_paths(
         config_path: impl Into<PathBuf>,
-        config: SwarmConfig,
+        mut config: SwarmConfig,
         paths: Option<OperatorSurfacePaths>,
     ) -> Result<Self, OperatorHttpError> {
+        let config_path = config_path.into();
+        config
+            .validate()
+            .map_err(|source| RuntimeConfigError::Validation {
+                source_name: config_path.display().to_string(),
+                source,
+            })?;
+        config.operator.runtime_base_url = config.operator.runtime_base_url.trim().to_string();
         if !config.operator.enabled {
             return Err(OperatorHttpError::Disabled);
         }
@@ -184,8 +201,8 @@ impl LocalOperatorSurface {
                 })?;
         let auth = OperatorAuthState::from_config(&config)?;
         let rate_limiter = HttpRateLimiter::new("operator", config.operator.rate_limit.clone());
+        let callback_client = build_operator_callback_client(reqwest::Client::builder())?;
 
-        let config_path = config_path.into();
         let control = Arc::new(DefaultControlPlane::from_config(
             config_path.clone(),
             config.clone(),
@@ -265,7 +282,9 @@ impl LocalOperatorSurface {
                 workbench,
                 approval,
                 prometheus,
+                callback_client,
                 runtime_base_url: config.operator.runtime_base_url.clone(),
+                approval_store_lock: Arc::new(tokio::sync::Mutex::new(())),
                 max_list_results: config.operator.max_list_results,
                 approval_receipt_signer_id,
                 approval_receipt_signing_key_env,
@@ -504,4 +523,15 @@ impl LocalOperatorSurface {
         .await
         .map_err(OperatorHttpError::Serve)
     }
+}
+
+pub(super) fn build_operator_callback_client(
+    builder: reqwest::ClientBuilder,
+) -> Result<reqwest::Client, OperatorHttpError> {
+    builder
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(OperatorHttpError::CallbackClient)
 }

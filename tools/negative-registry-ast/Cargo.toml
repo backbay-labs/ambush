@@ -1,0 +1,14 @@
+[package]
+name = "negative-registry-ast"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+sha2 = "0.10"
+syn = { version = "2", features = ["full", "parsing", "visit"] }

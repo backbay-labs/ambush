@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), forbid(unsafe_code))]
+
 //! Transport crate for the Ambush runtime: the authenticated operator HTTP
 //! surface and the TLS-capable server loop that carries it.
 //!
@@ -69,6 +71,15 @@ pub(crate) use swarm_runtime::{
 // `crate::review_workbench::...` paths resolve unchanged.
 pub(crate) use swarm_evolution::{evidence, governance_prep, operator_maintenance, portfolio};
 pub(crate) use swarm_runtime_workbench::review_workbench;
+
+/// Narrow facade used by the shared CLI source for the explicit offline
+/// governance-lock migration command.
+pub mod governance_migration {
+    pub use swarm_agents::tom_agent::{
+        GovernanceLockMigrationReport, GovernancePersistenceError, GovernancePolicy,
+        GovernancePolicyConfig,
+    };
+}
 
 pub mod cli;
 pub mod http;

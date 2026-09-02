@@ -1517,6 +1517,7 @@ mod tests {
             population_size: 4,
             pareto_tournament_size: 2,
             proposal_timestamps_ms: Vec::new(),
+            applied_feedback_operations: Default::default(),
             members: vec![
                 EvolutionPopulationCandidate {
                     generation: 1,

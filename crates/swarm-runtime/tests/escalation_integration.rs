@@ -141,7 +141,7 @@ fn finding(strategy_id: &str, finding_id: &str) -> DetectionFinding {
 
 #[tokio::test]
 async fn below_threshold_no_escalation() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     substrate
         .deposit(make_deposit(
             &signing_key_a(),
@@ -170,7 +170,7 @@ async fn below_threshold_no_escalation() {
 
 #[tokio::test]
 async fn single_source_above_threshold_no_escalation() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     let key = signing_key_a();
     for _ in 0..3 {
         substrate
@@ -192,7 +192,7 @@ async fn single_source_above_threshold_no_escalation() {
 
 #[tokio::test]
 async fn dual_source_above_alert_threshold() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     for key in [&signing_key_a(), &signing_key_b()] {
         substrate
             .deposit(make_deposit(
@@ -235,7 +235,7 @@ async fn dual_source_above_alert_threshold() {
 
 #[tokio::test]
 async fn dual_source_above_incident_threshold() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     for key in [&signing_key_a(), &signing_key_b()] {
         for _ in 0..3 {
             substrate
@@ -266,7 +266,7 @@ async fn dual_source_above_incident_threshold() {
 
 #[tokio::test]
 async fn threat_class_alert_override_applies_without_restart() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     substrate
         .store_threat_class_config(ThreatClassConfig {
             threat_class: ThreatClass::Execution,
@@ -303,19 +303,21 @@ async fn threat_class_alert_override_applies_without_restart() {
 
 #[tokio::test]
 async fn mode_progression_normal_to_alert_to_incident() {
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(test_config()));
     let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate));
 
     for key in [&signing_key_a(), &signing_key_b()] {
-        substrate
-            .deposit(make_deposit(
-                key,
-                ThreatClass::Execution,
-                1.1,
-                1_700_000_000,
-            ))
-            .await
-            .unwrap();
+        for _ in 0..2 {
+            substrate
+                .deposit(make_deposit(
+                    key,
+                    ThreatClass::Execution,
+                    0.6,
+                    1_700_000_000,
+                ))
+                .await
+                .unwrap();
+        }
     }
     let alert = monitor.evaluate_all(1_700_000_000).await.unwrap();
     assert_eq!(alert.current_mode, SwarmMode::Alert);
@@ -356,15 +358,17 @@ async fn mode_progression_normal_to_alert_to_incident() {
 #[tokio::test]
 async fn concentration_monitor_deescalates_after_cooldown() {
     let config = test_config();
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(config.clone()));
     let mut monitor = ConcentrationMonitor::new(config.clone(), Arc::clone(&substrate));
     let start = 1_700_000_000;
 
     for key in [&signing_key_a(), &signing_key_b()] {
-        substrate
-            .deposit(make_deposit(key, ThreatClass::Execution, 1.1, start))
-            .await
-            .unwrap();
+        for _ in 0..2 {
+            substrate
+                .deposit(make_deposit(key, ThreatClass::Execution, 0.6, start))
+                .await
+                .unwrap();
+        }
     }
 
     let alert = monitor.evaluate_all(start).await.unwrap();
@@ -408,7 +412,7 @@ async fn concentration_monitor_deescalates_after_cooldown() {
 #[tokio::test]
 async fn threat_intel_enriched_dns_detection_triggers_alert_escalation() {
     let config = threat_intel_alert_config();
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(config.clone()));
     substrate
         .store_threat_intel_entry(ThreatIntelEntry {
             indicator_type: ThreatIntelIndicatorType::Domain,
@@ -471,32 +475,13 @@ async fn threat_intel_enriched_dns_detection_triggers_alert_escalation() {
 }
 
 #[tokio::test]
-async fn cross_strategy_findings_from_one_agent_trigger_alert_escalation() {
-    // Both findings below carry confidence 1.0, so the concentration this test builds
-    // is EXACTLY 2.0 -- and `test_config()`'s alert_threshold is also exactly 2.0,
-    // compared with `>=` in `PheromoneConcentration::exceeds_threshold`. That is a
-    // zero-margin verdict. `strength_at` decays as confidence * 0.5^(elapsed / 3600),
-    // so a single second between the deposits and the evaluation yields
-    // 2 * 0.5^(1/3600) = 1.999615 and the monitor reports Normal instead of Alert.
-    // Measured, not inferred: forcing `evaluate_all(event.timestamp + 1)` fails with
-    // `left: Normal right: Alert` -- the same signature as the ninth wall-clock site
-    // fixed in b966aa8.
-    //
-    // Nothing reads a clock on this path today: `resolve_deposits` stamps deposits
-    // with `event.timestamp` and the monitor is handed that same literal, so the
-    // elapsed time is structurally zero and the test is latent rather than flaky. It
-    // stops being latent the moment a deposit is stamped with ingest time instead of
-    // event time, which is exactly what the platform API path already does. Give the
-    // threshold a margin decay cannot cross inside a run: at 1.5 the verdict survives
-    // 3600 * log2(2 / 1.5) = 1494s of decay. Do not raise it back to a value the
-    // seeded strength meets exactly.
-    //
-    // What the test is about is unchanged: two findings from DIFFERENT strategies
-    // emitted by ONE agent become two distinct strategy-scoped sources, so
-    // min_sources_for_escalation = 2 is satisfied without a second physical agent.
+async fn cross_strategy_findings_from_one_agent_do_not_trigger_alert_escalation() {
+    // Both findings carry confidence 1.0, so their combined strength clears the
+    // 1.5 alert threshold. They share one signing key, however: changing only the
+    // strategy-scoped suffix must not satisfy the two-source escalation gate.
     let mut config = test_config();
     config.alert_threshold = 1.5;
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(config.clone()));
     let detector = StaticDetector {
         findings: vec![
             finding("suspicious_process_tree", "finding-1"),
@@ -521,34 +506,23 @@ async fn cross_strategy_findings_from_one_agent_trigger_alert_escalation() {
 
     let mut monitor = ConcentrationMonitor::new(config, Arc::clone(&substrate));
     let escalation = monitor.evaluate_all(event.timestamp).await.unwrap();
-    assert_eq!(escalation.current_mode, SwarmMode::Alert);
-    assert!(matches!(
-        escalation.events[0],
-        EscalationEvent::Alert {
-            threat_class: ThreatClass::Execution,
-            ..
-        }
-    ));
+    assert!(escalation.events.is_empty());
+    assert_eq!(escalation.current_mode, SwarmMode::Normal);
 
     let records = substrate.query_escalations(0).await.unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].mode, SwarmMode::Alert);
-    assert_eq!(records[0].distinct_sources, 2);
-    // Bounded on BOTH sides rather than at the boundary. Two distinct strategy-scoped
-    // sources at confidence 1.0 sum to 2.0 at zero elapsed and decay from there: the
-    // lower bound is the alert threshold this test configures, and the upper bound
-    // still catches a double count of the same finding.
-    assert!(
-        records[0].total_strength > 1.5 && records[0].total_strength <= 2.0,
-        "expected two decaying full-strength cross-strategy sources above the alert threshold, got {}",
-        records[0].total_strength
-    );
+    assert!(records.is_empty());
+    let concentration = substrate
+        .query_concentration(&ThreatClass::Execution, event.timestamp)
+        .await
+        .unwrap();
+    assert_eq!(concentration.distinct_sources, 1);
+    assert!(concentration.total_strength > 1.5);
 }
 
 #[tokio::test]
 async fn repeated_same_strategy_findings_from_one_agent_do_not_trigger_cross_strategy_alert() {
     let config = test_config();
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(config.clone()));
     let detector = StaticDetector {
         findings: vec![
             finding("suspicious_process_tree", "finding-1"),

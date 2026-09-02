@@ -11,7 +11,9 @@ use std::sync::Once;
 use std::time::{Duration, Instant};
 use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig};
 use swarm_core::types::AgentId;
-use swarm_pheromone::ConfiguredPheromoneSubstrate;
+use swarm_pheromone::{
+    ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate,
+};
 use swarm_runtime::detection::pipeline::detect_and_deposit;
 use swarm_runtime::escalation::ConcentrationMonitor;
 use swarm_whisker::{SuspiciousProcessTreeDetector, TelemetryEvent};
@@ -71,10 +73,20 @@ impl HotPathFixture {
             }
         };
         let config = pheromone_config(backend, temp_root.as_ref());
-        let substrate = Arc::new(
-            ConfiguredPheromoneSubstrate::from_config(&config)
-                .expect("hot path benchmark substrate config must be valid"),
-        );
+        let substrate = Arc::new(match &config.backend {
+            PheromoneBackendConfig::InMemory => ConfiguredPheromoneSubstrate::InMemory(
+                InMemoryPheromoneSubstrate::new_for_replay(config.clone()),
+            ),
+            PheromoneBackendConfig::LocalJournal { path } => {
+                ConfiguredPheromoneSubstrate::LocalJournal(
+                    LocalJournalPheromoneSubstrate::open_for_replay(config.clone(), path)
+                        .expect("hot path benchmark substrate config must be valid"),
+                )
+            }
+            PheromoneBackendConfig::JetStream { .. } => {
+                unreachable!("the hot path benchmark exposes only deterministic local backends")
+            }
+        });
         let detector = SuspiciousProcessTreeDetector::default();
         let monitor = ConcentrationMonitor::new(config.clone(), Arc::clone(&substrate));
         let signing_key = SigningKey::from_bytes(&[42u8; 32]);

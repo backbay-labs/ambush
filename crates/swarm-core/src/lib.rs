@@ -10,12 +10,18 @@
 pub mod agent;
 pub mod config;
 pub mod http_rate_limit;
+pub mod hypothesis_graph;
 pub mod observability;
 pub mod pheromone;
 pub mod signed_state;
 pub mod telemetry;
 pub mod types;
 pub mod verdict;
+
+pub use hypothesis_graph::{
+    EventNode, EvidenceWitness, GraphLogicalTime, GraphPolicyContract, GraphPolicyMode,
+    HypothesisGraph, TypedEvidencePayload,
+};
 
 pub use agent::{
     AgentFinding, AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmEvent, SwarmMode,

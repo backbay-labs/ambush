@@ -1737,9 +1737,9 @@ mod tests {
     use std::path::PathBuf;
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
-        DetectorProfilesConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
-        PolicyConfig, PromotionConfig, ResponseAdapterConfig, RuntimeSettings, SwarmConfig,
-        TelemetrySourceConfig,
+        DetectorProfilesConfig, HypothesisGraphConfig, InvestigationConfig, PheromoneBackendConfig,
+        PheromoneConfig, PolicyConfig, PromotionConfig, ResponseAdapterConfig, RuntimeSettings,
+        SwarmConfig, TelemetrySourceConfig,
     };
     use swarm_core::types::{AgentId, Severity};
     use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
@@ -1819,6 +1819,7 @@ mod tests {
                 recent_decisions_limit: 20,
             },
             investigation: InvestigationConfig::default(),
+            hypothesis_graph: HypothesisGraphConfig::default(),
             correlation: CorrelationConfig::default(),
             canary: CanaryConfig {
                 enabled: true,
@@ -1852,6 +1853,26 @@ mod tests {
             operator: swarm_core::config::OperatorSurfaceConfig::default(),
             tls: None,
         }
+    }
+
+    #[test]
+    fn promotion_support_config_preserves_disabled_graph_and_legacy_runtime_bytes() {
+        let config = promotion_config();
+
+        assert_eq!(config.hypothesis_graph, HypothesisGraphConfig::default());
+        assert!(!config.hypothesis_graph.enabled);
+        assert_eq!(
+            serde_json::to_vec(&config.runtime.mode).unwrap(),
+            br#""detect_only""#
+        );
+        assert_eq!(
+            serde_json::to_vec(&config.policy).unwrap(),
+            br#"{"human_gate_severity":"HIGH","lease_ttl_ms":60000,"max_actions_per_scope_per_minute":5,"rules":[]}"#
+        );
+        assert_eq!(
+            serde_json::to_vec(&config.response_adapter).unwrap(),
+            br#"{"kind":"sandbox"}"#
+        );
     }
 
     fn control_candidate() -> DetectorCandidateManifest {

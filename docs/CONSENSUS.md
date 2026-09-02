@@ -30,7 +30,7 @@ The active runtime uses four governance modes.
 | --- | --- | --- |
 | Observation | Detection, investigation, correlation, memory, deception, status publication | No governance receipt; standard signed deposits and audit only |
 | Guarded response | Non-destructive response actions such as escalation or decoy deployment | Policy validation and ordinary audit trail |
-| Receipt-backed response | Destructive response actions such as `BlockEgress`, `IsolateHost`, and `RevokeCredential` | Signed governance receipt, policy validation, and optional human approval |
+| Receipt-backed response | Governed response actions listed below | One-time request-bound governance authorization, one policy preflight, and human approval when that preflight returns `RequireHuman` |
 | Partition contingency | Destructive response while quorum is partitioned | Valid staged contingency lease plus partition authorization and later reconciliation |
 | Maintenance-only | Local operator review, export, replay, and bounded maintenance actions | Authenticated operator access and maintenance audit, but no widened destructive authority |
 
@@ -39,26 +39,74 @@ plane.
 
 ## What Requires A Governance Receipt
 
-The dispatcher currently requires a valid signed governance receipt for these
-destructive actions:
+`ResponseAction::requires_governance_receipt()` is the single classification
+source. It currently classifies these actions as governed:
 
 - `BlockEgress`
 - `IsolateHost`
 - `RevokeCredential`
+- `SinkholeDns`
+- `TerminateUserSession`
+- `InjectFirewallRule`
+- `QuarantineFile`
+- `KillProcess`
+- `SuspendProcess`
+- `DisableUserAccount`
+- `ForcePasswordReset`
+- `RemoveScheduledTask`
+
+`TriggerEdrScan`, `DeployDecoy`, and `Escalate` are not governed by this
+receipt boundary. They remain subject to normal policy and audit controls.
 
 For those actions:
 
-1. `Pouncer` asks `Tom` policy whether the action can proceed.
+1. `Pouncer` constructs the complete `ActionRequest`, then asks `Tom` policy
+   whether that exact request can proceed.
 2. `Tom` runs one consensus round through the `ConsensusTransport` its policy
-   holds, driving a single `ConsensusNode` built from `Tom`'s own signing key,
-   and either returns the receipt that round committed, returns a veto, or
-   attaches a contingency lease if the request is occurring during partition.
-3. The dispatcher re-validates the receipt before the request reaches the
-   runtime response router.
-4. The response adapter still runs under the existing policy and lease checks.
+   holds and persists an issued authorization in the pending ledger before
+   returning its receipt. An approval, veto, and partition contingency are
+   distinct typed outcomes.
+3. The dispatcher preflights ordinary policy once without consuming governance.
+   `Deny` stops there. `RequireHuman` durably holds the exact request, policy
+   decision, and still-pending governance receipt, then binds a persisted
+   approval set; it creates no admission and invokes no executor.
+4. An `Allow`, or the dedicated resume path after an exact persisted human pack
+   is verified, atomically consumes the governance authorization immediately
+   before routing. Only then does the dispatcher create one opaque, non-cloneable
+   admission and move it to one router invocation.
+5. The runtime consumes that admission by value without parsing the receipts or
+   evaluating mutable policy a second time. Lease, containment, guard, adapter,
+   and audit checks still apply. If routing or execution fails after durable
+   consumption, the authorization is burned rather than made replayable.
 
 Non-destructive actions remain guarded and audited, but they do not require a
 governance receipt in the current runtime.
+
+### Request Binding And One-Time Admission
+
+Normal action authorization uses the domain-separated
+`GovernanceActionRequestSubjectV1`. Its canonical JSON binds the domain and
+schema version plus `hunt_id`, `requested_by`, the complete response action and
+target, derived scope, severity, and the remaining evidence. Only the bearer
+fields `governance_receipt` and `contingency_lease` are excluded. The proposal
+identifier is the hash of that canonical subject.
+
+A receipt is not authority merely because its signature verifies. The installed
+`GovernanceAuthority` separately verifies and consumes an `Approve` for a
+`RequestResponse` route or a `Veto` for a `GovernanceVeto` route. It requires:
+
+- the supported receipt schema and a signer in the configured governor set
+- the exact expected decision and exact canonical subject/proposal digest
+- bounded age and future clock skew
+- committee, threshold, tally, commit-hash, and receipt-id consistency that can
+  be derived from the local receipt data
+- a matching entry in the persisted pending-authorization ledger
+- durable movement to the bounded consumed ledger before routing
+
+Missing legacy pending state, a replayed receipt, or any issuance/consumption
+persistence failure refuses the route. These checks prove local consistency
+and one-time policy issuance. They do **not** prove that a distributed quorum
+actually exchanged votes; that depends on the transport described below.
 
 ### How The Round Is Actually Run (BFT-03, phase 321)
 
@@ -113,23 +161,117 @@ is the open half of BFT-04. Two consequences worth naming:
 ### Restart Safety Of A Round
 
 `PersistedGovernanceState` persists `previous_commit_hash`, the receipt counter,
-partition state and active leases. It persists NO round state and NOT the
-governor key. A restart mid-round therefore loses the round. The outcome is
-fail-closed -- no commit means a veto -- but governance LIVENESS is not
-restart-safe, and any claim of "restart-safe recovery" should be read as
-covering the persisted fields above and not the round.
+the display-to-consensus governor identity mapping, exact unhealthy-agent
+observations, the last healthy/quorum counts, partition state, active leases,
+bounded pending and consumed authorization ledgers, and bounded exact-request
+human holds. It persists NO round state and NOT the governor key. A restart
+mid-round therefore loses the round. A receipt issued before restart remains
+usable only if its pending entry was durably written; a consumed receipt remains
+refused after restart. A held request can resume only from its bound persisted
+approval set and pack while both approvals remain fresh. Governance LIVENESS is not restart-safe, and any claim of
+"restart-safe recovery" should be read as covering the persisted fields above
+and not the round.
+
+The signed state rename is the commit point. A checkpoint failure after that
+rename never rolls the in-memory authority state back. The policy records the
+lag, withholds newly issued receipts and external consume/redeem/attest effects,
+and repairs the signed checkpoint before another governed effect can proceed.
+Health, peer, and human-staging callers retain committed state rather than
+reporting that it was discarded. Initial creation has no older checkpoint to
+anchor recovery, so an incomplete first checkpoint rolls the new state file
+back and fails bootstrap.
+
+One persisted governance stream has exactly one live process owner. Startup,
+initialization, and explicit reinitialization acquire an exclusive OS advisory
+lock beside the stream and retain its file handle for the full policy lifetime;
+the existence of the lock file is not ownership and no stale-lockfile timeout is
+used. The lock inode is permanent stream metadata: its `0600` record contains a
+random 256-bit generation ID, and both the signed state and signed checkpoint
+bind that generation together with the lock's filesystem device and inode. A
+second process receives a typed startup refusal. Every mutation also
+compares the caller's verified predecessor sequence and signed-statement digest
+with durable state under that lock before writing. This CAS is defense in depth
+against a stale in-process snapshot: it cannot borrow the latest sequence and
+overwrite newer authorization state. Writers outside this lock protocol are not
+a supported coordination model.
+
+On the shipped Linux path and the macOS development path, the lock must be a
+regular, non-symlink file. The policy binds the held handle to its filesystem
+device, inode, and held-file generation record and rechecks all three before and
+after state loads, transaction checks, state commits, and checkpoint commits.
+Ordinary load and explicit reinitialization open the permanent lock without
+`create`; a missing lock never becomes a fresh authority epoch implicitly. A
+copied or replacement lock has a different signed binding and therefore cannot
+load the existing stream. If a displaced owner crosses its final pre-write check,
+its post-write check refuses the effect and the envelope remains bound to the
+dead inode, so it cannot restart under the replacement path.
+Persisted governance-stream startup is intentionally supported only on the
+shipped Linux and macOS Unix path until an equivalent Windows file-identity
+binding exists; persisted configuration on any other platform fails closed at
+startup. The non-persisted in-memory policy is unaffected.
+An active privileged host adversary can still make the stream unavailable by
+deleting or replacing its files. The binding prevents that availability attack
+from creating a second valid writer; it does not claim to make a path check and
+rename one kernel-atomic operation.
+
+Fresh initialization creates, fsyncs, and parent-directory-syncs the lock record
+before signing either anchor. A retry after a parent-sync failure re-fsyncs the
+same valid generation rather than minting another stream. Moving, restoring, or
+snapshotting the files onto a different device/inode fails with a typed binding
+mismatch. Recovery is explicit and offline with every process stopped.
+State-preserving recovery is the explicit offline migration described
+below. It authenticates both existing anchors with the externally admitted
+Tom/primary key, creates or reuses durable lock metadata, changes only the lock
+binding, and advances the state/checkpoint sequence. Signed payloads from the
+immediately preceding schema that omit only the binding fail closed at ordinary
+startup and are accepted only by that migration. Earlier signed schemas that
+omit health, identity, committee, or authorization inputs remain unsupported
+because defaulting those fields could fail open. Ordinary startup never performs
+this migration.
+
+A missing permanent lock cannot be repaired by `with_persistence` or
+`reinitialize_persistence`. Stop every process first and run the explicit
+state-preserving command with the same config, stable key root, identity
+registry, and state volume:
+
+```bash
+swarmctl --config /etc/swarm/config.yaml identity migrate-governance-lock \
+  --confirm-offline \
+  --state-path /var/lib/swarm/governance-partition-state.json
+```
+
+The command loads an existing key without creating one, requires an exact active
+Tom/primary registry record, verifies both signed anchors before creating the
+lock, acquires the advisory lock, re-verifies unchanged bytes under the lock,
+then signs state at `N+1` before signing checkpoint `N+1`. A lock-only failure is
+retryable. A crash after the state commit leaves an older checkpoint; retry
+recognizes the state already bound to the held lock and advances only the
+checkpoint. A fully migrated retry is idempotent. Unsigned, corrupt,
+wrong-signer, checkpoint-ahead, or incompatible-schema input creates no trusted
+authority and fails closed. The command detects an active owner that implements
+the permanent-lock protocol; `--confirm-offline` is still mandatory because a
+pre-lock release has no advisory owner to detect.
+
+If authenticated anchors are unavailable, archive the entire state root and
+follow the destructive identity-root reset procedure; do not fabricate an empty
+lock. Destructive reset discards membership, health, leases, holds,
+authorization ledgers, and chain position. Rolling back both valid signed
+anchors together remains outside local detection and requires an external
+monotonic or independently authenticated anchor.
 
 ## Approval And Receipt Lineage
 
 The active receipt chain is:
 
 1. An admitted runtime agent proposes or routes a response.
-2. Policy validation evaluates the request and severity.
-3. `Tom` governance either approves, vetoes, or stages partition-time fallback
+2. `Tom` governance either approves, vetoes, or stages partition-time fallback
    evidence.
-4. The dispatcher verifies destructive-governance evidence before runtime
-   routing.
-5. Human approval applies when severity crosses `policy.human_gate_severity`.
+3. The dispatcher evaluates ordinary policy once without consuming governance.
+4. `Allow` proceeds to atomic governance consumption. `RequireHuman` persists
+   an exact hold and approval-set binding while leaving governance pending.
+5. The dedicated resume path verifies the exact persisted human pack, rechecks
+   governance freshness and pending state, then atomically consumes governance
+   and creates the one-shot admission without a second policy evaluation.
 6. Final execution and audit artifacts persist the request, decision, and
    outcome lineage.
 
@@ -152,7 +294,7 @@ rate limit all match decides the request outright. Only when no configured rule
 matches does evaluation reach `StaticApprovalGate`, which is the sole producer of
 `RequireHuman` (`static.human_gate`). The precedence is therefore:
 
-1. first matching `policy.rules` entry -> `allow` or `deny`, immediately
+1. first matching `policy.rules` entry -> policy-layer `allow` or `deny`, immediately
 2. no rule matched -> static gate -> `static.human_gate` for destructive actions
    at or above `policy.human_gate_severity`, otherwise `static.default_allow`
 
@@ -169,9 +311,26 @@ destructive action human-gated must not write a matching `allow` rule for it.
 Current implications:
 
 - a destructive request can be governance-authorized and still stop at the human
-  gate, when no configured rule matches it
-- a matching configured `allow` rule authorizes a destructive action outright;
-  the human gate does not re-open a decision a rule already made
+  gate, when no configured rule matches it; stopping persists a hold but consumes
+  neither approval and executes nothing
+- a matching configured `allow` rule passes the policy layer without a human
+  hold; it still cannot replace dispatcher governance admission
+- only the dedicated dispatcher resume route can compose the exact persisted
+  human pack with the exact still-pending governance authorization
+- serve mode opens all four durable approval stores (sets, ledgers, verdicts,
+  and receipt packs). A governance-prefixed operator vote exports the pack,
+  then calls the authenticated internal runtime endpoint
+  `/v1/governance/approvals/{approval_set_id}/resume` with only its persisted
+  pack ID. The runtime reloads the pack and samples its own clock immediately
+  before freshness validation and consumption; neither the operator request nor
+  the callback body can supply a timestamp
+- that endpoint is an internal operator-to-runtime callback, not part of the
+  public read-only platform API/OpenAPI surface. Missing stores or a missing pack
+  fail closed; ordinary demo approval sets keep the existing demo-resume route
+- forged, denied, stale, future-dated, or cross-request human packs consume
+  neither approval; direct raw human-approved runtime entry points remain refused
+- after atomic consumption, the admission is non-cloneable and any routing or
+  execution failure burns both approvals
 - human approval does not replace the governance receipt
 - demo approval and live operator approval reuse the same bounded approval
   vocabulary rather than defining a second governance model
@@ -181,6 +340,13 @@ Current implications:
 Every runtime-owned agent identity follows the same admission path:
 
 - keys persist under `identity.agent_key_dir`
+- on the shipped Linux release path and macOS development path, a newly created
+  key-root chain is recorded up to its nearest existing directory anchor, only
+  the parents that anchor newly created entries are synced, and an existing root
+  triggers no ancestor sync; sync failure aborts startup and best-effort removes
+  only empty directories created by that attempt so retry repeats the durability
+  sequence; each new key is still synced with the key root before creation is
+  reported, and existing key bytes are loaded rather than creating another identity
 - stable identities are derived from the Ed25519 public key
 - registry snapshots and continuity proofs persist under
   `identity.registry_dir`
@@ -200,10 +366,15 @@ PKI or multi-tenant operator system.
 
 ## Identity Rotation And Verification
 
-Rotation is part of the active contract, not a manual side note.
+Rotation is part of the active contract for non-governor roles. Tom/primary is
+the signer of persisted governance authority and therefore has a stricter
+offline rekey boundary.
 
 - `swarmctl identity rotate` preserves continuity from the retired key to the
-  new key
+  new key for non-Tom roles
+- `swarmctl identity rotate --role tom` refuses before changing either the key
+  store or registry; see `docs/CONFIGURATION.md` for the required offline rekey
+  properties
 - registry state retains enough historical material to verify older receipts and
   deposits
 - governance and deposit validation fail closed for identities that are not
@@ -232,13 +403,13 @@ The active partition contract is:
 | State | Destructive response | Observability | Recovery expectation |
 | --- | --- | --- | --- |
 | `healthy` | Allowed through normal receipt-backed governance | Full health and runtime visibility | Stage bounded contingency leases for later emergency use |
-| `degraded` | Still allowed if quorum remains available | Full visibility, degraded state reported | Repair unhealthy governors before the system trends into partition |
+| `degraded` | Denied with a signed governance veto while any unhealthy agent remains | Full visibility, degraded state reported | Repair unhealthy agents and confirm a healthy signed state before retrying |
 | `partitioned` | Denied unless a valid staged contingency lease authorizes the exact action | Full visibility remains available | Persist every authorized and unauthorized partition-era attempt |
 | `healing` | Normal quorum is back, but partition-era activity is being reconciled | Full visibility plus reconciliation markers | Review reconciliation output before treating the incident as closed |
 
 This rule is intentional:
 
-- destructive authority fails closed when quorum disappears
+- destructive authority fails closed while any agent is unhealthy or quorum is unavailable
 - health, metrics, and operator visibility remain available
 - contingency leases are narrow emergency exceptions
 - healing is a first-class state, not an implicit return to healthy
@@ -254,7 +425,14 @@ The active contract is intentionally narrow:
 - leases may be scoped to one host or other action scope
 - leases carry a blast-radius cap
 - leases expire after a bounded TTL
-- redemption is persisted for later reconciliation
+- operator status counts a lease only before its exact expiry boundary; the
+  read does not mutate signed history, and later governed persistence performs
+  ordinary expiry pruning
+- each lease is bound to the exact canonical governor committee recorded in its
+  signed receipt; admitting a new committee member atomically invalidates every
+  lease staged by the prior committee
+- each exact request and each covered scope is redeemable only once
+- redemption is persisted before routing and retained for later reconciliation
 
 Contingency leases are an emergency exception inside the existing governance
 model. They are not an alternate control plane.
@@ -285,6 +463,94 @@ Operators should expect governance state in these surfaces:
 
 The platform and operator surfaces consume this governance data, but they do not
 change the underlying authorization semantics.
+
+Persisted governance authority is one Tom/primary-signed state envelope plus an
+adjacent Tom/primary-signed sequence checkpoint. The externally preloaded and
+admitted Tom key is the signer expectation; persisted peer governors are
+committee membership, not receipt-signing trust anchors. The shipped issuance
+path remains local-only. On load, a signed contingency lease whose receipt names
+a different canonical committee is discarded rather than migrated into the
+current committee's authority.
+The shipped Helm profile uses a single `Recreate` deployment and
+`ReadWriteOncePod` storage. Rendering fails when shared persistence is enabled
+with more than one replica; rolling pod overlap is not a supported authority
+topology.
+Rollback of only the envelope is detected against the checkpoint. Rolling back
+both local files together is outside the protection of this design and requires
+an external monotonic or independently authenticated anchor.
+
+## Pre-1.0 Rust API Migration
+
+The security boundary intentionally breaks several public Rust source APIs.
+There is no compatibility shim because each old shape omitted information now
+required to fail closed:
+
+- `GovernancePolicy::with_persistence(config, path) -> std::io::Result<_>` is
+  now `GovernancePolicy::with_persistence(config, path,
+  admitted_tom_agent_id, tom_signing_key) ->
+  Result<_, GovernancePersistenceError>`. Callers must load or create the stable
+  Tom/primary key, admit that externally derived identity through the registry,
+  and pass that exact identity and key. Legacy unsigned state must be explicitly
+  reinitialized offline; persisted envelope fields never supply the trust
+  anchor.
+- `GovernancePolicy::migrate_persistence_lock(path, admitted_tom_agent_id,
+  tom_signing_key)` is the only state-preserving missing/rebound-lock path. It
+  accepts the exact immediately preceding signed payload schema or the current
+  schema, advances the signed sequence, and requires an externally admitted
+  signer. There is no overload that trusts an envelope signer or creates a key.
+- `ContingencyLease::verify()` is now
+  `verify(&trusted_governor_identities)`. Callers must pass identities from the
+  admitted authority, normally `GovernanceAuthority::governor_public_keys()`;
+  the signer embedded in the lease is not its own trust anchor.
+- `GovernanceDecision::Allow { receipt: Option<_>, ... }` is split into
+  `NotRequired` for actions outside receipt-backed governance and `Authorize {
+  receipt, contingency_lease }` for governed approval. Match both explicitly;
+  do not convert a missing receipt into authorization.
+- the concrete `swarm_governance::GovernanceAuthority` handle exposes one-shot
+  approval/veto consumption and the human hold, binding, lookup, and atomic
+  human-consumption methods. Runtime callers must retain clones of the same
+  handle through issuance and consumption. Only an authenticated persisted
+  `GovernancePolicy` can mint it; there is no backend trait, generic installer,
+  `Deref`, or public constructor for downstream substitution.
+
+## Ingest, Bridge, Demo, And Raw Runtime Boundaries
+
+Live HTTP ingest and bridge ingest still detect, deposit, publish findings, and
+forward telemetry to the agent lane. Their synchronous playbook selector does
+not return a governed action. `Pouncer` constructs and governs the later request
+once; ingest does not start a duplicate round.
+
+All raw `SwarmRuntime` entry points refuse governed actions in enforced mode
+before policy, lease issuance, guards, containment, or executor invocation.
+This is keyed to the actual execution mode, not the caller's `live_mode` flag.
+Detect-only rehearsal and non-governed action behavior is unchanged.
+
+The guided `swarmctl first-run` path is a detect-only governed-action and policy
+rehearsal. It mints neither a human-approval receipt nor a governance
+authorization. A live demo step that names a governed action records
+`governance_deferred`; it does not create a human-resume path that could bypass
+`Pouncer` and the dispatcher. The hidden, deprecated
+`--voter-signing-key-env` option remains parseable for one compatibility release
+but is ignored; quickstart retains `receipt_pack_id: null` in JSON for the same
+compatibility window.
+
+The governed-resume callback is a bearer-bearing internal hop. Its configured
+`operator_surface.runtime_base_url` is fully validated even when callers use a
+public `LocalOperatorSurface` config constructor, and its dedicated client
+ignores process proxies, refuses redirects, and applies a bounded timeout.
+The surface stores the trimmed URL that validation accepted. A non-success
+callback diagnostic contains only the HTTP status; the upstream response body
+is never read or echoed.
+A refused redirect never contacts its target and leaves the exact
+governance/human hold pending. Other transport failures can be ambiguous after
+delivery, so operators inspect the persisted hold before retrying; durable
+one-time consumption prevents an already consumed approval from executing again.
+
+Source compatibility note for this release: downstream implementations of the
+public `RequestResponseRouter` trait must remove the former `now_ms` parameter
+from `restore_human_preflight`. The dispatcher now owns the clock and samples it
+after the awaited, side-effect-free restoration step; external implementations
+cannot select the pack-validation or governance-consumption time.
 
 ## Config Keys That Define The Contract
 

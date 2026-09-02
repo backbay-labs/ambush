@@ -2,7 +2,8 @@
 //!
 //! Backed by NATS JetStream KV for persistence and replay.
 //! Deposit keys are segmented primarily by threat class
-//! (`exp.<gc_page>.<threat_class>...` for deposits,
+//! (`exp.<gc_page>.<threat_class>.<evidence|control>...` for new deposits,
+//! with the pre-partition layout still readable during migration,
 //! `esc.<timestamp>.<mode>.<threat_class>...` for escalations).
 //!
 //! Responsibilities:

@@ -80,13 +80,7 @@ Use the packaged CLI inside the same image wrapper:
 ```bash
 docker compose run --rm --entrypoint swarmctl \
   -e RUST_LOG=warn \
-  -e SWARM_VOTER_SIGNING_KEY=quickstart-voter-key \
-  -e SWARM_EVIDENCE_SIGNING_KEY=quickstart-evidence-key \
   swarm-detect \
-  --approval-verdict-results-dir /tmp/approval-verdicts \
-  --approval-receipt-pack-results-dir /tmp/approval-receipt-packs \
-  --approval-set-results-dir /tmp/approval-sets \
-  --approval-ledger-results-dir /tmp/approval-ledgers \
   quickstart --config /app/rulesets/default.yaml
 ```
 

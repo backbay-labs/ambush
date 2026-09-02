@@ -86,12 +86,22 @@ pub struct ProvidenceRuntimeContext {
     pub bridge_health: BridgeStatusReport,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvidenceFeedbackTarget {
     pub incident_id: String,
     pub finding_id: String,
     pub hunt_id: String,
     pub event_id: String,
+    /// Exact durable replay artifact selected before an idempotent feedback
+    /// claim is committed. Older claims omit both replay fields and retain the
+    /// legacy hunt lookup behavior during rolling upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_bundle_digest: Option<String>,
+    /// Canonical seconds timestamp of the exact evidence record governed by
+    /// analyst feedback. Filled from the durable replay bundle when present.
+    pub evidence_timestamp: Option<i64>,
     pub host_id: Option<String>,
     pub strategy_id: Option<String>,
     pub threat_class: swarm_core::ThreatClass,
@@ -823,6 +833,9 @@ pub fn resolve_feedback_target(
         finding_id: member.finding_id.clone(),
         hunt_id: member.hunt_id.clone(),
         event_id,
+        replay_bundle_id: None,
+        replay_bundle_digest: None,
+        evidence_timestamp: None,
         host_id: extract_host_id_from_keys(&member.shared_keys)
             .or_else(|| extract_host_id_from_keys(&lookup.record.correlation_keys)),
         strategy_id: lookup.record.trigger_strategy_id.clone(),

@@ -1,0 +1,43 @@
+[package]
+name = "swarm-governance-witness"
+description = "External witness transport for authenticated swarm governance state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "swarm_governance_witness"
+path = "src/lib.rs"
+
+[[bin]]
+name = "swarm-governance-witness"
+path = "src/bin/swarm-governance-witness.rs"
+
+[[bin]]
+name = "swarm-governance-witness-store"
+path = "src/bin/swarm-governance-witness-store.rs"
+
+[dependencies]
+async-nats.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+rustix = { version = "1", features = ["fs", "process"] }
+rustls-pemfile.workspace = true
+swarm-crypto.workspace = true
+swarm-governance.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[build-dependencies]
+
+[lints]
+workspace = true

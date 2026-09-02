@@ -20,7 +20,9 @@ use swarm_pheromone::{
 };
 
 fn nats_url() -> String {
-    std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string())
+    std::env::var("SWARM_NATS_RUNTIME_URL")
+        .or_else(|_| std::env::var("NATS_URL"))
+        .unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string())
 }
 
 fn test_config() -> PheromoneConfig {
@@ -170,6 +172,10 @@ async fn connect_pair(
     match (alpha, beta) {
         (Ok(alpha), Ok(beta)) => Some((alpha, beta)),
         (Err(error), _) | (_, Err(error)) => {
+            assert!(
+                std::env::var_os("SWARM_NATS_HARNESS_SCRATCH").is_none(),
+                "repository-owned NATS harness failed to materialize multi-instance test: {error}"
+            );
             eprintln!("NATS server not available at {url}, skipping multi-instance test: {error}");
             None
         }
@@ -350,7 +356,7 @@ async fn cross_instance_query_deposits() {
 
 #[tokio::test]
 #[ignore = "run via tools/with-nats-jetstream.sh"]
-async fn strategy_scoped_agent_ids_count_as_distinct_sources_across_instances() {
+async fn strategy_scoped_agent_ids_share_one_source_across_instances() {
     let Some((alpha, beta)) = connect_pair("strategy-scope-distinct").await else {
         return;
     };
@@ -376,7 +382,7 @@ async fn strategy_scoped_agent_ids_count_as_distinct_sources_across_instances() 
         alpha
             .query_concentration(&ThreatClass::Execution, ts + 2)
             .await
-            .map(|concentration| concentration.distinct_sources == 2)
+            .map(|concentration| concentration.distinct_sources == 1)
             .unwrap_or(false)
     })
     .await;
@@ -385,7 +391,7 @@ async fn strategy_scoped_agent_ids_count_as_distinct_sources_across_instances() 
         .query_concentration(&ThreatClass::Execution, ts + 2)
         .await
         .unwrap();
-    assert_eq!(concentration.distinct_sources, 2);
+    assert_eq!(concentration.distinct_sources, 1);
 }
 
 #[tokio::test]

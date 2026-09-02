@@ -253,8 +253,8 @@ impl SphinxAgent {
                 }));
 
             match entity.role.as_str() {
-                "parent_process" => parent_process_node_id = Some(node_id),
-                "process" => process_node_id = Some(node_id),
+                "parent_process" | "parent_process_name" => parent_process_node_id = Some(node_id),
+                "process" | "process_name" => process_node_id = Some(node_id),
                 "source_ip" => source_ip_node_id = Some(node_id),
                 "destination_ip" => destination_ip_node_id = Some(node_id),
                 _ => {}
@@ -1598,29 +1598,44 @@ fn extract_entities(indicator: &Value) -> Vec<EntityObservation> {
         ("username", EntityKind::User),
         ("process_name", EntityKind::Process),
         ("parent_process_name", EntityKind::Process),
+        ("parent_process", EntityKind::Process),
         ("source_ip", EntityKind::IpAddress),
         ("destination_ip", EntityKind::IpAddress),
         ("remote_ip", EntityKind::IpAddress),
         ("ip_address", EntityKind::IpAddress),
     ];
 
-    for (field, kind) in candidates {
-        let Some(value) = indicator.get(field).and_then(Value::as_str) else {
-            continue;
-        };
-        let normalized = value.trim();
-        if normalized.is_empty() {
-            continue;
+    let mut collect_from_object = |object: &serde_json::Map<String, Value>| {
+        for (field, kind) in candidates {
+            let Some(value) = object.get(field).and_then(Value::as_str) else {
+                continue;
+            };
+            let normalized = value.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            let key = format!("{field}:{}", normalized.to_ascii_lowercase());
+            if !seen.insert(key) {
+                continue;
+            }
+            entities.push(EntityObservation {
+                kind,
+                role: field.to_string(),
+                value: normalized.to_string(),
+            });
         }
-        let key = format!("{field}:{}", normalized.to_ascii_lowercase());
-        if !seen.insert(key) {
-            continue;
-        }
-        entities.push(EntityObservation {
-            kind,
-            role: field.to_string(),
-            value: normalized.to_string(),
-        });
+    };
+
+    let Some(object) = indicator.as_object() else {
+        return entities;
+    };
+    collect_from_object(object);
+
+    // Detector deposits wrap finding context in one top-level `evidence`
+    // object. Inspect that one bounded layer only; arbitrary nested evidence is
+    // intentionally not traversed or promoted into graph entities.
+    if let Some(evidence) = object.get("evidence").and_then(Value::as_object) {
+        collect_from_object(evidence);
     }
     entities
 }
@@ -2124,9 +2139,9 @@ fn signed_memory_query_deposit(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
-        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, parse_memory_query,
-        signed_memory_query_deposit,
+        CausalRelation, DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
+        KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, entity_node_id,
+        extract_entities, parse_memory_query, signed_memory_query_deposit,
     };
     use crate::AgentTickBoundaryError;
     use crate::calico_agent::{
@@ -2148,7 +2163,9 @@ mod tests {
         SWARM_PROVIDENCE_FEEDBACK_SCHEMA_VERSION, Severity, SphinxMemoryPayloadKind,
         SphinxMemoryQuery, SwarmAction,
     };
-    use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
+    use swarm_pheromone::{
+        ConfiguredPheromoneSubstrate, InMemoryPheromoneSubstrate, PheromoneSubstrate,
+    };
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -2180,8 +2197,9 @@ mod tests {
     }
 
     fn substrate(config: &swarm_core::config::SwarmConfig) -> ConfiguredPheromoneSubstrate {
-        ConfiguredPheromoneSubstrate::from_config(&config.pheromone)
-            .expect("test substrate should initialize")
+        ConfiguredPheromoneSubstrate::InMemory(InMemoryPheromoneSubstrate::new_for_replay(
+            config.pheromone.clone(),
+        ))
     }
 
     fn test_signing_key() -> SigningKey {
@@ -2383,6 +2401,130 @@ mod tests {
             peer_findings: Vec::new(),
             agent_health: Vec::new(),
         }
+    }
+
+    #[test]
+    fn extracts_entities_from_detector_deposit_evidence_shape() {
+        let indicator = serde_json::json!({
+            "event_id": "evt-detector-1",
+            "host_id": "host-1",
+            "source": "endpoint",
+            "evidence": {
+                "host_id": "host-1",
+                "parent_process": "winword.exe",
+                "process_name": "powershell.exe",
+                "user": "alice",
+                "source_ip": "10.0.0.5",
+                "destination_ip": "198.51.100.7",
+                "raw": {
+                    "process_name": "raw-process-must-not-promote",
+                    "user": "raw-user-must-not-promote",
+                    "source_ip": "192.0.2.10",
+                    "destination_ip": "192.0.2.11"
+                },
+                "secret": {
+                    "username": "secret-user-must-not-promote"
+                },
+                "nested": {
+                    "evidence": {
+                        "process_name": "too-deep-must-not-promote"
+                    }
+                }
+            }
+        });
+
+        let entities = extract_entities(&indicator);
+        let actual = entities
+            .iter()
+            .map(|entity| (entity.role.as_str(), entity.value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                ("host_id", "host-1"),
+                ("user", "alice"),
+                ("process_name", "powershell.exe"),
+                ("parent_process", "winword.exe"),
+                ("source_ip", "10.0.0.5"),
+                ("destination_ip", "198.51.100.7"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn detector_process_aliases_create_the_parent_child_causal_edge() {
+        let root = temp_root("detector-process-aliases");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+        let mut deposit = pheromone("evt-detector-aliases", 1_800_499_000);
+        deposit.indicator = serde_json::json!({
+            "event_id": "evt-detector-aliases",
+            "observed_at_ms": 1_800_499_000_000_i64,
+            "evidence": {
+                "parent_process": "winword.exe",
+                "process_name": "powershell.exe"
+            }
+        });
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(vec![deposit], 1_800_499_001))
+            .await
+            .expect("detector-shaped deposit should persist");
+
+        let snapshot = FileKnowledgeGraphStore::open(root.join("knowledge-graph"))
+            .unwrap()
+            .load_snapshot()
+            .unwrap()
+            .unwrap();
+        let parent = entity_node_id(EntityKind::Process, "winword.exe");
+        let process = entity_node_id(EntityKind::Process, "powershell.exe");
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(edge)
+                if edge.relation == CausalRelation::ProcessParentChild
+                    && edge.from_node_id == parent
+                    && edge.to_node_id == process
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nested_entity_extraction_ignores_malformed_evidence_and_is_bounded() {
+        for indicator in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!("not-an-indicator-object"),
+            serde_json::json!({ "evidence": null }),
+            serde_json::json!({ "evidence": [] }),
+            serde_json::json!({ "evidence": "not-an-object" }),
+        ] {
+            assert!(
+                extract_entities(&indicator).is_empty(),
+                "malformed indicator should not produce entities: {indicator}"
+            );
+        }
+
+        let indicator = serde_json::json!({
+            "evidence": {
+                "context": {
+                    "process_name": "nested-process-must-not-promote",
+                    "credentials": {
+                        "user": "nested-secret-must-not-promote"
+                    }
+                }
+            }
+        });
+        assert!(extract_entities(&indicator).is_empty());
     }
 
     #[test]

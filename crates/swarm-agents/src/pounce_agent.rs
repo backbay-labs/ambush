@@ -12,7 +12,8 @@ use swarm_core::config::{
     ResponsePlaybookBranchResolution, ResponsePlaybookConfig, ResponsePlaybookRule,
 };
 use swarm_core::pheromone::PheromoneDeposit;
-use swarm_core::types::{AgentId, HuntId, ResponseAction, SwarmAction};
+use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
+use swarm_policy::ActionRequest;
 use swarm_policy::static_gate::scope_for_response_action;
 
 pub struct PounceAgent {
@@ -42,6 +43,7 @@ struct HandledActionKey {
 #[derive(Debug, Clone)]
 struct PlaybookMatch {
     hunt_id: HuntId,
+    severity: Severity,
     evidence: serde_json::Value,
     actions: Vec<ResponseAction>,
 }
@@ -141,6 +143,7 @@ impl PounceAgent {
 
             return Some(PlaybookMatch {
                 hunt_id: HuntId(hunt_id.to_string()),
+                severity: deposit.severity,
                 evidence: build_request_evidence(
                     deposit,
                     env,
@@ -214,15 +217,27 @@ impl SwarmAgent for PounceAgent {
                 continue;
             }
 
-            let mut evidence = playbook_match.evidence.clone();
-            match self.governance_policy.can_act(&action) {
-                GovernanceDecision::Allow {
+            let request = ActionRequest {
+                hunt_id: playbook_match.hunt_id.clone(),
+                requested_by: self.id.clone(),
+                action,
+                severity: playbook_match.severity,
+                evidence: playbook_match.evidence.clone(),
+            };
+            match self.governance_policy.can_act(&request) {
+                GovernanceDecision::NotRequired => {
+                    actions.push(SwarmAction::RequestResponse {
+                        hunt_id: request.hunt_id,
+                        action: request.action,
+                        evidence: request.evidence,
+                    });
+                }
+                GovernanceDecision::Authorize {
                     receipt,
                     contingency_lease,
                 } => {
-                    if let Some(receipt) = receipt
-                        && let Ok(receipt_value) = serde_json::to_value(receipt)
-                    {
+                    let mut evidence = request.evidence;
+                    if let Ok(receipt_value) = serde_json::to_value(receipt) {
                         evidence["governance_receipt"] = receipt_value;
                     }
                     if let Some(contingency_lease) = contingency_lease
@@ -231,8 +246,8 @@ impl SwarmAgent for PounceAgent {
                         evidence["contingency_lease"] = lease_value;
                     }
                     actions.push(SwarmAction::RequestResponse {
-                        hunt_id: playbook_match.hunt_id.clone(),
-                        action,
+                        hunt_id: request.hunt_id,
+                        action: request.action,
                         evidence,
                     })
                 }
@@ -241,14 +256,15 @@ impl SwarmAgent for PounceAgent {
                     reason,
                     receipt,
                 } => {
+                    let mut evidence = request.evidence;
                     if let Some(receipt) = receipt
                         && let Ok(receipt_value) = serde_json::to_value(receipt)
                     {
                         evidence["governance_receipt"] = receipt_value;
                     }
                     actions.push(SwarmAction::GovernanceVeto {
-                        hunt_id: playbook_match.hunt_id.clone(),
-                        action,
+                        hunt_id: request.hunt_id,
+                        action: request.action,
                         evidence,
                         governing_agent_id,
                         reason,

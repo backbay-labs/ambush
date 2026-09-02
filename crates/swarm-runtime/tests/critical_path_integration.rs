@@ -34,6 +34,8 @@ use swarm_runtime::replay::{
     DefaultReplayHarness, ReplayScenarioInput, ReplayScenarioStep, load_scenario_manifest,
 };
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
+
+const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
 use swarm_runtime::strategy::DefaultStrategyScorecardHarness;
 use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
@@ -87,10 +89,12 @@ impl InvestigationStrategy for NoOpInvestigation {
 }
 
 fn config() -> Result<SwarmConfig, Box<dyn std::error::Error>> {
-    Ok(load_config(concat!(
+    let mut config = load_config(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../rulesets/default.yaml"
-    ))?)
+    ))?;
+    config.pheromone.default_half_life_secs = TEST_LIVE_HALF_LIFE_SECS;
+    Ok(config)
 }
 
 fn repo_root() -> PathBuf {

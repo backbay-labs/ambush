@@ -22,7 +22,19 @@ use swarm_core::types::{AgentId, Severity};
 use swarm_pheromone::{DepositSigningPayload, JetStreamPheromoneSubstrate, PheromoneSubstrate};
 
 fn nats_url() -> String {
-    std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string())
+    std::env::var("SWARM_NATS_RUNTIME_URL")
+        .or_else(|_| std::env::var("NATS_URL"))
+        .unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string())
+}
+
+fn now_timestamp() -> i64 {
+    i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_secs(),
+    )
+    .expect("unix timestamp exceeds i64")
 }
 
 fn substrate_config() -> PheromoneConfig {
@@ -208,6 +220,10 @@ async fn connect_for_test(label: &str) -> Option<(String, JetStreamPheromoneSubs
     {
         Ok(substrate) => Some((bucket, substrate)),
         Err(error) => {
+            assert!(
+                std::env::var_os("SWARM_NATS_HARNESS_SCRATCH").is_none(),
+                "repository-owned NATS harness failed to materialize JetStream test: {error}"
+            );
             eprintln!("NATS server not available at {url}, skipping JetStream test: {error}");
             None
         }
@@ -220,12 +236,13 @@ async fn deposits_survive_reconnect_with_shared_bucket() {
     let Some((bucket, substrate)) = connect_for_test("restart").await else {
         return;
     };
+    let base = now_timestamp() - 2;
     substrate
-        .deposit(sample_deposit("instance-alpha", 100, 0.9))
+        .deposit(sample_deposit("instance-alpha", base, 0.9))
         .await
         .unwrap();
     substrate
-        .deposit(sample_deposit("instance-beta", 200, 0.8))
+        .deposit(sample_deposit("instance-beta", base + 1, 0.8))
         .await
         .unwrap();
     wait_until(|| async { substrate.recent_deposits(10).await.unwrap().len() == 2 }).await;
@@ -237,8 +254,8 @@ async fn deposits_survive_reconnect_with_shared_bucket() {
             .unwrap();
     let deposits = reopened.recent_deposits(10).await.unwrap();
     assert_eq!(deposits.len(), 2);
-    assert_eq!(deposits[0].timestamp, 200);
-    assert_eq!(deposits[1].timestamp, 100);
+    assert_eq!(deposits[0].timestamp, base + 1);
+    assert_eq!(deposits[1].timestamp, base);
 
     let health = reopened.health().await.unwrap();
     assert!(health.ready);
@@ -251,24 +268,25 @@ async fn recent_deposits_support_replay() {
     let Some((_bucket, substrate)) = connect_for_test("replay").await else {
         return;
     };
+    let base = now_timestamp() - 3;
     substrate
-        .deposit(sample_deposit("replay-alpha", 100, 1.0))
+        .deposit(sample_deposit("replay-alpha", base, 1.0))
         .await
         .unwrap();
     substrate
-        .deposit(sample_deposit("replay-beta", 200, 0.9))
+        .deposit(sample_deposit("replay-beta", base + 1, 0.9))
         .await
         .unwrap();
     substrate
-        .deposit(sample_deposit("replay-gamma", 300, 0.8))
+        .deposit(sample_deposit("replay-gamma", base + 2, 0.8))
         .await
         .unwrap();
     wait_until(|| async { substrate.recent_deposits(10).await.unwrap().len() == 3 }).await;
 
     let deposits = substrate.recent_deposits(2).await.unwrap();
     assert_eq!(deposits.len(), 2);
-    assert_eq!(deposits[0].timestamp, 300);
-    assert_eq!(deposits[1].timestamp, 200);
+    assert_eq!(deposits[0].timestamp, base + 2);
+    assert_eq!(deposits[1].timestamp, base + 1);
 }
 
 #[tokio::test]
@@ -279,13 +297,14 @@ async fn deposit_round_trip_preserves_all_fields() {
     };
     let signing_key = signing_key_for_label("round-trip-agent");
     let derived_agent_id = agent_id_for_label("round-trip-agent");
+    let timestamp = now_timestamp();
     let mut deposit = PheromoneDeposit {
         schema_version: PheromoneDeposit::current_schema_version(),
         indicator: serde_json::json!({"cmd": "whoami", "host_id": "host-7"}),
         threat_class: ThreatClass::Execution,
         severity: Severity::High,
         confidence: 0.95,
-        timestamp: 500,
+        timestamp,
         decay_half_life: 3600.0,
         agent_id: derived_agent_id.clone(),
         agent_identity: derived_agent_id.0.clone(),
@@ -307,7 +326,7 @@ async fn deposit_round_trip_preserves_all_fields() {
     assert_eq!(stored.threat_class, ThreatClass::Execution);
     assert_eq!(stored.severity, Severity::High);
     assert!((stored.confidence - 0.95).abs() < f64::EPSILON);
-    assert_eq!(stored.timestamp, 500);
+    assert_eq!(stored.timestamp, timestamp);
     assert!((stored.decay_half_life - 3600.0).abs() < f64::EPSILON);
     assert_eq!(stored.agent_role, Some(AgentRole::Whisker));
     assert!(!stored.signature.is_empty());
@@ -320,20 +339,21 @@ async fn concentration_decays_with_half_life() {
     let Some((_bucket, substrate)) = connect_for_test("half-life").await else {
         return;
     };
-    let mut deposit = sample_deposit("decay-agent", 0, 1.0);
+    let timestamp = now_timestamp();
+    let mut deposit = sample_deposit("decay-agent", timestamp, 1.0);
     deposit.decay_half_life = 3600.0;
     sign_deposit(&mut deposit, &signing_key_for_label("decay-agent"));
     substrate.deposit(deposit).await.unwrap();
     wait_until(|| async { substrate.recent_deposits(1).await.unwrap().len() == 1 }).await;
 
     let c0 = substrate
-        .query_concentration(&ThreatClass::Execution, 0)
+        .query_concentration(&ThreatClass::Execution, timestamp)
         .await
         .unwrap();
     assert!((c0.total_strength - 1.0).abs() < 0.01);
 
     let c1 = substrate
-        .query_concentration(&ThreatClass::Execution, 3600)
+        .query_concentration(&ThreatClass::Execution, timestamp + 3600)
         .await
         .unwrap();
     assert!(
@@ -343,7 +363,7 @@ async fn concentration_decays_with_half_life() {
     );
 
     let c2 = substrate
-        .query_concentration(&ThreatClass::Execution, 7200)
+        .query_concentration(&ThreatClass::Execution, timestamp + 7200)
         .await
         .unwrap();
     assert!(
@@ -359,11 +379,12 @@ async fn query_deposits_filters_by_threat_class_and_time() {
     let Some((_bucket, substrate)) = connect_for_test("query-filter").await else {
         return;
     };
+    let base = now_timestamp() - 2;
     substrate
-        .deposit(sample_deposit("filter-alpha", 100, 1.0))
+        .deposit(sample_deposit("filter-alpha", base, 1.0))
         .await
         .unwrap();
-    let mut second = sample_deposit("filter-beta", 200, 0.9);
+    let mut second = sample_deposit("filter-beta", base + 1, 0.9);
     second.threat_class = ThreatClass::DefenseEvasion;
     sign_deposit(&mut second, &signing_key_for_label("filter-beta"));
     substrate.deposit(second).await.unwrap();
@@ -372,14 +393,14 @@ async fn query_deposits_filters_by_threat_class_and_time() {
     let deposits = substrate
         .query_deposits(swarm_pheromone::DepositQuery {
             threat_class: Some(ThreatClass::Execution),
-            since_timestamp: Some(50),
+            since_timestamp: Some(base - 1),
             host_id: None,
             limit: 10,
         })
         .await
         .unwrap();
     assert_eq!(deposits.len(), 1);
-    assert_eq!(deposits[0].timestamp, 100);
+    assert_eq!(deposits[0].timestamp, base);
 }
 
 #[tokio::test]
@@ -388,12 +409,18 @@ async fn query_deposits_filters_by_host_id() {
     let Some((_bucket, substrate)) = connect_for_test("host-filter").await else {
         return;
     };
+    let base = now_timestamp() - 2;
     substrate
-        .deposit(sample_deposit_with_host("host-alpha", 100, 1.0, "host-a"))
+        .deposit(sample_deposit_with_host("host-alpha", base, 1.0, "host-a"))
         .await
         .unwrap();
     substrate
-        .deposit(sample_deposit_with_host("host-beta", 200, 0.9, "host-b"))
+        .deposit(sample_deposit_with_host(
+            "host-beta",
+            base + 1,
+            0.9,
+            "host-b",
+        ))
         .await
         .unwrap();
     wait_until(|| async { substrate.recent_deposits(10).await.unwrap().len() == 2 }).await;
@@ -408,7 +435,7 @@ async fn query_deposits_filters_by_host_id() {
         .await
         .unwrap();
     assert_eq!(deposits.len(), 1);
-    assert_eq!(deposits[0].timestamp, 200);
+    assert_eq!(deposits[0].timestamp, base + 1);
     assert_eq!(deposits[0].indicator["host_id"], "host-b");
 }
 
@@ -485,20 +512,25 @@ async fn threat_class_override_affects_concentration_and_gc() {
         ))
         .await
         .unwrap();
-    substrate
-        .deposit(sample_deposit("override-alpha", 0, 0.03))
-        .await
-        .unwrap();
+    let timestamp = now_timestamp();
+    let mut deposit = sample_deposit("override-alpha", timestamp, 0.1);
+    deposit.decay_half_life = 60.0;
+    sign_deposit(&mut deposit, &signing_key_for_label("override-alpha"));
+    substrate.deposit(deposit).await.unwrap();
     wait_until(|| async { substrate.recent_deposits(1).await.unwrap().len() == 1 }).await;
 
     let concentration = substrate
-        .query_concentration(&ThreatClass::Execution, 0)
+        .query_concentration(&ThreatClass::Execution, timestamp + 61)
         .await
         .unwrap();
     assert_eq!(concentration.total_strength, 0.0);
 
-    let removed = substrate.gc_evaporated(0).await.unwrap();
-    assert_eq!(removed, 1);
+    let removed = substrate.gc_evaporated(timestamp + 61).await.unwrap();
+    assert_eq!(
+        removed, 0,
+        "the scoped query already purges payloads expired under the current override"
+    );
+    assert!(substrate.recent_deposits(1).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -558,12 +590,13 @@ async fn gc_removes_evaporated_entries_and_preserves_fresh_concentration() {
     let Some((_bucket, substrate)) = connect_for_test("gc").await else {
         return;
     };
+    let now = now_timestamp();
     substrate
-        .deposit(sample_deposit("instance-alpha", 0, 0.1))
+        .deposit(sample_deposit("instance-alpha", now - 1, 0.1))
         .await
         .unwrap();
     substrate
-        .deposit(sample_deposit("instance-beta", 100_000, 0.9))
+        .deposit(sample_deposit("instance-beta", now, 0.9))
         .await
         .unwrap();
     wait_until(|| async { substrate.recent_deposits(10).await.unwrap().len() == 2 }).await;
@@ -571,14 +604,17 @@ async fn gc_removes_evaporated_entries_and_preserves_fresh_concentration() {
     assert_eq!(substrate.recent_deposits(10).await.unwrap().len(), 2);
 
     let concentration = substrate
-        .query_concentration(&ThreatClass::Execution, 100_000)
+        .query_concentration(&ThreatClass::Execution, now + 14_000)
         .await
         .unwrap();
     assert_eq!(concentration.distinct_sources, 1);
-    assert!(concentration.total_strength >= 0.9);
+    assert!(concentration.total_strength > substrate_config().evaporation_threshold);
 
-    let removed = substrate.gc_evaporated(100_000).await.unwrap();
-    assert_eq!(removed, 1);
+    let removed = substrate.gc_evaporated(now + 14_000).await.unwrap();
+    assert_eq!(
+        removed, 0,
+        "the scoped concentration index eagerly purges certainly expired GC pages"
+    );
 
     let deposits = substrate.recent_deposits(10).await.unwrap();
     assert_eq!(deposits.len(), 1);

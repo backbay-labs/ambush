@@ -10,34 +10,37 @@ Detect real threats quickly enough to take safe action before the window to resp
 
 ## Milestone Status
 
-`v1.77 Integration Proof` active with phases 276-279 complete. `v1.74 Structural Integrity` deferred.
+`v1.79 Collective Cyber Reasoning` is active across phases 284-289. Phase 285 is passed under a revised assurance scope; the external provenance-distinct GitHub App enforcement path is explicitly deferred and is not claimed as a protected rule. `v1.77 Integration Proof`, `v1.78 Runtime Decomposition And TCB Boundary`, and v1.78.1 are complete as scoped; `v1.74 Structural Integrity` remains deferred.
 
 **Goal:**
-- Prove one real EDR adapter, one real SIEM adapter, and one compose-backed detect-to-respond-to-deliver loop on the shipped runtime.
+- Make the runtime construct, contest, and refine a shared causal theory of an attack, then use bounded red/blue pressure and privacy-preserving memory to improve the next investigation.
 
-**Delivered:**
-- `v1.76` closed the external-signal loop with bounded STIX/TAXII ingestion, runtime threat-intel enrichment, CloudTrail and Kubernetes audit bridge normalization, and cloud-detector proof through the signed runtime path.
-- The next milestone can now assume a broader signal base and focus on proving outbound integration rather than adding more ingest breadth first.
-- `v1.74` remains deferred rather than lost; the structural-integrity phases stay available for later re-activation.
+**Delivered foundation:**
+- `v1.78` and `v1.78.1` provide the decomposed runtime, TCB boundary, reversible containment, and no-proof-no-promotion posture on the shipped single-node lane.
+- Phase 284 provides isolated fixture generation and suite-health evidence.
+- Phase 285 closes local mapping, falsifiability, supply-chain, SBOM, and hosted-runner evidence. Local and hosted checks are useful evidence; they do not imply a protected GitHub App check.
+- `v1.74` remains deferred rather than lost; its structural-integrity phases stay available for later reactivation.
 
 **Supporting foundation:**
 - `v1.75` packaged the runtime for first external operator use with validated Docker, Helm, quickstart, and adversary-emulation proof surfaces.
 - `v1.76` broadened the runtime signal base with external threat intelligence and cloud audit telemetry on the shared ingest and detector paths.
-- `v1.72` added a checked-in OpenAPI contract plus generated Python client proof, which remains relevant for the upcoming integration-architecture validation work.
+- `v1.77` proved the outbound EDR/SIEM integration lane, and `v1.78` established the verification and trust-boundary foundation that v1.79 audits.
 
-## Current Milestone: v1.77 Integration Proof
+## Current Milestone: v1.79 Collective Cyber Reasoning
 
-**Goal:** Prove end-to-end integration with one real EDR platform and one real SIEM, replacing generic wrappers with tested adapters and a compose-backed deployment proof.
+**Goal:** Replace parallel detector output with collective epistemology: competing hypotheses, evidence acquisition, falsification, convergence, bounded containment planning, and durable learning.
 
-**Target features:**
-- A `CrowdStrikeRtrAdapter` that executes bounded host isolation, process kill, and file quarantine actions through the shipped response lane
-- A `SplunkHecAdapter` that delivers detection findings with CIM-aligned mapping, batching, and bounded resilience
-- A repo-owned Docker Compose proof showing detect -> respond -> deliver with mocked CrowdStrike RTR and Splunk HEC dependencies
-- One integration architecture validation pass that checks health, metrics, and audit surfaces on the deployed compose stack
+**Acceptance shape:**
+- Every causal claim is typed, confidence-scored, contradiction-aware, and linked to source evidence.
+- Agents claim unresolved graph work through a stigmergic ledger without duplicate investigation.
+- Process, identity, Kubernetes, CloudTrail, network, and threat-intelligence signals share one normalized evidence model.
+- Red/blue episodes run through the real Ambush detector and policy boundaries in a bounded, non-destructive arena.
+- Synthesized detector/response candidates compete against historical attacks, benign controls, and counterexamples before any operator-reviewed promotion.
+- Herd memory transfers signed attack abstractions, never raw telemetry, and must improve withheld-campaign performance against the single-agent baseline.
 
 ## Current State
 
-`v1.77` is complete but remains the active milestone because `v1.78` is not defined yet. The repo has now completed the contiguous milestone run from `v1.52` through `v1.77`, covering Providence reconciliation, production packaging, panic and self-protection hardening, autonomous evolution, sequence detection, guided onboarding, agent isolation, response expansion, anomaly depth, large-file decomposition, runtime/evolution crate-boundary cleanup, config and service monolith decomposition, learned-state integrity signing, secret zeroization, release-build hardening, restart-free bearer lifecycle handling, shipped HTTP request throttling, multi-detector evolution breadth, command-line deobfuscation hardening, telemetry-source breadth across Windows Event Log, Sysmon, and auditd, hardened CI plus repo-owned versioned release automation, a machine-readable platform API contract with generated client proof plus inbound SOAR verdict sync and lineage, stigmergic feedback plus baseline-resistance proof, operator packaging with deployment docs plus quickstart validation, external-signal ingestion across TAXII plus cloud audit telemetry, and one repo-owned end-to-end integration proof spanning CrowdStrike RTR plus Splunk HEC mocks. `v1.74` structural-integrity work remains deferred while the next milestone is prepared.
+`v1.78` and `v1.78.1` are complete as scoped, and `v1.79` is now the active milestone. The repo has completed the prior integration, packaging, telemetry, response, governance, and assurance foundation work. The current gap is not another adapter or external check ceremony; it is a measurable shared reasoning loop. Phase 285's useful local and hosted evidence is retained, while the provenance-distinct GitHub App enforcement requirement is deferred until there is a real organizational enforcement need.
 
 **What is now real:**
 - The live runtime can detect, investigate, correlate, rehearse, review, and export signed evidence through one Rust-first operator workflow.
@@ -78,6 +81,18 @@ Detect real threats quickly enough to take safe action before the window to resp
 - Phases 108-111 completed canonical SIEM finding delivery, finding enrichment, rule-based notification routing, and replayable suppressed-alert queues.
 
 ## Requirements
+
+### Active v1.79 acceptance contract
+
+The canonical requirements live in `.planning/REQUIREMENTS.md`. The active slice is deliberately measurable and remains advisory/non-destructive until each gate is independently proven.
+
+- `ASSURE-01..06` — Phase 285 local and hosted assurance evidence, with no protected GitHub App claim.
+- `COG-01..08` — Phase 286 typed causal graph, competing hypotheses, evidence/task coordination, kill-chain reconstruction, containment ranking, persistent strategy memory, and five collective-reasoning metrics.
+- `ARENA-01..08` — Phase 287 bounded red/blue co-evolution through the real runtime, candidate competition, isolation, reproducibility, and five arena metrics.
+- `SYNTH-01..06` — Phase 288 detector and response candidate synthesis, differential/mutation controls, fail-closed review lineage, and quality/safety thresholds.
+- `HERDMEM-01..06` — Phase 289 privacy-preserving memory transfer, poisoning resistance, local corroboration, retention, and withheld-campaign improvement.
+
+The former `DST-*`, `FUZZ-*`, `LOOM-*`, `OPFOR-*`, `ATKSCORE-*`, `COEVOLVE-*`, and `ARMSCI-*` IDs remain in the historical record only; they are not active or queued acceptance gates.
 
 ### Validated
 
@@ -276,4 +291,4 @@ The project now has an end-to-end rollout ladder plus an offline mutation, ranki
 | Port from clawdstrike vendor references rather than arc | ClawdStrike guards are security-domain-native and map directly to swarm response pipeline; arc guards are designed for tool-call mediation. Crypto primitives come from hush-core which is already vendored. | ✓ Chosen |
 
 ---
-*Last updated: 2026-04-13 after defining v1.77 Integration Proof*
+*Last updated: 2026-08-21 after resetting v1.79 around Collective Cyber Reasoning*

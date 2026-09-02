@@ -1,0 +1,13 @@
+# This file is intentionally stale: dependency/Cargo.toml declares version 0.2.0.
+version = 4
+
+[[package]]
+name = "supply-chain-stale-lock-fixture"
+version = "0.1.0"
+dependencies = [
+ "supply-chain-stale-lock-dependency",
+]
+
+[[package]]
+name = "supply-chain-stale-lock-dependency"
+version = "0.1.0"

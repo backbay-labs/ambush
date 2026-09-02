@@ -8,12 +8,14 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 ed25519-dalek.workspace = true
+hex.workspace = true
 rand_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 swarm-consensus.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
+swarm-governance.workspace = true
 swarm-pheromone.workspace = true
 swarm-policy.workspace = true
 swarm-runtime.workspace = true
@@ -22,6 +24,9 @@ swarm-whisker.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 # Test-only collaborator: stalker's tests drive a full policy/response round

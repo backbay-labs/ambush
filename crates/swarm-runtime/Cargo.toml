@@ -13,11 +13,13 @@ z3 = ["dep:z3"]
 async-trait.workspace = true
 anyhow.workspace = true
 clap = { version = "4.5", features = ["derive"] }
+chrono.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 swarm-core.workspace = true
 swarm-consensus.workspace = true
+swarm-governance.workspace = true
 swarm-ingest-json.workspace = true
 swarm-ingest-sentinel.workspace = true
 swarm-ingest-taxii.workspace = true
@@ -96,6 +98,7 @@ swarm-agents.workspace = true
 swarm-ingest-runtime.workspace = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 tower.workspace = true
+trybuild = "1.0"
 
 [[bench]]
 name = "hot_path"

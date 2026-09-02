@@ -1,0 +1,7 @@
+error[E0432]: unresolved imports `swarm_policy::governance::GovernanceAuthority`, `swarm_policy::governance::sealed`
+ --> tests/ui/legacy_policy_governance_traits_do_not_exist.rs:2:5
+  |
+2 |     GovernanceAuthority,
+  |     ^^^^^^^^^^^^^^^^^^^ no `GovernanceAuthority` in `governance`
+3 |     sealed::SealedGovernanceAuthority,
+  |     ^^^^^^ could not find `sealed` in `governance`

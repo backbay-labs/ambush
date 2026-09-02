@@ -31,7 +31,7 @@ use tokio::time::MissedTickBehavior;
 
 use swarm_consensus::ConsensusGovernanceReceipt;
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
-use swarm_policy::governance::GovernanceAuthority;
+use swarm_governance::GovernanceAuthority;
 use swarm_response::containment::{
     ContainmentLease, ContainmentLeaseError, ContainmentLeaseStore, ContainmentStoreError,
     ContainmentTtl, FileContainmentLeaseStore, MemoryContainmentLeaseStore,
@@ -172,6 +172,16 @@ pub enum ReleaseAttestationError {
         attested: String,
         derived: String,
     },
+
+    #[error(
+        "governance attestation on rollback receipt `{rollback_id}` was not signed by a \
+         configured governor: {source}"
+    )]
+    UntrustedSigner {
+        rollback_id: String,
+        #[source]
+        source: swarm_consensus::ConsensusError,
+    },
 }
 
 /// The exact body a governance attestation is taken over.
@@ -196,49 +206,65 @@ fn release_subject_id(receipt: &RollbackReceipt) -> Result<String, swarm_crypto:
     ))?))
 }
 
-/// Verify that a rollback receipt carries a governance attestation, that the
-/// signature is good, and that it was taken over THIS receipt.
+/// Verify that a rollback receipt carries a governance attestation, that a
+/// CONFIGURED GOVERNOR signed it, and that it was taken over THIS receipt.
 ///
-/// BOTH CHECKS ARE LOAD BEARING AND NEITHER IMPLIES THE OTHER.
-/// [`ConsensusGovernanceReceipt::verify`] re-canonicalizes the governance
-/// payload and checks the detached ed25519 signature, so a mutated attestation
-/// fails there. But that payload names a commit, not a rollback -- it would
-/// verify just as happily attached to a DIFFERENT release, or to a rollback
-/// receipt whose steps had been rewritten from `Failed` to `Reversed`. The
-/// subject check is what binds the signature to this body: the attestation's
-/// `proposal_id` is the digest of the canonical receipt-minus-attestation, so
-/// mutating any field of the receipt moves the derived digest away from the
-/// signed one.
+/// THREE CHECKS, AND NO ONE OF THEM IMPLIES ANOTHER.
 ///
-/// WHAT THIS DOES NOT CHECK, AND IT MATTERS. There is no trust anchor.
-/// [`ConsensusGovernanceReceipt::verify`] checks the signature against
-/// `signature.public_key_hex` CARRIED INSIDE THE RECEIPT, and only that
-/// `payload.issued_by` derives from that same key. Nothing here compares the
-/// signer against the configured governor set, and nothing checks chain
-/// linkage. So an attacker who can rewrite a stored rollback receipt can also
-/// mint a fresh keypair, recompute `proposal_id` over the rewritten subject,
-/// sign it, and this function returns `Ok`.
+/// 1. SIGNATURE. [`ConsensusGovernanceReceipt::verify`] re-canonicalizes the
+///    governance payload and checks the detached ed25519 signature, so a
+///    mutated attestation fails there.
+/// 2. TRUST ANCHOR. The key that made that signature must be one of
+///    `governance.governor_public_keys()`. Without this, check 1 is closed over
+///    the receipt itself -- it verifies a signature against a public key the
+///    receipt carries -- so anyone holding any keypair passes it.
+/// 3. SUBJECT. The attestation's `proposal_id` is the digest of the canonical
+///    receipt-minus-attestation, so mutating any field of the receipt moves the
+///    derived digest away from the signed one. The governance payload names a
+///    commit, not a rollback, and would otherwise verify just as happily
+///    attached to a DIFFERENT release.
 ///
-/// What the two checks DO buy is that a PARTIAL rewrite fails: edit the body
-/// and leave the attestation alone, or lift a valid attestation from another
-/// release, and verification refuses. That is the realistic tampering case for
-/// an at-rest artifact, and it is what the tests exercise. A full
-/// re-attestation is not caught.
+/// Each catches a case the others do not, and each gap was measured by
+/// disabling exactly one check and watching a forgery pass:
 ///
-/// This is pre-existing `verify()` semantics shared with
-/// `missing_governance_receipt_reason` on the dispatcher path, not something
-/// this lane introduced. Closing it needs the governor public keys reachable
-/// from the runtime, and `GovernanceStatusReport` does not carry them -- so it
-/// is another sealed-trait widening rather than a small edit. Tracked as a
-/// follow-up; do not read `attestation_verified: true` as "a governor we trust
-/// authorized this".
+/// - without 3, a body rewritten `Reversed` -> `Failed` -- "the host was
+///   restored" turned into "it was not" -- verifies against the GENUINE
+///   governor signature it already carried (ADR 0010, re-measured against the
+///   anchored verifier with check 3 short-circuited);
+/// - without 2, that same rewrite passes when re-signed end to end by a freshly
+///   minted key, because check 1 then verifies the attacker's signature against
+///   the attacker's own public key and check 3 hashes the attacker's own body
+///   (ADR 0011).
+///
+/// FAILS CLOSED WITH NO ANCHOR. `governance: None`, or an authority naming no
+/// governor, yields [`ReleaseAttestationError::UntrustedSigner`] wrapping
+/// `ConsensusError::NoTrustAnchor` -- NOT a fallback to the receipt's own key.
+/// A verifier with nothing to check against knows nothing, and saying so is the
+/// point; `GovernancePolicy::can_act` takes the same posture with an empty
+/// keyring (b4bf119).
+///
+/// VERIFY THROUGH THE SWEEP THAT ATTESTED. On the release path callers use
+/// [`ContainmentSweep::verify_release_attestation`], which verifies against the
+/// private authority the sweep signs with. The anchor and signer therefore come
+/// from the same object rather than from two configurations that could drift,
+/// without exposing a cloneable authority handle.
+///
+/// STILL NOT CHECKED: chain linkage. Nothing here follows
+/// `previous_commit_hash` back to a known commit, so a governor's own key can
+/// still re-attest a rewritten body and produce a receipt this accepts -- an
+/// insider with the signing key, not an attacker with write access to the
+/// store. Closing that needs a durable, verifiable chain head, which this
+/// repository does not yet have.
 pub fn verify_release_attestation(
     receipt: &RollbackReceipt,
+    governance: Option<&GovernanceAuthority>,
 ) -> Result<ConsensusGovernanceReceipt, ReleaseAttestationError> {
     let rollback_id = receipt.rollback_id.clone();
+    // INVARIANT: RUNTIME-RELEASE-ATTESTATION-REQUIRED
     let Some(raw) = receipt.governance_attestation.as_ref() else {
         return Err(ReleaseAttestationError::Unattested { rollback_id });
     };
+    // INVARIANT: RUNTIME-RELEASE-ATTESTATION-WELL-FORMED
     let attestation: ConsensusGovernanceReceipt =
         serde_json::from_value(raw.clone()).map_err(|source| {
             ReleaseAttestationError::Malformed {
@@ -246,18 +272,36 @@ pub fn verify_release_attestation(
                 source,
             }
         })?;
-    attestation
-        .verify()
-        .map_err(|source| ReleaseAttestationError::Signature {
+    let governor_public_keys = governance
+        .map(GovernanceAuthority::governor_public_keys)
+        .unwrap_or_default();
+    // `verify_signed_by` performs the signature check too, so this call is one
+    // extra ed25519 verification on a non-hot path. It is kept because the two
+    // failures are different findings for an operator -- "this attestation was
+    // edited" and "this attestation was signed by someone we do not trust" --
+    // and collapsing them into one variant would report the second as the
+    // first.
+    // INVARIANT: RUNTIME-RELEASE-SIGNATURE-VALID
+    if let Err(source) = attestation.verify() {
+        return Err(ReleaseAttestationError::Signature {
             rollback_id: rollback_id.clone(),
             source,
-        })?;
+        });
+    }
+    // INVARIANT: RUNTIME-RELEASE-SIGNER-TRUSTED
+    if let Err(source) = attestation.verify_signed_by(&governor_public_keys) {
+        return Err(ReleaseAttestationError::UntrustedSigner {
+            rollback_id: rollback_id.clone(),
+            source,
+        });
+    }
     let derived = release_subject_id(receipt).map_err(|source| {
         ReleaseAttestationError::Canonicalization {
             rollback_id: rollback_id.clone(),
             source,
         }
     })?;
+    // INVARIANT: RUNTIME-RELEASE-SUBJECT-BOUND
     if attestation.payload.proposal_id != derived {
         return Err(ReleaseAttestationError::SubjectMismatch {
             rollback_id,
@@ -277,7 +321,7 @@ pub fn verify_release_attestation(
 /// pretending: the receipt goes to the store with `governance_attestation:
 /// None` and [`verify_release_attestation`] refuses it.
 fn attest_release_receipt(
-    governance: Option<&dyn GovernanceAuthority>,
+    governance: Option<&GovernanceAuthority>,
     receipt: &mut RollbackReceipt,
     now_ms: i64,
 ) {
@@ -363,7 +407,7 @@ pub async fn release_lease(
     lease_id: &str,
     trigger: RollbackTrigger,
     now_ms: i64,
-    governance: Option<&dyn GovernanceAuthority>,
+    governance: Option<&GovernanceAuthority>,
 ) -> Result<RollbackReceipt, ContainmentReleaseError> {
     let Some(lease) = store.get(lease_id)? else {
         return Err(ContainmentReleaseError::UnknownLease {
@@ -387,6 +431,7 @@ pub async fn release_lease(
         .steps
         .iter()
         .any(|step| step.status == RollbackStepStatus::Failed);
+    // INVARIANT: RUNTIME-FAILED-ROLLBACK-KEEPS-LEASE
     if attempt_failed {
         tracing::warn!(
             module = module_path!(),
@@ -492,7 +537,7 @@ pub struct ContainmentSweep {
     store: Arc<dyn ContainmentLeaseStore>,
     executor: Arc<dyn RollbackExecutor>,
     mode: ExecutionMode,
-    governance: Option<Arc<dyn GovernanceAuthority>>,
+    governance: Option<GovernanceAuthority>,
 }
 
 impl std::fmt::Debug for ContainmentSweep {
@@ -528,7 +573,7 @@ impl ContainmentSweep {
     /// than a convention: [`Self::release`] and [`Self::sweep`] read the same
     /// field, so there is no call site at which one could be attested and the
     /// other not.
-    pub fn with_governance(mut self, governance: Arc<dyn GovernanceAuthority>) -> Self {
+    pub fn with_governance_authority(mut self, governance: GovernanceAuthority) -> Self {
         self.governance = Some(governance);
         self
     }
@@ -538,8 +583,25 @@ impl ContainmentSweep {
         self.store.open_leases()
     }
 
-    fn governance(&self) -> Option<&dyn GovernanceAuthority> {
-        self.governance.as_deref()
+    /// Verify a release against the same private authority that attested it.
+    ///
+    /// This is deliberately the only public release-verification seam. Returning
+    /// or borrowing the authority would let a caller clone the capability and
+    /// invoke unrelated authorization operations.
+    pub fn verify_release_attestation(
+        &self,
+        receipt: &RollbackReceipt,
+    ) -> Result<ConsensusGovernanceReceipt, ReleaseAttestationError> {
+        verify_release_attestation(receipt, self.governance.as_ref())
+    }
+
+    /// Process-local identity of the configured authority, for composition checks.
+    ///
+    /// This is observational only and cannot invoke an authorization method.
+    pub fn governance_authority_identity(
+        &self,
+    ) -> Option<swarm_governance::GovernanceAuthorityIdentity> {
+        self.governance.as_ref().map(GovernanceAuthority::identity)
     }
 
     /// Release one named lease early. Same function the sweep uses.
@@ -555,7 +617,7 @@ impl ContainmentSweep {
             lease_id,
             RollbackTrigger::Manual,
             now_ms,
-            self.governance(),
+            self.governance.as_ref(),
         )
         .await
     }
@@ -590,7 +652,7 @@ impl ContainmentSweep {
                 lease.lease_id(),
                 RollbackTrigger::Expiry,
                 now_ms,
-                self.governance(),
+                self.governance.as_ref(),
             )
             .await
             {

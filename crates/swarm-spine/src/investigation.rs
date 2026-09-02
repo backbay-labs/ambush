@@ -1,12 +1,19 @@
 use crate::ReplayBundle;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use swarm_core::config::BundleStoreConfig;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::Severity;
 use swarm_whisker::TelemetryPayload;
+
+static INVESTIGATION_CLAIM_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+const INVESTIGATION_CLAIM_TEMP_ATTEMPTS: usize = 64;
 
 /// Persisted status of one investigation job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,6 +315,29 @@ pub enum InvestigationStoreError {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("investigation execution claim conflicts for `{investigation_id}`")]
+    ExecutionClaimConflict { investigation_id: String },
+
+    #[error(
+        "investigation `{investigation_id}` cannot regress from {persisted:?} to {attempted:?}"
+    )]
+    StatusRegression {
+        investigation_id: String,
+        persisted: InvestigationStatus,
+        attempted: InvestigationStatus,
+    },
+
+    #[error("investigation store path contains a parent-directory component: `{path}`")]
+    UnsafePath { path: PathBuf },
+}
+
+/// Result of the non-reclaimable durable fence acquired immediately before an
+/// investigation strategy executes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvestigationExecutionClaim {
+    Acquired,
+    AlreadyAcquired,
 }
 
 /// Store contract for durable investigation bundles.
@@ -333,6 +363,10 @@ pub trait InvestigationBundleStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<InvestigationBundleRecord>, InvestigationStoreError>;
     fn health(&self) -> Result<InvestigationStoreHealth, InvestigationStoreError>;
+    fn claim_execution(
+        &self,
+        bundle: &InvestigationBundle,
+    ) -> Result<InvestigationExecutionClaim, InvestigationStoreError>;
 }
 
 /// Configured investigation store backend.
@@ -412,12 +446,23 @@ impl InvestigationBundleStore for ConfiguredInvestigationBundleStore {
             Self::LocalFiles(store) => store.health(),
         }
     }
+
+    fn claim_execution(
+        &self,
+        bundle: &InvestigationBundle,
+    ) -> Result<InvestigationExecutionClaim, InvestigationStoreError> {
+        match self {
+            Self::Memory(store) => store.claim_execution(bundle),
+            Self::LocalFiles(store) => store.claim_execution(bundle),
+        }
+    }
 }
 
 /// In-memory investigation bundle store for tests and detect-only runs.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryInvestigationBundleStore {
     bundles: Arc<RwLock<Vec<InvestigationBundle>>>,
+    execution_claims: Arc<RwLock<BTreeMap<String, String>>>,
 }
 
 impl InvestigationBundleStore for MemoryInvestigationBundleStore {
@@ -429,6 +474,12 @@ impl InvestigationBundleStore for MemoryInvestigationBundleStore {
             .bundles
             .write()
             .map_err(|_| InvestigationStoreError::PoisonedLock)?;
+        if let Some(existing) = guard
+            .iter()
+            .find(|existing| existing.investigation_id == bundle.investigation_id)
+        {
+            validate_investigation_persist_transition(existing, bundle)?;
+        }
         guard.retain(|existing| existing.investigation_id != bundle.investigation_id);
         guard.push(bundle.clone());
         Ok(InvestigationBundleRecord::from_bundle(
@@ -523,6 +574,29 @@ impl InvestigationBundleStore for MemoryInvestigationBundleStore {
             details: "ephemeral in-process investigation store".to_string(),
         })
     }
+
+    fn claim_execution(
+        &self,
+        bundle: &InvestigationBundle,
+    ) -> Result<InvestigationExecutionClaim, InvestigationStoreError> {
+        let digest = investigation_execution_digest(bundle)?;
+        let mut claims = self
+            .execution_claims
+            .write()
+            .map_err(|_| InvestigationStoreError::PoisonedLock)?;
+        match claims.get(&bundle.investigation_id) {
+            Some(existing) if existing == &digest => {
+                Ok(InvestigationExecutionClaim::AlreadyAcquired)
+            }
+            Some(_) => Err(InvestigationStoreError::ExecutionClaimConflict {
+                investigation_id: bundle.investigation_id.clone(),
+            }),
+            None => {
+                claims.insert(bundle.investigation_id.clone(), digest);
+                Ok(InvestigationExecutionClaim::Acquired)
+            }
+        }
+    }
 }
 
 /// File-backed investigation bundle store for restart-safe enrichment state.
@@ -534,12 +608,9 @@ pub struct FileInvestigationBundleStore {
 impl FileInvestigationBundleStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, InvestigationStoreError> {
         let root = path.as_ref().to_path_buf();
-        fs::create_dir_all(root.join("bundles")).map_err(|source| {
-            InvestigationStoreError::Write {
-                path: root.clone(),
-                source,
-            }
-        })?;
+        create_investigation_directory_tree_durable(&root)?;
+        create_investigation_directory_tree_durable(&root.join("bundles"))?;
+        create_investigation_directory_tree_durable(&root.join("execution-claims"))?;
         Ok(Self { root })
     }
 
@@ -549,6 +620,13 @@ impl FileInvestigationBundleStore {
 
     fn index_path(&self) -> PathBuf {
         self.root.join("index.json")
+    }
+
+    fn execution_claim_path(&self, investigation_id: &str) -> PathBuf {
+        self.root.join("execution-claims").join(format!(
+            "{}.json",
+            swarm_crypto::sha256_hex(investigation_id.as_bytes())
+        ))
     }
 
     fn read_index(&self) -> Result<InvestigationIndex, InvestigationStoreError> {
@@ -621,6 +699,22 @@ impl InvestigationBundleStore for FileInvestigationBundleStore {
         &self,
         bundle: &InvestigationBundle,
     ) -> Result<InvestigationBundleRecord, InvestigationStoreError> {
+        let existing_path = self.bundle_path(&bundle.investigation_id);
+        if existing_path.exists() {
+            let raw = fs::read_to_string(&existing_path).map_err(|source| {
+                InvestigationStoreError::Read {
+                    path: existing_path.clone(),
+                    source,
+                }
+            })?;
+            let existing = serde_json::from_str::<InvestigationBundle>(&raw).map_err(|source| {
+                InvestigationStoreError::Parse {
+                    path: existing_path,
+                    source,
+                }
+            })?;
+            validate_investigation_persist_transition(&existing, bundle)?;
+        }
         let bundle_path = self.write_bundle(bundle)?;
         let mut index = self.read_index()?;
         index
@@ -702,11 +796,253 @@ impl InvestigationBundleStore for FileInvestigationBundleStore {
             details: format!("bundle directory at {}", self.root.display()),
         })
     }
+
+    fn claim_execution(
+        &self,
+        bundle: &InvestigationBundle,
+    ) -> Result<InvestigationExecutionClaim, InvestigationStoreError> {
+        let claim = InvestigationExecutionClaimRecord {
+            investigation_id: bundle.investigation_id.clone(),
+            submission_digest: investigation_execution_digest(bundle)?,
+        };
+        let path = self.execution_claim_path(&bundle.investigation_id);
+        let raw =
+            serde_json::to_vec_pretty(&claim).map_err(|source| InvestigationStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        let claims_directory = self.root.join("execution-claims");
+        let mut opened_temporary = None;
+        for _ in 0..INVESTIGATION_CLAIM_TEMP_ATTEMPTS {
+            let restart_nonce = uuid::Uuid::new_v4().simple();
+            let temporary_path = claims_directory.join(format!(
+                ".claim.{}.{restart_nonce}.{}.tmp",
+                std::process::id(),
+                INVESTIGATION_CLAIM_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary_path)
+            {
+                Ok(temporary) => {
+                    opened_temporary = Some((temporary_path, temporary));
+                    break;
+                }
+                Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(source) => {
+                    return Err(InvestigationStoreError::Write {
+                        path: temporary_path,
+                        source,
+                    });
+                }
+            }
+        }
+        let Some((temporary_path, mut temporary)) = opened_temporary else {
+            return Err(InvestigationStoreError::Write {
+                path: claims_directory,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "exhausted unique investigation execution-claim temporary paths",
+                ),
+            });
+        };
+        if let Err(source) = temporary
+            .write_all(&raw)
+            .and_then(|()| temporary.sync_all())
+        {
+            drop(temporary);
+            let _ = fs::remove_file(&temporary_path);
+            return Err(InvestigationStoreError::Write {
+                path: temporary_path,
+                source,
+            });
+        }
+        drop(temporary);
+
+        match fs::hard_link(&temporary_path, &path) {
+            Ok(()) => {
+                finish_acquired_execution_claim(
+                    &temporary_path,
+                    &claims_directory,
+                    |path| fs::remove_file(path),
+                    sync_investigation_directory,
+                )?;
+                Ok(InvestigationExecutionClaim::Acquired)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&temporary_path);
+                let existing_raw =
+                    fs::read_to_string(&path).map_err(|source| InvestigationStoreError::Read {
+                        path: path.clone(),
+                        source,
+                    })?;
+                let existing =
+                    serde_json::from_str::<InvestigationExecutionClaimRecord>(&existing_raw)
+                        .map_err(|source| InvestigationStoreError::Parse {
+                            path: path.clone(),
+                            source,
+                        })?;
+                if existing == claim {
+                    Ok(InvestigationExecutionClaim::AlreadyAcquired)
+                } else {
+                    Err(InvestigationStoreError::ExecutionClaimConflict {
+                        investigation_id: bundle.investigation_id.clone(),
+                    })
+                }
+            }
+            Err(source) => {
+                let _ = fs::remove_file(&temporary_path);
+                Err(InvestigationStoreError::Write { path, source })
+            }
+        }
+    }
+}
+
+fn create_investigation_directory_tree_durable(path: &Path) -> Result<(), InvestigationStoreError> {
+    create_investigation_directory_tree_durable_with(path, sync_investigation_directory)
+}
+
+fn create_investigation_directory_tree_durable_with<SyncDirectory>(
+    path: &Path,
+    mut sync_directory: SyncDirectory,
+) -> Result<(), InvestigationStoreError>
+where
+    SyncDirectory: FnMut(&Path) -> io::Result<()>,
+{
+    if path
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return Err(InvestigationStoreError::UnsafePath {
+            path: path.to_path_buf(),
+        });
+    }
+
+    let mut missing = Vec::new();
+    let mut cursor = Some(path);
+    while let Some(candidate) = cursor {
+        match fs::symlink_metadata(candidate) {
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(candidate.to_path_buf());
+                cursor = candidate
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty());
+            }
+            Err(source) => {
+                return Err(InvestigationStoreError::Write {
+                    path: candidate.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    }
+    fs::create_dir_all(path).map_err(|source| InvestigationStoreError::Write {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    for created in missing.iter().rev() {
+        sync_directory(created).map_err(|source| InvestigationStoreError::Write {
+            path: created.clone(),
+            source,
+        })?;
+        let parent = created
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        sync_directory(parent).map_err(|source| InvestigationStoreError::Write {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+fn sync_investigation_directory(path: &Path) -> io::Result<()> {
+    File::open(path)?.sync_all()
+}
+
+fn finish_acquired_execution_claim<RemoveTemporary, SyncDirectory>(
+    temporary_path: &Path,
+    claims_directory: &Path,
+    mut remove_temporary: RemoveTemporary,
+    mut sync_directory: SyncDirectory,
+) -> Result<(), InvestigationStoreError>
+where
+    RemoveTemporary: FnMut(&Path) -> io::Result<()>,
+    SyncDirectory: FnMut(&Path) -> io::Result<()>,
+{
+    // The hard link is the non-reclaimable fence. Once it exists, failure to
+    // remove the private temporary alias must not report that acquisition
+    // failed and strand every exact retry behind an already-owned claim.
+    let _ = remove_temporary(temporary_path);
+    sync_directory(claims_directory).map_err(|source| InvestigationStoreError::Write {
+        path: claims_directory.to_path_buf(),
+        source,
+    })
+}
+
+fn validate_investigation_persist_transition(
+    persisted: &InvestigationBundle,
+    attempted: &InvestigationBundle,
+) -> Result<(), InvestigationStoreError> {
+    let persisted_is_terminal = matches!(
+        persisted.status,
+        InvestigationStatus::Completed
+            | InvestigationStatus::Failed
+            | InvestigationStatus::TimedOut
+    );
+    let regresses_running = persisted.status == InvestigationStatus::Running
+        && attempted.status == InvestigationStatus::Queued;
+    if (persisted_is_terminal && persisted != attempted) || regresses_running {
+        return Err(InvestigationStoreError::StatusRegression {
+            investigation_id: persisted.investigation_id.clone(),
+            persisted: persisted.status,
+            attempted: attempted.status,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct InvestigationIndex {
     entries: Vec<InvestigationBundleRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvestigationExecutionClaimRecord {
+    investigation_id: String,
+    submission_digest: String,
+}
+
+fn investigation_execution_digest(
+    bundle: &InvestigationBundle,
+) -> Result<String, InvestigationStoreError> {
+    let identity = serde_json::to_vec(&(
+        "swarm-investigation-execution-v1",
+        &bundle.investigation_id,
+        &bundle.source_bundle_id,
+        &bundle.hunt_id,
+        &bundle.trail_id,
+        &bundle.event_id,
+        &bundle.finding_id,
+        &bundle.threat_class,
+        bundle.severity,
+        &bundle.strategy_id,
+        &bundle.response_kind,
+        &bundle.related_receipt_ids,
+        &bundle.host_id,
+        &bundle.user,
+        &bundle.process_name,
+        bundle.queued_at_ms,
+    ))
+    .map_err(|source| InvestigationStoreError::Parse {
+        path: PathBuf::from("<investigation-execution-identity>"),
+        source,
+    })?;
+    Ok(swarm_crypto::sha256_hex(&identity))
 }
 
 fn sorted_recent_bundles(bundles: &[InvestigationBundle]) -> Vec<InvestigationBundle> {
@@ -810,10 +1146,12 @@ fn extract_user(replay: &ReplayBundle) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
-        InvestigationBundleStore, InvestigationDecision, InvestigationInterpretation,
+        ConfiguredInvestigationBundleStore, FileInvestigationBundleStore,
+        INVESTIGATION_CLAIM_TEMP_COUNTER, InvestigationBundle, InvestigationBundleStore,
+        InvestigationDecision, InvestigationExecutionClaim, InvestigationInterpretation,
         InvestigationPriority, InvestigationPriorityClass, InvestigationStatus,
-        InvestigationStoreHealth, InvestigationVote,
+        InvestigationStoreError, InvestigationStoreHealth, InvestigationVote,
+        create_investigation_directory_tree_durable_with, finish_acquired_execution_claim,
     };
     use crate::{AuditResponseRecord, AuditTrail, PolicyRecord, ReplayBundle};
     use swarm_core::config::BundleStoreConfig;
@@ -1010,6 +1348,60 @@ mod tests {
     }
 
     #[test]
+    fn terminal_investigation_cannot_be_overwritten_by_a_stale_running_worker() {
+        let terminal = sample_investigation_bundle();
+        let stale_running = terminal.clone().with_status(
+            InvestigationStatus::Running,
+            terminal.started_at_ms,
+            None,
+        );
+
+        let memory = super::MemoryInvestigationBundleStore::default();
+        memory.persist(&terminal).unwrap();
+        assert!(matches!(
+            memory.persist(&stale_running),
+            Err(InvestigationStoreError::StatusRegression {
+                persisted: InvestigationStatus::Completed,
+                attempted: InvestigationStatus::Running,
+                ..
+            })
+        ));
+        assert_eq!(
+            memory
+                .load_by_investigation_id(&terminal.investigation_id)
+                .unwrap()
+                .unwrap()
+                .bundle,
+            terminal
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-investigation-terminal-fence-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let files = FileInvestigationBundleStore::open(&root).unwrap();
+        files.persist(&terminal).unwrap();
+        assert!(matches!(
+            files.persist(&stale_running),
+            Err(InvestigationStoreError::StatusRegression {
+                persisted: InvestigationStatus::Completed,
+                attempted: InvestigationStatus::Running,
+                ..
+            })
+        ));
+        assert_eq!(
+            files
+                .load_by_investigation_id(&terminal.investigation_id)
+                .unwrap()
+                .unwrap()
+                .bundle,
+            terminal
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn configured_store_selects_memory_and_local_backends() {
         let memory =
             ConfiguredInvestigationBundleStore::from_config(&BundleStoreConfig::Memory).unwrap();
@@ -1023,6 +1415,142 @@ mod tests {
             })
             .unwrap();
         assert_eq!(local.health().unwrap().backend, "local_files");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_execution_claim_has_one_cross_process_winner_and_fails_closed_on_conflict() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-investigation-claim-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store_a = FileInvestigationBundleStore::open(&root).unwrap();
+        let store_b = FileInvestigationBundleStore::open(&root).unwrap();
+        let bundle = sample_investigation_bundle();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let a_barrier = std::sync::Arc::clone(&barrier);
+        let b_barrier = std::sync::Arc::clone(&barrier);
+        let a_bundle = bundle.clone();
+        let b_bundle = bundle.clone();
+        let a = std::thread::spawn(move || {
+            a_barrier.wait();
+            store_a.claim_execution(&a_bundle).unwrap()
+        });
+        let b = std::thread::spawn(move || {
+            b_barrier.wait();
+            store_b.claim_execution(&b_bundle).unwrap()
+        });
+        let mut outcomes = [a.join().unwrap(), b.join().unwrap()];
+        outcomes.sort_by_key(|outcome| match outcome {
+            InvestigationExecutionClaim::Acquired => 0,
+            InvestigationExecutionClaim::AlreadyAcquired => 1,
+        });
+        assert_eq!(
+            outcomes,
+            [
+                InvestigationExecutionClaim::Acquired,
+                InvestigationExecutionClaim::AlreadyAcquired
+            ]
+        );
+
+        let mut conflict = bundle;
+        conflict.finding_id = "different-finding".to_string();
+        let reopened = FileInvestigationBundleStore::open(&root).unwrap();
+        assert!(matches!(
+            reopened.claim_execution(&conflict),
+            Err(super::InvestigationStoreError::ExecutionClaimConflict { .. })
+        ));
+        assert!(
+            std::fs::read_dir(root.join("execution-claims"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp"))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fresh_execution_claim_directory_syncs_the_root_naming_edge() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-investigation-directory-sync-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let claims = root.join("execution-claims");
+        let mut synced = Vec::new();
+        create_investigation_directory_tree_durable_with(&claims, |path| {
+            synced.push(path.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(claims.is_dir());
+        assert_eq!(synced.last(), Some(&root));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn acquired_execution_claim_survives_temporary_cleanup_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-investigation-claim-cleanup-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let temporary = root.join("claim.tmp");
+        let claim = root.join("claim.json");
+        std::fs::write(&temporary, b"claim").unwrap();
+        std::fs::hard_link(&temporary, &claim).unwrap();
+        let mut synced = false;
+
+        finish_acquired_execution_claim(
+            &temporary,
+            &root,
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated cleanup refusal",
+                ))
+            },
+            |_| {
+                synced = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(synced);
+        assert!(claim.exists());
+        assert!(temporary.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_execution_claim_ignores_stale_legacy_process_counter_temporary_files() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-investigation-stale-claim-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileInvestigationBundleStore::open(&root).unwrap();
+        let stale = root.join("execution-claims").join(format!(
+            ".claim.{}.{}.tmp",
+            std::process::id(),
+            INVESTIGATION_CLAIM_TEMP_COUNTER.load(std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&stale, b"stale legacy temporary claim").unwrap();
+
+        assert_eq!(
+            store
+                .claim_execution(&sample_investigation_bundle())
+                .unwrap(),
+            InvestigationExecutionClaim::Acquired
+        );
+        assert!(stale.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 }

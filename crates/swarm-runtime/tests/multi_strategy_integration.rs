@@ -225,7 +225,7 @@ async fn network_connect_end_to_end_produces_signed_command_and_control_deposit(
         "suspicious_ports": [4444],
     }))?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
     let outcome = detect_and_deposit(
         &detector,
         &substrate,
@@ -281,7 +281,9 @@ async fn composite_execution_sequence_reaches_three_distinct_sources_and_alerts(
             stage_name: "lolbin runner",
         }),
     ]);
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(execution_pheromone_config()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        execution_pheromone_config(),
+    ));
     let events = [
         staged_process_event(
             "stage-1",
@@ -306,14 +308,16 @@ async fn composite_execution_sequence_reaches_three_distinct_sources_and_alerts(
         ),
     ];
 
-    for event in &events {
+    for (event, seed) in events.iter().zip([42u8, 43u8, 44u8]) {
+        let signing_key = SigningKey::from_bytes(&[seed; 32]);
+        let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
         let outcome = detect_and_deposit(
             &detector,
             substrate.as_ref(),
             event,
-            &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
+            &agent_id,
             &execution_pheromone_config(),
-            &test_signing_key(),
+            &signing_key,
         )
         .await?;
 
@@ -322,7 +326,7 @@ async fn composite_execution_sequence_reaches_three_distinct_sources_and_alerts(
         assert_eq!(outcome.findings[0].threat_class, ThreatClass::Execution);
         assert_eq!(
             outcome.deposits[0].agent_id.0,
-            format!("{}:{}", test_agent_id(), outcome.findings[0].strategy_id)
+            format!("{}:{}", agent_id, outcome.findings[0].strategy_id)
         );
         validate_deposit_signature(&outcome.deposits[0])?;
     }
@@ -354,22 +358,19 @@ async fn composite_execution_sequence_reaches_three_distinct_sources_and_alerts(
 
     let persisted = substrate.recent_deposits(10).await?;
     assert_eq!(persisted.len(), 3);
-    let base = test_agent_id();
-    assert!(
-        persisted
-            .iter()
-            .any(|deposit| deposit.agent_id.0 == format!("{base}:macro_launcher"))
-    );
-    assert!(
-        persisted
-            .iter()
-            .any(|deposit| deposit.agent_id.0 == format!("{base}:encoded_stager"))
-    );
-    assert!(
-        persisted
-            .iter()
-            .any(|deposit| deposit.agent_id.0 == format!("{base}:lolbin_runner"))
-    );
+    for (seed, strategy_id) in [
+        (42u8, "macro_launcher"),
+        (43u8, "encoded_stager"),
+        (44u8, "lolbin_runner"),
+    ] {
+        let base =
+            AgentId::from_verifying_key(&SigningKey::from_bytes(&[seed; 32]).verifying_key());
+        assert!(
+            persisted
+                .iter()
+                .any(|deposit| { deposit.agent_id.0 == format!("{base}:{strategy_id}") })
+        );
+    }
 
     Ok(())
 }
@@ -379,7 +380,13 @@ async fn infrastructure_and_behavioral_execution_signals_share_alert_lane()
 -> Result<(), Box<dyn std::error::Error>> {
     let config = config_with_execution_and_infrastructure_strategies()?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.pheromone.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        config.pheromone.clone(),
+    ));
+    let infrastructure_key = SigningKey::from_bytes(&[43u8; 32]);
+    let infrastructure_agent_id = AgentId::from_verifying_key(&infrastructure_key.verifying_key());
+    let behavioral_key = SigningKey::from_bytes(&[44u8; 32]);
+    let behavioral_agent_id = AgentId::from_verifying_key(&behavioral_key.verifying_key());
     let events = [
         infra_health_event("infra-1", 1_700_001_000, 97.0),
         infra_health_event("infra-2", 1_700_001_020, 98.0),
@@ -397,9 +404,9 @@ async fn infrastructure_and_behavioral_execution_signals_share_alert_lane()
         &detector,
         substrate.as_ref(),
         &events[0],
-        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
+        &infrastructure_agent_id,
         &config.pheromone,
-        &test_signing_key(),
+        &infrastructure_key,
     )
     .await?;
     assert!(infra_outcome.findings.is_empty());
@@ -408,9 +415,9 @@ async fn infrastructure_and_behavioral_execution_signals_share_alert_lane()
         &detector,
         substrate.as_ref(),
         &events[1],
-        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
+        &infrastructure_agent_id,
         &config.pheromone,
-        &test_signing_key(),
+        &infrastructure_key,
     )
     .await?;
     assert!(infra_outcome.findings.is_empty());
@@ -419,9 +426,9 @@ async fn infrastructure_and_behavioral_execution_signals_share_alert_lane()
         &detector,
         substrate.as_ref(),
         &events[2],
-        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
+        &infrastructure_agent_id,
         &config.pheromone,
-        &test_signing_key(),
+        &infrastructure_key,
     )
     .await?;
     assert_eq!(infra_outcome.findings.len(), 1);
@@ -438,9 +445,9 @@ async fn infrastructure_and_behavioral_execution_signals_share_alert_lane()
         &detector,
         substrate.as_ref(),
         &events[3],
-        &AgentId::from_verifying_key(&test_signing_key().verifying_key()),
+        &behavioral_agent_id,
         &config.pheromone,
-        &test_signing_key(),
+        &behavioral_key,
     )
     .await?;
     assert_eq!(behavioral_outcome.findings.len(), 1);
@@ -477,16 +484,13 @@ async fn infrastructure_and_behavioral_execution_signals_share_alert_lane()
     }
 
     let persisted = substrate.recent_deposits(10).await?;
-    let base = test_agent_id();
     assert!(
-        persisted
-            .iter()
-            .any(|deposit| deposit.agent_id.0 == format!("{base}:infrastructure_anomaly"))
+        persisted.iter().any(|deposit| deposit.agent_id.0
+            == format!("{infrastructure_agent_id}:infrastructure_anomaly"))
     );
     assert!(
-        persisted
-            .iter()
-            .any(|deposit| deposit.agent_id.0 == format!("{base}:suspicious_process_tree"))
+        persisted.iter().any(|deposit| deposit.agent_id.0
+            == format!("{behavioral_agent_id}:suspicious_process_tree"))
     );
 
     Ok(())

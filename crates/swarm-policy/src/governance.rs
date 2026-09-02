@@ -1,29 +1,91 @@
-//! The governance authority the dispatcher authorizes partition-time actions through.
+//! Shared governance request, hold, event, and health-report value types.
 //!
-//! # Why this exists (SPLIT-03, phase 282)
-//!
-//! `dispatcher.rs` -- the composition root's agent loop -- used to hold an
-//! `Arc<crate::tom_agent::GovernancePolicy>` and match on
-//! `crate::tom_agent::GovernanceRuntimeEvent`, while `tom_agent` imports back into
-//! the runtime. That coupling is bidirectional, so no extraction order resolves it;
-//! the root has to stop naming the concrete governance agent.
-//!
-//! # Why this trait lives in `swarm-policy` and not `swarm_core::agent`
-//!
-//! [`GovernanceAuthority::authorize_partition_request`] must be handed the whole
-//! [`ActionRequest`] -- the Tom implementation records the rejected request in its
-//! partition activity log, not just the action kind -- and `ActionRequest` is defined
-//! here, in a crate that already depends on `swarm-core` rather than the other way
-//! round. Putting the trait in `swarm-core` would mean moving `ActionRequest` down
-//! with it, which is a far larger change than breaking one cycle. `swarm-policy` is
-//! the lowest crate that can name both `ActionRequest` and `AgentRole`, both the
-//! dispatcher and the governance agent already depend on it, and authorizing a
-//! destructive action during a partition is a policy decision by any reading.
+//! The authority capability and concrete policy live in `swarm-governance`.
+//! This lower policy crate owns only the serializable values used across that
+//! boundary; it exposes no governance backend or authorization extension point.
 
 use serde::{Deserialize, Serialize};
 use swarm_core::agent::AgentRole;
+use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 
-use crate::ActionRequest;
+use crate::{ActionRequest, PolicyDecision, static_gate::scope_for_response_action};
+
+pub const GOVERNANCE_ACTION_REQUEST_SUBJECT_SCHEMA_VERSION: u32 = 1;
+pub const GOVERNANCE_ACTION_REQUEST_SUBJECT_DOMAIN: &str =
+    "swarm.governance.action-request.authorization.v1";
+pub const GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX: &str =
+    "swarm.governance.human-authorization.v1:";
+
+/// Canonical subject governed for one response request.
+///
+/// The two bearer artifacts are deliberately not part of the subject: the receipt
+/// cannot hash itself, and the partition lease is verified through its own path.
+/// Every other evidence field is retained. The domain and schema prevent this digest
+/// from being confused with a release attestation, contingency lease, or later schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GovernanceActionRequestSubjectV1 {
+    pub domain: String,
+    pub schema_version: u32,
+    pub hunt_id: HuntId,
+    pub requested_by: AgentId,
+    pub action: ResponseAction,
+    pub scope: Option<String>,
+    pub severity: Severity,
+    pub evidence: serde_json::Value,
+}
+
+impl GovernanceActionRequestSubjectV1 {
+    pub fn from_request(request: &ActionRequest) -> Self {
+        let mut evidence = request.evidence.clone();
+        if let Some(object) = evidence.as_object_mut() {
+            object.remove("governance_receipt");
+            object.remove("contingency_lease");
+        }
+        Self {
+            domain: GOVERNANCE_ACTION_REQUEST_SUBJECT_DOMAIN.to_string(),
+            schema_version: GOVERNANCE_ACTION_REQUEST_SUBJECT_SCHEMA_VERSION,
+            hunt_id: request.hunt_id.clone(),
+            requested_by: request.requested_by.clone(),
+            action: request.action.clone(),
+            scope: scope_for_response_action(&request.action),
+            severity: request.severity,
+            evidence,
+        }
+    }
+}
+
+/// Durable composition point between a pending governance authorization and an
+/// ordinary policy decision that requires a human.
+///
+/// This record is data, not an execution capability. The configured governance
+/// authority persists and consumes it, and the dispatcher can mint an execution
+/// admission only from the consumed form returned by that authority.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GovernedHumanAuthorizationHold {
+    pub hold_id: String,
+    pub request: ActionRequest,
+    pub policy_decision: PolicyDecision,
+    pub governance_receipt: serde_json::Value,
+    pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_set_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_set_digest: Option<String>,
+}
+
+impl GovernedHumanAuthorizationHold {
+    pub fn approval_evidence_ref(&self) -> String {
+        format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}{}", self.hold_id)
+    }
+}
+
+/// Result of atomically consuming both a human hold and its still-pending
+/// governance authorization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConsumedGovernedHumanAuthorization {
+    pub hold: GovernedHumanAuthorizationHold,
+    pub verified_governance_receipt: serde_json::Value,
+}
 
 /// One governance-originated runtime event, flattened to what the dispatcher publishes.
 ///
@@ -53,12 +115,10 @@ pub enum PartitionState {
     Healing,
 }
 
-/// The governance authority's own account of itself, as operators read it.
+/// The governance policy's own account of itself, as operators read it.
 ///
-/// Moved down here from the concrete governance agent in SPLIT-05, so
-/// [`GovernanceAuthority::status_report`] can name its own return type. The ingest
-/// health surface renders these eight fields into `/healthz` and reads nothing else
-/// off the authority.
+/// Kept in this lower value-type crate so the ingest health surface can render
+/// these eight fields into `/healthz` without depending on governance internals.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GovernanceStatusReport {
     pub partition_state: PartitionState,
@@ -69,135 +129,4 @@ pub struct GovernanceStatusReport {
     pub unauthorized_partition_actions: usize,
     pub last_transition_at_ms: Option<i64>,
     pub last_reconciliation_report_id: Option<String>,
-}
-
-/// Not public API. Seals [`GovernanceAuthority`]; see the note on that trait.
-#[doc(hidden)]
-pub mod sealed {
-    /// Supertrait of [`super::GovernanceAuthority`], carrying no contract of its own.
-    ///
-    /// Its only job is to make implementing `GovernanceAuthority` require naming a
-    /// `#[doc(hidden)]` item, so the set of types that can authorize a destructive
-    /// action during a governance partition stays enumerable and every addition is
-    /// explicit.
-    pub trait SealedGovernanceAuthority {}
-}
-
-/// Partition-time authorization and event drain, as the dispatcher needs them.
-///
-/// Deliberately narrow. The first four methods are the entire surface the dispatcher
-/// used of the concrete governance policy; [`GovernanceAuthority::status_report`] is
-/// the entire surface the ingest health endpoint used of it (SPLIT-05). Widening it
-/// beyond what a named consumer already called would re-import the coupling this
-/// trait exists to remove.
-///
-/// # What the trait widened, and why it is sealed
-///
-/// This is a security-relevant extension point, and it did not exist before SPLIT-03.
-/// The dispatcher used to install one concrete type, `tom_agent::GovernancePolicy`
-/// (`swarm_runtime::` then, `swarm_agents::` since SPLIT-03 moved the role out), whose
-/// enforcement logic is the only thing that could answer
-/// [`GovernanceAuthority::authorize_partition_request`]. That
-/// method returning `Ok(true)` is what lets a destructive action proceed while the
-/// governance quorum is partitioned, so an arbitrary implementation installed through
-/// `AgentDispatcher::with_governance_policy` could approve every partition-time
-/// request without minting a contingency lease.
-///
-/// The trait is therefore sealed: it requires
-/// [`sealed::SealedGovernanceAuthority`], which lives in a `#[doc(hidden)]` module and
-/// is not part of the documented API. An implementer must write that impl too, so
-/// every type that can render this verdict stays enumerable with
-/// `grep -rn SealedGovernanceAuthority`, and adding one is a deliberate, reviewable
-/// act rather than a side effect of depending on this crate.
-///
-/// The seal is a deliberate-act barrier, not a capability boundary. Rust cannot
-/// restrict an impl to a named set of crates, and this trait must stay implementable
-/// from whichever crate the governance agent is extracted into (that is the entire
-/// point of SPLIT-03), so a determined downstream crate can still name the hidden
-/// module. What the seal buys is that it cannot happen by accident or unnoticed.
-///
-/// # The second widening: [`GovernanceAuthority::attest_release`] (QRT-04, ADR 0010)
-///
-/// The paragraph above says widening beyond what a named consumer already called
-/// re-imports the coupling this trait exists to remove. `attest_release` is widened
-/// past that bar deliberately, and this is the record of why.
-///
-/// QRT-04 requires a manual containment release to go "through the same governance
-/// signing path" as the rest of the audit chain. The signing path is the governor
-/// keyring plus the `previous_commit_hash` chain, and both live inside the concrete
-/// governance agent's `Mutex<GovernanceState>` -- reachable only from a type that
-/// implements this trait. The release path is `swarm_runtime::containment`, and
-/// `swarm-agents` depends on `swarm-runtime`, so the runtime cannot name
-/// `GovernancePolicy`. Either the release goes unsigned, or a second signer and a
-/// second chain appear beside the governance one, or this trait carries the request.
-/// A second chain over the same subject is the split-brain hazard QRT-04's own
-/// blocker note describes, so the trait carries it.
-///
-/// It is a *narrow* widening on purpose:
-///
-/// - It takes an opaque `serde_json::Value` subject and returns an opaque
-///   `serde_json::Value` receipt. `swarm-policy` is trusted-computing-base
-///   (`docs/decisions/0009-*`, `tools/check-workspace-layering.sh`) and its declared
-///   workspace dependencies are allow-listed down to `{swarm-core}`; naming
-///   `swarm_consensus::ConsensusGovernanceReceipt` here would add a TCB edge for a
-///   type this crate never inspects. `GovernanceRuntimeEventRecord::details` already
-///   carries governance receipts across this boundary the same way, and
-///   `swarm_runtime::dispatcher` already deserializes one out of a `Value`.
-/// - It renders no authorization verdict. `Ok(true)` from
-///   [`GovernanceAuthority::authorize_partition_request`] lets a destructive action
-///   proceed; the worst an implementation of `attest_release` can do is refuse to
-///   attest (`None`) or attest something. It cannot cause a containment, and it
-///   cannot prevent one being undone -- release proceeds either way, and an
-///   unattested release is recorded as unattested rather than silently equated with
-///   an attested one.
-pub trait GovernanceAuthority: sealed::SealedGovernanceAuthority + Send + Sync {
-    /// Whether `request` may proceed while the governance quorum is partitioned.
-    ///
-    /// `Ok(true)` means a contingency lease covers the request, `Ok(false)` that no
-    /// partition-time authorization was required or issued, and `Err` that the
-    /// request was rejected outright.
-    fn authorize_partition_request(
-        &self,
-        request: &ActionRequest,
-        now_ms: i64,
-    ) -> Result<bool, String>;
-
-    /// Whether the governance quorum is currently partitioned.
-    fn is_partitioned(&self) -> bool;
-
-    /// Record that `request` was vetoed while the quorum was partitioned.
-    ///
-    /// A no-op unless the quorum is actually partitioned.
-    fn note_partition_veto(&self, request: &ActionRequest, reason: &str, now_ms: i64);
-
-    /// Take the governance events queued since the last drain.
-    fn drain_runtime_events(&self) -> Vec<GovernanceRuntimeEventRecord>;
-
-    /// Snapshot of quorum health, for the operator-facing health surface.
-    ///
-    /// Read-only and verdict-free: it reports what the authority already decided and
-    /// authorizes nothing. It is on this trait rather than a second one because the
-    /// ingest surface holds the same authority object the dispatcher does, and one
-    /// sealed governance trait keeps the enumerable-implementers property in one place.
-    fn status_report(&self) -> GovernanceStatusReport;
-
-    /// Sign `subject` on the governance receipt chain and return the receipt.
-    ///
-    /// `subject` is the canonical body being attested -- for QRT-04, a containment
-    /// rollback receipt with its own attestation field cleared. The returned value is
-    /// a serialized `swarm_consensus::ConsensusGovernanceReceipt`; see the trait doc
-    /// for why the types are opaque here.
-    ///
-    /// THE BINDING IS THE CALLER'S TO CHECK, AND IT IS CHECKABLE. An implementation
-    /// must set the attested commit's `proposal_id` to the sha256 of the canonical
-    /// `subject`, so a verifier that re-canonicalizes the subject can prove the
-    /// signature covers *this* body and not some other one. A verifier that only
-    /// checked the signature would accept a receipt lifted from a different release.
-    ///
-    /// `None` means no attestation was produced -- no governors are registered, or the
-    /// commit could not be built. It is NOT an authorization failure and callers must
-    /// not read it as one: the caller records the release as unattested, which is a
-    /// true statement, rather than treating absence as proof.
-    fn attest_release(&self, subject: &serde_json::Value, now_ms: i64)
-    -> Option<serde_json::Value>;
 }

@@ -24,7 +24,7 @@ services:
       retries: 3
 
   nats:
-    image: nats:2-alpine
+    image: docker.io/library/nats:2.11.17-alpine@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00
     profiles:
       - nats
     ports:
@@ -38,6 +38,34 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+
+x-phase285-authority-topology:
+  accounts:
+    - phase285-runtime
+    - phase285-witness
+    - phase285-witness-store
+  principals:
+    phase285-runtime:
+      imports: [swarm.governance.witness.v1]
+      mounts: [runtime-credentials, phase285-ca]
+    phase285-witness:
+      imports: [swarm.governance.witness.store.v1]
+      exports: [swarm.governance.witness.v1]
+      mounts: [witness-signing-key, witness-client-credentials, phase285-ca]
+    phase285-witness-store:
+      exports: [swarm.governance.witness.store.v1]
+      mounts: [raw-store-credentials, witness-public-key, phase285-ca]
+    phase285-init:
+      serves: []
+      mounts: [init-credentials, witness-signing-key, phase285-ca]
+  transport:
+    url: tls://nats.phase285.test:4222
+    pinned_ca: phase285-ca
+    server_name: nats.phase285.test
+  forbidden:
+    - wildcard-service-import
+    - cross-role-credential-mount
+    - init-serving-subject
 
 volumes:
   nats-data:

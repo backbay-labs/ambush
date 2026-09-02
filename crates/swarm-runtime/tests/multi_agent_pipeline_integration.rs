@@ -20,6 +20,8 @@ use swarm_policy::ApprovalContext;
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::investigation::SummaryInvestigator;
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
+
+const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
 use swarm_spine::IncidentStore;
 use swarm_whisker::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
@@ -63,7 +65,7 @@ fn integration_config() -> SwarmConfig {
             profiles: DetectorProfilesConfig::default(),
         },
         pheromone: PheromoneConfig {
-            default_half_life_secs: 3600.0,
+            default_half_life_secs: TEST_LIVE_HALF_LIFE_SECS,
             evaporation_threshold: 0.01,
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
@@ -93,6 +95,7 @@ fn integration_config() -> SwarmConfig {
             bundle_store: BundleStoreConfig::Memory,
             ..InvestigationConfig::default()
         },
+        hypothesis_graph: Default::default(),
         correlation: CorrelationConfig {
             enabled: true,
             time_window_ms: 300_000,

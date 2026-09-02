@@ -15,7 +15,7 @@ use crate::config::{
     config_signature_sidecar_path, load_config,
 };
 use crate::control::{
-    ControlError, DefaultControlPlane, FirstRunStatus, FirstRunWizardOptions, FirstRunWizardPaths,
+    ControlError, DefaultControlPlane, FirstRunStatus, FirstRunWizardOptions,
     IncidentLookupSelector, InvestigationLookupSelector, OPERATOR_API_SCHEMA_VERSION_HEADER,
     OperatorControlOutput, ReplayLookupSelector, render_output,
     resolve_operator_api_schema_version,
@@ -38,6 +38,7 @@ use crate::evolution::{
     render_evolution_proposal_list,
 };
 use crate::evolution_status::{DefaultEvolutionStatusHarness, render_evolution_status};
+use crate::governance_migration::{GovernanceLockMigrationReport, GovernancePolicy};
 use crate::governance_prep::{
     DefaultEvolutionGovernancePrepHarness, render_evolution_governance_packet_set,
     render_evolution_governance_packet_set_list, render_evolution_portfolio_history,
@@ -457,7 +458,11 @@ struct FirstRunArgs {
     #[arg(long, default_value_t = 0)]
     pace_ms: u64,
 
-    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "first-run is detect-only and no longer reads voter signing keys"
+    )]
+    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY", hide = true)]
     voter_signing_key_env: String,
 }
 
@@ -469,7 +474,11 @@ struct QuickstartArgs {
     #[arg(long, default_value_t = 0)]
     pace_ms: u64,
 
-    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "quickstart is detect-only and no longer reads voter signing keys"
+    )]
+    #[arg(long, default_value = "SWARM_VOTER_SIGNING_KEY", hide = true)]
     voter_signing_key_env: String,
 }
 
@@ -491,6 +500,9 @@ struct PlaybookPreviewArgs {
 #[derive(Debug, Subcommand)]
 enum IdentityCommand {
     Rotate(IdentityRotateArgs),
+    /// Rebind an authenticated governance stream to permanent local lock
+    /// metadata. All swarm-detect processes must be stopped first.
+    MigrateGovernanceLock(IdentityMigrateGovernanceLockArgs),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -530,6 +542,18 @@ struct IdentityRotateArgs {
 
     #[arg(long)]
     active_until_ms: Option<i64>,
+}
+
+#[derive(Debug, Args)]
+struct IdentityMigrateGovernanceLockArgs {
+    /// Assert that every process capable of opening this governance stream is
+    /// stopped. This cannot be inferred for pre-lock releases.
+    #[arg(long, action = clap::ArgAction::SetTrue, required = true)]
+    confirm_offline: bool,
+
+    /// Override the governance state path. Defaults beside the stable agent-key root.
+    #[arg(long)]
+    state_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -1809,6 +1833,7 @@ struct QuickstartCommandReport {
     injected_events: usize,
     elapsed_ms: Option<i64>,
     finding: Option<QuickstartFindingSummary>,
+    /// Retained as an explicit JSON `null` for output-schema compatibility.
     receipt_pack_id: Option<String>,
     proof_merkle_root: Option<String>,
     blocking_failures: Vec<String>,
@@ -2576,9 +2601,6 @@ fn render_quickstart_report(report: &QuickstartCommandReport) -> String {
             lines.push(format!("Severity: {severity}"));
         }
     }
-    if let Some(receipt_pack_id) = report.receipt_pack_id.as_deref() {
-        lines.push(format!("Receipt pack: {receipt_pack_id}"));
-    }
     if let Some(proof_merkle_root) = report.proof_merkle_root.as_deref() {
         lines.push(format!("Proof Merkle root: {proof_merkle_root}"));
     }
@@ -2620,6 +2642,18 @@ fn render_identity_rotate_report(report: &IdentityRotateCommandReport) -> String
         report.next_agent_id,
         report.continuity_proof_id,
         report.registry_dir
+    )
+}
+
+fn render_governance_lock_migration_report(report: &GovernanceLockMigrationReport) -> String {
+    format!(
+        "Migrated governance lock binding\nstate_path: {}\nprevious_state_sequence: {}\nprevious_checkpoint_sequence: {}\nmigrated_sequence: {}\nresumed_state_commit: {}\nalready_migrated: {}",
+        report.state_path.display(),
+        report.previous_state_sequence,
+        report.previous_checkpoint_sequence,
+        report.migrated_sequence,
+        report.resumed_state_commit,
+        report.already_migrated,
     )
 }
 
@@ -2673,6 +2707,7 @@ async fn run_readiness_command(
     }
 }
 
+#[allow(deprecated)]
 async fn run_first_run_command(
     cli: &Cli,
     args: &FirstRunArgs,
@@ -2681,21 +2716,10 @@ async fn run_first_run_command(
     let plane = load_control_plane_with_remediation(&cli.config)?;
     let output = OperatorControlOutput::FirstRun(Box::new(
         plane
-            .first_run(FirstRunWizardOptions {
-                scenario_path: args.scenario.clone(),
-                pace_ms: args.pace_ms,
-                voter_signing_key_env: args.voter_signing_key_env.clone(),
-                evidence_signer_id: cli.evidence_signer_id.clone(),
-                evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
-                paths: FirstRunWizardPaths {
-                    approval_verdict_results_dir: cli.approval_verdict_results_dir.clone(),
-                    approval_receipt_pack_results_dir: cli
-                        .approval_receipt_pack_results_dir
-                        .clone(),
-                    approval_set_results_dir: cli.approval_set_results_dir.clone(),
-                    approval_ledger_results_dir: cli.approval_ledger_results_dir.clone(),
-                },
-            })
+            .first_run(FirstRunWizardOptions::detect_only(
+                args.scenario.clone(),
+                args.pace_ms,
+            ))
             .await?,
     ));
 
@@ -2721,6 +2745,7 @@ async fn run_first_run_command(
     }
 }
 
+#[allow(deprecated)]
 async fn run_quickstart_command(
     cli: &Cli,
     args: &QuickstartArgs,
@@ -2762,19 +2787,10 @@ async fn run_quickstart_command(
         );
     let plane = load_control_plane_with_remediation(&cli.config)?;
     let walkthrough = plane
-        .first_run(FirstRunWizardOptions {
-            scenario_path: args.scenario.clone(),
-            pace_ms: args.pace_ms,
-            voter_signing_key_env: args.voter_signing_key_env.clone(),
-            evidence_signer_id: cli.evidence_signer_id.clone(),
-            evidence_signing_key_env: cli.evidence_signing_key_env.clone(),
-            paths: FirstRunWizardPaths {
-                approval_verdict_results_dir: cli.approval_verdict_results_dir.clone(),
-                approval_receipt_pack_results_dir: cli.approval_receipt_pack_results_dir.clone(),
-                approval_set_results_dir: cli.approval_set_results_dir.clone(),
-                approval_ledger_results_dir: cli.approval_ledger_results_dir.clone(),
-            },
-        })
+        .first_run(FirstRunWizardOptions::detect_only(
+            args.scenario.clone(),
+            args.pace_ms,
+        ))
         .await?;
 
     let walkthrough = walkthrough.data;
@@ -2813,7 +2829,6 @@ async fn run_quickstart_command(
             threat_class: incident.threat_class.as_ref().and_then(serialized_label),
             severity: incident.severity.as_ref().and_then(serialized_label),
         });
-        report.receipt_pack_id = walkthrough.artifacts.receipt_pack_id.clone();
         report.proof_merkle_root = walkthrough.artifacts.proof_merkle_root.clone();
         report
             .next_steps
@@ -2937,7 +2952,56 @@ fn run_identity_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match &args.command {
         IdentityCommand::Rotate(args) => run_identity_rotate_command(config_path, args, json),
+        IdentityCommand::MigrateGovernanceLock(args) => {
+            run_identity_migrate_governance_lock_command(config_path, args, json)
+        }
     }
+}
+
+fn default_governance_state_path(
+    config_path: &std::path::Path,
+    identity: &swarm_core::config::IdentityConfig,
+) -> std::path::PathBuf {
+    let agent_key_dir = resolve_agent_key_dir(config_path, identity);
+    agent_key_dir
+        .parent()
+        .unwrap_or(agent_key_dir.as_path())
+        .join("governance-partition-state.json")
+}
+
+fn run_identity_migrate_governance_lock_command(
+    config_path: &std::path::Path,
+    args: &IdentityMigrateGovernanceLockArgs,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !args.confirm_offline {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "governance lock migration requires --confirm-offline after every swarm-detect process using the state root has stopped",
+        )
+        .into());
+    }
+    let config = load_config(config_path)?;
+    let key_store = FileAgentKeyStore::open(resolve_agent_key_dir(config_path, &config.identity))?;
+    let tom_identity = key_store.load_existing(AgentRole::Tom, "primary")?;
+    let registry_dir = resolve_identity_registry_dir(config_path, &config.identity);
+    let registry = FileAgentIdentityRegistry::open(registry_dir)?;
+    registry.verify_admitted_persisted_identity(AgentRole::Tom, "primary", &tom_identity)?;
+    let state_path = args
+        .state_path
+        .clone()
+        .unwrap_or_else(|| default_governance_state_path(config_path, &config.identity));
+    let report = GovernancePolicy::migrate_persistence_lock(
+        state_path,
+        tom_identity.id,
+        tom_identity.signing_key,
+    )?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", render_governance_lock_migration_report(&report));
+    }
+    Ok(())
 }
 
 fn run_identity_rotate_command(
@@ -2945,6 +3009,13 @@ fn run_identity_rotate_command(
     args: &IdentityRotateArgs,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(args.role, IdentityRoleArg::Tom) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Tom identity rotation is disabled: governance persistence is signed by Tom/primary; use the documented offline governance rekey procedure instead of silently stranding signed state",
+        )
+        .into());
+    }
     let config = load_config(config_path)?;
     let key_store = FileAgentKeyStore::open(resolve_agent_key_dir(config_path, &config.identity))?;
     let registry_dir = resolve_identity_registry_dir(config_path, &config.identity);
@@ -4211,12 +4282,16 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Command::CanaryStart(args) => {
-            let lookup = canary_harness.start_run(
+            // A direct CLI start has no durable queue-to-canary assurance
+            // lineage. Keep this production-capable entry point fail-closed;
+            // reviewed launches use `evolution-handoff-launch-canary`.
+            let lookup = canary_harness.start_run_with_assurance(
                 args.experiment,
                 &cli.verification_results_dir,
                 &args.verification_id,
                 &cli.shadow_results_dir,
                 &args.shadow_id,
+                None,
             )?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&lookup.report)?);
@@ -5290,18 +5365,21 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, build_validate_report,
-        evolution_mutation_signing_key, load_config, parse_review_artifact_ref_arg,
-        render_init_template, resolve_quarantine_endpoint, run_init_command,
-        run_playbook_preview_command, run_quickstart_command, run_readiness_command,
+        Cli, Command, EvolutionArgs, EvolutionCommand, InitArgs, InitMode, QuickstartCommandReport,
+        build_validate_report, evolution_mutation_signing_key, load_config,
+        parse_review_artifact_ref_arg, render_init_template, resolve_quarantine_endpoint,
+        run_identity_migrate_governance_lock_command, run_identity_rotate_command,
+        run_init_command, run_playbook_preview_command, run_quickstart_command,
+        run_readiness_command,
     };
     use crate::config::write_debug_test_config_signature;
     use clap::Parser;
+    use ed25519_dalek::SigningKey;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
-    use swarm_core::agent::SwarmMode;
+    use swarm_core::agent::{AgentRole, SwarmMode};
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::Severity;
 
@@ -5384,6 +5462,70 @@ mod tests {
         assert!(matches!(cli.command, Command::Quickstart(_)));
     }
 
+    #[allow(deprecated)]
+    #[test]
+    fn cli_accepts_legacy_voter_signing_key_flags_without_using_them_as_authority() {
+        let first_run = Cli::parse_from([
+            "swarmctl",
+            "first-run",
+            "--voter-signing-key-env",
+            "LEGACY_FIRST_RUN_KEY",
+        ]);
+        let Command::FirstRun(first_run) = first_run.command else {
+            panic!("expected first-run command");
+        };
+        assert_eq!(first_run.voter_signing_key_env, "LEGACY_FIRST_RUN_KEY");
+
+        let quickstart = Cli::parse_from([
+            "swarmctl",
+            "quickstart",
+            "--voter-signing-key-env",
+            "LEGACY_QUICKSTART_KEY",
+        ]);
+        let Command::Quickstart(quickstart) = quickstart.command else {
+            panic!("expected quickstart command");
+        };
+        assert_eq!(quickstart.voter_signing_key_env, "LEGACY_QUICKSTART_KEY");
+    }
+
+    #[test]
+    fn quickstart_json_keeps_the_legacy_receipt_pack_field_as_null() {
+        let value = serde_json::to_value(QuickstartCommandReport {
+            config_path: "config.yaml".to_string(),
+            validation_passed: true,
+            readiness_passed: true,
+            status: "completed".to_string(),
+            scenario_name: None,
+            run_id: None,
+            injected_events: 0,
+            elapsed_ms: None,
+            finding: None,
+            receipt_pack_id: None,
+            proof_merkle_root: None,
+            blocking_failures: Vec::new(),
+            next_steps: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "config_path": "config.yaml",
+                "validation_passed": true,
+                "readiness_passed": true,
+                "status": "completed",
+                "scenario_name": null,
+                "run_id": null,
+                "injected_events": 0,
+                "elapsed_ms": null,
+                "finding": null,
+                "receipt_pack_id": null,
+                "proof_merkle_root": null,
+                "blocking_failures": [],
+                "next_steps": [],
+            })
+        );
+    }
+
     #[test]
     fn cli_parses_playbook_preview_command() {
         let cli = Cli::parse_from([
@@ -5406,7 +5548,117 @@ mod tests {
         let cli = Cli::parse_from([
             "swarmctl", "identity", "rotate", "--role", "tom", "--slot", "primary",
         ]);
-        assert!(matches!(cli.command, Command::Identity(_)));
+        let Command::Identity(identity) = cli.command else {
+            panic!("expected identity command");
+        };
+        let super::IdentityCommand::Rotate(args) = identity.command else {
+            panic!("expected identity rotation command");
+        };
+        let error = run_identity_rotate_command(
+            std::path::Path::new("/path/that/must/not/be/read.yaml"),
+            &args,
+            false,
+        )
+        .expect_err("Tom rotation must fail before reading config or mutating key state");
+        assert!(
+            error
+                .to_string()
+                .contains("Tom identity rotation is disabled")
+        );
+    }
+
+    #[test]
+    fn governance_lock_migration_requires_explicit_offline_confirmation() {
+        assert!(Cli::try_parse_from(["swarmctl", "identity", "migrate-governance-lock",]).is_err());
+        let cli = Cli::parse_from([
+            "swarmctl",
+            "identity",
+            "migrate-governance-lock",
+            "--confirm-offline",
+            "--state-path",
+            "/var/lib/swarm/governance-partition-state.json",
+        ]);
+        let Command::Identity(identity) = cli.command else {
+            panic!("expected identity command");
+        };
+        let super::IdentityCommand::MigrateGovernanceLock(args) = identity.command else {
+            panic!("expected governance lock migration command");
+        };
+        assert!(args.confirm_offline);
+        assert_eq!(
+            args.state_path.as_deref(),
+            Some(std::path::Path::new(
+                "/var/lib/swarm/governance-partition-state.json"
+            ))
+        );
+
+        let no_confirmation = super::IdentityMigrateGovernanceLockArgs {
+            confirm_offline: false,
+            state_path: None,
+        };
+        let error = run_identity_migrate_governance_lock_command(
+            std::path::Path::new("/path/that/must/not/be/read.yaml"),
+            &no_confirmation,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requires --confirm-offline"));
+    }
+
+    #[test]
+    fn governance_lock_migration_command_uses_only_the_admitted_existing_tom_key() {
+        let root = unique_temp_dir("governance-lock-migration");
+        let config_path = root.join("config.yaml");
+        fs::write(&config_path, render_init_template(InitMode::DetectOnly)).unwrap();
+        write_debug_test_config_signature(&config_path).unwrap();
+        let config = load_config(&config_path).unwrap();
+        let key_store = crate::agent_identity::FileAgentKeyStore::open(
+            crate::agent_identity::resolve_agent_key_dir(&config_path, &config.identity),
+        )
+        .unwrap();
+        let key = SigningKey::from_bytes(&[158; 32]);
+        let identity = key_store.replace(AgentRole::Tom, "primary", &key).unwrap();
+        let registry = crate::agent_identity::FileAgentIdentityRegistry::open(
+            crate::agent_identity::resolve_identity_registry_dir(&config_path, &config.identity),
+        )
+        .unwrap();
+        registry
+            .admit_persisted_identity(AgentRole::Tom, "primary", &identity, 1)
+            .unwrap();
+
+        let source_path = root.join("source-governance.json");
+        let restored_path = root.join("restored-governance.json");
+        let source = crate::governance_migration::GovernancePolicy::initialize_persistence(
+            crate::governance_migration::GovernancePolicyConfig::default(),
+            &source_path,
+            identity.id.clone(),
+            key.clone(),
+        )
+        .unwrap();
+        drop(source);
+        fs::copy(&source_path, &restored_path).unwrap();
+        fs::copy(
+            crate::governance_migration::GovernancePolicy::persistence_sequence_path(&source_path),
+            crate::governance_migration::GovernancePolicy::persistence_sequence_path(
+                &restored_path,
+            ),
+        )
+        .unwrap();
+        let args = super::IdentityMigrateGovernanceLockArgs {
+            confirm_offline: true,
+            state_path: Some(restored_path.clone()),
+        };
+        run_identity_migrate_governance_lock_command(&config_path, &args, true).unwrap();
+        drop(
+            crate::governance_migration::GovernancePolicy::with_persistence(
+                crate::governance_migration::GovernancePolicyConfig::default(),
+                &restored_path,
+                identity.id,
+                key,
+            )
+            .unwrap(),
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -5462,41 +5714,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quickstart_command_completes_on_signed_detect_only_template() {
+    async fn quickstart_command_completes_without_approval_or_evidence_keys() {
         let dir = unique_temp_dir("quickstart");
         let config_path = dir.join("config.yaml");
         fs::write(&config_path, render_init_template(InitMode::DetectOnly)).unwrap();
         write_debug_test_config_signature(&config_path).unwrap();
 
-        let voter_env = "SWARM_QUICKSTART_TEST_VOTER_KEY";
-        let evidence_env = "SWARM_QUICKSTART_TEST_EVIDENCE_KEY";
-        unsafe {
-            std::env::set_var(voter_env, "quickstart-voter-key");
-            std::env::set_var(evidence_env, "quickstart-evidence-key");
-        }
-
-        // The four approval stores default to REPO-RELATIVE `data/approval-*`
-        // paths (see the `#[arg(long, global = true, default_value = ...)]`
-        // declarations above), and `cargo test`'s cwd is the crate root, so a
-        // quickstart run that omits them writes into the checked-out tree.
         let cli = Cli::parse_from([
             "swarmctl",
             "--config",
             config_path.to_str().unwrap(),
             "--json",
-            "--evidence-signing-key-env",
-            evidence_env,
-            "--approval-set-results-dir",
-            dir.join("approval-sets").to_str().unwrap(),
-            "--approval-ledger-results-dir",
-            dir.join("approval-ledgers").to_str().unwrap(),
-            "--approval-verdict-results-dir",
-            dir.join("approval-verdicts").to_str().unwrap(),
-            "--approval-receipt-pack-results-dir",
-            dir.join("approval-receipt-packs").to_str().unwrap(),
             "quickstart",
-            "--voter-signing-key-env",
-            voter_env,
         ]);
 
         let args = match &cli.command {

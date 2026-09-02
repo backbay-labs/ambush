@@ -46,10 +46,12 @@
 pub mod chain;
 pub mod checkpoint;
 pub mod envelope;
+pub mod hypothesis_graph_store;
 pub mod incident;
 pub mod investigation;
 pub mod spine_error;
 pub mod store;
+pub mod strategy_memory;
 
 use serde::{Deserialize, Serialize};
 use swarm_core::pheromone::PheromoneDeposit;
@@ -68,26 +70,41 @@ pub use envelope::{
     envelope_signing_bytes, extract_envelope_hash, issuer_from_keypair, now_rfc3339,
     parse_issuer_pubkey_hex, sign_envelope, verify_envelope,
 };
+pub use hypothesis_graph_store::{
+    ConfiguredHypothesisGraphStore, DurableTaskRecord, FileHypothesisGraphStore, GraphCasEnvelope,
+    GraphStoreError, GraphStoreRevision, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
+    MemoryHypothesisGraphStore, TaskClaimEnvelope, TaskClaimResult, TaskCreationEnvelope,
+    TaskExpiryEnvelope, TaskFailure, TaskFailureEnvelope, TaskMutationResult, TaskReclaimEnvelope,
+    TaskRenewalEnvelope, TaskStore, TaskTerminalClockEnvelope, TaskTerminalOperationKind,
+    TaskTerminalResult, validate_task_failure_envelope, validate_task_logical_identity,
+    validate_task_terminal_envelope,
+};
 pub use incident::{
     AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
     FalsePositiveDetectorSummary, FalsePositiveHostSummary, FalsePositiveMeasurement,
     FalsePositiveMeasurementReport, FileIncidentStore, IncidentEvidenceLink,
     IncidentGraphDimension, IncidentLookup, IncidentMemberDecision, IncidentRecord, IncidentStore,
-    IncidentStoreError, IncidentStoreHealth, MemoryIncidentStore,
-    summarize_false_positive_measurements,
+    IncidentStoreError, IncidentStoreHealth, MemoryIncidentStore, SoarVerdictClaimLease,
+    SoarVerdictClaimResult, summarize_false_positive_measurements,
 };
 pub use investigation::{
     ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
     InvestigationBundleLookup, InvestigationBundleRecord, InvestigationBundleStore,
-    InvestigationDecision, InvestigationInterpretation, InvestigationPriority,
-    InvestigationPriorityClass, InvestigationStatus, InvestigationStoreError,
-    InvestigationStoreHealth, InvestigationVote, MemoryInvestigationBundleStore,
+    InvestigationDecision, InvestigationExecutionClaim, InvestigationInterpretation,
+    InvestigationPriority, InvestigationPriorityClass, InvestigationStatus,
+    InvestigationStoreError, InvestigationStoreHealth, InvestigationVote,
+    MemoryInvestigationBundleStore,
 };
 pub use spine_error::{SpineError, SpineResult};
 pub use store::{
     ConfiguredReplayBundleStore, FileReplayBundleStore, MemoryReplayBundleStore,
     ReplayBundleLookup, ReplayBundleRecord, ReplayBundleStore, ReplayPreview, ReplayStoreError,
     ReplayStoreHealth,
+};
+pub use strategy_memory::{
+    FileStrategyMemoryStore, MemoryStrategyMemoryStore, RetrievedStrategyMemory,
+    StrategyMemoryAppendResult, StrategyMemoryExpiryRecord, StrategyMemoryRecord,
+    StrategyMemoryStore, StrategyMemoryStoreError, applicable_strategy_memory,
 };
 
 /// Policy step captured in an audit trail.

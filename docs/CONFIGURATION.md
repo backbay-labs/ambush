@@ -401,7 +401,48 @@ The steady-state readiness and runtime-status surfaces now also include anti-tam
 - `/v2/api/runtime/status` carries the same `anti_tamper` report for operator-visible runtime status
 - when `anti_tamper.fail_closed_live_response` is enabled, only supported Linux live-response runtimes fail closed; unsupported platforms surface `status: unsupported` without creating a readiness bypass
 
-When multi-instance governance is active, `/healthz` and `/readyz` also expose a `governance` component that reports partition state, quorum counts, active contingency leases, and the latest reconciliation report marker. The partition-authority state is persisted under `data/governance-partition-state.json` relative to the repo or config root so restart and healing paths can reconcile redeemed versus unauthorized partition-era actions.
+When governance is active, `/healthz` and `/readyz` also expose a `governance` component that reports partition state, quorum counts, active contingency leases, and the latest reconciliation report marker. The complete authority state is persisted as a Tom/primary-signed envelope at `governance-partition-state.json` beside the configured `identity.agent_key_dir`, with an adjacent Tom/primary-signed `governance-partition-state.sequence.json` high-water checkpoint. Signed authority state includes the display-to-consensus governor mapping, exact unhealthy-agent observations, healthy/quorum counts, partition state, peers, leases, authorization ledgers, human holds, activity, reports, and receipt chain. This keeps both files on the same stable volume as the identity root in the shipped deployment and prevents a restart from clearing a health veto or changing the operator-visible quorum state.
+
+Startup derives the expected signer from the Tom/primary key loaded from the key store and admitted by the identity registry before it reads governance state. It never trusts an envelope signer or peer identity merely because the state file names it. Existing Tom keys require both files: unsigned legacy JSON, a signed payload from the earlier incomplete schema that lacks health or identity-binding fields, a missing or corrupt file, a wrong signer, or a state sequence older than its checkpoint aborts startup. A valid signed envelope one sequence or more ahead of a lagging checkpoint is the recoverable state-first/checkpoint-second crash case; startup advances the checkpoint. A checkpoint ahead of the envelope fails closed.
+
+The signed state envelope rename is the runtime commit point. If that rename succeeds but the checkpoint write fails, the policy retains the committed in-memory mutation and records a checkpoint-lag condition. Peer admission, health observations, and human hold/binding staging accurately retain their committed result. Receipt issuance is withheld, and receipt consumption, contingency-lease redemption, human-authorization consumption, and release attestation refuse their external effect while retaining the conservative committed ledger/chain mutation. A subsequent governed effect first repairs the signed checkpoint; restart accepts the newer valid state and performs the same repair. Before the first checkpoint exists, initialization is different: a checkpoint failure removes the unanchored state file and fails bootstrap instead of treating it as an established stream.
+
+Fresh automatic initialization is allowed only when the Tom key file is atomically created during the same bootstrap. `RegistryAdmission::Added` is insufficient because registry state is mutable: deleting a registry row while retaining an existing key cannot turn an existing installation into a fresh one.
+
+### Governance State Migration And Rekey
+
+Ordinary daemon startup and `--reinitialize-governance-state` never create a
+missing permanent governance lock beside existing anchors. For an upgrade from
+the immediately preceding signed schema, or a PVC restore whose copied lock has
+a different device/inode, stop every process using the state root and run:
+
+```bash
+swarmctl --config /path/to/swarm.yaml identity migrate-governance-lock \
+  --confirm-offline \
+  --state-path /var/lib/swarm/governance-partition-state.json
+```
+
+The command loads (but never creates) the Tom/primary key, verifies its exact
+active registry admission, authenticates the old state and checkpoint, then
+creates/reuses and fsyncs the permanent lock. It re-signs the unchanged authority
+payload with only the new lock binding at state sequence `N+1`, then writes the
+checkpoint at `N+1`. Lock-only and state-first/checkpoint-second failures are
+safe to retry; a completed retry is idempotent. Unsigned, corrupt, wrong-signer,
+checkpoint-ahead, unknown-field, and older signed payloads that omit health or
+authorization inputs fail closed. A pre-lock daemon cannot advertise an advisory
+owner, so `--confirm-offline` is a real operator assertion, not cosmetic syntax.
+
+Unsigned governance state is deliberately not upgraded in place. Stop every daemon using the state root, preserve the directory for audit, restore the trusted permanent lock if necessary, and run:
+
+```bash
+swarm-detect --config /path/to/swarm.yaml --reinitialize-governance-state
+```
+
+The command archives any prior envelope/checkpoint with a `.discarded-<timestamp>-<pid>` suffix and creates an empty state signed by the admitted Tom/primary key. On a partial archive or failed replacement initialization it restores the prior files and returns an error; an underlying filesystem failure that also prevents restoration is reported explicitly. A missing checkpoint is still an explicit offline-recovery case and may be reinitialized; ordinary daemon startup never does this implicitly. The command does not copy governor health observations or counts, peer membership, active contingency leases, pending or consumed action authorizations, human-approval holds, partition activity, reconciliation reports, receipt counters, or chain hashes. Those authorities must be re-established after restart.
+
+Do not use `swarmctl identity rotate --role tom`: the command refuses Tom rotation because it cannot atomically re-sign governance history. A future Tom rekey flow must run offline, verify the old envelope against the old admitted key, bind old and new identities through an independently authenticated rotation procedure, and write a new envelope/checkpoint before changing the active key. Other role rotations retain their existing behavior.
+
+The signed checkpoint rejects forged raises, lowers, signer substitutions, and metadata edits, and detects replay of an older state envelope while the checkpoint remains current. It is not a hardware monotonic counter: an attacker able to roll back both signed files to a previously valid pair can evade this local check. Strong joint-file rollback resistance requires an external monotonic store or independently authenticated peer/operator anchor; the shipped local-only runtime claims neither.
 
 ### Config Signature Verification
 
@@ -429,8 +470,11 @@ The repository now treats dependency hygiene and release inventory as part of th
 
 - `Cargo.toml` now pins every first-party workspace dependency to an explicit internal version instead of inheriting wildcard path requirements through `[workspace.dependencies]`
 - `deny.toml` now denies wildcard dependency requirements, broadens the explicit license allowlist to match the shipped transitive graph, and documents the two currently accepted RustSec advisories that do not yet have safe upstream replacements in the current shipped stack
-- `tools/check-supply-chain.sh` runs ONE `cargo deny check advisories licenses bans sources` — `bans` with duplicates ENFORCED, so a new duplicate fails the gate and an accepted one has to be a dated, justified `[[bans.skip]]` entry in `deny.toml` — plus a hard `cargo audit --deny warnings` gate with TWO repo-owned temporary advisory exceptions, `RUSTSEC-2024-0384` and `RUSTSEC-2025-0134`, which must stay identical to `[advisories] ignore` in `deny.toml`
-- `.github/workflows/ci.yml` fans out repo CI into parallel `fmt`, `panic-contract`, `build`, `clippy`, `test`, `fixture-freshness`, `platform-contract`, `proof-surfaces`, `solver-z3`, `jetstream`, `benchmark`, and `supply-chain` jobs while reusing a shared target cache for the commit under test
+- `tools/check-supply-chain.sh` exact-pins and enforces cargo-deny 0.19.4 plus cargo-audit 0.22.0; a binary or workflow-pin mismatch fails before scanning. CI unconditionally rebuilds both exact versions with `cargo install --locked --force` instead of trusting a cached executable that merely prints the expected version. The release workflow does the same for reviewed cargo-cyclonedx 0.5.9 in a versioned temporary install root, verifies its exact `cargo-cyclonedx-cyclonedx 0.5.9` output through that absolute executable path, and exports the path for generation. Neither version checking nor generation invokes the aliasable `cargo cyclonedx` form. The gate asks git through NUL-delimited `ls-files -z` inventories for every tracked `.github/workflows/*.yml` and `*.yaml` plus every tracked `action.yml` and `action.yaml`; invalid UTF-8 filename bytes fail closed instead of being surrogate-decoded or silently omitted. It then parses those documents structurally with Ruby's standard JSON/YAML libraries, `YAML.safe_load`, and Psych's syntax-tree API. Aliases, custom tags, duplicate mapping keys, split `actions/cache/restore` or `/save` uses, and all cache-family uses inside composite actions fail closed. A real temporary Git repository fixture invokes a tracked newline-directory composite action after both forced scanner installs and proves the NUL-delimited inventory finds and rejects its executable cache path. The committed inventory is exactly 12 CI caches, 2 release caches, and zero composite-action caches. Each cache may retain only registry and git sources — never `~/.cargo/bin`, `.crates.toml`, `.crates2.json`, or a target directory — and every key and restore prefix must use the rotated `cargo-home-sources-v1` namespace so no legacy archive can match and extract its recorded executable paths. The separate advisory-enforcement surface inventory is also NUL-delimited, so newline-bearing workflow/tool paths cannot evade the RustSec-ID scan. Executable mutations enforce both workflow extensions, quoted/renamed/capitalized uses, source-only path normalization, duplicate-key/parser failures, composite-action discovery, the rotated namespace, unconditional installs, exact cyclonedx pin/path, and release permission boundaries. This prevents cargo-deny 0.20's breaking move of `--config` from making hosted behavior diverge from the locally measured policy contract. The gate first runs quiet `cargo metadata --locked --format-version 1`, refusing stale manifest resolution before Cargo.lock becomes policy input. It then runs the metadata and lock-identity gate over `deny.toml` plus `Cargo.lock`, followed by ONE `cargo deny --locked check -D advisory-not-detected -D unmatched-skip -D unnecessary-skip advisories licenses bans sources` — `bans` with duplicates ENFORCED, so a new duplicate fails and an accepted one has to be an exact `<crate>@<SemVer 2.0>` `[[bans.skip]]` entry — and a hard `cargo audit --deny warnings`. Cargo-audit 0.22.0 exposes no locked option, so the script retains a byte snapshot and fails if metadata, cargo-deny, or cargo-audit changes Cargo.lock. An executable disposable fixture changes a path dependency's manifest version while retaining its old locked dependency row, then proves the first locked metadata invocation refuses that stale resolution without changing lock bytes
+- `tools/negative-registry-ast` is an independently locked executable graph, so the same supply gate validates its locked metadata and immutable lock bytes, then runs a separate zero-waiver `cargo-deny` policy plus `cargo audit --deny warnings`. Its manifest, lock, deny policy, and Rust source are included in the enforcement-surface inventory; root-graph coverage is not treated as coverage of this nested tool.
+- every waiver in `deny.toml` carries parsed metadata, and the gate fails without it: `last-checked <YYYY-MM-DD>` and a `clears-when:` clause on both kinds of entry, plus `expires <YYYY-MM-DD>` and a `blast-radius:` note on an `[advisories] ignore`. An `expires` date in the past FAILS the build rather than warning, and the last-checked..expires window is capped at 180 days so a deadline cannot be written far enough out to stop being one. Duplicate waivers carry no expiry because two independent checks make the exact pin self-invalidating. The custom metadata stage owns full textual identity: it splits at the final `@`, requires a non-empty name and valid exact SemVer 2.0, and makes exact `Cargo.lock` name matching authoritative, thereby accepting Cargo-valid leading-underscore and Unicode-XID names without a second name grammar. It requires the complete textual version including `+build`, and rejects every selector when multiple lock rows share its exact name and build-stripped core-plus-prerelease identity. Ambiguity errors list registry/git sources and label source-less rows path/local while stating Cargo.lock omits their filesystem path. Cargo-deny owns duplicate applicability in its scanned graph: `unmatched-skip`, `unnecessary-skip`, and ordinary duplicate errors are denied, so a locked waiver that stops applying fails instead of lingering
+- `deny.toml` is the SINGLE SOURCE OF TRUTH for advisory exceptions. The `cargo audit --ignore` flags are read out of `[advisories] ignore` at run time rather than written down a second time, and a literal RustSec id anywhere else on an enforcement surface — a workflow, a `tools/*.sh`, a cargo-audit `audit.toml` — fails the gate as a second list being born. That is also why the currently accepted advisories are not named in this document: read them out of `deny.toml`
+- `.github/workflows/ci.yml` fans out repo CI into parallel `fmt`, `panic-contract`, `build`, `clippy`, `test`, `fixture-freshness`, `platform-contract`, `proof-surfaces`, `solver-z3`, `jetstream`, `benchmark`, and `supply-chain` jobs. Every compilation lane retains the small source-only cargo-home cache but compiles into a cold, uncached `${{ github.workspace }}/target/ci`; no job restores or uploads a `target/ci` archive. Hosted evidence showed that restoring and re-uploading the roughly 8 GB target tree cost more time than compiling cold, and removing the build dependency keeps the lanes parallel instead of serializing them around an artifact that no longer exists
 - the `solver-z3` CI lane is the only place the optional `z3` feature is compiled at all: every other job builds default features, so `#[cfg(feature = "z3")] evaluate_custom_z3_invariant_impl` and the three tests that exercise it were previously unlinted and unrun anywhere in CI. The lane clippies `--all-targets` AND runs `cargo test -p swarm-runtime --features z3`, so the solver executes rather than merely type-checking; `z3-sys`'s `gh-release` feature downloads a prebuilt solver at build time instead of needing a system libz3
 - `promotion.require_solver_result_for_promotion` (default **true**) refuses to promote a candidate whose assurance lineage carries no `proved` solver result. `disabled` and a missing status are rejected identically -- both are the same amount of evidence, none -- while the error's `recorded_status` still distinguishes a stub from an absence. The gate sits DOWNSTREAM of the assurance waiver check and performs no waiver lookup: a bounded operator waiver can excuse a known coverage shortfall, but it cannot manufacture a proof. The curated `rulesets/default.yaml` omits the key (it is frozen by the signed attestation), so the serde default is what makes the shipped configuration fail closed -- writing `#[serde(default)]` instead of `#[serde(default = "...")]` there would silently ship the gate off, which `tracked_default_ruleset_resolves_the_promotion_solver_gate_to_enabled` exists to catch
 - every production promotion report carries a solver line unconditionally: either `Solver result: <status> | required_for_promotion=<bool>` or the exact literal `Solver result: NO SOLVER RESULT RECORDED`, so an operator reading a report cannot mistake "never asked" for "proved"
@@ -445,9 +489,9 @@ The repository now treats dependency hygiene and release inventory as part of th
 - `tools/check-worktree-clean.sh` carries the phase-284 clean-tree contract (four assertions: tracked-file mutation, crate-local store roots, untracked/ignored residue outside `target/`, stray empty directories) and runs in three jobs: `test`, `solver-z3` and `proof-surfaces`, each passing its own label so a failure names the lane that dirtied the tree
 - `tools/check-gates-wired.sh` runs in the `panic-contract` job. It parses `.github/workflows/*.yml` structurally and fails when any `tools/check-*.sh` or `tools/verify-*.sh` is named by no step's `run:` command. Three gate scripts had drifted out of CI entirely before this existed
 - `tools/verify-release-hardening.sh` runs in the `release-hardening` job of `.github/workflows/release.yml`, which `publish-container` depends on. It builds the two shipped binaries in release mode with `-v` and asserts `-C panic=abort` and `-C overflow-checks=on` appear on their rustc invocations, so the image that gets Cosign-signed and attested is verified hardened rather than assumed to be
-- `tools/generate-sbom.sh` generates one CycloneDX JSON SBOM per workspace crate and stages the files into a chosen output directory
+- `tools/generate-sbom.sh` resolves and invokes the external `cargo-cyclonedx` executable directly with its required `cyclonedx` subcommand, and refuses a repository `.cargo/config*` alias named `cyclonedx`. It generates one CycloneDX 1.5 JSON SBOM for every package in `cargo metadata --locked --no-deps`, then requires an exact filename and unique `metadata.component` inventory with matching package name, version, and Cargo purl. It also rejects duplicate JSON keys, NaN/Infinity, malformed JSON, empty documents, and missing core component/dependency identity before staging files. Differential fixtures prove that bare Cargo is shadowed by an array alias while the direct executable is not; a structurally valid one-file forged BOM is rejected when the locked fixture workspace contains two packages
 - `tools/generate-changelog.sh` renders a release changelog from conventional commit history for the tagged release range
-- `.github/workflows/release.yml` handles tagged releases end to end: it generates the changelog, verifies the release hardening flags reach the shipped binaries, publishes the multi-arch GHCR image, signs the image with keyless Cosign, pushes build provenance attestation, and attaches the generated `*.cdx.json` SBOM set plus `CHANGELOG.md` to the GitHub release
+- `.github/workflows/release.yml` handles tagged releases end to end. Its default token permission is only `contents: read`; `publish-container` alone receives contents-read, packages-write, identity-token, and attestation-write permissions, while `github-release` alone receives contents-write. It generates the changelog, verifies the release hardening flags reach the shipped binaries, publishes the multi-arch GHCR image, signs the image with keyless Cosign, pushes build provenance attestation, and attaches the generated `*.cdx.json` SBOM set plus `CHANGELOG.md` to the GitHub release
 
 Operator workflow:
 
@@ -583,7 +627,7 @@ Deployment bootstrap commands:
 - `--json` emits one structured validation report suitable for CI gates.
 - `swarmctl init --mode detect_only|live_response` writes a complete `rulesets/custom.yaml` template with inline comments and prints the matching `swarmctl readiness --config ...` follow-up command. The live-response template defaults to a durable local-journal pheromone backend.
 - `swarmctl readiness` runs the first-run readiness diagnostic and fails non-zero when telemetry sources, detector activation, or substrate readiness are not good enough for onboarding. Subject-backed telemetry sources are reported as configuration-validated, while bridge-backed sources are probed or validated according to their transport.
-- `swarmctl first-run` reruns the readiness gate, then launches one sandboxed synthetic walkthrough that forces the approval path, exports a signed receipt pack, and emits a proof bundle for the resulting incident. It requires `SWARM_VOTER_SIGNING_KEY` plus the normal evidence-signing env (default `SWARM_EVIDENCE_SIGNING_KEY`) and can take `--scenario path/to/custom.yaml` when the built-in process-start sample is not appropriate for the active detector mix.
+- `swarmctl first-run` reruns the readiness gate, then launches one detect-only sandboxed walkthrough that rehearses policy evaluation and emits a proof bundle for the resulting incident. It does not mint a human-approval receipt or a live governance authorization and therefore requires no voter or evidence signing key. The command can take `--scenario path/to/custom.yaml` when the built-in process-start sample is not appropriate for the active detector mix.
 - `swarmctl quickstart` collapses validate, readiness, built-in telemetry injection, and first-finding proof into one command. The signed detect-only bootstrap uses in-memory incident state, so quickstart prints the finding summary directly and only suggests `swarmctl incident` follow-ups when the active config already has durable incident storage enabled.
 - `swarmctl playbook-preview` evaluates the checked-in `pheromone.response_playbook` config with one explicit `--threat-class`, `--severity`, `--confidence`, and `--mode` tuple, then returns the matched rule or branch, typed rehearsal blast-radius and rollback metadata for each ordered action, and the approval verdict summary that would govern the live path. The command is side-effect free: it does not call live executors, mint governance receipts, or mutate durable runtime state.
 - `swarmctl status` now carries `false_positive_tracking` in JSON and prints the recent reviewed-finding count plus the top detector and host false-positive rates in text mode. The rollup is bounded to the same recent-incident window used by the operator review surface.
@@ -762,8 +806,9 @@ keys rather than a broad abstract autonomy schema:
   must stop for human approval. It applies to the static fallback gate only.
   `policy.rules` is evaluated first, in file order, and the first matching rule
   decides `allow` or `deny` outright; the human gate is reached only when no rule
-  matches. A matching `allow` rule therefore authorizes a destructive action
-  without human confirmation - which is exactly what the shipped
+  matches. A matching `allow` rule therefore passes the policy layer without
+  human confirmation, but it cannot replace dispatcher governance admission -
+  which is exactly the policy behavior the shipped
   `command-and-control-emergency-block` rule relies on. See
   `docs/CONSENSUS.md` "Human Approval Boundary".
 - `policy.lease_ttl_ms`: lifetime of ordinary capability leases minted by the
@@ -940,13 +985,22 @@ operator_surface:
         scopes: ["read", "maintenance"]
 ```
 
-- `runtime_base_url` is the detect-server base URL used by the Providence widget and scoped drilldown links.
+- `runtime_base_url` is the detect-server base URL used by the Providence widget, scoped drilldown links, and governed-approval resume. Because resume forwards the authenticated operator bearer, this URL must use HTTPS except for local development on an exact loopback host: `localhost`, any `127.0.0.0/8` address, or `::1`. Plaintext private, link-local, unspecified, remote, credential-bearing, and lookalike hostnames are rejected during configuration validation. Both public `LocalOperatorSurface` config constructors run the complete validation contract before creating stores, clients, or callbacks. Outer whitespace is accepted by validation and then removed from the stored callback URL, so subsequent routing uses exactly the validated target.
+- Governed-resume callbacks use one dedicated client that ignores process proxy settings, never follows redirects, and has a 10-second total request timeout. A non-success response is reported using only its HTTP status; its body is neither buffered nor copied into operator diagnostics. A `3xx` is returned as an error without contacting its redirect target, so that refusal leaves the held action pending. A timeout or other transport error can be ambiguous after delivery; operators must inspect the persisted hold before retrying, and the one-time consume contract prevents a retry from executing an already consumed approval again.
 - `public_base_url` remains the operator-surface base URL for replay, audit-trail, and review links.
 - `allowed_embed_origins` drives `Content-Security-Policy: frame-ancestors` and `X-Frame-Options` for `/v1/demo/widget`.
 - `widget_token_ttl_secs` controls the lifetime of the signed read-only context tokens included in Providence links.
 - `auth.context_token_env` should be a dedicated signing secret in production; local development may reuse one principal token, but production should keep context-token signing separate from mutable operator credentials.
 - every entry in `auth.principals` must use a distinct token env so one bearer secret maps to exactly one operator identity.
 - approval voters must authenticate as the same signer-derived operator ID they submit in `voter_id`, and approval sets may only list principals that grant `approve`.
+
+Library compatibility note: the public `RequestResponseRouter::restore_human_preflight`
+method now accepts only `(&GovernedHumanAuthorizationHold, &str)`; the former
+caller-selected `now_ms` argument was removed. Downstream router implementations
+must update their signature for this release. The resume dispatcher samples its
+host clock after all awaited artifact loading and side-effect-free preflight work,
+then uses that same trusted time for pack freshness, durable governance
+consumption, lease construction, audit context, and execution.
 
 Optional TLS for both `swarm_detect --serve` and `swarmctl serve` is configured once at the top level:
 
@@ -1000,6 +1054,15 @@ Supported reference architecture:
 
 - run `swarm_detect --serve` as the primary runtime service
 - run `swarmctl serve` as a separate operator deployment, admin pod, or private service mounting the same state root and artifact directories
+- keep the approval set, ledger, verdict, and receipt-pack directories shared and
+  durable across both services. `swarm_detect --serve` defaults them to
+  `data/approval-sets`, `data/approval-ledgers`, `data/approval-verdicts`, and
+  `data/approval-receipt-packs`; its matching override flags are
+  `--approval-set-results-dir`, `--approval-ledger-results-dir`,
+  `--approval-verdict-results-dir`, and
+  `--approval-receipt-pack-results-dir`. Governed human resume fails closed if
+  the verdict or receipt-pack store is not configured or the referenced pack is
+  absent
 - front the non-loopback operator address with TLS; prefer mTLS or a private network boundary if it leaves localhost
 - keep operator bearer secrets and the context-token signer in the mounted secret bundle, not in repo config
 

@@ -1,25 +1,37 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::LocalOperatorSurface;
+use super::approval::resume_governed_approval;
+use super::state::build_operator_callback_client;
+use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use axum::Json;
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::extract::State;
+use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
-use axum::routing::post;
+use axum::response::IntoResponse;
+use axum::routing::{any, post};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use swarm_agents::tom_agent::{
+    GovernanceAuthority, GovernanceDecision, GovernancePolicy, GovernancePolicyConfig,
+};
+use swarm_core::agent::{
+    AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError,
+};
 use swarm_core::config::{
     AuditConfig, BundleStoreConfig, CanaryConfig, CorrelationConfig, DetectionConfig,
     DetectorProfilesConfig, InvestigationConfig, NotificationChannelConfig,
     NotificationRateLimitConfig, NotificationRoutingConfig, OperatorAuthConfig,
     OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, OperatorSurfacePaths,
-    PheromoneBackendConfig, PheromoneConfig, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
-    PromotionConfig, QuietHoursConfig, RoutingRule, RuntimeSettings, SwarmConfig,
-    TelemetrySourceConfig,
+    PheromoneBackendConfig, PheromoneConfig, PolicyActionSelector, PolicyConfig, PolicyRuleConfig,
+    PolicyRuleDecision, PromotionConfig, QuietHoursConfig, RoutingRule, RuntimeSettings,
+    SwarmConfig, TelemetrySourceConfig,
 };
 use swarm_core::pheromone::{
     ThreatClass, ThreatClassConfig, ThreatIntelEntry, ThreatIntelIndicatorType,
@@ -28,9 +40,9 @@ use swarm_core::types::{
     AgentId, HuntId, ProvidenceIncidentReconciliation, ProvidenceIncidentStatus,
     ProvidenceReconciliationOutcome, ResponseAction, ResponseBlastRadiusImpact,
     ResponseBlastRadiusPreview, ResponseRehearsalPreview, ResponseRehearsalScopeKind,
-    ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity,
+    ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity, SwarmAction,
 };
-use swarm_crypto::{Ed25519Signer, canonical_json_bytes};
+use swarm_crypto::{DetachedSignature, Ed25519Signer, canonical_json_bytes};
 use swarm_evolution::evidence::{
     EvidenceBundle, EvidenceRelatedRef, EvidenceSignature, EvidenceSubjectKind,
     EvidenceSubjectMetadata, EvidenceVerificationReport, EvidenceVerificationStatus,
@@ -40,21 +52,24 @@ use swarm_evolution::evidence::{
 use swarm_ingest_runtime::control::{
     CURRENT_OPERATOR_API_SCHEMA_VERSION, OPERATOR_API_SCHEMA_VERSION_HEADER,
 };
-use swarm_ingest_runtime::ingest::{DemoProofPackage, IngestState, detect_http_router};
-use swarm_policy::ApprovalContext;
+use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
+use swarm_policy::governance::GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX;
+use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision};
 use swarm_response::SwarmFindingEnvelope;
-use swarm_runtime::approval::DefaultApprovalHarness;
+use swarm_runtime::approval::{DefaultApprovalHarness, ThresholdRule};
+use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::replay::{
     ExperimentLineage, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
     ReplayScenarioMetadata, ReplayScenarioStep,
 };
+use swarm_runtime::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
 use swarm_runtime::service::EventExecutionContext;
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, CorrelatedIncident, IncidentMemberDecision, IncidentStore,
     PolicyRecord, ReplayBundle, ReplayBundleStore,
 };
 use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
-use tokio::sync::{Mutex as AsyncMutex, oneshot};
+use tokio::sync::{Barrier, Mutex as AsyncMutex, oneshot, watch};
 use tower::ServiceExt;
 
 use swarm_evolution::governance_prep::{
@@ -75,8 +90,76 @@ use swarm_runtime::evolution::{
     EvolutionProposalReviewState,
 };
 use swarm_runtime_workbench::review_workbench::DefaultReviewWorkbenchHarness;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct ScopedTestEnv {
+    name: String,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ScopedTestEnv {
+    fn set(name: impl Into<String>, value: &str) -> Self {
+        let name = name.into();
+        let previous = std::env::var_os(&name);
+        unsafe { std::env::set_var(&name, value) };
+        Self { name, previous }
+    }
+}
+
+impl Drop for ScopedTestEnv {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => unsafe { std::env::set_var(&self.name, value) },
+            None => unsafe { std::env::remove_var(&self.name) },
+        }
+    }
+}
+
+struct OneShotGovernedRequestAgent {
+    id: AgentId,
+    verifying_key: ed25519_dalek::VerifyingKey,
+    actions: Option<Vec<SwarmAction>>,
+}
+
+impl OneShotGovernedRequestAgent {
+    fn new(id: AgentId, actions: Vec<SwarmAction>) -> Self {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[73; 32]);
+        Self {
+            id,
+            verifying_key: signing_key.verifying_key(),
+            actions: Some(actions),
+        }
+    }
+}
+
+#[async_trait]
+impl SwarmAgent for OneShotGovernedRequestAgent {
+    fn identity(&self) -> &ed25519_dalek::VerifyingKey {
+        &self.verifying_key
+    }
+
+    fn id(&self) -> &AgentId {
+        &self.id
+    }
+
+    fn role(&self) -> AgentRole {
+        AgentRole::Pouncer
+    }
+
+    fn observe_event(&mut self, _event: &swarm_core::agent::SwarmEvent) -> Result<(), SwarmError> {
+        Ok(())
+    }
+
+    async fn tick(&mut self, _env: &SwarmEnvironment) -> Result<Vec<SwarmAction>, SwarmError> {
+        Ok(self.actions.take().unwrap_or_default())
+    }
+
+    fn health(&self) -> AgentHealth {
+        AgentHealth::Healthy
+    }
+}
 
 fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
     vec![PolicyRuleConfig {
@@ -159,6 +242,7 @@ fn operator_config() -> SwarmConfig {
             bundle_store: BundleStoreConfig::Memory,
             ..InvestigationConfig::default()
         },
+        hypothesis_graph: Default::default(),
         correlation: CorrelationConfig {
             enabled: true,
             time_window_ms: 60_000,
@@ -220,6 +304,104 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     path
 }
 
+#[tokio::test]
+async fn public_operator_surface_constructors_reject_unvalidated_callback_urls() {
+    for (case, runtime_base_url) in [
+        ("remote-http", "http://detect.example"),
+        ("userinfo", "https://operator@detect.example"),
+        ("malformed", "://missing-scheme.example"),
+        ("no-host", "https://"),
+        ("unsupported-scheme", "ws://127.0.0.1:9090"),
+        ("query", "https://detect.example?mode=preview"),
+        ("fragment", "https://detect.example#callback-route"),
+    ] {
+        let mut config = operator_config();
+        config.operator.runtime_base_url = runtime_base_url.to_string();
+        let error = match LocalOperatorSurface::from_config("inline", config.clone()) {
+            Ok(_) => panic!("from_config accepted invalid case `{case}`"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("operator_surface.runtime_base_url"),
+            "from_config returned the wrong error for `{case}`: {error}"
+        );
+
+        let root = unique_temp_dir(&format!("invalid-callback-{case}"));
+        let error = match LocalOperatorSurface::from_config_and_paths(
+            "inline",
+            config,
+            surface_paths(&root),
+        ) {
+            Ok(_) => panic!("from_config_and_paths accepted invalid case `{case}`"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("operator_surface.runtime_base_url"),
+            "from_config_and_paths returned the wrong error for `{case}`: {error}"
+        );
+        assert!(
+            fs::read_dir(&root).unwrap().next().is_none(),
+            "validation failure must occur before artifact stores are created"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    let mut config = operator_config();
+    config.runtime.max_in_flight_actions = 0;
+    let error = match LocalOperatorSurface::from_config("inline", config.clone()) {
+        Ok(_) => panic!("from_config accepted an invalid non-URL config field"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("runtime.max_in_flight_actions"),
+        "from_config did not run full config validation: {error}"
+    );
+    let root = unique_temp_dir("invalid-non-url-config");
+    let error =
+        match LocalOperatorSurface::from_config_and_paths("inline", config, surface_paths(&root)) {
+            Ok(_) => panic!("from_config_and_paths accepted an invalid non-URL config field"),
+            Err(error) => error,
+        };
+    assert!(
+        error.to_string().contains("runtime.max_in_flight_actions"),
+        "from_config_and_paths did not run full config validation: {error}"
+    );
+    assert!(
+        fs::read_dir(&root).unwrap().next().is_none(),
+        "full validation must run before callbacks or artifact-store creation"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn public_operator_surface_constructors_accept_secure_callback_urls() {
+    for (case, runtime_base_url) in [
+        ("https", "https://detect.example"),
+        ("localhost", "http://localhost:9090"),
+        ("ipv4-loopback", "http://127.42.0.1:9090"),
+        ("ipv6-loopback", "http://[::1]:9090"),
+    ] {
+        let token_env = format!("SWARM_OPERATOR_CONSTRUCTOR_{case}_TOKEN").to_uppercase();
+        let _token_env = ScopedTestEnv::set(token_env.clone(), "constructor-token");
+        let mut config = operator_config();
+        config.operator.runtime_base_url = runtime_base_url.to_string();
+        config.operator.auth.context_token_env = token_env.clone();
+        config.operator.auth.token_env = token_env.clone();
+
+        LocalOperatorSurface::from_config("inline", config.clone())
+            .unwrap_or_else(|error| panic!("from_config rejected `{case}`: {error}"));
+        let root = unique_temp_dir(&format!("valid-callback-{case}"));
+        LocalOperatorSurface::from_config_and_paths("inline", config, surface_paths(&root))
+            .unwrap_or_else(|error| panic!("from_config_and_paths rejected `{case}`: {error}"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 fn event(event_id: &str, command_line: &str) -> TelemetryEvent {
     TelemetryEvent {
         source: "synthetic".to_string(),
@@ -235,6 +417,13 @@ fn event(event_id: &str, command_line: &str) -> TelemetryEvent {
             signer: None,
             signature_valid: None,
         }),
+    }
+}
+
+fn live_event(event_id: &str, command_line: &str, now_ms: i64) -> TelemetryEvent {
+    TelemetryEvent {
+        timestamp: now_ms.div_euclid(1_000),
+        ..event(event_id, command_line)
     }
 }
 
@@ -306,8 +495,501 @@ async fn spawn_notification_capture_server() -> (
     (format!("http://{address}/"), state, shutdown_tx, handle)
 }
 
+#[derive(Clone, Default)]
+struct ApprovalResumeCaptureState {
+    requests: Arc<AsyncMutex<Vec<(String, Value)>>>,
+    authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+}
+
+async fn approval_resume_capture_handler(
+    State(state): State<ApprovalResumeCaptureState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    state.authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    state
+        .requests
+        .lock()
+        .await
+        .push((uri.path().to_string(), body));
+    (StatusCode::OK, Json(json!({"ok": true})))
+}
+
+async fn spawn_approval_resume_capture_server() -> (
+    String,
+    ApprovalResumeCaptureState,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = ApprovalResumeCaptureState::default();
+    let app = Router::new()
+        .route("/{*path}", post(approval_resume_capture_handler))
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+    (format!("http://{address}"), state, shutdown_tx, handle)
+}
+
+#[derive(Clone)]
+struct SequencedApprovalResumeState {
+    capture: ApprovalResumeCaptureState,
+    statuses: Arc<AsyncMutex<VecDeque<StatusCode>>>,
+}
+
+async fn sequenced_approval_resume_handler(
+    State(state): State<SequencedApprovalResumeState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    state.capture.authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    state
+        .capture
+        .requests
+        .lock()
+        .await
+        .push((uri.path().to_string(), body));
+    let status = state
+        .statuses
+        .lock()
+        .await
+        .pop_front()
+        .unwrap_or(StatusCode::OK);
+    (status, Json(json!({"ok": status.is_success()})))
+}
+
+async fn spawn_sequenced_approval_resume_server(
+    statuses: Vec<StatusCode>,
+) -> (
+    String,
+    ApprovalResumeCaptureState,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let capture = ApprovalResumeCaptureState::default();
+    let state = SequencedApprovalResumeState {
+        capture: capture.clone(),
+        statuses: Arc::new(AsyncMutex::new(statuses.into())),
+    };
+    let app = Router::new()
+        .route("/{*path}", post(sequenced_approval_resume_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+    (format!("http://{address}"), capture, shutdown_tx, handle)
+}
+
+#[derive(Clone)]
+struct ApprovalRedirectState {
+    status: StatusCode,
+    location: String,
+    source_authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+    relative_target_authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+}
+
+async fn approval_redirect_handler(
+    State(state): State<ApprovalRedirectState>,
+    headers: HeaderMap,
+) -> (StatusCode, [(axum::http::HeaderName, String); 1]) {
+    state.source_authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    (state.status, [(header::LOCATION, state.location)])
+}
+
+async fn relative_redirect_target_handler(
+    State(state): State<ApprovalRedirectState>,
+    headers: HeaderMap,
+) -> StatusCode {
+    state.relative_target_authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    StatusCode::OK
+}
+
+async fn spawn_approval_redirect_server(
+    status: StatusCode,
+    location: String,
+) -> (
+    String,
+    ApprovalRedirectState,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = ApprovalRedirectState {
+        status,
+        location,
+        source_authorizations: Arc::new(AsyncMutex::new(Vec::new())),
+        relative_target_authorizations: Arc::new(AsyncMutex::new(Vec::new())),
+    };
+    let app = Router::new()
+        .route("/source/{*path}", post(approval_redirect_handler))
+        .route("/relative-target", any(relative_redirect_target_handler))
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+    (
+        format!("http://{address}/source"),
+        state,
+        shutdown_tx,
+        handle,
+    )
+}
+
+#[derive(Clone, Default)]
+struct AbsoluteRedirectTargetState {
+    authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+}
+
+async fn absolute_redirect_target_handler(
+    State(state): State<AbsoluteRedirectTargetState>,
+    headers: HeaderMap,
+) -> StatusCode {
+    state.authorizations.lock().await.push(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    );
+    StatusCode::OK
+}
+
+async fn spawn_absolute_redirect_target_server() -> (
+    String,
+    AbsoluteRedirectTargetState,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = AbsoluteRedirectTargetState::default();
+    let app = Router::new()
+        .route("/absolute-target", any(absolute_redirect_target_handler))
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        });
+        let _ = server.await;
+    });
+    (
+        format!("http://{address}/absolute-target"),
+        state,
+        shutdown_tx,
+        handle,
+    )
+}
+
+fn pending_governed_human_hold(case: &str, approval_set_id: &str) -> GovernancePolicy {
+    let governance = GovernancePolicy::default();
+    governance
+        .register_governor(
+            AgentId::new("tom", &format!("callback-{case}")),
+            ed25519_dalek::SigningKey::from_bytes(&[91; 32]),
+        )
+        .unwrap();
+    let request = ActionRequest {
+        hunt_id: HuntId(format!("hunt-callback-{case}")),
+        requested_by: AgentId::new("pounce", &format!("callback-{case}")),
+        action: ResponseAction::BlockEgress {
+            target: "203.0.113.77".to_string(),
+        },
+        severity: Severity::Critical,
+        evidence: json!({"signal": case}),
+    };
+    let GovernanceDecision::Authorize { receipt, .. } = governance.can_act(&request) else {
+        panic!("configured governance must issue the exact pending authorization");
+    };
+    let receipt = serde_json::to_value(receipt).unwrap();
+    let issued_at_ms = receipt["payload"]["issued_at_ms"].as_i64().unwrap();
+    let hold = governance
+        .begin_human_authorization_hold(
+            &request,
+            &receipt,
+            &PolicyDecision::require_human_with_rule(
+                "test.callback-refusal",
+                "human approval is required",
+            ),
+            issued_at_ms,
+        )
+        .unwrap();
+    governance
+        .bind_human_approval_set(
+            &hold.hold_id,
+            approval_set_id,
+            &format!("approval-set-digest:{case}"),
+        )
+        .unwrap();
+    governance
+}
+
+async fn spawn_streaming_callback_error_server()
+-> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0_u8; 16 * 1024];
+        let _ = stream.read(&mut request).await.unwrap();
+        stream
+            .write_all(
+                b"HTTP/1.1 503 Service Unavailable\r\n\
+                  Content-Type: text/plain\r\n\
+                  Transfer-Encoding: chunked\r\n\
+                  Connection: keep-alive\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let mut chunk = b"UPSTREAM_SECRET_DO_NOT_ECHO:".to_vec();
+        chunk.resize(64 * 1024, b'x');
+        stream
+            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+            .await
+            .unwrap();
+        stream.write_all(&chunk).await.unwrap();
+        stream.write_all(b"\r\n").await.unwrap();
+        stream.flush().await.unwrap();
+        let _ = shutdown_rx.await;
+    });
+    (format!("http://{address}"), shutdown_tx, handle)
+}
+
+#[tokio::test]
+async fn governed_approval_callback_bypasses_even_an_explicit_proxy() {
+    let (target_url, target, target_shutdown, target_server) =
+        spawn_approval_resume_capture_server().await;
+    let (proxy_url, proxy, proxy_shutdown, proxy_server) =
+        spawn_approval_resume_capture_server().await;
+    let client = build_operator_callback_client(
+        reqwest::Client::builder().proxy(reqwest::Proxy::all(&proxy_url).unwrap()),
+    )
+    .unwrap();
+
+    let result = resume_governed_approval(
+        &client,
+        &target_url,
+        "approval-set:no-proxy",
+        "receipt-pack:no-proxy",
+        "Bearer callback-secret",
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "the dedicated client must connect directly to loopback"
+    );
+
+    assert!(
+        proxy.requests.lock().await.is_empty(),
+        "the callback and bearer must not traverse an explicit or environment proxy"
+    );
+    let target_requests = target.requests.lock().await;
+    assert_eq!(target_requests.len(), 1);
+    assert_eq!(
+        target_requests[0].0,
+        "/v1/governance/approvals/approval-set:no-proxy/resume"
+    );
+    drop(target_requests);
+    assert_eq!(
+        target.authorizations.lock().await.as_slice(),
+        [Some("Bearer callback-secret".to_string())]
+    );
+
+    let _ = proxy_shutdown.send(());
+    let _ = target_shutdown.send(());
+    let _ = proxy_server.await;
+    let _ = target_server.await;
+}
+
+#[tokio::test]
+async fn validated_callback_url_is_trimmed_before_storage_and_use() {
+    const TOKEN_ENV: &str = "SWARM_OPERATOR_TRIMMED_CALLBACK_TOKEN";
+    let _token_env = ScopedTestEnv::set(TOKEN_ENV, "trimmed-callback-token");
+    let (target_url, target, target_shutdown, target_server) =
+        spawn_approval_resume_capture_server().await;
+    let mut config = operator_config();
+    config.operator.runtime_base_url = format!(" \t{target_url}\n ");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+
+    let surface = LocalOperatorSurface::from_config("inline", config)
+        .expect("outer whitespace around a valid loopback URL must be accepted");
+    assert_eq!(
+        surface.state.runtime_base_url, target_url,
+        "the surface must store exactly the trimmed URL that validation accepted"
+    );
+    let result = resume_governed_approval(
+        &surface.state.callback_client,
+        &surface.state.runtime_base_url,
+        "approval-set:trimmed-url",
+        "receipt-pack:trimmed-url",
+        "Bearer trimmed-url-secret",
+    )
+    .await;
+    assert!(result.is_ok(), "the trimmed callback URL must be routable");
+    assert_eq!(
+        target.requests.lock().await[0].0,
+        "/v1/governance/approvals/approval-set:trimmed-url/resume"
+    );
+
+    let _ = target_shutdown.send(());
+    let _ = target_server.await;
+}
+
+#[tokio::test]
+async fn callback_error_does_not_read_or_echo_streamed_upstream_body() {
+    const APPROVAL_SET_ID: &str = "approval-set:streamed-error";
+    const UPSTREAM_SECRET: &str = "UPSTREAM_SECRET_DO_NOT_ECHO";
+    let governance = pending_governed_human_hold("streamed-error", APPROVAL_SET_ID);
+    let (runtime_url, shutdown_tx, server) = spawn_streaming_callback_error_server().await;
+    let client = build_operator_callback_client(reqwest::Client::builder()).unwrap();
+
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        resume_governed_approval(
+            &client,
+            &runtime_url,
+            APPROVAL_SET_ID,
+            "receipt-pack:streamed-error",
+            "Bearer callback-secret",
+        ),
+    )
+    .await
+    .expect("non-success handling must return after headers without draining the body")
+    .expect_err("the streamed 503 must fail closed");
+    let response = error.into_response();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let diagnostic = to_bytes(response.into_body(), 1_024).await.unwrap();
+    let diagnostic = String::from_utf8(diagnostic.to_vec()).unwrap();
+    assert!(diagnostic.contains("503"));
+    assert!(!diagnostic.contains(UPSTREAM_SECRET));
+    assert!(
+        diagnostic.len() < 512,
+        "upstream bodies must not make callback diagnostics unbounded"
+    );
+    assert!(
+        governance
+            .pending_human_authorization(APPROVAL_SET_ID)
+            .is_ok(),
+        "an upstream error must leave the held authorization pending"
+    );
+
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn governed_approval_callback_refuses_every_redirect_without_consuming_held_action() {
+    for (status_name, status) in [
+        ("301", StatusCode::MOVED_PERMANENTLY),
+        ("302", StatusCode::FOUND),
+        ("303", StatusCode::SEE_OTHER),
+        ("307", StatusCode::TEMPORARY_REDIRECT),
+        ("308", StatusCode::PERMANENT_REDIRECT),
+    ] {
+        for destination_kind in ["relative-same-origin", "absolute-cross-origin"] {
+            let (absolute_url, absolute_target, target_shutdown, target_server) =
+                spawn_absolute_redirect_target_server().await;
+            let location = if destination_kind == "relative-same-origin" {
+                "/relative-target".to_string()
+            } else {
+                absolute_url
+            };
+            let (redirect_url, redirect, redirect_shutdown, redirect_server) =
+                spawn_approval_redirect_server(status, location).await;
+            let case = format!("{status_name}-{destination_kind}");
+            let approval_set_id = format!("approval-set:{case}");
+            let governance = pending_governed_human_hold(&case, &approval_set_id);
+            let client = build_operator_callback_client(reqwest::Client::builder()).unwrap();
+
+            let result = resume_governed_approval(
+                &client,
+                &redirect_url,
+                &approval_set_id,
+                "receipt-pack:redirect-refusal",
+                "Bearer redirect-secret",
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "{status_name} {destination_kind} redirect must fail closed"
+            );
+            assert_eq!(
+                redirect.source_authorizations.lock().await.as_slice(),
+                [Some("Bearer redirect-secret".to_string())],
+                "the configured source did not receive the initial {case} callback"
+            );
+            assert!(
+                redirect
+                    .relative_target_authorizations
+                    .lock()
+                    .await
+                    .is_empty(),
+                "{case} followed a relative redirect"
+            );
+            assert!(
+                absolute_target.authorizations.lock().await.is_empty(),
+                "{case} contacted an absolute redirect target"
+            );
+            assert!(
+                governance
+                    .pending_human_authorization(&approval_set_id)
+                    .is_ok(),
+                "{case} consumed the held authorization"
+            );
+
+            let _ = redirect_shutdown.send(());
+            let _ = target_shutdown.send(());
+            let _ = redirect_server.await;
+            let _ = target_server.await;
+        }
+    }
+}
+
 fn notification_operator_config(target_url: String, dead_letter_path: String) -> SwarmConfig {
     let mut config = operator_config();
+    let quiet_start_hour = (swarm_runtime::runtime_events::now_ms()
+        .div_euclid(3_600_000)
+        .rem_euclid(24)) as u8;
     config.notification_channels.insert(
         "pager".to_string(),
         NotificationChannelConfig {
@@ -320,8 +1002,11 @@ fn notification_operator_config(target_url: String, dead_letter_path: String) ->
                 window_ms: 60_000,
             },
             quiet_hours: Some(QuietHoursConfig {
-                start_hour_utc: 0,
-                end_hour_utc: 0,
+                // Cover the construction hour and the following 22 hours. This
+                // preserves the fixture's suppression contract while satisfying
+                // validation's ban on an ambiguous 00:00-00:00 interval.
+                start_hour_utc: quiet_start_hour,
+                end_hour_utc: (quiet_start_hour + 23) % 24,
             }),
             dead_letter_path,
         },
@@ -1365,16 +2050,21 @@ async fn notification_dead_letter_routes_list_and_replay_entries() {
 
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
     let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+    let event_now_ms = swarm_runtime::runtime_events::now_ms();
     let _ = surface
         .state
         .control
         .stack
         .process_event(
             &swarm_whisker::SuspiciousProcessTreeDetector::default(),
-            &event("evt-http-notify-1", "powershell.exe -enc AAA="),
+            &live_event(
+                "evt-http-notify-1",
+                "powershell.exe -enc AAA=",
+                event_now_ms,
+            ),
             EventExecutionContext {
                 agent_id: &agent_id,
-                approval: &approval_context(1_700_000_000_010),
+                approval: &approval_context(event_now_ms),
                 signing_key: &signing_key,
             },
             |_finding| {
@@ -1504,16 +2194,17 @@ async fn read_endpoints_return_runtime_and_governance_artifacts() {
 
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
     let agent_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+    let event_now_ms = swarm_runtime::runtime_events::now_ms();
     let processed = surface
         .state
         .control
         .stack
         .process_event(
             &swarm_whisker::SuspiciousProcessTreeDetector::default(),
-            &event("evt-http-1", "powershell.exe -enc AAA="),
+            &live_event("evt-http-1", "powershell.exe -enc AAA=", event_now_ms),
             EventExecutionContext {
                 agent_id: &agent_id,
-                approval: &approval_context(1_700_000_000_001),
+                approval: &approval_context(event_now_ms),
                 signing_key: &signing_key,
             },
             |_finding| {
@@ -1730,15 +2421,8 @@ async fn evidence_endpoints_return_signed_bundle_views() {
 }
 
 #[tokio::test]
-async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
-    unsafe {
-        std::env::set_var("SWARM_OPERATOR_TEST_TOKEN", "secret-token");
-        std::env::set_var("SWARM_EVIDENCE_SIGNING_KEY", "operator-demo-proof-key");
-    }
-
+async fn live_governed_demo_cannot_be_resumed_by_human_approval() {
     let root = unique_temp_dir("approval-resume");
-    let operator_vote_signer = Ed25519Signer::from_secret_material("local-operator-vote-key");
-    let operator_voter_id = format!("swarm:ed25519:{}", operator_vote_signer.public_key_hex());
     let runtime_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let runtime_addr = runtime_listener.local_addr().unwrap();
     let runtime_base_url = format!("http://{}", runtime_addr);
@@ -1748,22 +2432,12 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
     runtime_config.runtime.mode = swarm_runtime::RuntimeMode::LiveResponse;
     runtime_config.runtime.demo_mode = true;
     runtime_config.policy.human_gate_severity = swarm_core::types::Severity::Low;
-    // Lowering `human_gate_severity` is not sufficient on its own. `operator_config()`
-    // inherits `permissive_policy_rules()`, whose sole rule has an empty `actions`
-    // selector -- a wildcard that matches `IsolateHost`, returns Allow, and short
-    // circuits the static human gate (the first matching rule decides outright; see
-    // docs/CONSENSUS.md "Human Approval Boundary"). Without this, no approval set is
-    // ever registered and `total_count` below is 0.
-    //
-    // Scope the inherited allow off destructive actions so `IsolateHost` reaches
-    // `static.human_gate`, mirroring the fixture shape already used in
-    // `ingest/tests.rs` `permissive_policy_rules`. Scoped to this test's own
-    // `runtime_config`: `operator_config()` has dozens of consumers in this module.
+    // Even a config that would otherwise hold the action for human review must
+    // defer a live governed demo action to Pouncer and dispatcher governance.
     for rule in &mut runtime_config.policy.rules {
         rule.actions = vec![swarm_core::config::PolicyActionSelector::Escalate];
     }
     runtime_config.operator.runtime_base_url = runtime_base_url.clone();
-    runtime_config.operator.auth.operator_id = operator_voter_id.clone();
     let runtime_harness = DefaultApprovalHarness::from_path(
         &runtime_config_path,
         root.join("approval-verdicts"),
@@ -1782,10 +2456,11 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
     });
 
     let scenario_path = root.join("human-gate-demo.yaml");
+    let replay_now_ms = swarm_runtime::runtime_events::now_ms();
     let manifest = ReplayScenarioManifest {
         name: "operator approval replay".to_string(),
         description: "operator approval replay scenario".to_string(),
-        seed_time_ms: 1_700_000_200_000,
+        seed_time_ms: replay_now_ms,
         requested_by: "demo-operator".to_string(),
         receipt_chain: Vec::new(),
         metadata: ReplayScenarioMetadata {
@@ -1804,7 +2479,7 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
                 action: ResponseAction::IsolateHost {
                     host_id: "host-1".to_string(),
                 },
-                event: event("evt-approval-1", "powershell.exe -enc AAA="),
+                event: live_event("evt-approval-1", "powershell.exe -enc AAA=", replay_now_ms),
             }],
         },
         expectations: Default::default(),
@@ -1825,58 +2500,7 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
     let run_id = replay_json["run_id"].as_str().unwrap().to_string();
 
     let approval_sets = runtime_harness.list_approval_sets().unwrap();
-    assert_eq!(approval_sets.total_count, 1);
-    let approval_set_id = approval_sets.sets[0].set_id.clone();
-    let approval_ledgers = runtime_harness
-        .list_ledgers(Some(&approval_set_id))
-        .unwrap();
-    assert_eq!(approval_ledgers.total_count, 1);
-    let approval_ledger_id = approval_ledgers.ledgers[0].ledger_id.clone();
-
-    let mut operator_demo_config = operator_config();
-    operator_demo_config.operator.runtime_base_url = runtime_base_url.clone();
-    operator_demo_config.operator.auth.operator_id = operator_voter_id.clone();
-    let surface = LocalOperatorSurface::from_config_and_paths(
-        "inline",
-        operator_demo_config,
-        surface_paths(&root),
-    )
-    .unwrap();
-    let app = surface.router();
-    let vote_payload = canonical_json_bytes(&json!({
-        "approval_set_id": approval_set_id.clone(),
-        "ledger_id": approval_ledger_id.clone(),
-        "voter_id": operator_voter_id.clone(),
-    }))
-    .unwrap();
-    let signature = operator_vote_signer.sign(&vote_payload);
-
-    let vote_response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!(
-                    "/v1/operator/approval-ledgers/{approval_ledger_id}/vote"
-                ))
-                .header("authorization", "Bearer secret-token")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "voter_id": operator_voter_id,
-                        "signature": signature,
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(vote_response.status(), StatusCode::OK);
-    let vote_body = to_bytes(vote_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let vote_json: Value = serde_json::from_slice(&vote_body).unwrap();
-    assert_eq!(vote_json["quorum_state"]["quorum_met"], true);
+    assert_eq!(approval_sets.total_count, 0);
 
     let proof_response = reqwest::Client::new()
         .get(format!("{runtime_base_url}/v1/demo/proof"))
@@ -1884,17 +2508,14 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
         .send()
         .await
         .unwrap();
-    assert_eq!(proof_response.status(), reqwest::StatusCode::OK);
-    let proof: DemoProofPackage = proof_response.json().await.unwrap();
-    assert_eq!(proof.run_id, run_id);
-    assert_eq!(proof.signed_receipts.len(), 1);
+    assert_eq!(proof_response.status(), reqwest::StatusCode::CONFLICT);
     assert!(
-        proof
-            .decision_timeline
-            .iter()
-            .any(|entry| entry.stage == "approval_resumed")
+        proof_response
+            .text()
+            .await
+            .unwrap()
+            .contains("does not have a correlated incident")
     );
-    assert!(!proof.final_incident.incident_id.is_empty());
 
     runtime_server.abort();
 }
@@ -3016,10 +3637,720 @@ async fn review_workbench_routes_create_export_and_handoff_sessions() {
     );
 }
 
+#[tokio::test]
+async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
+    const TOKEN_ENV: &str = "SWARM_ORDINARY_APPROVAL_ROUTE_TOKEN";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_ORDINARY_APPROVAL_ROUTE_EVIDENCE_KEY";
+    const TOKEN: &str = "ordinary-approval-route-token";
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(EVIDENCE_KEY_ENV, "ordinary-approval-route-evidence-key");
+    }
+    let (runtime_base_url, capture, shutdown_tx, server) =
+        spawn_approval_resume_capture_server().await;
+    let signer = Ed25519Signer::from_secret_material("ordinary-approval-route-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let mut config = operator_config();
+    config.operator.runtime_base_url = runtime_base_url;
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: voter_id.clone(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+    }];
+    let root = unique_temp_dir("ordinary-approval-route");
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
+    let harness = surface.state.approval.as_ref().unwrap();
+    let set = harness
+        .create_approval_set(
+            vec![voter_id.clone()],
+            ThresholdRule::AtLeast { required: 1 },
+            "promotion_evidence:ordinary-demo-approval",
+        )
+        .unwrap();
+    let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+        .ledger_id
+        .clone();
+    let signature = signer.sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": set.set_id.clone(),
+            "ledger_id": ledger_id.clone(),
+            "voter_id": voter_id.clone(),
+        }))
+        .unwrap(),
+    );
+    let response = surface
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"voter_id": voter_id, "signature": signature}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = capture.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].0,
+        format!("/v1/demo/approvals/{}/resume", set.set_id)
+    );
+    assert!(requests[0].1.get("receipt_pack").is_some());
+    assert!(requests[0].1.get("receipt_pack_id").is_none());
+    drop(requests);
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(EVIDENCE_KEY_ENV);
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_approval_mutations_preserve_indexes_votes_and_quorum_artifacts() {
+    const TOKEN_ENV: &str = "SWARM_CONCURRENT_APPROVAL_TOKEN";
+    const SECOND_TOKEN_ENV: &str = "SWARM_CONCURRENT_APPROVAL_SECOND_TOKEN";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_CONCURRENT_APPROVAL_EVIDENCE_KEY";
+    const TOKEN: &str = "concurrent-approval-token";
+    const SECOND_TOKEN: &str = "concurrent-approval-second-token";
+    let _token = ScopedTestEnv::set(TOKEN_ENV, TOKEN);
+    let _second_token = ScopedTestEnv::set(SECOND_TOKEN_ENV, SECOND_TOKEN);
+    let _evidence_key = ScopedTestEnv::set(EVIDENCE_KEY_ENV, "concurrent-approval-evidence-key");
+    let (runtime_base_url, capture, shutdown_tx, server) =
+        spawn_approval_resume_capture_server().await;
+
+    let signer = Ed25519Signer::from_secret_material("concurrent-approval-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let second_signer = Ed25519Signer::from_secret_material("concurrent-approval-second-voter");
+    let second_voter_id = format!("swarm:ed25519:{}", second_signer.public_key_hex());
+    let mut config = operator_config();
+    config.operator.runtime_base_url = runtime_base_url;
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: voter_id.clone(),
+            token_env: TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: second_voter_id.clone(),
+            token_env: SECOND_TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+    ];
+    let root = unique_temp_dir("concurrent-approval-votes");
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
+    let harness = surface.state.approval.as_ref().unwrap().clone();
+
+    // Concurrent creates exercise both shared set and ledger indexes. The
+    // synchronous file operations can run at the same time on separate Tokio
+    // workers even though each individual handler contains no internal await.
+    let create_barrier = Arc::new(Barrier::new(9));
+    let mut create_tasks = Vec::new();
+    for index in 0..8 {
+        let app = surface.router();
+        let barrier = create_barrier.clone();
+        let voter_id = voter_id.clone();
+        let second_voter_id = second_voter_id.clone();
+        create_tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/operator/approval-sets")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "eligible_voters": [voter_id, second_voter_id],
+                            "threshold_required": 2,
+                            "promotion_evidence_ref": format!(
+                                "promotion_evidence:concurrent-create-{index}"
+                            ),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        }));
+    }
+    create_barrier.wait().await;
+    for task in create_tasks {
+        assert_eq!(task.await.unwrap(), StatusCode::CREATED);
+    }
+    assert_eq!(harness.list_approval_sets().unwrap().sets.len(), 8);
+    assert_eq!(harness.list_ledgers(None).unwrap().ledgers.len(), 8);
+
+    // Multiple voted ledgers exercise the per-report writes and every shared
+    // artifact index. Without one store lock, concurrent read/modify/write
+    // cycles can lose votes, ledgers, verdicts, or packs independently.
+    let mut votes = Vec::new();
+    let mut ledger_ids = Vec::new();
+    for index in 0..8 {
+        let set = harness
+            .create_approval_set(
+                vec![voter_id.clone(), second_voter_id.clone()],
+                ThresholdRule::AtLeast { required: 2 },
+                &format!("promotion_evidence:concurrent-{index}"),
+            )
+            .unwrap();
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        let signature = signer.sign(
+            &canonical_json_bytes(&json!({
+                "approval_set_id": set.set_id.clone(),
+                "ledger_id": ledger_id.clone(),
+                "voter_id": voter_id.clone(),
+            }))
+            .unwrap(),
+        );
+        let second_signature = second_signer.sign(
+            &canonical_json_bytes(&json!({
+                "approval_set_id": set.set_id,
+                "ledger_id": ledger_id.clone(),
+                "voter_id": second_voter_id.clone(),
+            }))
+            .unwrap(),
+        );
+        votes.push((
+            TOKEN.to_string(),
+            voter_id.clone(),
+            ledger_id.clone(),
+            signature,
+        ));
+        votes.push((
+            SECOND_TOKEN.to_string(),
+            second_voter_id.clone(),
+            ledger_id.clone(),
+            second_signature,
+        ));
+        ledger_ids.push(ledger_id);
+    }
+
+    let barrier = Arc::new(Barrier::new(votes.len() + 1));
+    let mut tasks = Vec::new();
+    for (token, submitted_voter, ledger_id, signature) in votes {
+        let app = surface.router();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"voter_id": submitted_voter, "signature": signature}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        }));
+    }
+    barrier.wait().await;
+    for task in tasks {
+        assert_eq!(task.await.unwrap(), StatusCode::OK);
+    }
+
+    for ledger_id in &ledger_ids {
+        let ledger = harness.load_ledger(ledger_id).unwrap().unwrap();
+        assert_eq!(ledger.report.entries.len(), 2);
+        assert!(ledger.quorum_state.quorum_met);
+    }
+    assert_eq!(harness.list_receipt_packs().unwrap().packs.len(), 8);
+    assert_eq!(harness.list_verdicts().unwrap().verdicts.len(), 8);
+    assert_eq!(capture.requests.lock().await.len(), 8);
+
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_failure() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_TOKEN";
+    const SECOND_TOKEN_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_SECOND_TOKEN";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_EVIDENCE_KEY";
+    const TOKEN: &str = "governed-approval-retry-token";
+    const SECOND_TOKEN: &str = "governed-approval-retry-second-token";
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(SECOND_TOKEN_ENV, SECOND_TOKEN);
+        std::env::set_var(EVIDENCE_KEY_ENV, "governed-approval-retry-key");
+    }
+    let (runtime_base_url, capture, shutdown_tx, server) =
+        spawn_sequenced_approval_resume_server(vec![
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::OK,
+        ])
+        .await;
+    let signer = Ed25519Signer::from_secret_material("governed-approval-retry-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let second_signer = Ed25519Signer::from_secret_material("governed-approval-retry-second-voter");
+    let second_voter_id = format!("swarm:ed25519:{}", second_signer.public_key_hex());
+    let mut config = operator_config();
+    config.operator.runtime_base_url = runtime_base_url;
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: voter_id.clone(),
+            token_env: TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: second_voter_id.clone(),
+            token_env: SECOND_TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+    ];
+    let root = unique_temp_dir("governed-approval-retry");
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
+    let harness = surface.state.approval.as_ref().unwrap();
+    let set = harness
+        .create_approval_set(
+            vec![voter_id.clone(), second_voter_id.clone()],
+            ThresholdRule::AtLeast { required: 2 },
+            &format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}hold-retry"),
+        )
+        .unwrap();
+    let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+        .ledger_id
+        .clone();
+    let signature = signer.sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": set.set_id.clone(),
+            "ledger_id": ledger_id.clone(),
+            "voter_id": voter_id.clone(),
+        }))
+        .unwrap(),
+    );
+    let second_signature = second_signer.sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": set.set_id.clone(),
+            "ledger_id": ledger_id.clone(),
+            "voter_id": second_voter_id.clone(),
+        }))
+        .unwrap(),
+    );
+
+    let vote_request = |token: &str, voter_id: &str, signature: &DetachedSignature| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                    "voter_id": voter_id,
+                    "signature": signature,
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    };
+
+    let first = surface
+        .router()
+        .oneshot(vote_request(TOKEN, &voter_id, &signature))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_packs = harness.list_receipt_packs().unwrap();
+    assert!(first_packs.packs.is_empty());
+    assert!(capture.requests.lock().await.is_empty());
+
+    let prequorum_duplicate = surface
+        .router()
+        .oneshot(vote_request(TOKEN, &voter_id, &signature))
+        .await
+        .unwrap();
+    assert_eq!(prequorum_duplicate.status(), StatusCode::OK);
+    let prequorum_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    assert_eq!(prequorum_ledger.report.entries.len(), 1);
+    assert!(!prequorum_ledger.quorum_state.quorum_met);
+    assert!(harness.list_receipt_packs().unwrap().packs.is_empty());
+    assert!(capture.requests.lock().await.is_empty());
+
+    let second = surface
+        .router()
+        .oneshot(vote_request(
+            SECOND_TOKEN,
+            &second_voter_id,
+            &second_signature,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_GATEWAY);
+    let second_packs = harness.list_receipt_packs().unwrap();
+    assert_eq!(second_packs.packs.len(), 1);
+    let persisted_pack_id = second_packs.packs[0].pack_id.clone();
+    let requests = capture.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].1["receipt_pack_id"], persisted_pack_id);
+    drop(requests);
+
+    let duplicate = surface
+        .router()
+        .oneshot(vote_request(TOKEN, &voter_id, &signature))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::OK);
+    let duplicate_packs = harness.list_receipt_packs().unwrap();
+    assert_eq!(duplicate_packs.packs.len(), 1);
+    assert_eq!(duplicate_packs.packs[0].pack_id, persisted_pack_id);
+    let requests = capture.requests.lock().await;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0], requests[1]);
+    drop(requests);
+
+    let altered = Ed25519Signer::from_secret_material("altered-governed-vote").sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": set.set_id,
+            "ledger_id": ledger_id,
+            "voter_id": voter_id.clone(),
+        }))
+        .unwrap(),
+    );
+    let altered_response = surface
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"voter_id": voter_id, "signature": altered}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(altered_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(capture.requests.lock().await.len(), 2);
+
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(SECOND_TOKEN_ENV);
+        std::env::remove_var(EVIDENCE_KEY_ENV);
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticated_runtime_route() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_E2E_TOKEN";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_GOVERNED_RESUME_E2E_EVIDENCE_KEY";
+    const TOKEN: &str = "governed-resume-e2e-bearer";
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(EVIDENCE_KEY_ENV, "governed-resume-e2e-evidence-key");
+    }
+
+    let root = unique_temp_dir("governed-resume-production-composition");
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    paths.evidence_signer_id = "governed-resume-e2e-signer".to_string();
+    let harness = DefaultApprovalHarness::from_path(
+        "inline",
+        &paths.approval_verdict_results_dir,
+        &paths.approval_receipt_pack_results_dir,
+        &paths.approval_set_results_dir,
+        &paths.approval_ledger_results_dir,
+    )
+    .unwrap();
+
+    let operator_signer = Ed25519Signer::from_secret_material("governed-resume-e2e-voter");
+    let operator_id = format!("swarm:ed25519:{}", operator_signer.public_key_hex());
+    let runtime_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let runtime_address = runtime_listener.local_addr().unwrap();
+    let mut config = operator_config();
+    config.runtime.mode = swarm_core::config::RuntimeMode::LiveResponse;
+    config.policy.human_gate_severity = Severity::Low;
+    for rule in &mut config.policy.rules {
+        rule.actions = vec![PolicyActionSelector::Escalate];
+    }
+    config.operator.runtime_base_url = format!("http://{runtime_address}");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = operator_id.clone();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: operator_id.clone(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+    }];
+
+    let governance = Arc::new(
+        GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            root.join("governance-authorizations.json"),
+            AgentId::new("tom", "governed-resume-e2e"),
+            ed25519_dalek::SigningKey::from_bytes(&[91; 32]),
+        )
+        .unwrap(),
+    );
+    let governance_authority = governance
+        .authority()
+        .expect("persisted governance should mint an authority");
+    let runtime_events = RuntimeEventBroadcaster::new(32);
+    let mut runtime_rx = runtime_events.subscribe();
+    let state = IngestState::from_config(root.join("swarm.yaml"), config.clone())
+        .unwrap()
+        .with_approval_harness(harness.clone())
+        .with_governance_authority(governance_authority.clone())
+        .with_runtime_events(runtime_events.clone());
+
+    let pounce_id = AgentId::new("pounce", "governed-resume-e2e");
+    let hunt_id = HuntId("hunt-governed-resume-e2e".to_string());
+    let response_action = ResponseAction::BlockEgress {
+        target: "203.0.113.211".to_string(),
+    };
+    let mut evidence = json!({
+        "lineage": {
+            "hunt_id": hunt_id.0.clone(),
+            "event_id": "evt-governed-resume-e2e",
+            "indicator": {"host_id": "host-governed-resume-e2e"}
+        },
+        "escalation": {
+            "mode": "alert",
+            "mode_transition_at": 1_700_000_000,
+            "timestamp": 1_700_000_010,
+            "threat_class": ThreatClass::Execution,
+            "severity": Severity::Critical,
+            "confidence": 0.99
+        },
+        "playbook_match": {
+            "threat_class": ThreatClass::Execution,
+            "severity": Severity::Critical,
+            "min_confidence": 0.90,
+            "max_confidence": 1.0
+        }
+    });
+    let request = ActionRequest {
+        hunt_id: hunt_id.clone(),
+        requested_by: pounce_id.clone(),
+        action: response_action.clone(),
+        severity: Severity::Critical,
+        evidence: evidence.clone(),
+    };
+    let GovernanceDecision::Authorize { receipt, .. } = governance.can_act(&request) else {
+        panic!("healthy configured governance must authorize the exact request");
+    };
+    evidence["governance_receipt"] = serde_json::to_value(receipt).unwrap();
+
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        state.current_substrate(),
+        Arc::new(ArcSwap::from_pointee(Vec::<AgentHealthEntry>::new())),
+    )
+    .with_request_response_router(state.current_request_response_router())
+    .with_governance_authority(governance_authority)
+    .with_runtime_events(runtime_events);
+    dispatcher
+        .register(Box::new(OneShotGovernedRequestAgent::new(
+            pounce_id,
+            vec![SwarmAction::RequestResponse {
+                hunt_id,
+                action: response_action,
+                evidence,
+            }],
+        )))
+        .unwrap();
+    dispatcher.tick_once().await;
+
+    let approval_sets = harness.list_approval_sets().unwrap();
+    assert_eq!(approval_sets.sets.len(), 1);
+    let approval_set_id = approval_sets.sets[0].set_id.clone();
+    governance
+        .pending_human_authorization(&approval_set_id)
+        .expect("dispatcher must leave governance pending while it waits for a human");
+    while let Ok(event) = runtime_rx.try_recv() {
+        if let RuntimeEvent::ResponseExecution { response_kind, .. } = event {
+            assert_ne!(
+                response_kind, "success",
+                "the initial hold must not execute"
+            );
+        }
+    }
+
+    let runtime_server = tokio::spawn(async move {
+        axum::serve(runtime_listener, detect_http_router(state))
+            .await
+            .unwrap();
+    });
+    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
+    let operator_app = surface.router();
+    let ledgers = harness.list_ledgers(Some(&approval_set_id)).unwrap();
+    assert_eq!(ledgers.ledgers.len(), 1);
+    let ledger_id = ledgers.ledgers[0].ledger_id.clone();
+    let signature = operator_signer.sign(
+        &canonical_json_bytes(&json!({
+            "approval_set_id": approval_set_id.clone(),
+            "ledger_id": ledger_id.clone(),
+            "voter_id": operator_id.clone(),
+        }))
+        .unwrap(),
+    );
+    let trusted_before_ms = swarm_runtime::runtime_events::now_ms();
+    let vote_response = operator_app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "voter_id": operator_id.clone(),
+                        "signature": signature,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let trusted_after_ms = swarm_runtime::runtime_events::now_ms();
+    let vote_status = vote_response.status();
+    let vote_body = to_bytes(vote_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        vote_status,
+        StatusCode::OK,
+        "unexpected vote response: {}",
+        String::from_utf8_lossy(&vote_body)
+    );
+
+    let receipt_packs = harness.list_receipt_packs().unwrap();
+    assert_eq!(receipt_packs.packs.len(), 1);
+    let receipt_pack_id = receipt_packs.packs[0].pack_id.clone();
+    assert!(
+        governance
+            .pending_human_authorization(&approval_set_id)
+            .is_err()
+    );
+
+    let mut successful_executions = 0;
+    while let Ok(event) = runtime_rx.try_recv() {
+        if let RuntimeEvent::ResponseExecution {
+            response_kind,
+            emitted_at_ms,
+            ..
+        } = event
+            && response_kind == "success"
+        {
+            successful_executions += 1;
+            assert!(emitted_at_ms >= trusted_before_ms && emitted_at_ms <= trusted_after_ms);
+        }
+    }
+    assert_eq!(successful_executions, 1);
+
+    let duplicate_vote = operator_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "voter_id": operator_id.clone(),
+                        "signature": operator_signer.sign(
+                            &canonical_json_bytes(&json!({
+                                "approval_set_id": approval_set_id.clone(),
+                                "ledger_id": ledger_id.clone(),
+                                "voter_id": operator_id.clone(),
+                            }))
+                            .unwrap(),
+                        ),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let duplicate_status = duplicate_vote.status();
+    let duplicate_body = to_bytes(duplicate_vote.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        duplicate_status,
+        StatusCode::OK,
+        "unexpected duplicate vote response: {}",
+        String::from_utf8_lossy(&duplicate_body)
+    );
+
+    let replay = reqwest::Client::new()
+        .post(format!(
+            "http://{runtime_address}/v1/governance/approvals/{approval_set_id}/resume"
+        ))
+        .bearer_auth(TOKEN)
+        .json(&json!({"receipt_pack_id": receipt_pack_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), reqwest::StatusCode::OK);
+    tokio::task::yield_now().await;
+    while let Ok(event) = runtime_rx.try_recv() {
+        if let RuntimeEvent::ResponseExecution { response_kind, .. } = event {
+            assert_ne!(response_kind, "success", "a retry must not execute again");
+        }
+    }
+
+    runtime_server.abort();
+    let _ = runtime_server.await;
+    drop(dispatcher);
+    drop(governance);
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(EVIDENCE_KEY_ENV);
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
 // --- QRT-04: operator-driven containment release ---------------------------
 //
 // These tests drive the routes in `super::containment` against a REAL
-// `swarm_agents::tom_agent::GovernancePolicy`, because the requirement's phrase
+// `swarm_governance::GovernancePolicy`, because the requirement's phrase
 // is "through the same governance signing path" and a fake signer would prove
 // nothing about that path. `swarm-runtime-http` is the lowest crate that can
 // name both the governance agent and the HTTP surface, which is why they live
@@ -3038,8 +4369,11 @@ mod qrt_04 {
     use ed25519_dalek::SigningKey;
     use std::collections::BTreeSet;
     use std::sync::Mutex;
-    use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
-    use swarm_consensus::ConsensusGovernanceReceipt;
+    use swarm_consensus::{
+        ConsensusCommit, ConsensusCommittee, ConsensusGovernanceReceipt, ConsensusProposal,
+        GovernanceReceiptDecision,
+    };
+    use swarm_crypto::sha256_hex;
     use swarm_response::containment::{
         ContainmentLease, ContainmentLeaseStore, ContainmentTtl, MemoryContainmentLeaseStore,
     };
@@ -3159,17 +4493,30 @@ mod qrt_04 {
         lease
     }
 
-    fn governance_with_one_governor() -> Arc<GovernancePolicy> {
-        let policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig::default()));
-        // `register_governor` became fallible in BFT-03 -- it refuses a SECOND
-        // distinct signing key -- so the Result is handled rather than dropped.
-        policy
-            .register_governor(
+    struct GovernanceRoot(PathBuf);
+
+    impl Drop for GovernanceRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn governance_with_one_governor() -> (GovernanceAuthority, GovernanceRoot) {
+        let root = unique_temp_dir("qrt-04-governance");
+        let policy = Arc::new(
+            GovernancePolicy::initialize_persistence(
+                GovernancePolicyConfig::default(),
+                root.join("governance.json"),
                 AgentId::new("tom", "primary"),
                 SigningKey::from_bytes(&[41; 32]),
             )
-            .expect("the first governor key must register");
-        policy
+            .expect("test governance should initialize signed persistence"),
+        );
+        let authority = policy
+            .authority()
+            .expect("persisted test governance should mint authority");
+        drop(policy);
+        (authority, GovernanceRoot(root))
     }
 
     fn attestation_of(receipt: &RollbackReceipt) -> ConsensusGovernanceReceipt {
@@ -3187,6 +4534,7 @@ mod qrt_04 {
         store: Arc<MemoryContainmentLeaseStore>,
         sweep: Arc<ContainmentSweep>,
         app: Router,
+        _governance_root: GovernanceRoot,
     }
 
     fn harness() -> Harness {
@@ -3195,6 +4543,7 @@ mod qrt_04 {
         }
         let world = Arc::new(World::default());
         let store = Arc::new(MemoryContainmentLeaseStore::new());
+        let (governance, governance_root) = governance_with_one_governor();
         let sweep = Arc::new(
             ContainmentSweep::new(
                 store.clone(),
@@ -3203,7 +4552,7 @@ mod qrt_04 {
                 }),
                 ExecutionMode::Enforced,
             )
-            .with_governance(governance_with_one_governor()),
+            .with_governance_authority(governance),
         );
         // ONE sweep object, and the router is handed the same `Arc` the TTL
         // task would get in `swarm_detect`. That sharing is the thing under
@@ -3220,6 +4569,7 @@ mod qrt_04 {
             store,
             sweep,
             app,
+            _governance_root: governance_root,
         }
     }
 
@@ -3346,8 +4696,14 @@ mod qrt_04 {
             .unwrap();
         assert_eq!(manual_receipt.trigger, RollbackTrigger::Manual);
         assert_eq!(ttl_receipt.trigger, RollbackTrigger::Expiry);
-        verify_release_attestation(manual_receipt).expect("manual release should verify");
-        verify_release_attestation(ttl_receipt).expect("ttl release should verify");
+        harness
+            .sweep
+            .verify_release_attestation(manual_receipt)
+            .expect("manual release should verify");
+        harness
+            .sweep
+            .verify_release_attestation(ttl_receipt)
+            .expect("ttl release should verify");
 
         // 6. MANUAL AND AUTOMATIC RELEASE DID NOT DIVERGE. Everything a
         //    reviewer would compare is equal except the trigger, the subject
@@ -3398,7 +4754,10 @@ mod qrt_04 {
             60_000,
         );
         let receipt = harness.sweep.release("lease-tamper", 2_000).await.unwrap();
-        verify_release_attestation(&receipt).expect("the untampered receipt must verify");
+        harness
+            .sweep
+            .verify_release_attestation(&receipt)
+            .expect("the untampered receipt must verify");
 
         // (a) MUTATE THE BODY. An auditor reading `fully_reversed` acts on it,
         //     so rewriting a `Failed` step into a `Reversed` one is the lie
@@ -3407,7 +4766,10 @@ mod qrt_04 {
         //     what catches it.
         let mut rewritten = receipt.clone();
         rewritten.steps[0].status = RollbackStepStatus::Failed;
-        let error = verify_release_attestation(&rewritten).unwrap_err();
+        let error = harness
+            .sweep
+            .verify_release_attestation(&rewritten)
+            .unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::SubjectMismatch { .. }),
             "expected a subject mismatch, got {error:?}"
@@ -3435,7 +4797,7 @@ mod qrt_04 {
             mutate(&mut tampered);
             assert!(
                 matches!(
-                    verify_release_attestation(&tampered),
+                    harness.sweep.verify_release_attestation(&tampered),
                     Err(ReleaseAttestationError::SubjectMismatch { .. })
                 ),
                 "a mutated receipt must not verify: {tampered:?}"
@@ -3449,7 +4811,10 @@ mod qrt_04 {
         let mut attestation = attestation_of(&receipt);
         attestation.payload.issued_at_ms += 1;
         forged.governance_attestation = Some(serde_json::to_value(&attestation).unwrap());
-        let error = verify_release_attestation(&forged).unwrap_err();
+        let error = harness
+            .sweep
+            .verify_release_attestation(&forged)
+            .unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::Signature { .. }),
             "expected a signature failure, got {error:?}"
@@ -3459,7 +4824,10 @@ mod qrt_04 {
         //     would be reporting success over a region it never inspected.
         let mut stripped = receipt.clone();
         stripped.governance_attestation = None;
-        let error = verify_release_attestation(&stripped).unwrap_err();
+        let error = harness
+            .sweep
+            .verify_release_attestation(&stripped)
+            .unwrap_err();
         assert!(
             matches!(error, ReleaseAttestationError::Unattested { .. }),
             "expected an unattested refusal, got {error:?}"
@@ -3483,10 +4851,125 @@ mod qrt_04 {
             .expect("the lifted signature is genuine, which is the point");
         assert!(
             matches!(
-                verify_release_attestation(&lifted),
+                harness.sweep.verify_release_attestation(&lifted),
                 Err(ReleaseAttestationError::SubjectMismatch { .. })
             ),
             "a genuine signature over a different release must not verify this one"
+        );
+    }
+
+    /// Re-attest `receipt` end to end with `signing_key`: a fresh commit whose
+    /// `proposal_id` is the digest of the canonical receipt-minus-attestation,
+    /// signed by whoever holds the key.
+    ///
+    /// This is the attacker's whole job, and it is eight lines. Every input is
+    /// public: the subject is the receipt itself, and the binding rule is
+    /// documented on `GovernanceAuthority::attest_release`.
+    fn re_attest(receipt: &RollbackReceipt, signing_key: &SigningKey) -> Value {
+        let mut subject = receipt.clone();
+        subject.governance_attestation = None;
+        let subject_id = sha256_hex(&canonical_json_bytes(&subject).unwrap());
+        let issued_by = AgentId::from_verifying_key(&signing_key.verifying_key());
+        let committee = ConsensusCommittee::new(vec![issued_by.clone()], 0).unwrap();
+        let commit = ConsensusCommit {
+            height: 1,
+            round: 0,
+            committee_id: committee.committee_id().to_string(),
+            proposal: ConsensusProposal {
+                proposal_id: subject_id,
+                payload: json!({ "forged": true }),
+            },
+            prevote_tally: 1,
+            precommit_tally: 1,
+            commit_hash: "forged-commit-hash".to_string(),
+        };
+        serde_json::to_value(
+            ConsensusGovernanceReceipt::issue(
+                &commit,
+                "forged-previous-commit-hash",
+                &committee,
+                GovernanceReceiptDecision::Approve,
+                issued_by,
+                signing_key,
+                9_999,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// A FULL RE-ATTESTATION BY A KEY NO GOVERNOR EVER HELD.
+    ///
+    /// The tamper test above covers PARTIAL rewrites -- body edited with the
+    /// attestation left alone, or a genuine attestation lifted from another
+    /// release. This is the case it did not cover: the attacker rewrites the
+    /// body AND mints a fresh keypair AND recomputes `proposal_id` over the
+    /// rewritten subject AND signs it. Both of the checks that shipped with
+    /// QRT-04 pass on that input, because both are self-referential -- the
+    /// signature is checked against a public key carried inside the receipt,
+    /// and the subject digest against the body the attacker wrote.
+    #[tokio::test]
+    async fn a_fully_re_attested_receipt_is_refused() {
+        let harness = harness();
+        open_containment(
+            &harness.world,
+            harness.store.as_ref(),
+            "lease-forge",
+            "host-forge",
+            1_000,
+            60_000,
+        );
+        let receipt = harness.sweep.release("lease-forge", 2_000).await.unwrap();
+        harness
+            .sweep
+            .verify_release_attestation(&receipt)
+            .expect("the genuine receipt must verify");
+
+        // The lie an auditor would act on: a release that did NOT restore the
+        // host, rewritten to say it did -- and then re-signed end to end.
+        let mut forged = receipt.clone();
+        forged.steps[0].status = RollbackStepStatus::Failed;
+        forged.summary = "forged by a key no governor ever held".to_string();
+        let attacker = SigningKey::from_bytes(&[251; 32]);
+        forged.governance_attestation = Some(re_attest(&forged, &attacker));
+
+        // The forged attestation is signed by a DIFFERENT key than the genuine
+        // one, which is what makes this a trust-anchor question rather than a
+        // signature question.
+        let attacker_id = AgentId::from_verifying_key(&attacker.verifying_key());
+        assert_ne!(attestation_of(&receipt).payload.issued_by, attacker_id);
+        // Both shipped checks pass on the forgery, individually.
+        attestation_of(&forged)
+            .verify()
+            .expect("the forged signature is internally consistent, which is the point");
+
+        let error = harness
+            .sweep
+            .verify_release_attestation(&forged)
+            .expect_err("a receipt re-attested by an unknown key must be refused");
+        assert!(
+            matches!(error, ReleaseAttestationError::UntrustedSigner { .. }),
+            "expected an untrusted-signer refusal, got {error:?}"
+        );
+        // The diagnostic names the key that actually signed, so an operator can
+        // tell a forgery from a governor rotation they forgot about.
+        assert!(
+            error.to_string().contains(&attacker_id.0),
+            "the refusal should name the untrusted signer: {error}"
+        );
+
+        // FAIL CLOSED WITH NO ANCHOR. The same GENUINE receipt that verified
+        // above is refused when there is no authority to check it against --
+        // not accepted on the strength of the key it carries.
+        let error = verify_release_attestation(&receipt, None)
+            .expect_err("with no governor set, a verifier knows nothing and must say so");
+        assert!(
+            matches!(error, ReleaseAttestationError::UntrustedSigner { .. }),
+            "expected a refusal with no trust anchor, got {error:?}"
+        );
+        assert!(
+            error.to_string().contains("no governor public keys"),
+            "the refusal should name the missing anchor: {error}"
         );
     }
 

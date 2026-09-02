@@ -1,11 +1,15 @@
 use super::*;
 use ed25519_dalek::SigningKey;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use swarm_core::signed_state::{SignedStateEnvelope, SignedStateExpectation};
 use swarm_core::types::AgentId;
 
 const EVOLUTION_POPULATION_STATE_KIND: &str = "evolution_population_state";
 const EVOLUTION_POPULATION_STREAM_ID: &str = "population";
 const EVOLUTION_EPISODE_STATE_KIND: &str = "evolution_episode_report";
+static NEXT_POPULATION_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Errors raised by the persisted mutation-spec store.
 #[derive(Debug, thiserror::Error)]
@@ -146,6 +150,9 @@ pub enum EvolutionPopulationStoreError {
         #[source]
         source: swarm_core::SignedStateError,
     },
+
+    #[error("invalid evolution population state for `{path}`: {reason}")]
+    InvalidState { path: PathBuf, reason: String },
 }
 
 /// Errors raised by the durable evolution-episode store.
@@ -711,10 +718,7 @@ pub struct FileEvolutionPopulationStore {
 impl FileEvolutionPopulationStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, EvolutionPopulationStoreError> {
         let root = path.as_ref().to_path_buf();
-        fs::create_dir_all(&root).map_err(|source| EvolutionPopulationStoreError::Write {
-            path: root.clone(),
-            source,
-        })?;
+        create_population_directory_durably(&root)?;
         Ok(Self {
             root,
             signer_agent_id: None,
@@ -741,6 +745,109 @@ impl FileEvolutionPopulationStore {
         self.root.join("state.sequence.json")
     }
 
+    fn mutation_lock_path(&self) -> PathBuf {
+        self.root.join("state.lock")
+    }
+
+    fn lock_mutation(&self) -> Result<File, EvolutionPopulationStoreError> {
+        let path = self.mutation_lock_path();
+        let existed = path.exists();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|source| EvolutionPopulationStoreError::Write {
+                path: path.clone(),
+                source,
+            })?;
+        file.lock()
+            .map_err(|source| EvolutionPopulationStoreError::Write {
+                path: path.clone(),
+                source,
+            })?;
+        if !existed {
+            self.sync_root()?;
+        }
+        Ok(file)
+    }
+
+    fn sync_root(&self) -> Result<(), EvolutionPopulationStoreError> {
+        File::open(&self.root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| EvolutionPopulationStoreError::Write {
+                path: self.root.clone(),
+                source,
+            })
+    }
+
+    fn write_atomic_synced(
+        &self,
+        path: &Path,
+        contents: &[u8],
+    ) -> Result<(), EvolutionPopulationStoreError> {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| EvolutionPopulationStoreError::InvalidState {
+                path: path.to_path_buf(),
+                reason: "state path has no UTF-8 file name".to_string(),
+            })?;
+        let process_id = std::process::id();
+        let mut created = None;
+        for _ in 0..32 {
+            let unique_id = NEXT_POPULATION_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+            let restart_nonce = uuid::Uuid::new_v4().simple();
+            let temporary_path = self.root.join(format!(
+                ".{file_name}.{process_id}.{restart_nonce}.{unique_id}.tmp"
+            ));
+            match OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary_path)
+            {
+                Ok(file) => {
+                    created = Some((temporary_path, file));
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(source) => {
+                    return Err(EvolutionPopulationStoreError::Write {
+                        path: temporary_path,
+                        source,
+                    });
+                }
+            }
+        }
+        let Some((temporary_path, mut temporary_file)) = created else {
+            return Err(EvolutionPopulationStoreError::InvalidState {
+                path: path.to_path_buf(),
+                reason: "could not allocate a unique atomic-write temporary file".to_string(),
+            });
+        };
+        let write_result = temporary_file
+            .write_all(contents)
+            .and_then(|()| temporary_file.sync_all());
+        if let Err(source) = write_result {
+            drop(temporary_file);
+            let _ = fs::remove_file(&temporary_path);
+            return Err(EvolutionPopulationStoreError::Write {
+                path: temporary_path,
+                source,
+            });
+        }
+        drop(temporary_file);
+        if let Err(source) = fs::rename(&temporary_path, path) {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(EvolutionPopulationStoreError::Write {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+        self.sync_root()
+    }
+
     pub fn load(&self) -> Result<Option<EvolutionPopulationState>, EvolutionPopulationStoreError> {
         self.load_internal(None)
     }
@@ -753,6 +860,14 @@ impl FileEvolutionPopulationStore {
     }
 
     fn load_internal(
+        &self,
+        expected_signer_agent_id: Option<&AgentId>,
+    ) -> Result<Option<EvolutionPopulationState>, EvolutionPopulationStoreError> {
+        let _lock = self.lock_mutation()?;
+        self.load_internal_locked(expected_signer_agent_id)
+    }
+
+    fn load_internal_locked(
         &self,
         expected_signer_agent_id: Option<&AgentId>,
     ) -> Result<Option<EvolutionPopulationState>, EvolutionPopulationStoreError> {
@@ -799,7 +914,69 @@ impl FileEvolutionPopulationStore {
         let signing_key = self.signing_key.as_ref().ok_or_else(|| {
             EvolutionPopulationStoreError::MissingSignerContext { path: path.clone() }
         })?;
-        let sequence = self.read_state_sequence()?.unwrap_or(0).saturating_add(1);
+        let _lock = self.lock_mutation()?;
+        let mut merged = state.clone();
+        if let Some(current) = self.load_internal_locked(Some(signer_agent_id))? {
+            merge_population_feedback_operations(&path, &mut merged, &current)?;
+        }
+        self.persist_locked(&merged, signer_agent_id, signing_key)
+    }
+
+    pub fn update_trusted<F>(
+        &self,
+        expected_signer_agent_id: &AgentId,
+        update: F,
+    ) -> Result<Option<EvolutionPopulationState>, EvolutionPopulationStoreError>
+    where
+        F: FnOnce(&mut EvolutionPopulationState) -> Result<bool, String>,
+    {
+        let path = self.state_path();
+        let signer_agent_id = self.signer_agent_id.as_ref().ok_or_else(|| {
+            EvolutionPopulationStoreError::MissingSignerContext { path: path.clone() }
+        })?;
+        let signing_key = self.signing_key.as_ref().ok_or_else(|| {
+            EvolutionPopulationStoreError::MissingSignerContext { path: path.clone() }
+        })?;
+        if signer_agent_id != expected_signer_agent_id {
+            return Err(EvolutionPopulationStoreError::InvalidState {
+                path,
+                reason: format!(
+                    "configured signer `{signer_agent_id}` did not match expected signer `{expected_signer_agent_id}`"
+                ),
+            });
+        }
+        let _lock = self.lock_mutation()?;
+        let Some(mut state) = self.load_internal_locked(Some(expected_signer_agent_id))? else {
+            return Ok(None);
+        };
+        let changed =
+            update(&mut state).map_err(|reason| EvolutionPopulationStoreError::InvalidState {
+                path: self.state_path(),
+                reason,
+            })?;
+        if changed {
+            validate_population_feedback_operations(&path, &state)?;
+            self.persist_locked(&state, signer_agent_id, signing_key)?;
+        }
+        Ok(Some(state))
+    }
+
+    fn persist_locked(
+        &self,
+        state: &EvolutionPopulationState,
+        signer_agent_id: &AgentId,
+        signing_key: &SigningKey,
+    ) -> Result<(), EvolutionPopulationStoreError> {
+        let path = self.state_path();
+        validate_population_feedback_operations(&path, state)?;
+        let sequence = self
+            .read_state_sequence()?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| EvolutionPopulationStoreError::InvalidState {
+                path: self.state_sequence_path(),
+                reason: "population state sequence exhausted u64".to_string(),
+            })?;
         let envelope = SignedStateEnvelope::sign(
             EVOLUTION_POPULATION_STATE_KIND,
             EVOLUTION_POPULATION_STREAM_ID,
@@ -818,10 +995,7 @@ impl FileEvolutionPopulationStore {
                 source,
             }
         })?;
-        fs::write(&path, raw).map_err(|source| EvolutionPopulationStoreError::Write {
-            path: path.clone(),
-            source,
-        })?;
+        self.write_atomic_synced(&path, raw.as_bytes())?;
         self.write_state_sequence(sequence)
     }
 
@@ -848,8 +1022,142 @@ impl FileEvolutionPopulationStore {
                 source,
             }
         })?;
-        fs::write(&path, raw)
-            .map_err(|source| EvolutionPopulationStoreError::Write { path, source })
+        self.write_atomic_synced(&path, raw.as_bytes())
+    }
+}
+
+fn create_population_directory_durably(root: &Path) -> Result<(), EvolutionPopulationStoreError> {
+    let mut missing = Vec::new();
+    let mut cursor = root;
+    while !cursor.exists() {
+        missing.push(cursor.to_path_buf());
+        let Some(parent) = cursor.parent() else {
+            break;
+        };
+        cursor = parent;
+    }
+    fs::create_dir_all(root).map_err(|source| EvolutionPopulationStoreError::Write {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    #[cfg(unix)]
+    for created in missing {
+        let Some(parent) = created.parent() else {
+            continue;
+        };
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| EvolutionPopulationStoreError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+    }
+    Ok(())
+}
+
+fn validate_population_feedback_operations(
+    path: &Path,
+    state: &EvolutionPopulationState,
+) -> Result<(), EvolutionPopulationStoreError> {
+    if state.applied_feedback_operations.len() > MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS {
+        return Err(EvolutionPopulationStoreError::InvalidState {
+            path: path.to_path_buf(),
+            reason: format!(
+                "applied feedback operation ledger exceeds the {}-operation hard limit",
+                MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS
+            ),
+        });
+    }
+    for (operation_id, operation) in &state.applied_feedback_operations {
+        let valid_digest =
+            |value: &str| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+        if !valid_digest(operation_id)
+            || !valid_digest(&operation.operation_digest)
+            || operation.strategy_id.trim().is_empty()
+            || !operation.penalty.is_finite()
+            || operation.penalty < 0.0
+            || operation.applied_at_ms <= 0
+        {
+            return Err(EvolutionPopulationStoreError::InvalidState {
+                path: path.to_path_buf(),
+                reason: format!("applied feedback operation `{operation_id}` is invalid"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn merge_population_feedback_operations(
+    path: &Path,
+    proposed: &mut EvolutionPopulationState,
+    current: &EvolutionPopulationState,
+) -> Result<(), EvolutionPopulationStoreError> {
+    validate_population_feedback_operations(path, proposed)?;
+    validate_population_feedback_operations(path, current)?;
+    let mut changed = false;
+    for (operation_id, current_operation) in &current.applied_feedback_operations {
+        if let Some(proposed_operation) = proposed.applied_feedback_operations.get(operation_id) {
+            if proposed_operation != current_operation {
+                return Err(EvolutionPopulationStoreError::InvalidState {
+                    path: path.to_path_buf(),
+                    reason: format!(
+                        "applied feedback operation `{operation_id}` conflicts with durable state"
+                    ),
+                });
+            }
+            continue;
+        }
+        if let Some(candidate) = proposed
+            .members
+            .iter_mut()
+            .find(|candidate| candidate.strategy_id == current_operation.strategy_id)
+        {
+            apply_population_feedback_penalty(candidate, current_operation.penalty);
+        }
+        proposed
+            .applied_feedback_operations
+            .insert(operation_id.clone(), current_operation.clone());
+        changed = true;
+    }
+    validate_population_feedback_operations(path, proposed)?;
+    if changed {
+        rerank_population_after_feedback(&mut proposed.members);
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_population_feedback_penalty(
+    candidate: &mut EvolutionPopulationCandidate,
+    penalty: f64,
+) {
+    candidate.fitness = (candidate.fitness - penalty).max(0.0);
+    if !candidate
+        .blocking_reason_names
+        .iter()
+        .any(|reason| reason == "analyst_false_positive_feedback")
+    {
+        candidate
+            .blocking_reason_names
+            .push("analyst_false_positive_feedback".to_string());
+    }
+    if !candidate
+        .summary
+        .contains("analyst false-positive feedback")
+    {
+        candidate.summary = format!("{} | analyst false-positive feedback", candidate.summary);
+    }
+}
+
+fn rerank_population_after_feedback(candidates: &mut [EvolutionPopulationCandidate]) {
+    candidates.sort_by(|left, right| {
+        right
+            .fitness
+            .partial_cmp(&left.fitness)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.strategy_id.cmp(&right.strategy_id))
+    });
+    for (index, candidate) in candidates.iter_mut().enumerate() {
+        candidate.population_rank = index + 1;
     }
 }
 
@@ -1190,5 +1498,41 @@ impl FileEvolutionBenchmarkStore {
         let mut entries = self.read_index()?.entries;
         entries.truncate(limit);
         Ok(entries)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod atomic_write_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn population_atomic_write_ignores_stale_temps_from_a_prior_process_epoch() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-population-stale-temp-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = FileEvolutionPopulationStore::open(&root).unwrap();
+        let first_counter = NEXT_POPULATION_TEMP_FILE_ID.load(Ordering::Relaxed);
+        for counter in first_counter..first_counter.saturating_add(32) {
+            let stale = root.join(format!(".state.json.{}.{counter}.tmp", std::process::id()));
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(stale)
+                .unwrap();
+        }
+
+        let state_path = root.join("state.json");
+        store
+            .write_atomic_synced(&state_path, b"restart-safe")
+            .unwrap();
+        assert_eq!(fs::read(&state_path).unwrap(), b"restart-safe");
+        let _ = fs::remove_dir_all(root);
     }
 }

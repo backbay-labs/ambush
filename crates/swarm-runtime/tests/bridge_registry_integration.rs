@@ -25,6 +25,8 @@ use swarm_runtime::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 
+const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
+
 fn default_config_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../rulesets/default.yaml")
 }
@@ -117,6 +119,7 @@ fn config_with_concurrent_bridges(
     generic_json_path: &Path,
 ) -> Result<SwarmConfig, Box<dyn std::error::Error>> {
     let mut config = load_config(default_config_path())?;
+    config.pheromone.default_half_life_secs = TEST_LIVE_HALF_LIFE_SECS;
     config.detection.strategy = "credential_access".to_string();
     // The CloudTrail bridge normalizes into `TelemetryPayload::CloudTrail`, which
     // `CredentialAccessDetector` deliberately ignores; the dedicated CloudTrail
@@ -170,6 +173,7 @@ fn config_with_host_log_bridges(
     auditd_path: &Path,
 ) -> Result<SwarmConfig, Box<dyn std::error::Error>> {
     let mut config = load_config(default_config_path())?;
+    config.pheromone.default_half_life_secs = TEST_LIVE_HALF_LIFE_SECS;
     config.detection.strategy = "suspicious_scripting".to_string();
     config.detection.strategies = vec![
         "suspicious_scripting".to_string(),

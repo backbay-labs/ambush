@@ -168,7 +168,9 @@ async fn benchmark_alert_elapsed_secs(
         config_with_network_connect_profile(recruitment_benchmark_profile(recruitment_enabled))?;
     config.pheromone.alert_threshold = 2.0;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = Arc::new(InMemoryPheromoneSubstrate::new(config.pheromone.clone()));
+    let substrate = Arc::new(InMemoryPheromoneSubstrate::new_for_replay(
+        config.pheromone.clone(),
+    ));
 
     seed_signed_concentration(
         substrate.as_ref(),
@@ -225,7 +227,7 @@ async fn command_and_control_recruitment_lowers_beacon_threshold_from_signed_con
 -> Result<(), Box<dyn std::error::Error>> {
     let config = config_with_network_connect_profile(recruitment_profile())?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
 
     seed_signed_concentration(
         &substrate,
@@ -301,7 +303,7 @@ async fn unrelated_threat_class_pressure_does_not_recruit_command_and_control_be
 -> Result<(), Box<dyn std::error::Error>> {
     let config = config_with_network_connect_profile(recruitment_profile())?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
 
     seed_signed_concentration(
         &substrate,
@@ -352,7 +354,7 @@ async fn invalid_unsigned_deposits_do_not_activate_recruitment()
 -> Result<(), Box<dyn std::error::Error>> {
     let config = config_with_network_connect_profile(recruitment_profile())?;
     let detector = build_composite_detector(&config.detection)?;
-    let substrate = InMemoryPheromoneSubstrate::new(config.pheromone.clone());
+    let substrate = InMemoryPheromoneSubstrate::new_for_replay(config.pheromone.clone());
 
     let deposits = seed_signed_concentration(
         &substrate,
@@ -403,8 +405,10 @@ async fn deescalation_persists_normal_inhibitory_signal_that_survives_restart()
     };
 
     {
-        let substrate =
-            LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), &journal_path)?;
+        let substrate = LocalJournalPheromoneSubstrate::open_for_replay(
+            config.pheromone.clone(),
+            &journal_path,
+        )?;
         seed_signed_concentration(
             &substrate,
             &config.pheromone,
@@ -457,8 +461,10 @@ async fn deescalation_persists_normal_inhibitory_signal_that_survives_restart()
 
     {
         let detector = build_composite_detector(&config.detection)?;
-        let substrate =
-            LocalJournalPheromoneSubstrate::open(config.pheromone.clone(), &journal_path)?;
+        let substrate = LocalJournalPheromoneSubstrate::open_for_replay(
+            config.pheromone.clone(),
+            &journal_path,
+        )?;
         let timestamps = [1_700_401_301, 1_700_401_361, 1_700_401_421];
         for (index, timestamp) in timestamps.iter().enumerate() {
             let outcome = detect_and_deposit(

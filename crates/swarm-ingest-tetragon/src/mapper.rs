@@ -2,7 +2,25 @@ use crate::client::proto;
 use std::time::{SystemTime, UNIX_EPOCH};
 use swarm_core::{ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
+/// Stable source identity retained for bridge health and detection telemetry.
+pub const TETRAGON_SOURCE: &str = "tetragon";
+/// Prefix marking a source record whose timestamp came from the mapper host
+/// clock rather than Tetragon's process-start timestamp.  Such a record is
+/// operational telemetry only and must not become graph causal time.
+pub const TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX: &str = "tetragon:fallback_time:";
+
 pub fn map_process_exec(exec: &proto::ProcessExec, node_name: &str) -> Option<TelemetryEvent> {
+    map_process_exec_with_fallback_time(exec, node_name, current_unix_timestamp())
+}
+
+/// Map one process-exec event while allowing the adapter boundary to supply
+/// the fallback host time.  Production callers use [`map_process_exec`]; the
+/// explicit seam makes the fallback origin deterministic and testable.
+pub fn map_process_exec_with_fallback_time(
+    exec: &proto::ProcessExec,
+    node_name: &str,
+    fallback_timestamp: i64,
+) -> Option<TelemetryEvent> {
     let process = exec.process.as_ref()?;
     let process_name = process.binary.clone();
     let command_line = format!("{} {}", process.binary, process.arguments)
@@ -14,20 +32,26 @@ pub fn map_process_exec(exec: &proto::ProcessExec, node_name: &str) -> Option<Te
         .map(|parent| parent.binary.clone())
         .filter(|binary| !binary.trim().is_empty())
         .unwrap_or_else(|| "<none>".to_string());
-    let event_id = if node_name.is_empty() {
+    let base_event_id = if node_name.is_empty() {
         format!("tetragon:{}", process.exec_id)
     } else {
         format!("tetragon:{node_name}:{}", process.exec_id)
     };
+    let has_source_timestamp = process.start_time.is_some();
+    let event_id = if has_source_timestamp {
+        base_event_id
+    } else {
+        format!("{TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX}{base_event_id}")
+    };
 
     Some(TelemetryEvent {
-        source: "tetragon".to_string(),
+        source: TETRAGON_SOURCE.to_string(),
         event_id,
         timestamp: process
             .start_time
             .as_ref()
             .map(|timestamp| timestamp.seconds)
-            .unwrap_or_else(current_unix_timestamp),
+            .unwrap_or(fallback_timestamp),
         host_id: (!node_name.is_empty()).then(|| node_name.to_string()),
         payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
             parent_process,
@@ -51,7 +75,10 @@ fn current_unix_timestamp() -> i64 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::map_process_exec;
+    use super::{
+        TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX, TETRAGON_SOURCE, map_process_exec,
+        map_process_exec_with_fallback_time,
+    };
     use crate::client::proto;
     use prost_types::Timestamp;
     use swarm_core::TelemetryPayload;
@@ -94,7 +121,7 @@ mod tests {
         };
 
         let event = map_process_exec(&exec, "node-a").expect("event should map");
-        assert_eq!(event.source, "tetragon");
+        assert_eq!(event.source, TETRAGON_SOURCE);
         assert_eq!(event.event_id, "tetragon:node-a:exec-1");
         assert_eq!(event.host_id.as_deref(), Some("node-a"));
         assert_eq!(event.timestamp, 42);
@@ -216,5 +243,40 @@ mod tests {
 
         let event = map_process_exec(&exec, "node-e").expect("event should map");
         assert!(event.timestamp > 0);
+        assert!(
+            event
+                .event_id
+                .starts_with(TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX)
+        );
+    }
+
+    #[test]
+    fn fallback_host_time_is_marked_and_does_not_change_source_record_identity() {
+        let exec = proto::ProcessExec {
+            process: Some(make_process(
+                "exec-fallback",
+                "/bin/echo",
+                "hello",
+                None,
+                None,
+            )),
+            parent: None,
+            ancestors: Vec::new(),
+        };
+
+        let first = map_process_exec_with_fallback_time(&exec, "node-e", 1_700_000_001)
+            .expect("first event should map");
+        let second = map_process_exec_with_fallback_time(&exec, "node-e", 1_800_000_001)
+            .expect("second event should map");
+
+        assert_eq!(first.source, TETRAGON_SOURCE);
+        assert_eq!(first.timestamp, 1_700_000_001);
+        assert_eq!(second.timestamp, 1_800_000_001);
+        assert_eq!(first.event_id, second.event_id);
+        assert!(
+            first
+                .event_id
+                .starts_with(TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX)
+        );
     }
 }

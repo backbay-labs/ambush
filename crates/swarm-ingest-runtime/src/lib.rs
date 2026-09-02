@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), forbid(unsafe_code))]
+
 //! Ingest HTTP surface, telemetry bridge runtime, and operator control plane.
 //!
 //! This crate holds the code that turns telemetry and operator requests into
@@ -96,19 +98,19 @@
 //! and is not -- `providence.rs` gates a whole `pub mod tests` that way -- so
 //! any later move here has to be probed against the non-test build.
 //!
-//! # This crate's unit tests must run serially
+//! # Test environment isolation
 //!
 //! `ingest/tests.rs` came here as `#[cfg(test)] mod tests` inside
-//! `ingest/mod.rs`, bringing 115 unit tests that share one process-global
-//! environment variable. `enable_platform_api` sets
-//! `SWARM_PLATFORM_API_TEST_TOKEN` for every platform_api test, and
-//! `platform_api_routes_reload_rotated_bearer_token_without_restart` overwrites
-//! it mid-test on purpose, so run in parallel they fail each other about three
-//! runs in five. That is why `.github/workflows/ci.yml` runs this crate under
-//! `--test-threads=1` alongside `swarm-runtime`, and why adding a test here that
-//! touches `std::env` is safe only under that assumption. The defect is the
-//! shared variable, not the parallelism; the other four `SWARM_*_TEST_TOKEN`
-//! sites in the same file already use a per-test name and do not race.
+//! `ingest/mod.rs`. Its platform API tests use
+//! `SWARM_PLATFORM_API_TEST_TOKEN` for the common fixed bearer, while
+//! `platform_api_routes_reload_rotated_bearer_token_without_restart` uses
+//! `SWARM_PLATFORM_API_ROTATION_TEST_TOKEN` because it mutates its secret
+//! while requests run. Keeping that rotating secret per-test prevents an
+//! unrelated API-key hot-reload test from observing a transient 401.
+//!
+//! The CI lane still runs `swarm-runtime` and `swarm-ingest-runtime` serially
+//! until the remaining test-environment assumptions in the sibling crate are
+//! narrowed; this API-auth race does not require serial execution.
 //!
 //! # Three items on the root were widened for this crate
 //!

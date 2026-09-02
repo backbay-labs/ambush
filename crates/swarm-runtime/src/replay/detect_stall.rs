@@ -22,12 +22,14 @@
 
 use crate::detector_factory::RuntimeDetector;
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::Duration;
 use swarm_whisker::{DetectionFinding, DetectionStrategy, TelemetryEvent};
 
 thread_local! {
     static REMAINING: Cell<u32> = const { Cell::new(0) };
     static STALL: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    static APPLIED: RefCell<Option<Rc<Cell<u32>>>> = const { RefCell::new(None) };
     /// When `Some`, only evaluations by the detector with this strategy id are
     /// stalled; everything else runs at full speed and does not consume the
     /// budget. `None` stalls whichever detector evaluates next.
@@ -39,16 +41,20 @@ thread_local! {
 /// `#[tokio::test]` runs on a current-thread runtime, so the harness executes
 /// on the same thread that armed the guard, and the thread-local keeps the
 /// stall from leaking into any other test.
-pub(crate) struct DetectStallGuard;
+pub(crate) struct DetectStallGuard {
+    applied: Rc<Cell<u32>>,
+}
 
 impl DetectStallGuard {
     /// The next `count` detect-stage evaluations on this thread sleep for
     /// `stall` before delegating to the real detector.
     pub(crate) fn arm(count: u32, stall: Duration) -> Self {
+        let applied = Rc::new(Cell::new(0));
         REMAINING.with(|remaining| remaining.set(count));
         STALL.with(|configured| configured.set(stall));
+        APPLIED.with(|receipt| *receipt.borrow_mut() = Some(applied.clone()));
         ONLY_STRATEGY.with(|only| *only.borrow_mut() = None);
-        Self
+        Self { applied }
     }
 
     /// Same, but only evaluations by the detector whose `id()` is
@@ -61,10 +67,19 @@ impl DetectStallGuard {
     /// by strategy id targets exactly one side of the comparison and is
     /// deterministic regardless of how many events the other side replays.
     pub(crate) fn arm_for_strategy(strategy_id: &str, count: u32, stall: Duration) -> Self {
+        let applied = Rc::new(Cell::new(0));
         REMAINING.with(|remaining| remaining.set(count));
         STALL.with(|configured| configured.set(stall));
+        APPLIED.with(|receipt| *receipt.borrow_mut() = Some(applied.clone()));
         ONLY_STRATEGY.with(|only| *only.borrow_mut() = Some(strategy_id.to_string()));
-        Self
+        Self { applied }
+    }
+
+    /// Returns the number of evaluations that consumed this guard's stall.
+    /// This is a deterministic test receipt; it proves the load injection ran
+    /// without turning a noisy wall-clock measurement back into a test gate.
+    pub(crate) fn applied_count(&self) -> u32 {
+        self.applied.get()
     }
 }
 
@@ -72,6 +87,7 @@ impl Drop for DetectStallGuard {
     fn drop(&mut self) {
         REMAINING.with(|remaining| remaining.set(0));
         STALL.with(|configured| configured.set(Duration::ZERO));
+        APPLIED.with(|receipt| *receipt.borrow_mut() = None);
         ONLY_STRATEGY.with(|only| *only.borrow_mut() = None);
     }
 }
@@ -90,6 +106,11 @@ fn take_stall(strategy_id: &str) -> Option<Duration> {
             return None;
         }
         remaining.set(left - 1);
+        APPLIED.with(|receipt| {
+            if let Some(applied) = receipt.borrow().as_ref() {
+                applied.set(applied.get().saturating_add(1));
+            }
+        });
         Some(STALL.with(|configured| configured.get()))
     })
 }

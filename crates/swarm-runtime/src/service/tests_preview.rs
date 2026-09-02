@@ -143,7 +143,7 @@
     async fn rehearse_bundle_supports_expanded_firewall_action_preview() {
         let (service, modes) = runtime_service_with_recording_modes();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-rehearsal-firewall", "powershell.exe -enc AAA=");
         let source_context = approval_context(1_700_000_000_320, "corr-rehearsal-firewall");
         let agent_id = test_agent_id();
@@ -174,9 +174,10 @@
 
         assert!(matches!(
             source.audit.response,
-            AuditResponseRecord::Skipped { .. }
+            AuditResponseRecord::Success(_)
         ));
-        assert!(modes.lock().await.is_empty());
+        assert_eq!(&*modes.lock().await, &[ExecutionMode::DryRun]);
+        modes.lock().await.clear();
 
         let store = MemoryReplayBundleStore::default();
         let rehearsal_context = approval_context(1_700_000_000_321, "corr-rehearsal-run");
@@ -209,7 +210,7 @@
     async fn rehearse_bundle_fails_closed_before_executor_when_scope_metadata_is_missing() {
         let (service, modes) = runtime_service_with_recording_modes();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let event = suspicious_event("evt-rehearsal-invalid", "powershell.exe -enc AAA=");
         let source_context = approval_context(1_700_000_000_300, "corr-rehearsal-invalid");
         let agent_id = test_agent_id();
@@ -233,6 +234,8 @@
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(&*modes.lock().await, &[ExecutionMode::DryRun]);
+        modes.lock().await.clear();
         source.action_request.action = ResponseAction::BlockEgress {
             target: "   ".to_string(),
         };
@@ -356,4 +359,3 @@
             service.playbook_action_for_finding(&single_action_finding, SwarmMode::Alert);
         assert!(matches!(fallback, Some(ResponseAction::Escalate { .. })));
     }
-

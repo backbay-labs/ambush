@@ -61,8 +61,9 @@ correlator, no saved search, and no orchestrator handing out work. Detection is
 what the substrate does.
 
 A swarm that can isolate your production fleet has to answer for it. Every
-destructive action routes through a gate that will not open without a signed
-authorization, revalidated by the dispatcher before it reaches an adapter. Every
+governed action in [the consensus contract](docs/CONSENSUS.md#what-requires-a-governance-receipt)
+routes through a gate that will not open without a full-request-bound authorization
+the dispatcher verifies and durably consumes once immediately before routing. Every
 decision seals into a receipt that verifies offline.
 
 Detect-only is the default. Live response is one config line, and the runtime
@@ -83,11 +84,12 @@ Incident:           incident:evt-first-run-1:...
 Trigger strategy:   suspicious_process_tree
 Threat class:       execution
 Severity:           CRITICAL
-Receipt pack:       approval-receipt-pack:...
 Proof Merkle root:  0x...
 ```
 
-That bundle verifies offline, by someone with no access to your runtime:
+This is a detect-only policy rehearsal. It mints neither a human-approval receipt
+nor a governance authorization, and it executes no governed live response. Its
+evidence bundle still verifies offline, by someone with no access to your runtime:
 
 ```sh
 swarmctl evidence-export --kind replay-bundle --id <run-id>
@@ -214,13 +216,14 @@ pressure that produced it. See [docs/EVOLUTION.md](docs/EVOLUTION.md).
 A swarm that can isolate your production fleet has to be governable. Both properties
 below are enforced in code.
 
-**Destructive action requires a signed receipt.** Fifteen typed response actions are
-available to the playbook. Three are destructive — `BlockEgress`, `IsolateHost`,
-`RevokeCredential` — and none can execute without a signed governance receipt from Tom,
-revalidated by the dispatcher before the request reaches an adapter, plus human approval
-above your configured severity. Invalid config is rejected at load, degraded quorum
-blocks destructive response, and an action the runtime cannot seal into a receipt is an
-action it does not take.
+**Governed action requires one-time authorization.** Fifteen typed response actions are
+available to the playbook. The twelve governed actions named in
+[the consensus contract](docs/CONSENSUS.md#what-requires-a-governance-receipt) cannot
+execute without a full-request-bound authorization from Tom that the dispatcher verifies
+and durably consumes once immediately before routing, plus human approval above your
+configured severity. Invalid config is rejected at load, degraded quorum blocks
+destructive response, and an action the runtime cannot seal into a pending authorization
+is an action it does not take.
 
 **Containment has a timer on it.** Every enforced containment opens a lease with a
 bounded life, a declared blast radius, and a real inverse. When it expires, the sweep
@@ -376,7 +379,7 @@ response_adapter:
 
 ---
 
-**More:** `swarmctl identity rotate` (per-role key rotation) &middot;
+**More:** `swarmctl identity rotate` (non-Tom role key rotation; Tom governance rekey is offline) &middot;
 `swarmctl evolution status` (evolution lane state) &middot; `swarmctl canary-start`
 and `swarmctl promotion-start` (rollout gates) &middot;
 `swarmctl review-session-create` (operator review workbench) &middot;
@@ -481,10 +484,10 @@ five layers wrap it, each failing closed.
 - **Deterministic critical lane.** Ingest, detect, deposit, escalate, and route
   stay in one language and one type system, with `unwrap` and `expect` denied
   workspace-wide and a CI gate that enforces the runtime panic contract.
-- **Fail-closed authorization.** Invalid config is rejected at load. Destructive
-  actions require a signed receipt that the dispatcher revalidates. Degraded
-  quorum blocks destructive response while leaving observability and recovery
-  inspection open.
+- **Fail-closed authorization.** Invalid config is rejected at load. Governed
+  actions require a request-bound authorization that the dispatcher verifies and
+  durably consumes once. Degraded quorum blocks destructive response while leaving
+  observability and recovery inspection open.
 - **A named trusted computing base.** [ADR 0009](docs/decisions/0009-trusted-computing-base-boundary.md)
   states what the TCB may never link, and `tools/check-workspace-layering.sh`
   fails the build from `cargo metadata` if that boundary is crossed.
@@ -501,7 +504,7 @@ Governance modes bound what any of this can reach:
 | --- | --- | --- |
 | Observation | Detection, investigation, correlation, memory, deception, status | Signed deposits and ordinary audit |
 | Guarded response | Escalation, decoy deployment, other non-destructive actions | Policy validation and audit trail |
-| Receipt-backed response | `BlockEgress`, `IsolateHost`, `RevokeCredential` | Signed governance receipt, policy validation, human approval when configured |
+| Receipt-backed response | The governed action set in `docs/CONSENSUS.md` | One-time request-bound governance authorization, policy validation, human approval when configured |
 | Partition contingency | Destructive response while quorum is partitioned | Valid pre-staged lease, blast-radius cap, later reconciliation |
 | Maintenance-only | Operator review, export, replay, bounded upkeep | Authenticated operator access and maintenance audit |
 

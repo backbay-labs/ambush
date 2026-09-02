@@ -17,6 +17,8 @@ use swarm_runtime::replay::{
 };
 use swarm_runtime::service::{ConfiguredRuntimeStack, EventExecutionContext};
 
+const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -25,6 +27,7 @@ fn config_with_strategy(strategy: &str) -> Result<SwarmConfig, Box<dyn std::erro
     let mut config = load_config(repo_root().join("rulesets/default.yaml"))?;
     config.detection.strategy = strategy.to_string();
     config.detection.strategies.clear();
+    config.pheromone.default_half_life_secs = TEST_LIVE_HALF_LIFE_SECS;
     Ok(config)
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use url::{Host, Url};
 
 /// Semantic validation errors that survive after deserialization.
 #[derive(Debug, thiserror::Error)]
@@ -494,6 +495,19 @@ impl SwarmConfig {
             }
         }
 
+        if let Err(error) = self.hypothesis_graph.resource_limits().validate() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "hypothesis_graph",
+                reason: error.to_string(),
+            });
+        }
+        if let Err(error) = self.hypothesis_graph.validate_reasoning_limits() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "hypothesis_graph",
+                reason: error.to_string(),
+            });
+        }
+
         if self.canary.enabled {
             if self.canary.slot_id.trim().is_empty() {
                 return Err(ConfigValidationError::InvalidField {
@@ -623,12 +637,10 @@ impl SwarmConfig {
                             .to_string(),
                 });
             }
-            if !(runtime_base_url.starts_with("http://")
-                || runtime_base_url.starts_with("https://"))
-            {
+            if !is_secure_operator_runtime_url(runtime_base_url) {
                 return Err(ConfigValidationError::InvalidField {
                     field: "operator_surface.runtime_base_url",
-                    reason: "must start with http:// or https://".to_string(),
+                    reason: "must be a valid HTTPS URL, or HTTP on exact loopback (localhost, 127.0.0.0/8, or ::1)".to_string(),
                 });
             }
 
@@ -796,6 +808,41 @@ impl SwarmConfig {
         }
 
         Ok(())
+    }
+}
+
+/// The operator surface forwards an approval bearer to this endpoint. Plaintext
+/// transport is therefore confined to an address that the URL parser proves is
+/// loopback; private, link-local, unspecified, and lookalike hostnames are remote.
+fn is_secure_operator_runtime_url(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
+    // Callback routes are appended to this configured base. A query or
+    // fragment would make that string concatenation target the wrong URL
+    // component (and can strand a governed approval after quorum).
+    if url.query().is_some() || url.fragment().is_some() {
+        return false;
+    }
+    let Some((_, after_scheme)) = value.split_once("://") else {
+        return false;
+    };
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    if authority.contains('@') || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    match url.scheme() {
+        "https" => url.host().is_some(),
+        "http" => match url.host() {
+            Some(Host::Ipv4(address)) => address.is_loopback(),
+            Some(Host::Ipv6(address)) => address.is_loopback(),
+            Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+            None => false,
+        },
+        _ => false,
     }
 }
 

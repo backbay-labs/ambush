@@ -2,7 +2,7 @@
     async fn operator_status_reports_metrics_and_recent_decisions() {
         let service = runtime_service();
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let store_root = std::env::temp_dir().join("swarm-runtime-operator-store");
         let _ = std::fs::remove_dir_all(&store_root);
         let store = FileReplayBundleStore::open(&store_root).unwrap();
@@ -91,7 +91,7 @@
             ),
         );
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let store = swarm_spine::MemoryReplayBundleStore::default();
 
         let bridges = BridgeStatusReport::from_entries(vec![
@@ -156,7 +156,7 @@
             ),
         );
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let replay_store_root =
             std::env::temp_dir().join("swarm-runtime-investigation-replay-store");
         let _ = std::fs::remove_dir_all(&replay_store_root);
@@ -399,7 +399,7 @@
             ),
         );
         let detector = SuspiciousProcessTreeDetector::default();
-        let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
+        let substrate = InMemoryPheromoneSubstrate::replay(service.config.pheromone.clone());
         let replay_store_root = std::env::temp_dir().join("swarm-runtime-review-replay-store");
         let _ = std::fs::remove_dir_all(&replay_store_root);
         let replay_store = FileReplayBundleStore::open(&replay_store_root).unwrap();
@@ -634,11 +634,18 @@
         .unwrap();
         let detector = SuspiciousProcessTreeDetector::default();
         let agent_id = test_agent_id();
+        let live_now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
 
         let make_event = |event_id: &str, command_line: &str| TelemetryEvent {
             source: "synthetic".to_string(),
             event_id: event_id.to_string(),
-            timestamp: 1_700_000_000,
+            timestamp: live_now,
             host_id: Some("host-1".to_string()),
             payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
                 parent_process: "winword".to_string(),
@@ -663,7 +670,7 @@
                 &make_event("evt-stack-1", "powershell.exe -enc AAA="),
                 EventExecutionContext {
                     agent_id: &agent_id,
-                    approval: &make_context(1_700_000_000_100),
+                    approval: &make_context(live_now.saturating_mul(1_000).saturating_add(100)),
                     signing_key: &test_signing_key(),
                 },
                 |_finding| {
@@ -682,7 +689,7 @@
                 &make_event("evt-stack-2", "powershell.exe -enc BBB="),
                 EventExecutionContext {
                     agent_id: &agent_id,
-                    approval: &make_context(1_700_000_000_200),
+                    approval: &make_context(live_now.saturating_mul(1_000).saturating_add(200)),
                     signing_key: &test_signing_key(),
                 },
                 |_finding| {

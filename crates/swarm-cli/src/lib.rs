@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), forbid(unsafe_code))]
+
 //! Extracted CLI surface that still delegates into the runtime-owned service APIs.
 
 pub mod agent_identity {
@@ -38,6 +40,10 @@ pub mod evolution_status {
 
 pub mod governance_prep {
     pub use swarm_evolution::governance_prep::*;
+}
+
+pub mod governance_migration {
+    pub use swarm_runtime_http::governance_migration::*;
 }
 
 pub mod mutation {

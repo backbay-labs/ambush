@@ -781,7 +781,9 @@ impl DefaultReplayHarness {
         #[cfg(test)]
         let detector = &stalling_detector;
         let service = self.build_service()?;
-        let substrate = InMemoryPheromoneSubstrate::new(self.config.pheromone.clone());
+        // Offline replay operates on the scenario's signed logical timeline;
+        // live/service construction uses the trusted wall-clock constructor.
+        let substrate = InMemoryPheromoneSubstrate::new_for_replay(self.config.pheromone.clone());
         // Deterministic simulation identity, NOT a credential. Replay runs entirely
         // in memory (`InMemoryPheromoneSubstrate`, `MemoryInvestigationBundleStore`)
         // with `live_mode: false`, and comparing two replay runs requires a stable

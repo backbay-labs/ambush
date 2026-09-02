@@ -4,9 +4,9 @@ use super::platform_api::{
     PlatformRuntimeStatus,
 };
 use super::{
-    DemoApprovalResumeRequest, DemoApprovalResumeResponse, DemoDashboardSnapshot, DemoProofPackage,
-    DemoReplayRequest, DemoReplayResponse, IngestRequest, IngestRequestError, IngestResponse,
-    IngestState, StrategyProposalRoute, detect_http_router, ingest_router, validate_and_parse,
+    DemoDashboardSnapshot, DemoProofPackage, DemoReplayRequest, DemoReplayResponse, IngestRequest,
+    IngestRequestError, IngestResponse, IngestState, StrategyProposalRoute, detect_http_router,
+    ingest_router, validate_and_parse,
 };
 use crate::anti_tamper::AntiTamperReport;
 use crate::bridge_runtime::SharedBridgeHealth;
@@ -36,8 +36,8 @@ use swarm_core::config::{
     OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig, PheromoneBackendConfig,
     PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig, PlatformApiScope,
     PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PromotionConfig,
-    ResponseAdapterConfig, RetryConfig, RoutingRule, RuntimeAntiTamperConfig, RuntimeMode,
-    RuntimeSettings, SecretString, SwarmConfig, TelemetrySourceConfig, WebhookConfig,
+    ResponseAdapterConfig, ResponsePlaybookRule, RetryConfig, RoutingRule, RuntimeAntiTamperConfig,
+    RuntimeMode, RuntimeSettings, SecretString, SwarmConfig, TelemetrySourceConfig, WebhookConfig,
 };
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{
@@ -76,6 +76,11 @@ use swarm_spine::{
 };
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
 use tower::ServiceExt;
+
+// Historical fixture timestamps remain deterministic while the configured runtime exercises the
+// production, wall-clock-backed admission path. Keep their retention horizon long enough that the
+// fixtures test ingest behavior instead of eventually expiring as the calendar advances.
+const TEST_LIVE_HALF_LIFE_SECS: f64 = 3_153_600_000.0;
 
 fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
     vec![PolicyRuleConfig {
@@ -143,7 +148,7 @@ fn test_config(strategy: &str) -> SwarmConfig {
             profiles: DetectorProfilesConfig::default(),
         },
         pheromone: PheromoneConfig {
-            default_half_life_secs: 3600.0,
+            default_half_life_secs: TEST_LIVE_HALF_LIFE_SECS,
             evaporation_threshold: 0.01,
             min_sources_for_escalation: 2,
             alert_threshold: 2.0,
@@ -167,6 +172,7 @@ fn test_config(strategy: &str) -> SwarmConfig {
             recent_decisions_limit: 20,
         },
         investigation: InvestigationConfig::default(),
+        hypothesis_graph: Default::default(),
         correlation: CorrelationConfig::default(),
         canary: CanaryConfig::default(),
         promotion: PromotionConfig::default(),
@@ -185,21 +191,23 @@ fn test_config(strategy: &str) -> SwarmConfig {
 const TEST_PLATFORM_API_KEY: &str = "platform-read-secret";
 const TEST_PLATFORM_API_BEARER_TOKEN: &str = "platform-bearer-secret";
 const TEST_PLATFORM_API_BEARER_TOKEN_ENV: &str = "SWARM_PLATFORM_API_TEST_TOKEN";
+const TEST_PLATFORM_API_ROTATION_BEARER_TOKEN_ENV: &str = "SWARM_PLATFORM_API_ROTATION_TEST_TOKEN";
 
 fn enable_platform_api(config: &mut SwarmConfig) {
+    enable_platform_api_with_token_env(config, TEST_PLATFORM_API_BEARER_TOKEN_ENV);
+}
+
+fn enable_platform_api_with_token_env(config: &mut SwarmConfig, token_env: &str) {
     config.platform_api.keys = vec![PlatformApiKeyConfig {
         name: "test-reader".to_string(),
         key_hash: super::platform_api::platform_api_key_hash_hex(TEST_PLATFORM_API_KEY),
         scopes: vec![PlatformApiScope::Read],
     }];
     config.operator.auth.operator_id = "platform-api-test-operator".to_string();
-    config.operator.auth.token_env = TEST_PLATFORM_API_BEARER_TOKEN_ENV.to_string();
-    config.operator.auth.context_token_env = TEST_PLATFORM_API_BEARER_TOKEN_ENV.to_string();
+    config.operator.auth.token_env = token_env.to_string();
+    config.operator.auth.context_token_env = token_env.to_string();
     unsafe {
-        std::env::set_var(
-            TEST_PLATFORM_API_BEARER_TOKEN_ENV,
-            TEST_PLATFORM_API_BEARER_TOKEN,
-        );
+        std::env::set_var(token_env, TEST_PLATFORM_API_BEARER_TOKEN);
     }
 }
 
@@ -464,7 +472,7 @@ async fn seed_platform_host_deposit(
         severity: Severity::High,
         confidence,
         timestamp,
-        decay_half_life: 3600.0,
+        decay_half_life: TEST_LIVE_HALF_LIFE_SECS,
         agent_id: agent_id.clone(),
         agent_identity: agent_id.0,
         agent_role: None,
@@ -783,6 +791,19 @@ fn live_response_config(strategy: &str) -> SwarmConfig {
     config
 }
 
+fn live_response_playbook_config(action: ResponseAction) -> SwarmConfig {
+    let mut config = live_response_config("suspicious_process_tree");
+    config.pheromone.response_playbook.rules = vec![ResponsePlaybookRule {
+        threat_class: ThreatClass::Execution,
+        severity: Severity::Critical,
+        min_confidence: 0.90,
+        max_confidence: 1.0,
+        actions: vec![action],
+        branches: Vec::new(),
+    }];
+    config
+}
+
 /// Everything the two `route_kitten_candidate` cases assert on.
 struct RoutedKittenCandidate {
     report: super::StrategyProposalRouteReport,
@@ -1028,6 +1049,76 @@ fn bridge_queue_proposal(
         .map(|lookup| lookup.report)
 }
 
+#[test]
+fn configured_approval_voters_use_effective_approve_principals_in_deterministic_order() {
+    let legacy = Ed25519Signer::from_secret_material("legacy-voter-must-not-widen");
+    let first = Ed25519Signer::from_secret_material("multi-principal-voter-first");
+    let second = Ed25519Signer::from_secret_material("multi-principal-voter-second");
+    let legacy_id = format!("swarm:ed25519:{}", legacy.public_key_hex());
+    let first_id = format!("swarm:ed25519:{}", first.public_key_hex());
+    let second_id = format!("swarm:ed25519:{}", second.public_key_hex());
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.operator_id = legacy_id.clone();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: second_id.clone(),
+            token_env: "SWARM_APPROVAL_SECOND".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: "read-only-principal".to_string(),
+            token_env: "SWARM_APPROVAL_READ_ONLY".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read],
+        },
+        OperatorPrincipalConfig {
+            operator_id: first_id.clone(),
+            token_env: "SWARM_APPROVAL_FIRST".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+    ];
+
+    let mut expected = vec![first_id, second_id];
+    expected.sort();
+    let voters = super::configured_approval_voters(&config).unwrap();
+    assert_eq!(voters, expected);
+    assert!(!voters.contains(&legacy_id));
+}
+
+#[test]
+fn configured_approval_voters_fail_closed_for_malformed_explicit_approvers() {
+    let mut config = test_config("suspicious_process_tree");
+    let legacy = Ed25519Signer::from_secret_material("legacy-auth-id");
+    config.operator.auth.operator_id = format!("swarm:ed25519:{}", legacy.public_key_hex());
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "operator-legacy-approver".to_string(),
+        token_env: "SWARM_APPROVAL_LEGACY".to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+
+    assert!(matches!(
+        super::configured_approval_voters(&config),
+        Err(super::ApprovalVoterConfigError::NoEligibleApprover)
+    ));
+}
+
+#[test]
+fn configured_approval_voters_keep_canonical_legacy_fallback() {
+    let signer = Ed25519Signer::from_secret_material("canonical-legacy-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.principals.clear();
+
+    assert_eq!(
+        super::configured_approval_voters(&config).unwrap(),
+        vec![voter_id]
+    );
+}
+
 #[tokio::test]
 async fn strategy_proposal_router_admits_verified_kitten_candidate_into_canary_lane() {
     // Floor below the candidate's measured 0.143 catch rate: assurance genuinely
@@ -1162,6 +1253,17 @@ fn live_demo_ingest_state() -> (IngestState, DefaultApprovalHarness) {
             .with_approval_harness(harness.clone()),
         harness,
     )
+}
+
+fn rehearsal_demo_ingest_state() -> (IngestState, DefaultApprovalHarness) {
+    let (mut state, harness) = live_demo_ingest_state();
+    let mut config = state.config_template.load_full().as_ref().clone();
+    config.runtime.mode = RuntimeMode::DetectOnly;
+    let config_path = temp_path("demo-rehearsal-inline");
+    state = IngestState::from_config(config_path, config)
+        .unwrap()
+        .with_approval_harness(harness.clone());
+    (state, harness)
 }
 
 fn bridge_health(entries: Vec<BridgeStatusSnapshot>) -> SharedBridgeHealth {
@@ -1311,13 +1413,6 @@ async fn parse_demo_replay_response(response: axum::response::Response) -> DemoR
 async fn parse_demo_dashboard_response(
     response: axum::response::Response,
 ) -> DemoDashboardSnapshot {
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&body).unwrap()
-}
-
-async fn parse_demo_approval_resume_response(
-    response: axum::response::Response,
-) -> DemoApprovalResumeResponse {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&body).unwrap()
 }
@@ -1524,6 +1619,75 @@ async fn handler_accepts_valid_batch() {
     assert!(!body.correlation_id.is_empty());
     assert_eq!(body.accepted.len(), 1);
     assert!(body.rejected.is_empty());
+}
+
+#[test]
+fn live_ingest_timestamp_validation_handles_seconds_milliseconds_and_invalid_values() {
+    assert_eq!(
+        super::normalized_ingest_timestamp_ms(1_700_000_000).unwrap(),
+        1_700_000_000_000
+    );
+    assert_eq!(
+        super::normalized_ingest_timestamp_ms(1_700_000_000_000).unwrap(),
+        1_700_000_000_000
+    );
+    assert!(matches!(
+        super::normalized_ingest_timestamp_ms(-1),
+        Err(super::IngestProcessingError::InvalidEventTimestamp { timestamp: -1 })
+    ));
+    assert!(matches!(
+        super::validate_live_event_timestamp(1_800_000_301, 1_800_000_000_000),
+        Err(super::IngestProcessingError::FutureEventTimestamp { .. })
+    ));
+}
+
+#[tokio::test]
+async fn handler_rejects_future_timestamp_before_detection_or_deposit() {
+    let state = test_ingest_state();
+    let app = ingest_router(state.clone());
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let mut event = valid_process_event_json();
+    event["timestamp"] = json!(now_ms + 6 * 60 * 1_000);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![event])).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = parse_response(response).await;
+    assert!(body.accepted.is_empty());
+    assert_eq!(body.rejected.len(), 1);
+    assert!(matches!(
+        body.rejected[0].status,
+        super::IngestEventStatus::Rejected
+    ));
+    assert!(
+        body.rejected[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("trusted ingest ceiling"))
+    );
+    assert!(
+        state
+            .current_substrate()
+            .recent_deposits(10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -1793,9 +1957,201 @@ async fn platform_api_routes_require_bearer_and_api_key_but_health_and_ingest_do
 }
 
 #[tokio::test]
+async fn governed_resume_requires_approve_bearer_and_fails_closed_without_pack_store() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_AUTH_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-auth-test-secret";
+    const READ_TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_READ_TEST_TOKEN";
+    const READ_TOKEN: &str = "governed-resume-read-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-auth-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: "governed-resume-auth-operator".to_string(),
+            token_env: TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: "governed-resume-read-operator".to_string(),
+            token_env: READ_TOKEN_ENV.to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read],
+        },
+    ];
+    unsafe {
+        std::env::set_var(TOKEN_ENV, TOKEN);
+        std::env::set_var(READ_TOKEN_ENV, READ_TOKEN);
+    }
+    let state = IngestState::from_config(temp_path("governed-resume-auth"), config).unwrap();
+    let app = detect_http_router(state);
+    let uri = "/v1/governance/approvals/approval-set:missing/resume";
+    let body = json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string();
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let forbidden = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {READ_TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let caller_selected_time = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "receipt_pack_id": "approval-receipt-pack:missing",
+                        "now_ms": 0,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        caller_selected_time.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let unavailable = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    unsafe {
+        std::env::remove_var(TOKEN_ENV);
+        std::env::remove_var(READ_TOKEN_ENV);
+    }
+}
+
+#[tokio::test]
+async fn governed_resume_fails_closed_when_receipt_pack_store_is_not_configured() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_STORE_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-store-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-store-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "governed-resume-store-operator".to_string(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+    unsafe { std::env::set_var(TOKEN_ENV, TOKEN) };
+    let root = temp_path("governed-resume-two-stores");
+    let harness = DefaultApprovalHarness::from_paths(root.join("sets"), root.join("ledgers"))
+        .expect("two-store compatibility harness should open");
+    let state = IngestState::from_config(temp_path("governed-resume-two-store-config"), config)
+        .unwrap()
+        .with_approval_harness(harness);
+    let response = detect_http_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/governance/approvals/approval-set:missing/resume")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    unsafe { std::env::remove_var(TOKEN_ENV) };
+}
+
+#[tokio::test]
+async fn governed_resume_fails_closed_when_persisted_pack_is_missing() {
+    const TOKEN_ENV: &str = "SWARM_GOVERNED_RESUME_MISSING_PACK_TEST_TOKEN";
+    const TOKEN: &str = "governed-resume-missing-pack-test-secret";
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
+    config.operator.auth.operator_id = "governed-resume-missing-pack-operator".to_string();
+    config.operator.auth.token_env = TOKEN_ENV.to_string();
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "governed-resume-missing-pack-operator".to_string(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+    unsafe { std::env::set_var(TOKEN_ENV, TOKEN) };
+    let root = temp_path("governed-resume-four-stores");
+    let harness = DefaultApprovalHarness::from_path(
+        root.join("config.yaml"),
+        root.join("verdicts"),
+        root.join("receipt-packs"),
+        root.join("sets"),
+        root.join("ledgers"),
+    )
+    .expect("four-store approval harness should open");
+    let state = IngestState::from_config(temp_path("governed-resume-four-store-config"), config)
+        .unwrap()
+        .with_approval_harness(harness);
+    let response = detect_http_router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/governance/approvals/approval-set:missing/resume")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"receipt_pack_id": "approval-receipt-pack:missing"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    unsafe { std::env::remove_var(TOKEN_ENV) };
+}
+
+#[tokio::test]
 async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
     let mut config = test_config("suspicious_process_tree");
-    enable_platform_api(&mut config);
+    enable_platform_api_with_token_env(&mut config, TEST_PLATFORM_API_ROTATION_BEARER_TOKEN_ENV);
+    // This test mutates its bearer secret mid-flight. Keep that mutation out of
+    // the shared helper env so it cannot invalidate another platform API test
+    // running in parallel.
     let app = detect_http_router(
         IngestState::from_config(temp_path("platform-auth-rotation"), config).unwrap(),
     );
@@ -1813,7 +2169,7 @@ async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
 
     unsafe {
         std::env::set_var(
-            TEST_PLATFORM_API_BEARER_TOKEN_ENV,
+            TEST_PLATFORM_API_ROTATION_BEARER_TOKEN_ENV,
             "platform-bearer-rotated",
         );
     }
@@ -3085,15 +3441,10 @@ async fn demo_replay_endpoint_injects_events_into_runtime_lane() {
 }
 
 #[tokio::test]
-async fn human_gated_demo_replay_can_resume_and_export_proof() {
-    unsafe {
-        std::env::set_var("SWARM_EVIDENCE_SIGNING_KEY", "demo-proof-signing-key");
-    }
-
-    let scenario_path = temp_path("demo-scenario-human-gate");
+async fn detect_only_governed_demo_produces_rehearsal_proof_without_live_approval() {
+    let scenario_path = temp_path("demo-scenario-detect-only-governed");
     write_human_gate_demo_scenario(&scenario_path);
-    let (state, harness) = live_demo_ingest_state();
-    let operator_id = state.operator_id();
+    let (state, harness) = rehearsal_demo_ingest_state();
     let app = detect_http_router(state);
 
     let replay_response = app
@@ -3113,52 +3464,7 @@ async fn human_gated_demo_replay_can_resume_and_export_proof() {
     assert_eq!(replay_response.status(), StatusCode::OK);
     let replay_body = parse_demo_replay_response(replay_response).await;
 
-    let approval_sets = harness.list_approval_sets().unwrap();
-    assert_eq!(approval_sets.total_count, 1);
-    let approval_set_id = approval_sets.sets[0].set_id.clone();
-    let approval_ledgers = harness.list_ledgers(Some(&approval_set_id)).unwrap();
-    assert_eq!(approval_ledgers.total_count, 1);
-    let approval_ledger_id = approval_ledgers.ledgers[0].ledger_id.clone();
-
-    let voter = Ed25519Signer::from_secret_material("demo-operator-vote-key");
-    let quorum = harness
-        .append_vote(&approval_set_id, &operator_id, &voter)
-        .unwrap();
-    assert!(quorum.quorum_met);
-
-    let verdict = harness
-        .create_verdict(&approval_set_id, &approval_ledger_id)
-        .unwrap();
-    let receipt_pack = harness
-        .export_receipt_pack(
-            &verdict.report.verdict_id,
-            "demo-proof-signer",
-            "SWARM_EVIDENCE_SIGNING_KEY",
-        )
-        .unwrap();
-
-    let resume_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/demo/approvals/{approval_set_id}/resume"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::to_string(&DemoApprovalResumeRequest {
-                        receipt_pack: receipt_pack.report.clone(),
-                    })
-                    .unwrap(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resume_response.status(), StatusCode::OK);
-    let resume_body = parse_demo_approval_resume_response(resume_response).await;
-    assert_eq!(resume_body.approval_set_id, approval_set_id);
-    assert_eq!(resume_body.receipt_pack_id, receipt_pack.report.pack_id);
-    assert_eq!(resume_body.response_kind, "success");
+    assert_eq!(harness.list_approval_sets().unwrap().total_count, 0);
 
     let proof_response = app
         .oneshot(
@@ -3173,25 +3479,56 @@ async fn human_gated_demo_replay_can_resume_and_export_proof() {
     assert_eq!(proof_response.status(), StatusCode::OK);
     let proof = parse_demo_proof_response(proof_response).await;
     assert_eq!(proof.run_id, replay_body.run_id);
-    assert_eq!(proof.signed_receipts.len(), 1);
-    assert_eq!(
-        proof.signed_receipts[0].pack_id,
-        receipt_pack.report.pack_id
-    );
+    assert!(proof.signed_receipts.is_empty());
     assert!(!proof.final_incident.incident_id.is_empty());
     assert!(
         proof
             .decision_timeline
             .iter()
-            .any(|entry| entry.stage == "approval_paused")
+            .any(|entry| entry.stage == "replay_step_decision")
     );
     assert!(
         proof
             .decision_timeline
             .iter()
-            .any(|entry| entry.stage == "approval_resumed")
+            .all(|entry| entry.stage != "governance_deferred")
     );
-    assert!(proof.merkle_leaves.len() >= 5);
+    assert!(proof.merkle_leaves.len() >= 2);
+
+    let _ = fs::remove_file(scenario_path);
+}
+
+#[tokio::test]
+async fn live_governed_demo_defers_without_creating_human_approval() {
+    let scenario_path = temp_path("demo-scenario-governance-deferred");
+    write_human_gate_demo_scenario(&scenario_path);
+    let (state, harness) = live_demo_ingest_state();
+    let app = detect_http_router(state.clone());
+
+    let replay_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/demo/replay")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&demo_replay_request(&scenario_path)).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(replay_response.status(), StatusCode::OK);
+    let replay = parse_demo_replay_response(replay_response).await;
+    assert_eq!(harness.list_approval_sets().unwrap().total_count, 0);
+    let run = state.load_demo_run(&replay.run_id).unwrap();
+    assert!(
+        run.timeline
+            .iter()
+            .any(|entry| entry.stage == "governance_deferred")
+    );
+    assert!(run.approvals.is_empty());
 
     let _ = fs::remove_file(scenario_path);
 }
@@ -3810,12 +4147,14 @@ mod providence_callback {
 
 mod providence_feedback {
     use super::*;
-    use swarm_core::types::{AgentId, ProvidenceFeedbackAction, SwarmProvidenceFeedbackRequest};
+    use swarm_core::types::{
+        AgentId, ProvidenceFeedbackAction, SwarmFeedbackSignal, SwarmProvidenceFeedbackRequest,
+    };
     use swarm_crypto::{canonical_json_bytes, hmac_sha256_hex};
     use swarm_pheromone::DepositSigningPayload;
     use swarm_runtime::drafting::EvolutionValidationBundleStatus;
     use swarm_runtime::evolution::{EvolutionProposalProofStatus, EvolutionProposalReviewState};
-    use swarm_runtime::kitten_agent::KittenFeedbackSignalRecord;
+    use swarm_runtime::kitten_agent::{KittenFeedbackSignalRecord, route_feedback_signal};
     use swarm_runtime::mutation::{
         EvolutionPopulationCandidate, EvolutionPopulationFitnessObjectives,
         EvolutionPopulationState, FileEvolutionPopulationStore,
@@ -3876,6 +4215,19 @@ mod providence_feedback {
                     .to_string(),
             },
         );
+    }
+
+    #[tokio::test]
+    async fn feedback_clock_is_strictly_monotonic_across_state_clones() {
+        let state = IngestState::from_config(
+            super::temp_path("feedback-monotonic-clock"),
+            super::test_config("suspicious_process_tree"),
+        )
+        .unwrap();
+        let clone = state.clone();
+        let first = state.next_providence_feedback_timestamp_ms().await.unwrap();
+        let second = clone.next_providence_feedback_timestamp_ms().await.unwrap();
+        assert!(second > first);
     }
 
     fn feedback_signature(payload: &SwarmProvidenceFeedbackRequest) -> String {
@@ -3943,6 +4295,103 @@ mod providence_feedback {
             .unwrap();
     }
 
+    #[tokio::test]
+    async fn feedback_clock_reservation_survives_partial_commit_and_restart() {
+        let incident_root = temp_dir("feedback-durable-clock");
+        let mut config = super::test_config("suspicious_process_tree");
+        config.correlation.incident_store = BundleStoreConfig::LocalFiles {
+            directory: incident_root.display().to_string(),
+        };
+        config.pheromone.backend = PheromoneBackendConfig::LocalJournal {
+            path: incident_root
+                .join("pheromone-feedback.jsonl")
+                .display()
+                .to_string(),
+        };
+        let config_path = super::temp_path("feedback-durable-clock-config");
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let state = IngestState::from_config_with_signing_key(
+            config_path.clone(),
+            config.clone(),
+            signing_key.clone(),
+        )
+        .unwrap();
+        seed_feedback_incident(
+            &state,
+            "incident-durable-clock",
+            "event-durable-clock",
+            "host-durable-clock",
+            "suspicious_process_tree",
+            1_700_000_000_000,
+        );
+        let durable_high_water = now_ms().saturating_add(60_000);
+        let mut incident = state
+            .current_incident_store()
+            .load_by_incident_id("incident-durable-clock")
+            .unwrap()
+            .unwrap()
+            .incident;
+        incident
+            .feedback_audit_entries
+            .push(swarm_spine::AnalystFeedbackAuditEntry {
+                feedback_id: "durable-feedback".to_string(),
+                received_at_ms: durable_high_water,
+                action: ProvidenceFeedbackAction::Confirm,
+                analyst_id: "analyst-durable".to_string(),
+                incident_id: incident.incident_id.clone(),
+                finding_id: Some("finding-event-durable-clock".to_string()),
+                reason: None,
+                request_signature: "sha256=durable".to_string(),
+                evidence: None,
+                soar_lineage: None,
+                payload: json!({"source": "durable-clock-test"}),
+                outcome: json!({"status": "recorded"}),
+                soar_claim_lease: None,
+            });
+        state.current_incident_store().persist(&incident).unwrap();
+        let reserved_high_water = state.next_providence_feedback_timestamp_ms().await.unwrap();
+        assert!(reserved_high_water > durable_high_water);
+        crate::ingest::providence_handlers::apply_providence_feedback(
+            &state,
+            &SwarmProvidenceFeedbackRequest {
+                action: ProvidenceFeedbackAction::Confirm,
+                incident_id: "incident-durable-clock".to_string(),
+                finding_id: Some("finding-event-durable-clock".to_string()),
+                analyst_id: "analyst-partial-commit".to_string(),
+                reason: Some("durable substrate before audit".to_string()),
+            },
+            &swarm_runtime::providence::ProvidenceFeedbackTarget {
+                incident_id: "incident-durable-clock".to_string(),
+                finding_id: "finding-event-durable-clock".to_string(),
+                hunt_id: "event-durable-clock".to_string(),
+                event_id: "event-durable-clock".to_string(),
+                replay_bundle_id: None,
+                replay_bundle_digest: None,
+                evidence_timestamp: None,
+                host_id: Some("host-durable-clock".to_string()),
+                strategy_id: Some("suspicious_process_tree".to_string()),
+                threat_class: ThreatClass::Execution,
+                severity: Severity::High,
+            },
+            "partial-commit-feedback",
+            reserved_high_water,
+        )
+        .await
+        .unwrap();
+        drop(state);
+
+        let reopened =
+            IngestState::from_config_with_signing_key(config_path, config, signing_key).unwrap();
+        assert!(
+            reopened
+                .next_providence_feedback_timestamp_ms()
+                .await
+                .unwrap()
+                > reserved_high_water,
+            "a restarted process must advance beyond a reservation whose substrate write completed before its audit"
+        );
+    }
+
     async fn seed_feedback_deposit(
         state: &IngestState,
         _agent_label: &str,
@@ -3967,8 +4416,8 @@ mod providence_feedback {
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
             confidence,
-            timestamp,
-            decay_half_life: 3600.0,
+            timestamp: timestamp.div_euclid(1_000),
+            decay_half_life: TEST_LIVE_HALF_LIFE_SECS,
             agent_id: agent_id.clone(),
             agent_identity: agent_id.0,
             agent_role: None,
@@ -4012,6 +4461,7 @@ mod providence_feedback {
                 population_size: 4,
                 pareto_tournament_size: 2,
                 proposal_timestamps_ms: Vec::new(),
+                applied_feedback_operations: Default::default(),
                 members: vec![EvolutionPopulationCandidate {
                     generation: 1,
                     generation_created_at_ms: 1_800_900_000_000,
@@ -4115,6 +4565,160 @@ mod providence_feedback {
         assert_eq!(entry.outcome["substrate"]["status"], "suppressed");
         assert_eq!(entry.outcome["memory"]["disposition"], "audit_only");
         assert_eq!(entry.outcome["kitten"]["disposition"], "pending");
+        let feedback_deposit = state
+            .current_substrate()
+            .recent_deposits(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|deposit| {
+                deposit.indicator["feedback_id"]
+                    == serde_json::Value::String(entry.feedback_id.clone())
+            })
+            .unwrap();
+        assert_eq!(
+            feedback_deposit.indicator["governed_evidence_timestamp"],
+            serde_json::json!(1_700_100_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_target_event_id_is_bound_to_the_selected_replay_bundle() {
+        let state = IngestState::from_config(
+            super::temp_path("feedback-selected-replay-event"),
+            super::test_config("suspicious_process_tree"),
+        )
+        .unwrap();
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-selected-replay",
+            "host-selected-replay",
+            1_700_105_000_000,
+        );
+        seed_feedback_incident(
+            &state,
+            "incident-selected-replay",
+            "evt-trigger",
+            "host-trigger",
+            "trigger-strategy",
+            1_700_105_000_000,
+        );
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-selected-replay")
+            .unwrap()
+            .unwrap();
+        let target = swarm_runtime::providence::ProvidenceFeedbackTarget {
+            incident_id: lookup.incident.incident_id.clone(),
+            finding_id: "finding-evt-selected-replay".to_string(),
+            hunt_id: "evt-selected-replay".to_string(),
+            event_id: "evt-trigger".to_string(),
+            replay_bundle_id: None,
+            replay_bundle_digest: None,
+            evidence_timestamp: None,
+            host_id: None,
+            strategy_id: None,
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+        };
+        let enriched =
+            crate::ingest::providence_handlers::enrich_feedback_target(&state, &lookup, &target)
+                .unwrap();
+        assert_eq!(enriched.event_id, "evt-selected-replay");
+        assert_eq!(enriched.host_id.as_deref(), Some("host-selected-replay"));
+        assert_eq!(
+            enriched.replay_bundle_id.as_deref(),
+            Some("bundle-evt-selected-replay")
+        );
+        assert!(
+            enriched
+                .replay_bundle_digest
+                .as_ref()
+                .is_some_and(|digest| digest.len() == 64)
+        );
+    }
+
+    #[tokio::test]
+    async fn investigation_feedback_uses_the_replay_bundle_frozen_in_its_target() {
+        let mut config = super::test_config("suspicious_process_tree");
+        config.investigation.enabled = true;
+        let state =
+            IngestState::from_config(super::temp_path("feedback-frozen-replay-bundle"), config)
+                .unwrap();
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-frozen-replay",
+            "host-original",
+            1_700_106_000_000,
+        );
+        seed_feedback_incident(
+            &state,
+            "incident-frozen-replay",
+            "evt-frozen-replay",
+            "host-original",
+            "suspicious_process_tree",
+            1_700_106_000_000,
+        );
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-frozen-replay")
+            .unwrap()
+            .unwrap();
+        let unresolved = swarm_runtime::providence::resolve_feedback_target(
+            &lookup,
+            Some("finding-evt-frozen-replay"),
+        )
+        .unwrap();
+        let frozen = crate::ingest::providence_handlers::enrich_feedback_target(
+            &state,
+            &lookup,
+            &unresolved,
+        )
+        .unwrap();
+        let frozen_bundle_id = frozen.replay_bundle_id.clone().unwrap();
+
+        let mut newer = state
+            .current_replay_store()
+            .load_by_bundle_id(&frozen_bundle_id)
+            .unwrap()
+            .unwrap()
+            .bundle;
+        newer.bundle_id = "bundle-newer-same-hunt".to_string();
+        newer.audit.created_at_ms += 1_000;
+        newer.event.host_id = Some("host-newer".to_string());
+        state.current_replay_store().persist(&newer).unwrap();
+        assert_eq!(
+            state
+                .current_replay_store()
+                .load_by_hunt_id("evt-frozen-replay")
+                .unwrap()
+                .unwrap()
+                .record
+                .bundle_id,
+            "bundle-newer-same-hunt"
+        );
+
+        crate::ingest::providence_handlers::apply_providence_feedback(
+            &state,
+            &SwarmProvidenceFeedbackRequest {
+                action: ProvidenceFeedbackAction::Investigate,
+                incident_id: "incident-frozen-replay".to_string(),
+                finding_id: Some("finding-evt-frozen-replay".to_string()),
+                analyst_id: "analyst-frozen-replay".to_string(),
+                reason: Some("freeze exact replay".to_string()),
+            },
+            &frozen,
+            "feedback-frozen-replay",
+            1_700_106_001_000,
+        )
+        .await
+        .unwrap();
+        let investigation = state
+            .current_investigation()
+            .load_by_hunt_id("evt-frozen-replay")
+            .unwrap()
+            .unwrap();
+        assert_eq!(investigation.bundle.source_bundle_id, frozen_bundle_id);
     }
 
     #[tokio::test]
@@ -4187,7 +4791,7 @@ mod providence_feedback {
 
         let before_confirm = state
             .current_substrate()
-            .query_concentration(&ThreatClass::Execution, super::now_ms())
+            .query_concentration(&ThreatClass::Execution, super::now_ms().div_euclid(1_000))
             .await
             .unwrap()
             .total_strength;
@@ -4208,7 +4812,7 @@ mod providence_feedback {
 
         let after_confirm = state
             .current_substrate()
-            .query_concentration(&ThreatClass::Execution, super::now_ms())
+            .query_concentration(&ThreatClass::Execution, super::now_ms().div_euclid(1_000))
             .await
             .unwrap()
             .total_strength;
@@ -4229,7 +4833,7 @@ mod providence_feedback {
 
         let suppressed = state
             .current_substrate()
-            .query_concentration(&ThreatClass::Execution, super::now_ms())
+            .query_concentration(&ThreatClass::Execution, super::now_ms().div_euclid(1_000))
             .await
             .unwrap()
             .total_strength;
@@ -4457,18 +5061,130 @@ mod providence_feedback {
         assert_eq!(applied_response.status(), StatusCode::OK);
         let applied_json: Value = super::parse_json(applied_response).await;
         assert_eq!(applied_json["outcome"]["kitten"]["disposition"], "applied");
+        let feedback_id = applied_json["feedback_id"].as_str().unwrap().to_string();
 
-        let population = FileEvolutionPopulationStore::open(applied_root.join("population"))
-            .unwrap()
-            .load()
-            .unwrap()
-            .unwrap();
-        assert!(population.members[0].fitness < 0.80);
+        let population_store =
+            FileEvolutionPopulationStore::open(applied_root.join("population")).unwrap();
+        let population = population_store.load().unwrap().unwrap();
+        let penalized_fitness = population.members[0].fitness;
+        assert!(penalized_fitness < 0.80);
         assert!(
             population.members[0]
                 .blocking_reason_names
                 .iter()
                 .any(|reason| reason == "analyst_false_positive_feedback")
+        );
+        assert_eq!(population.applied_feedback_operations.len(), 1);
+
+        // Simulate a crash after the signed population transaction committed but
+        // before the append-only audit record became durable. The operation
+        // ledger must make the retry repair the audit without applying a second
+        // fitness penalty.
+        let applied_record = load_feedback_signal_records(applied_root.join("population"))
+            .unwrap()
+            .into_iter()
+            .find(|record| {
+                record.disposition
+                    == swarm_runtime::kitten_agent::FeedbackSignalDisposition::Applied
+            })
+            .unwrap();
+        fs::remove_file(applied_root.join("population").join(FEEDBACK_SIGNALS_FILE)).unwrap();
+        fs::remove_dir_all(applied_root.join("population").join("feedback-operations")).unwrap();
+        let stack = applied_state.stack.load_full();
+        let retried = route_feedback_signal(
+            applied_state.config_path(),
+            &stack.service.config,
+            true,
+            &SwarmFeedbackSignal {
+                operation_id: Some(feedback_id),
+                action: applied_record.action,
+                incident_id: applied_record.incident_id.clone(),
+                finding_id: applied_record.finding_id.clone(),
+                strategy_id: applied_record.strategy_id.clone(),
+                threat_class: applied_record.threat_class.clone(),
+                analyst_id: applied_record.analyst_id.clone(),
+                reason: applied_record.reason.clone(),
+                recorded_at_ms: applied_record.recorded_at_ms,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            retried.disposition,
+            swarm_runtime::kitten_agent::FeedbackSignalDisposition::Applied
+        );
+        let retried_population = population_store.load().unwrap().unwrap();
+        assert_eq!(retried_population.applied_feedback_operations.len(), 1);
+        assert!((retried_population.members[0].fitness - penalized_fitness).abs() < f64::EPSILON);
+        assert_eq!(
+            load_feedback_signal_records(applied_root.join("population"))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Fill the signed population cache to its exact bound. The oldest
+        // marker has an independently durable applied audit record, so the
+        // next valid operation must roll that cache entry instead of imposing
+        // a lifetime service ceiling.
+        let signed_population_store = FileEvolutionPopulationStore::open_signed(
+            applied_root.join("population"),
+            kitten_identity.id.clone(),
+            kitten_identity.signing_key.clone(),
+        )
+        .unwrap();
+        let oldest_marker = retried_population
+            .applied_feedback_operations
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        signed_population_store
+            .update_trusted(&kitten_identity.id, |state| {
+                for index in 1..swarm_runtime::mutation::MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS {
+                    state.applied_feedback_operations.insert(
+                        format!("{index:064x}"),
+                        swarm_runtime::mutation::EvolutionAppliedFeedbackOperation {
+                            operation_digest: format!("{:064x}", index + 1),
+                            strategy_id: "suspicious_process_tree".to_string(),
+                            penalty: 0.20,
+                            applied_at_ms: applied_record.recorded_at_ms + index as i64,
+                        },
+                    );
+                }
+                Ok(true)
+            })
+            .unwrap();
+        let rolled = route_feedback_signal(
+            applied_state.config_path(),
+            &stack.service.config,
+            true,
+            &SwarmFeedbackSignal {
+                operation_id: Some("feedback-rollover-operation".to_string()),
+                action: ProvidenceFeedbackAction::Dismiss,
+                incident_id: "incident-feedback-applied".to_string(),
+                finding_id: Some("finding-evt-feedback-applied".to_string()),
+                strategy_id: Some("suspicious_process_tree".to_string()),
+                threat_class: Some(ThreatClass::Execution),
+                analyst_id: "analyst-rollover".to_string(),
+                reason: Some("exercise bounded rollover".to_string()),
+                recorded_at_ms: applied_record.recorded_at_ms
+                    + swarm_runtime::mutation::MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS as i64,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            rolled.disposition,
+            swarm_runtime::kitten_agent::FeedbackSignalDisposition::Applied
+        );
+        let rolled_population = population_store.load().unwrap().unwrap();
+        assert_eq!(
+            rolled_population.applied_feedback_operations.len(),
+            swarm_runtime::mutation::MAX_EVOLUTION_APPLIED_FEEDBACK_OPERATIONS
+        );
+        assert!(
+            !rolled_population
+                .applied_feedback_operations
+                .contains_key(&oldest_marker)
         );
 
         let pending_root = temp_dir("feedback-pending");
@@ -4577,38 +5293,54 @@ mod soar_verdict_sync {
     ) {
         state
             .current_incident_store()
-            .persist(&CorrelatedIncident {
-                incident_id: incident_id.to_string(),
-                summary: format!("soar incident for {event_id}"),
+            .persist(&soar_incident(
+                incident_id,
+                event_id,
+                host_id,
+                strategy_id,
                 created_at_ms,
-                window_start_ms: created_at_ms,
-                window_end_ms: created_at_ms + 1,
-                correlation_keys: vec![format!("host:{host_id}")],
-                related_receipt_ids: vec![format!("receipt-{event_id}")],
-                included_members: vec![swarm_spine::IncidentMemberDecision {
-                    investigation_id: format!("investigation-{event_id}"),
-                    hunt_id: event_id.to_string(),
-                    finding_id: format!("finding-{event_id}"),
-                    reason: "soar fixture".to_string(),
-                    shared_keys: vec![format!("host:{host_id}")],
-                    evidence_links: Vec::new(),
-                    confidence_score: 1.0,
-                }],
-                rejected_members: Vec::new(),
-                graph_dimensions: Vec::new(),
-                confidence_score: 1.0,
-                trigger_event_id: Some(event_id.to_string()),
-                trigger_finding_id: Some(format!("finding-{event_id}")),
-                trigger_strategy_id: Some(strategy_id.to_string()),
-                threat_class: Some(ThreatClass::Execution),
-                severity: Some(Severity::High),
-                external_references: Vec::new(),
-                providence_reconciliation: None,
-                providence_callback_audit_entries: Vec::new(),
-                feedback_audit_entries: Vec::new(),
-                false_positive_measurements: Vec::new(),
-            })
+            ))
             .unwrap();
+    }
+
+    fn soar_incident(
+        incident_id: &str,
+        event_id: &str,
+        host_id: &str,
+        strategy_id: &str,
+        created_at_ms: i64,
+    ) -> CorrelatedIncident {
+        CorrelatedIncident {
+            incident_id: incident_id.to_string(),
+            summary: format!("soar incident for {event_id}"),
+            created_at_ms,
+            window_start_ms: created_at_ms,
+            window_end_ms: created_at_ms + 1,
+            correlation_keys: vec![format!("host:{host_id}")],
+            related_receipt_ids: vec![format!("receipt-{event_id}")],
+            included_members: vec![swarm_spine::IncidentMemberDecision {
+                investigation_id: format!("investigation-{event_id}"),
+                hunt_id: event_id.to_string(),
+                finding_id: format!("finding-{event_id}"),
+                reason: "soar fixture".to_string(),
+                shared_keys: vec![format!("host:{host_id}")],
+                evidence_links: Vec::new(),
+                confidence_score: 1.0,
+            }],
+            rejected_members: Vec::new(),
+            graph_dimensions: Vec::new(),
+            confidence_score: 1.0,
+            trigger_event_id: Some(event_id.to_string()),
+            trigger_finding_id: Some(format!("finding-{event_id}")),
+            trigger_strategy_id: Some(strategy_id.to_string()),
+            threat_class: Some(ThreatClass::Execution),
+            severity: Some(Severity::High),
+            external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
+            feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
+        }
     }
 
     #[tokio::test]
@@ -4768,7 +5500,7 @@ mod soar_verdict_sync {
     }
 
     #[tokio::test]
-    async fn duplicate_soar_verdicts_fail_closed_and_persist_rejection_audit() {
+    async fn concurrent_exact_soar_retries_apply_once_and_conflicting_reuse_fails_closed() {
         let mut config = super::test_config("suspicious_process_tree");
         configure_soar_channel(&mut config);
         let state =
@@ -4802,15 +5534,46 @@ mod soar_verdict_sync {
         };
 
         let app = detect_http_router(state.clone());
-        let first = app
+        let (first, second) = tokio::join!(
+            app.clone().oneshot(signed_soar_request(&payload)),
+            app.clone().oneshot(signed_soar_request(&payload))
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(second.status(), StatusCode::OK);
+        let first: Value = super::parse_json(first).await;
+        let second: Value = super::parse_json(second).await;
+        assert_eq!(first["feedback_id"], second["feedback_id"]);
+        assert_eq!(first["outcome"], second["outcome"]);
+
+        let mut completed_incident = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-duplicate")
+            .unwrap()
+            .unwrap()
+            .incident;
+        completed_incident.included_members.clear();
+        completed_incident.trigger_finding_id = None;
+        completed_incident.trigger_event_id = None;
+        state
+            .current_incident_store()
+            .persist(&completed_incident)
+            .unwrap();
+        let retry_after_target_removal = app
             .clone()
             .oneshot(signed_soar_request(&payload))
             .await
             .unwrap();
-        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(retry_after_target_removal.status(), StatusCode::OK);
 
-        let second = app.oneshot(signed_soar_request(&payload)).await.unwrap();
-        assert_eq!(second.status(), StatusCode::CONFLICT);
+        let mut conflicting = payload.clone();
+        conflicting.reason = Some("different verdict payload".to_string());
+        let conflict = app
+            .oneshot(signed_soar_request(&conflicting))
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
 
         let lookup = state
             .current_incident_store()
@@ -4818,14 +5581,102 @@ mod soar_verdict_sync {
             .unwrap()
             .unwrap();
         assert_eq!(lookup.incident.false_positive_measurements.len(), 1);
-        assert_eq!(lookup.incident.feedback_audit_entries.len(), 2);
-        let rejected = &lookup.incident.feedback_audit_entries[1];
-        assert_eq!(rejected.outcome["status"], "rejected");
-        assert_eq!(rejected.outcome["reason"], "duplicate source verdict");
-        assert_eq!(
-            rejected.soar_lineage.as_ref().unwrap().source_verdict_id,
-            "splunk-duplicate-1"
+        assert_eq!(lookup.incident.feedback_audit_entries.len(), 1);
+        assert!(lookup.incident.feedback_audit_entries[0].evidence.is_some());
+    }
+
+    #[tokio::test]
+    async fn rolling_upgrade_retry_preserves_the_durable_legacy_feedback_id() {
+        let mut config = super::test_config("suspicious_process_tree");
+        configure_soar_channel(&mut config);
+        let state =
+            IngestState::from_config(super::temp_path("soar-verdict-legacy-id"), config).unwrap();
+        super::seed_platform_replay_bundle(
+            &state,
+            "evt-soar-legacy-id",
+            "host-legacy-id",
+            1_700_130_150_000,
         );
+        let payload = SwarmSoarVerdictRequest {
+            source_system: SoarSourceSystem::SplunkSoar,
+            source_verdict_id: "legacy/case?42".to_string(),
+            verdict_at_ms: 1_700_130_151_000,
+            action: ProvidenceFeedbackAction::Dismiss,
+            incident_id: "incident-soar-legacy-id".to_string(),
+            finding_id: Some("finding-evt-soar-legacy-id".to_string()),
+            analyst_id: "legacy-analyst".to_string(),
+            reason: Some("rolling upgrade retry".to_string()),
+            source_case_id: Some("legacy-case-42".to_string()),
+            source_case_url: None,
+        };
+        let legacy_feedback_id = "soar-verdict:splunk_soar:legacy_case_42";
+        let mut incident = soar_incident(
+            "incident-soar-legacy-id",
+            "evt-soar-legacy-id",
+            "host-legacy-id",
+            "suspicious_process_tree",
+            1_700_130_150_000,
+        );
+        incident
+            .feedback_audit_entries
+            .push(swarm_spine::AnalystFeedbackAuditEntry {
+                feedback_id: legacy_feedback_id.to_string(),
+                received_at_ms: 1_700_130_151_100,
+                action: payload.action,
+                analyst_id: payload.analyst_id.clone(),
+                incident_id: payload.incident_id.clone(),
+                finding_id: payload.finding_id.clone(),
+                reason: payload.reason.clone(),
+                request_signature: soar_signature(&payload),
+                evidence: None,
+                soar_lineage: Some(swarm_core::types::SoarVerdictLineage {
+                    source_system: payload.source_system,
+                    source_verdict_id: payload.source_verdict_id.clone(),
+                    verdict_at_ms: payload.verdict_at_ms,
+                    source_case_id: payload.source_case_id.clone(),
+                    source_case_url: payload.source_case_url.clone(),
+                }),
+                payload: serde_json::to_value(&payload).unwrap(),
+                outcome: serde_json::json!({
+                    "status": "recorded",
+                    "target": {
+                        "incident_id": "incident-soar-legacy-id",
+                        "finding_id": "finding-evt-soar-legacy-id",
+                        "hunt_id": "evt-soar-legacy-id",
+                        "event_id": "evt-soar-legacy-id",
+                        "evidence_timestamp": 1_700_130_150,
+                        "host_id": "host-legacy-id",
+                        "strategy_id": "suspicious_process_tree",
+                        "threat_class": "execution",
+                        "severity": "HIGH"
+                    }
+                }),
+                soar_claim_lease: Some(swarm_spine::SoarVerdictClaimLease {
+                    token: "pre-upgrade-expired-lease".to_string(),
+                    issued_at_ms: None,
+                    expires_at_ms: 1_700_130_151_101,
+                }),
+            });
+        state.current_incident_store().persist(&incident).unwrap();
+
+        let app = detect_http_router(state.clone());
+        let retry = app.oneshot(signed_soar_request(&payload)).await.unwrap();
+        let retry_status = retry.status();
+        let retry: Value = super::parse_json(retry).await;
+        assert_eq!(retry_status, StatusCode::OK, "retry response: {retry}");
+        assert_eq!(retry["feedback_id"], legacy_feedback_id);
+        let retained = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-legacy-id")
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.incident.feedback_audit_entries.len(), 1);
+        assert!(
+            retained.incident.feedback_audit_entries[0]
+                .evidence
+                .is_some()
+        );
+        assert_eq!(retained.incident.false_positive_measurements.len(), 1);
     }
 
     #[tokio::test]
@@ -4863,7 +5714,11 @@ mod soar_verdict_sync {
         };
 
         let app = detect_http_router(state.clone());
-        let response = app.oneshot(signed_soar_request(&payload)).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(signed_soar_request(&payload))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let lookup = state
@@ -4883,6 +5738,40 @@ mod soar_verdict_sync {
             rejected.soar_lineage.as_ref().unwrap().source_system,
             SoarSourceSystem::SentinelSoar
         );
+
+        let mut corrected = payload;
+        corrected.source_verdict_id = "sentinel-corrected-redelivery".to_string();
+        corrected.analyst_id.clear();
+        let rejected = app
+            .clone()
+            .oneshot(signed_soar_request(&corrected))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        corrected.analyst_id = "corrected-analyst".to_string();
+        let accepted = app.oneshot(signed_soar_request(&corrected)).await.unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+
+        let lookup = state
+            .current_incident_store()
+            .load_by_incident_id("incident-soar-incomplete")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lookup
+                .incident
+                .feedback_audit_entries
+                .iter()
+                .filter(|entry| {
+                    entry.soar_lineage.as_ref().is_some_and(|lineage| {
+                        lineage.source_verdict_id == "sentinel-corrected-redelivery"
+                    })
+                })
+                .count(),
+            2,
+            "the rejected audit is retained while corrected redelivery completes"
+        );
+        assert_eq!(lookup.incident.false_positive_measurements.len(), 1);
     }
 }
 
@@ -5146,6 +6035,115 @@ async fn handler_forwards_accepted_events_to_agent_buffer() {
 }
 
 #[tokio::test]
+async fn live_ingest_defers_governed_playbook_action_but_deposits_and_forwards() {
+    let mut config = live_response_playbook_config(ResponseAction::BlockEgress {
+        target: "203.0.113.25".to_string(),
+    });
+    config.policy.rules = vec![PolicyRuleConfig {
+        name: "would-execute-without-governance-boundary".to_string(),
+        decision: PolicyRuleDecision::Allow,
+        threat_class: ThreatClass::Execution,
+        actions: vec![PolicyActionSelector::BlockEgress],
+        min_severity: Severity::Critical,
+        max_severity: Severity::Critical,
+        time_window_utc: None,
+        max_actions_per_agent_per_minute: None,
+        reason: Some("security regression fixture".to_string()),
+    }];
+    let (tx, mut rx) = mpsc::channel(4);
+    let state = IngestState::from_config(temp_path("governed-live-ingest"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report())
+        .with_telemetry_channel(tx);
+    let app = ingest_router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![valid_process_event_json()]))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(rx.recv().await.unwrap().event_id, "evt-ingest-1");
+    let deposits = state.current_substrate().recent_deposits(10).await.unwrap();
+    assert_eq!(deposits.len(), 1, "the finding must still be deposited");
+    assert_eq!(deposits[0].indicator["event_id"], "evt-ingest-1");
+    assert!(
+        state.current_replay_store().recent(10).unwrap().is_empty(),
+        "direct ingest must not propose or execute a governed action"
+    );
+}
+
+#[tokio::test]
+async fn live_ingest_still_executes_non_governed_playbook_action() {
+    let config = live_response_playbook_config(ResponseAction::Escalate {
+        summary: "notify the response team".to_string(),
+        urgency: Severity::Critical,
+    });
+    let state = IngestState::from_config(temp_path("non-governed-live-ingest"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report());
+    let app = ingest_router(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![valid_process_event_json()]))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let decisions = state.current_replay_store().recent(10).unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].action_kind, "escalate");
+    assert_eq!(decisions[0].response_kind, "success");
+}
+
+#[tokio::test]
+async fn bridge_ingest_defers_governed_playbook_action_and_forwards_to_agents() {
+    let config = live_response_playbook_config(ResponseAction::IsolateHost {
+        host_id: "host-1".to_string(),
+    });
+    let (tx, mut rx) = mpsc::channel(4);
+    let state = IngestState::from_config(temp_path("governed-bridge-ingest"), config)
+        .unwrap()
+        .with_startup_attestation(verified_startup_attestation_report())
+        .with_telemetry_channel(tx);
+    let event = validate_and_parse(valid_process_event_json()).unwrap();
+
+    state.process_bridge_event(event).await.unwrap();
+
+    assert_eq!(rx.recv().await.unwrap().event_id, "evt-ingest-1");
+    assert_eq!(
+        state
+            .current_substrate()
+            .recent_deposits(10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(state.current_replay_store().recent(10).unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn healthz_includes_agent_component_when_available() {
     let health = Arc::new(ArcSwap::from_pointee(vec![AgentHealthEntry {
         id: "whisker-primary".to_string(),
@@ -5209,16 +6207,22 @@ async fn healthz_includes_async_lane_component_when_enabled() {
 
 #[tokio::test]
 async fn healthz_includes_governance_partition_component() {
-    let governance_policy = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
-        contingency_lease_ttl_ms: 60_000,
-        contingency_blast_radius_cap: 1,
-    }));
-    governance_policy
-        .register_governor(
+    let governance_root = temp_dir("healthz-governance");
+    let governance_policy = Arc::new(
+        GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig {
+                contingency_lease_ttl_ms: 60_000,
+                contingency_blast_radius_cap: 1,
+            },
+            governance_root.join("governance.json"),
             AgentId::new("tom", "primary"),
             ed25519_dalek::SigningKey::from_bytes(&[29; 32]),
         )
-        .expect("the policy holds no other governor key");
+        .expect("test governance should initialize signed persistence"),
+    );
+    let governance_authority = governance_policy
+        .authority()
+        .expect("persisted test governance should mint authority");
     governance_policy.observe_health(
         &AgentId::new("tom", "primary"),
         &[AgentHealthEntry {
@@ -5229,7 +6233,8 @@ async fn healthz_includes_governance_partition_component() {
         1_700_000_000_000,
     );
 
-    let app = detect_http_router(test_ingest_state().with_governance_policy(governance_policy));
+    let app =
+        detect_http_router(test_ingest_state().with_governance_authority(governance_authority));
     let response = app
         .oneshot(
             Request::builder()
@@ -5250,6 +6255,8 @@ async fn healthz_includes_governance_partition_component() {
         json["components"]["governance"]["active_contingency_leases"],
         0
     );
+    drop(governance_policy);
+    let _ = fs::remove_dir_all(governance_root);
 }
 
 #[tokio::test]

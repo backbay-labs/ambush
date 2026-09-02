@@ -15,7 +15,8 @@ use swarm_consensus::{
     ConsensusCommittee, ConsensusError, ConsensusSignedEnvelope, ConsensusTransport,
 };
 use swarm_core::agent::AgentHealthEntry;
-use swarm_core::types::{AgentId, ResponseAction};
+use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
+use swarm_policy::ActionRequest;
 
 fn key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed; 32])
@@ -34,9 +35,15 @@ fn healthy_policy(seed: u8) -> Arc<GovernancePolicy> {
     policy
 }
 
-fn block_egress() -> ResponseAction {
-    ResponseAction::BlockEgress {
-        target: "203.0.113.77".to_string(),
+fn block_egress() -> ActionRequest {
+    ActionRequest {
+        hunt_id: HuntId("hunt-single-key".to_string()),
+        requested_by: AgentId::new("pounce", "test"),
+        action: ResponseAction::BlockEgress {
+            target: "203.0.113.77".to_string(),
+        },
+        severity: Severity::Critical,
+        evidence: serde_json::json!({"signal": "test"}),
     }
 }
 
@@ -54,7 +61,9 @@ fn a_second_distinct_governor_signing_key_is_refused() {
     let error = policy
         .register_governor(AgentId::new("tom", "secondary"), key(4))
         .expect_err("a second, different signing key must be refused");
-    let GovernanceKeyError::SecondSigningKey { existing, offered } = error;
+    let GovernanceKeyError::SecondSigningKey { existing, offered } = error else {
+        panic!("expected a second-key error");
+    };
     assert_eq!(
         existing,
         AgentId::from_verifying_key(&key(3).verifying_key())
@@ -84,11 +93,7 @@ fn the_receipt_names_a_committee_of_one_signed_by_the_local_key() {
     // process can speak for is exactly itself. A receipt naming more members
     // than that, issued by a solo process, would be the thing BFT-03 removes.
     let policy = healthy_policy(5);
-    let GovernanceDecision::Allow {
-        receipt: Some(receipt),
-        ..
-    } = policy.can_act(&block_egress())
-    else {
+    let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&block_egress()) else {
         panic!("a healthy single-governor policy must allow with a receipt");
     };
 
@@ -113,7 +118,9 @@ fn admitting_a_peer_governor_without_a_networked_transport_vetoes() {
     // returned Allow with a receipt claiming a 2-of-2 quorum that no second
     // process had taken part in.
     let policy = healthy_policy(6);
-    policy.register_peer_governor(&key(7).verifying_key());
+    policy
+        .register_peer_governor(&key(7).verifying_key())
+        .unwrap();
 
     let decision = policy.can_act(&block_egress());
     let GovernanceDecision::Veto {
@@ -143,11 +150,7 @@ fn the_governance_receipt_wire_shape_is_unchanged() {
     // committee was configured would keep this field set and still be wrong, so
     // the tallies are checked against the threshold rather than just present.
     let policy = healthy_policy(8);
-    let GovernanceDecision::Allow {
-        receipt: Some(receipt),
-        ..
-    } = policy.can_act(&block_egress())
-    else {
+    let GovernanceDecision::Authorize { receipt, .. } = policy.can_act(&block_egress()) else {
         panic!("expected an allow with a receipt");
     };
 
@@ -211,16 +214,12 @@ fn receipts_chain_across_calls_so_the_audit_log_is_ordered() {
     // committed round. If a refactor ever mints a receipt without advancing it
     // -- or advances it without committing -- this breaks.
     let policy = healthy_policy(9);
-    let GovernanceDecision::Allow {
-        receipt: Some(first),
-        ..
-    } = policy.can_act(&block_egress())
+    let GovernanceDecision::Authorize { receipt: first, .. } = policy.can_act(&block_egress())
     else {
         panic!("expected an allow");
     };
-    let GovernanceDecision::Allow {
-        receipt: Some(second),
-        ..
+    let GovernanceDecision::Authorize {
+        receipt: second, ..
     } = policy.can_act(&block_egress())
     else {
         panic!("expected an allow");
@@ -253,12 +252,16 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
     ));
     let _ = std::fs::remove_file(&path);
 
-    let policy = GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path)
-        .expect("a fresh persistence path loads");
+    let policy = GovernancePolicy::initialize_persistence(
+        GovernancePolicyConfig::default(),
+        &path,
+        AgentId::new("tom", "primary"),
+        key(21),
+    )
+    .expect("a fresh persistence path initializes");
     policy
-        .register_governor(AgentId::new("tom", "primary"), key(21))
-        .expect("first key is accepted");
-    policy.register_peer_governor(&key(22).verifying_key());
+        .register_peer_governor(&key(22).verifying_key())
+        .unwrap();
     policy.observe_health(
         &AgentId::new("tom", "primary"),
         &[] as &[AgentHealthEntry],
@@ -268,12 +271,15 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
         policy.can_act(&block_egress()),
         GovernanceDecision::Veto { .. }
     ));
+    drop(policy);
 
-    let reloaded = GovernancePolicy::with_persistence(GovernancePolicyConfig::default(), &path)
-        .expect("the persisted state reloads");
-    reloaded
-        .register_governor(AgentId::new("tom", "primary"), key(21))
-        .expect("re-registering the same key after a reload is a no-op");
+    let reloaded = GovernancePolicy::with_persistence(
+        GovernancePolicyConfig::default(),
+        &path,
+        AgentId::new("tom", "primary"),
+        key(21),
+    )
+    .expect("the persisted state reloads");
     reloaded.observe_health(
         &AgentId::new("tom", "primary"),
         &[] as &[AgentHealthEntry],
@@ -286,7 +292,10 @@ fn admitted_peer_governors_survive_a_persistence_reload() {
         "a reloaded policy must still know about its peer governor, got {decision:?}"
     );
 
+    drop(reloaded);
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(GovernancePolicy::persistence_sequence_path(&path));
+    let _ = std::fs::remove_file(GovernancePolicy::persistence_lock_path(&path));
 }
 
 /// Records everything a round publishes. Accepts any committee, which is
@@ -348,7 +357,7 @@ fn can_act_publishes_its_round_through_the_policys_transport_and_signs_only_loca
     );
 
     let decision = policy.can_act(&block_egress());
-    assert!(matches!(decision, GovernanceDecision::Allow { .. }));
+    assert!(matches!(decision, GovernanceDecision::Authorize { .. }));
 
     let accepted = transport.accepted.lock().unwrap().clone();
     assert!(

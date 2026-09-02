@@ -18,11 +18,11 @@
     use swarm_core::agent::SwarmMode;
     use swarm_core::config::{
         AuditConfig, BundleStoreConfig, CanaryConfig, CircuitBreakerConfig, CorrelationConfig,
-        InvestigationConfig, PheromoneBackendConfig, PheromoneConfig, PolicyConfig,
-        PolicyRuleConfig, PolicyRuleDecision, PromotionConfig, ResponsePlaybookBranch,
-        ResponsePlaybookCondition, ResponsePlaybookConfig, ResponsePlaybookRule, RetryConfig,
-        RuntimeSettings, SiemForwardConfig, SwarmConfig, TelemetrySourceConfig,
-        TemporalEventWindowConfig,
+        HypothesisGraphConfig, InvestigationConfig, PheromoneBackendConfig, PheromoneConfig,
+        PolicyConfig, PolicyRuleConfig, PolicyRuleDecision, PromotionConfig,
+        ResponsePlaybookBranch, ResponsePlaybookCondition, ResponsePlaybookConfig,
+        ResponsePlaybookRule, RetryConfig, RuntimeSettings, SiemForwardConfig, SwarmConfig,
+        TelemetrySourceConfig, TemporalEventWindowConfig,
     };
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::{
@@ -32,7 +32,10 @@
     use swarm_guard::{
         Guard, GuardAction, GuardContext, GuardPipeline, GuardResult, Severity as GuardSeverity,
     };
-    use swarm_pheromone::{InMemoryPheromoneSubstrate, LocalJournalPheromoneSubstrate};
+    use swarm_pheromone::{
+        InMemoryPheromoneSubstrate as ReplayInMemoryPheromoneSubstrate,
+        LocalJournalPheromoneSubstrate as ReplayLocalJournalPheromoneSubstrate,
+    };
     use swarm_policy::static_gate::StaticApprovalGate;
     use swarm_policy::{ActionRequest, ApprovalContext, CapabilityLease, PolicyVerdict};
     use swarm_response::adapters::SandboxExecutor;
@@ -48,6 +51,25 @@
         TelemetryPayload,
     };
     use tokio::sync::{Mutex as AsyncMutex, oneshot};
+
+    struct InMemoryPheromoneSubstrate;
+
+    impl InMemoryPheromoneSubstrate {
+        fn replay(config: PheromoneConfig) -> ReplayInMemoryPheromoneSubstrate {
+            ReplayInMemoryPheromoneSubstrate::new_for_replay(config)
+        }
+    }
+
+    struct LocalJournalPheromoneSubstrate;
+
+    impl LocalJournalPheromoneSubstrate {
+        fn open_replay(
+            config: PheromoneConfig,
+            path: impl AsRef<std::path::Path>,
+        ) -> Result<ReplayLocalJournalPheromoneSubstrate, swarm_pheromone::SubstrateError> {
+            ReplayLocalJournalPheromoneSubstrate::open_for_replay(config, path)
+        }
+    }
 
     fn test_signing_key() -> ed25519_dalek::SigningKey {
         ed25519_dalek::SigningKey::from_bytes(&[42u8; 32])
@@ -120,6 +142,7 @@
                 recent_decisions_limit: 20,
             },
             investigation: InvestigationConfig::default(),
+            hypothesis_graph: HypothesisGraphConfig::default(),
             correlation: CorrelationConfig::default(),
             canary: CanaryConfig::default(),
             promotion: PromotionConfig::default(),
@@ -131,6 +154,30 @@
             operator: swarm_core::config::OperatorSurfaceConfig::default(),
             tls: None,
         }
+    }
+
+    #[test]
+    fn service_support_config_preserves_disabled_graph_and_legacy_runtime_bytes() {
+        let config = service_config(
+            RuntimeMode::DetectOnly,
+            PheromoneBackendConfig::InMemory,
+            false,
+        );
+
+        assert_eq!(config.hypothesis_graph, HypothesisGraphConfig::default());
+        assert!(!config.hypothesis_graph.enabled);
+        assert_eq!(
+            serde_json::to_vec(&config.runtime.mode).unwrap(),
+            br#""detect_only""#
+        );
+        assert_eq!(
+            serde_json::to_vec(&config.policy).unwrap(),
+            br#"{"human_gate_severity":"HIGH","lease_ttl_ms":60000,"max_actions_per_scope_per_minute":5,"rules":[]}"#
+        );
+        assert_eq!(
+            serde_json::to_vec(&config.response_adapter).unwrap(),
+            br#"{"kind":"sandbox"}"#
+        );
     }
 
     fn runtime_service() -> RuntimeService<StaticApprovalGate, SandboxExecutor> {
@@ -410,12 +457,12 @@
         (
             RuntimeService::new(
                 service_config(
-                    RuntimeMode::LiveResponse,
+                    RuntimeMode::DetectOnly,
                     PheromoneBackendConfig::InMemory,
                     false,
                 ),
                 SwarmRuntime::new(
-                    RuntimeMode::LiveResponse,
+                    RuntimeMode::DetectOnly,
                     StaticApprovalGate::default(),
                     executor,
                 ),

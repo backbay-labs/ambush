@@ -50,9 +50,7 @@ use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_ingest_runtime::control::CURRENT_OPERATOR_API_SCHEMA_VERSION;
 use swarm_response::containment::ContainmentLease;
 use swarm_response::rollback::RollbackReceipt;
-use swarm_runtime::containment::{
-    ContainmentReleaseError, ContainmentSweep, verify_release_attestation,
-};
+use swarm_runtime::containment::{ContainmentReleaseError, ContainmentSweep};
 
 use super::auth::{
     AuthenticatedOperatorPrincipal, OperatorAuthState, require_bearer_auth,
@@ -216,10 +214,16 @@ async fn containment_lease_release_handler(
         .await
         .map_err(map_release_error)?;
 
-    let (attestation_verified, attestation_error) = match verify_release_attestation(&receipt) {
-        Ok(_) => (true, None),
-        Err(error) => (false, Some(error.to_string())),
-    };
+    // ANCHORED TO THE AUTHORITY THAT SIGNED IT. The sweep's own governance
+    // authority is the trust anchor, so `attestation_verified: true` now means
+    // "a governor this process recognizes signed this exact body" rather than
+    // "this receipt is internally consistent" (ADR 0011). With no authority
+    // installed the answer is `false` with a stated reason, never `true`.
+    let (attestation_verified, attestation_error) =
+        match state.sweep.verify_release_attestation(&receipt) {
+            Ok(_) => (true, None),
+            Err(error) => (false, Some(error.to_string())),
+        };
     let lease_closed = state
         .sweep
         .open_leases()

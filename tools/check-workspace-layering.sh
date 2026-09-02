@@ -146,6 +146,129 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+phase285_paths_overlap() {
+  [[ "$1" == "$2" || "$1" == "$2/"* || "$2" == "$1/"* ]]
+}
+
+phase285_create_confined_scratch() {
+  local prefix="$1" parent="${2:-${TMPDIR:-/tmp}}" scratch raw_scratch boundary
+  parent="$(cd -- "$parent" && pwd -P)" || return 1
+  local boundaries=(
+    "$ROOT_DIR"
+    "$(git rev-parse --path-format=absolute --git-dir)"
+    "$(git rev-parse --path-format=absolute --git-common-dir)"
+  )
+  local canonical_boundaries=()
+  for boundary in "${boundaries[@]}"; do
+    canonical_boundaries+=("$(cd -- "$boundary" && pwd -P)") || return 1
+  done
+  scratch="$(mktemp -d "$parent/$prefix.XXXXXX")" || return 1
+  raw_scratch="$scratch"
+  scratch="$(cd -- "$scratch" && pwd -P)" || {
+    rm -rf -- "$raw_scratch"
+    [ ! -e "$raw_scratch" ]
+    return 1
+  }
+  [ -z "$(find "$scratch" -mindepth 1 -maxdepth 1 -print -quit)" ] || {
+    rm -rf -- "$scratch" || true
+    [ ! -e "$scratch" ] || echo "PHASE285-SCRATCH[nonempty-cleanup-failed]" >&2
+    echo "PHASE285-SCRATCH[nonempty-new-directory]" >&2
+    return 1
+  }
+  for boundary in "${canonical_boundaries[@]}"; do
+    if phase285_paths_overlap "$scratch" "$boundary"; then
+      rmdir -- "$scratch" || {
+        echo "PHASE285-SCRATCH[boundary-cleanup-failed]" >&2
+        return 1
+      }
+      [ ! -e "$scratch" ] || {
+        echo "PHASE285-SCRATCH[boundary-cleanup-failed]" >&2
+        return 1
+      }
+      echo "PHASE285-SCRATCH[boundary-overlap]" >&2
+      return 1
+    fi
+  done
+  printf '%s\n' "$scratch"
+}
+
+phase285_cleanup_confined_scratch() {
+  rm -rf -- "$1" || return 1
+  [ ! -e "$1" ] || return 1
+}
+
+phase285_scratch_hostile_controls() {
+  local boundary output exit_code rejected=0
+  local boundaries=(
+    "$ROOT_DIR"
+    "$(git rev-parse --path-format=absolute --git-dir)"
+    "$(git rev-parse --path-format=absolute --git-common-dir)"
+  )
+  for boundary in "${boundaries[@]}"; do
+    exit_code=0
+    output="$(TMPDIR="$boundary" phase285_create_confined_scratch phase285-layering-hostile 2>&1)" || exit_code=$?
+    [ "$exit_code" -ne 0 ] && [ "$output" = "PHASE285-SCRATCH[boundary-overlap]" ] || return 1
+    rejected=$((rejected + 1))
+  done
+  echo "phase285_scratch_self_test site=layering boundaries=$rejected passed=1"
+}
+
+phase285_witness_reverse_check() {
+  python3 - "$1/crates/swarm-governance/Cargo.toml" <<'PY'
+import pathlib, sys, tomllib
+path = pathlib.Path(sys.argv[1])
+with path.open("rb") as handle:
+    manifest = tomllib.load(handle)
+names = set()
+for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+    for key, value in manifest.get(section, {}).items():
+        names.add(value.get("package", key) if isinstance(value, dict) else key)
+for target in manifest.get("target", {}).values():
+    if not isinstance(target, dict):
+        continue
+    for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+        for key, value in target.get(section, {}).items():
+            names.add(value.get("package", key) if isinstance(value, dict) else key)
+if "swarm-governance-witness" in names:
+    raise SystemExit("PHASE285-LAYERING[governance-reverse-dependency]")
+print("phase285_witness_reverse positive=1")
+PY
+}
+
+phase285_witness_reverse_self_test() (
+  phase285_witness_reverse_check "$ROOT_DIR"
+  phase285_scratch_hostile_controls
+  local scratch
+  scratch="$(phase285_create_confined_scratch phase285-layering)"
+  trap 'phase285_cleanup_confined_scratch "$scratch" || exit 1' EXIT
+  mkdir -p "$scratch/crates/swarm-governance"
+  cp "$ROOT_DIR/crates/swarm-governance/Cargo.toml" "$scratch/crates/swarm-governance/Cargo.toml"
+  python3 - "$scratch/crates/swarm-governance/Cargo.toml" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = text.replace("[dev-dependencies]", "[dev-dependencies]\nswarm-governance-witness = { path = \"../swarm-governance-witness\" }", 1)
+path.write_text(text)
+PY
+  local output status=0
+  output="$(phase285_witness_reverse_check "$scratch" 2>&1)" || status=$?
+  [ "$status" -ne 0 ] && [ "$output" = "PHASE285-LAYERING[governance-reverse-dependency]" ] || return 1
+  echo "phase285_transport_self_test case=phase285-witness-reverse-dependency positive=1 mutation_failure=1"
+)
+
+if [ "${1:-}" = --self-test ]; then
+  [ "$#" -eq 2 ] && [ "$2" = phase285-witness-reverse-dependency ] || {
+    echo "usage: $0 [--self-test phase285-witness-reverse-dependency]" >&2
+    exit 2
+  }
+  phase285_witness_reverse_self_test
+  exit 0
+elif [ "$#" -ne 0 ]; then
+  echo "usage: $0 [--self-test phase285-witness-reverse-dependency]" >&2
+  exit 2
+fi
+phase285_witness_reverse_check "$ROOT_DIR"
+
 WORK_DIR="$(mktemp -d)"
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
@@ -183,6 +306,7 @@ TCB = ("swarm-crypto", "swarm-policy", "swarm-spine")
 # TCBOUND-02. Order is the requirement's; sorted only for output.
 TRUST_SENSITIVE = (
     "swarm-policy",
+    "swarm-governance",
     "swarm-pheromone",
     "swarm-response",
     "swarm-guard",
@@ -621,9 +745,10 @@ swarm-whisker|swarm-core
 swarm-guard|swarm-core
 swarm-pheromone|swarm-core swarm-crypto
 swarm-policy|swarm-core
+swarm-governance|swarm-core swarm-crypto swarm-policy
 swarm-response|swarm-core swarm-crypto swarm-policy swarm-whisker reqwest
 swarm-spine|swarm-core swarm-crypto swarm-policy swarm-response swarm-whisker
-swarm-agents|swarm-pheromone swarm-spine
+swarm-agents|swarm-governance swarm-pheromone swarm-spine
 swarm-runtime|swarm-spine swarm-policy swarm-response swarm-pheromone swarm-guard swarm-agents clap
 swarm-runtime-http|swarm-runtime axum
 swarm-cli|swarm-policy clap
@@ -632,12 +757,12 @@ hyper|
 axum|
 clap|'
 
-# The six TCBOUND-02 crates get the two headings in the fixture too, so RULE 5
+# The seven trust-sensitive crates get the two headings in the fixture too, so RULE 5
 # is exercised by the fixture rather than skipped in it.
-FIXTURE_DOCUMENTED='swarm-policy swarm-pheromone swarm-response swarm-guard swarm-crypto swarm-spine'
+FIXTURE_DOCUMENTED='swarm-policy swarm-governance swarm-pheromone swarm-response swarm-guard swarm-crypto swarm-spine'
 
 build_fixture() { # <dir>
-  local dir="$1" line crate deps dep members=""
+  local dir="$1" crate deps dep members=""
   rm -rf "$dir"
   mkdir -p "$dir/crates"
 

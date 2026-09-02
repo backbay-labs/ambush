@@ -1,41 +1,42 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.79
-milestone_name: Assurance Foundation
+milestone_name: Collective Cyber Reasoning
 current_phase: 285
-current_phase_name: Assumption Registry And Invariant Mapping
+current_phase_name: Assurance Foundation Closure
 current_plan: null
-status: active
-last_updated: "2026-08-14T00:00:00Z"
-last_activity: 2026-08-14
+status: in_progress
+last_updated: "2026-08-24T16:06:22Z"
+last_activity: 2026-08-24
 progress:
-  total_phases: 4
-  completed_phases: 4
+  total_phases: 6
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 100
+  percent: 17
 ---
 
 # State
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-04-13)
+See: `.planning/PROJECT.md` (updated 2026-08-21)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.78 Runtime Decomposition And TCB Boundary` — green the verification gates, eliminate `core.inc`, split `swarm-runtime`, and enforce a TCB boundary. Phase 284 (test isolation) is pulled forward from v1.79 as a hard prerequisite for parallel work.
+**Current focus:** `v1.79 Collective Cyber Reasoning` — complete the typed causal hypothesis graph, adversarial co-evolution loop, autonomous synthesis, and privacy-preserving herd memory on top of the shipped assurance substrate.
 
 ## Current Position
 
-**Current Phase:** 320 — Reversible Quarantine Execution (v1.78.1); phase 283 (TCB Boundary) COMPLETE 2026-08-13, so v1.78 has no open phases
-**Total Phases:** 4 (280-283), plus 320-322 in v1.78.1
-**Current Plan:** None started yet
-**Total Plans in Phase:** TBD
-**Status:** Ready to plan
-**Last Activity:** 2026-08-13
-**Last Activity Description:** Merged phase 282 (0a09358) into main after a five-lens adversarial review — 15 findings raised, 9 survived independent refutation, 3 fixed as merge blockers. Then measured phases 320/321/322 against the code and found three of their recorded statuses false.
+**Current Phase:** 285 — Assurance Foundation Closure (v1.79); Phase 285 is reopened for the governance/detector integration gate and Phase 284 remains complete.
+**Current Phase Name:** Assurance Foundation Closure
+**Total Phases:** 6 (284-289)
+**Current Plan:** Clean checkpoint sequence; next slice is the session-fence protocol repair required by the reviewed witness-adapter contract.
+**Total Plans in Phase:** No new GSD plan count; the remediation is banked as independently reviewed slices.
+**Status:** In progress; phase advancement is blocked until one frozen combined Phase 285 tree passes all acceptance gates.
+**Last Activity:** 2026-08-24
+**Last Activity Description:** Banked and pushed the independently reviewed witness-adapter architecture at `eacadf6b071c158a677dd77441fec1be8d7e548f` (`checkpoint/v179-phase285-witness-adapter-contract`), with P0/P1/P2 all zero. Implementation remains open.
 
-Progress: v1.78 phases 280/281/282/283 COMPLETE. v1.78.1: phase 320 complete (QRT-01..04), phase 322 complete (ZGATE-01..05, ZGATE-03 restated to the consuming code and ZGATE-04 partial), phase 321 PARTIAL — BFT-01/02/05 done, BFT-03 single-key done with substrate exchange deferred, BFT-04 transport seam only, both deliberately not pre-empting v1.83's VRF-02.
+**Progress:** Phase 284 is complete. Phase 285 has accepted checkpoints for approval/voter governance (`f2eb791d`), the production protocol slice (`27b64174`), persistence architecture (`5be011a0`), and witness-adapter contract (`eacadf6b`), but it is not complete until the contract is implemented and a frozen combined tree passes workspace tests, strict clippy, formatting, diff checks, mutation controls, independent review, hosted CI, and closure evidence. Phase 286 Plan 04 is independently accepted at `1408620e` but remains sequenced behind Phase 285. Phase 287-289 plans are independently reviewed and parked at `e88204e7`; execution is stopped. External provenance-distinct GitHub App enforcement remains explicitly deferred and is not represented as a protected check. The former DST/FUZZ/LOOM and OPFOR/ATKSCORE/COEVOLVE/ARMSCI queues are historical scope only.
 
 ## Memory
 
@@ -89,6 +90,7 @@ Progress: v1.78 phases 280/281/282/283 COMPLETE. v1.78.1: phase 320 complete (QR
 - CORRECTION carried forward: INCFIX-01's rationale is half wrong. rustc, clippy AND rustfmt all follow `#[path]`; only rust-analyzer and `*.rs`-globbing LOC tools skip a `.inc`. Phase 281 criterion 3 is unsatisfiable as written and is marked superseded. Do not repeat the claim in 282/283.
 - OPEN, filed from phase 281's final review: a vacuous-verification bug in replay, proven pre-existing. `ReplayScenarioClass` derives `Default` with `#[default] Mixed` and `ReplayScenarioMetadata.class` is `#[serde(default)]`, while `verify_known_bad_coverage` requires `class == Adversarial` and `verify_false_positive_bound` filters on `scenario_is_benign`. A manifest omitting `class:` is exempt from BOTH invariants and passes vacuously.
 - Phase 284 COMPLETE 2026-08-11 (FIXTURE-01..04). The suite no longer writes into the repository: a full G1+G2 leaves all four drift assertions clean. Parallel phase work is now unblocked.
+- Phase 285 correction 2026-08-24: the 2026-08-21 ledger marked Phase 285 passed too early. Governance/detector integration reopened the acceptance gate, and the external witness needed a bounded session fence plus an exact version-pinned persistence contract. External GitHub App enforcement remains deferred, but that deferral does not waive the internal governance durability gate.
 - The kitten_agent flake was NOT prior-run state. `Option::unwrap_or` evaluates eagerly, so `load_source_seed` scanned every manifest under `experiments/` even when given an override, racing four `mutation::tests_autonomous` tests that write transient files there. 11 failures in 107 runs.
 - The CI drift gate now carries four assertions; the fourth (no empty directories anywhere) is unscoped and is what catches leaks the path-scoped checks miss.
 - CORRECTED 2026-08-13: phase 320 is 0/4, not 2/4. 4d03543 shipped TYPES ONLY — `rg -l 'ContainmentLease|ContainmentLedger|RollbackExecutor|RollbackReceipt'` returns only `swarm-response/src/lib.rs` (the re-export) and `swarm-response/src/rollback.rs` (definitions plus their `#[cfg(test)]` tests). Zero production code constructs a lease. `SandboxRollbackExecutor::rollback` never branches on `ResponseRollbackStepKind` and performs no side effect. The roadmap's own "highest-blast-radius gap" — containment with no undo — is fully open. See task #19.
@@ -128,6 +130,16 @@ Progress: v1.78 phases 280/281/282/283 COMPLETE. v1.78.1: phase 320 complete (QR
 - SECURITY, fixed in cf48f7a: the manual-release route let the request body supply `now_ms`, which flowed into `ConsensusGovernanceReceipt::issue` as `payload.issued_at_ms` — inside a signed, chain-advancing record. Any principal holding `maintenance` could write an arbitrary timestamp into durable governance state and make the chain non-monotonic, with every signature still verifying, because the value is SIGNED RATHER THAN CHECKED. The governance stamp now comes from the host clock; the caller's value still decides expiry so tests stay decidable from integer literals.
 - OPEN (task #27), pre-existing and now documented in three places: rollback attestation verification has NO TRUST ANCHOR. `ConsensusGovernanceReceipt::verify` checks the signature against a public key CARRIED INSIDE THE RECEIPT, so a full re-attestation by a freshly minted key passes. What the current checks do buy is that a PARTIAL rewrite fails — and that is not nothing: mutation M2 showed a receipt whose `steps[0].status` was rewritten Reversed -> Failed verifying against a genuine, unmodified signature, so the SIGNATURE ALONE does not catch a body rewrite; the subject binding is what does. `attestation_verified: true` means "this attestation matches this body", NOT "a governor we trust authorized this".
 
+## Session
+
+**Session Continuity**
+
+Last Date: 2026-08-24 — convergence reset
+Stopped At: Reviewed witness-adapter contract checkpoint pushed; session-fence implementation is next.
+Resume File: None — no `.continue-here` checkpoint exists.
+Incomplete plan: Phase 285 clean-slice sequence remains open; future-phase plan checkpoints are not execution authority.
+Interrupted agent: None. The former broad swarm is stopped; one owner and one hostile reviewer are used per frozen slice.
+
 ## Next Command
 
-Phase 322 (Promotion Solver Gate) is COMPLETE as of 2026-08-13: ZGATE-01/02/04 landed in 99733a0, ZGATE-03/05 and the task #23 posture decision closed after it. The remaining open v1.78.1 work is Phase 321's BFT-03/04/05 and Phase 320's QRT-04 (blocked on the split-brain governance design decision, task #24). Phase 320 is 3/4 and Phase 283 (TCB Boundary) is complete. Implementation-ready plans for 320, 321 and task #15 were produced 2026-08-13 and each was independently critiqued; they carry measured file:line and name the requirement text that is factually wrong about the code.
+Implement the Phase 285 bounded session-fence repair from `checkpoint/v179-phase285-witness-adapter-contract` as a clean red-first slice on top of `eacadf6b`. Obtain an independent zero-P0/P1/P2 review and push the checkpoint before starting the witness engine/proxy adapter. Do not edit the dirty integration tree, execute Phase 287-289, reopen the deferred GitHub App check, or advance Phase 286 publication before the frozen combined Phase 285 gate passes.
