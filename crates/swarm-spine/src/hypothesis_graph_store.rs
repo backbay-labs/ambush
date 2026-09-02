@@ -5071,6 +5071,19 @@ pub enum GraphStoreError {
 /// to a caller-supplied generation/digest predecessor.
 pub trait HypothesisGraphStore: Send + Sync {
     fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError>;
+    /// Authenticate the current state and return only the requested task page.
+    ///
+    /// Backends override this to avoid cloning a complete authenticated state
+    /// merely to serve a bounded operator collection. The default preserves
+    /// compatibility for test stores while applying identical cursor rules.
+    fn task_page(
+        &self,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphStoreError> {
+        let snapshot = self.snapshot()?;
+        bounded_task_page(snapshot.state(), after, limit)
+    }
     fn compare_and_swap(
         &self,
         expected: &GraphStoreRevision,
@@ -5208,6 +5221,55 @@ pub trait HypothesisGraphStore: Send + Sync {
         now: GraphLogicalTime,
         lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError>;
+}
+
+const MAX_GRAPH_TASK_PAGE_LIMIT: usize = 4_096;
+
+fn bounded_task_page(
+    state: &GraphStoreState,
+    after: Option<(u64, &str)>,
+    limit: usize,
+) -> Result<Vec<TaskRecord>, GraphStoreError> {
+    if limit == 0 || limit > MAX_GRAPH_TASK_PAGE_LIMIT {
+        return Err(GraphStoreError::InvalidState {
+            reason: format!(
+                "operator task page limit must be between 1 and {MAX_GRAPH_TASK_PAGE_LIMIT}"
+            ),
+        });
+    }
+    let mut page = Vec::with_capacity(limit.min(state.tasks.len()));
+    for durable in state.tasks.values() {
+        let task = &durable.task;
+        let after_cursor = after.is_none_or(|(generation, stable_id)| {
+            task.generation < generation
+                || (task.generation == generation && task.request.task_id.as_str() < stable_id)
+        });
+        if !after_cursor {
+            continue;
+        }
+        let insertion = page
+            .binary_search_by(|candidate| {
+                let candidate: &&TaskRecord = candidate;
+                let left = *candidate;
+                let right = task;
+                right.generation.cmp(&left.generation).then_with(|| {
+                    right
+                        .request
+                        .task_id
+                        .as_str()
+                        .cmp(left.request.task_id.as_str())
+                })
+            })
+            .unwrap_or_else(|position| position);
+        if insertion >= limit {
+            continue;
+        }
+        page.insert(insertion, task);
+        if page.len() > limit {
+            page.pop();
+        }
+    }
+    Ok(page.into_iter().cloned().collect())
 }
 
 pub trait TaskStore: HypothesisGraphStore {}
@@ -5370,6 +5432,25 @@ impl MemoryHypothesisGraphStore {
 impl HypothesisGraphStore for MemoryHypothesisGraphStore {
     fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError> {
         self.read_signed()?.snapshot()
+    }
+
+    fn task_page(
+        &self,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphStoreError> {
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| GraphStoreError::PoisonedLock)?;
+        verify_state(
+            &guard,
+            &self.graph_id,
+            &self.signer_id,
+            &self.limits,
+            &self.scheduler_policy,
+        )?;
+        bounded_task_page(&guard.state, after, limit)
     }
 
     fn compare_and_swap(
@@ -8480,6 +8561,15 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
         self.read_signed()?.snapshot()
     }
 
+    fn task_page(
+        &self,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphStoreError> {
+        let authenticated = self.read_signed()?;
+        bounded_task_page(&authenticated.state, after, limit)
+    }
+
     fn compare_and_swap(
         &self,
         expected: &GraphStoreRevision,
@@ -8843,6 +8933,17 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
         match self {
             Self::Memory(store) => store.snapshot(),
             Self::LocalFiles(store) => store.snapshot(),
+        }
+    }
+
+    fn task_page(
+        &self,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphStoreError> {
+        match self {
+            Self::Memory(store) => store.task_page(after, limit),
+            Self::LocalFiles(store) => store.task_page(after, limit),
         }
     }
 

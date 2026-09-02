@@ -1503,47 +1503,8 @@ impl CollectiveHypothesisService {
         after: Option<(u64, &str)>,
         limit: usize,
     ) -> Result<Vec<TaskRecord>, GraphServiceError> {
-        if limit == 0 {
-            return Err(GraphStoreError::InvalidState {
-                reason: "operator task page limit must be positive".to_string(),
-            }
-            .into());
-        }
         let campaign = self.campaign_for(graph_id)?;
-        let snapshot = campaign.store.snapshot()?;
-        let mut page = Vec::with_capacity(limit.min(snapshot.state().tasks.len()));
-        for durable in snapshot.tasks() {
-            let task = &durable.task;
-            let after_cursor = after.is_none_or(|(generation, stable_id)| {
-                task.generation < generation
-                    || (task.generation == generation && task.request.task_id.as_str() < stable_id)
-            });
-            if !after_cursor {
-                continue;
-            }
-            let insertion = page
-                .binary_search_by(|candidate| {
-                    let candidate: &&TaskRecord = candidate;
-                    let left = *candidate;
-                    let right = task;
-                    right.generation.cmp(&left.generation).then_with(|| {
-                        right
-                            .request
-                            .task_id
-                            .as_str()
-                            .cmp(left.request.task_id.as_str())
-                    })
-                })
-                .unwrap_or_else(|position| position);
-            if insertion >= limit {
-                continue;
-            }
-            page.insert(insertion, task);
-            if page.len() > limit {
-                page.pop();
-            }
-        }
-        Ok(page.into_iter().cloned().collect())
+        Ok(campaign.store.task_page(after, limit)?)
     }
 
     pub fn operator_memory_for(
