@@ -40,15 +40,14 @@ import {
   DialogTitle,
 } from "@/shared/ui/dialog";
 
-const FUZZY_SURFACE_CLASS =
-  "relative left-1/2 w-[min(calc(100%+12rem),calc(100vw-2rem))] max-w-[1040px] -translate-x-1/2 px-20 pb-14 pt-20 !text-[rgb(var(--ambush-hosted-community-surface-fg))] [--ambush-card-textured-min-height:224px]";
+const PAGE_SURFACE_CLASS =
+  "relative left-1/2 flex min-h-[14rem] w-[min(calc(100%+12rem),calc(100vw-2rem))] max-w-[1040px] -translate-x-1/2 flex-col justify-center border-border bg-card px-20 pb-14 pt-20";
 const COMMUNITY_LIST_CLASS = "mx-auto w-full max-w-[520px] text-left";
 const COMMUNITY_ROW_CLASS =
   "flex min-h-[5.75rem] items-center justify-between gap-8 py-4 text-sm";
-const COMMUNITY_DIVIDER_CLASS =
-  "border-b-[0.5px] border-[rgb(var(--ambush-hosted-community-divider-border)/0.5)]";
+const COMMUNITY_DIVIDER_CLASS = "border-b-[0.5px] border-border";
 const COMMUNITY_ACTION_CLASS =
-  "h-[2.375rem] min-w-32 shrink-0 rounded-full bg-[rgb(var(--ambush-hosted-community-action-bg))] px-6 text-sm text-foreground shadow-none hover:bg-[rgb(var(--ambush-hosted-community-action-bg-hover))]";
+  "h-[2.375rem] min-w-32 shrink-0 rounded-full bg-accent px-6 text-sm text-accent-foreground shadow-none hover:bg-accent/70";
 const PAGE_CTA_CLASS = `${ONBOARDING_PRIMARY_CTA_CLASS} w-36 shadow-none`;
 const PAGE_BACK_CLASS =
   "h-[2.375rem] w-36 rounded-full bg-foreground/10 px-6 shadow-none hover:bg-foreground/15";
@@ -389,8 +388,8 @@ export function HostedCommunityOnboarding({
       autoComplete="off"
       className={
         inline
-          ? "h-[2.375rem] w-[16.5rem] rounded-full border border-[color:var(--ambush-onboarding-backup-ink)]/25 bg-[rgb(var(--ambush-hosted-community-input-bg)/0.6)] px-6 text-center text-sm shadow-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-[color:var(--ambush-onboarding-backup-ink)]/40"
-          : "h-auto min-w-0 flex-none rounded-none border-0 bg-transparent p-0 text-right font-mono !text-[rgb(var(--ambush-hosted-community-surface-fg))] shadow-none placeholder:!text-[rgb(var(--ambush-hosted-community-surface-fg))] placeholder:opacity-20 focus-visible:ring-0"
+          ? "h-[2.375rem] w-[16.5rem] rounded-full border border-border bg-accent/60 px-6 text-center text-sm shadow-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring/40"
+          : "h-auto min-w-0 flex-none rounded-none border-0 bg-transparent p-0 text-right font-mono text-card-foreground shadow-none placeholder:text-card-foreground placeholder:opacity-20 focus-visible:ring-0"
       }
       disabled={busy || atCommunityLimit}
       id="hosted-community-address"
@@ -431,9 +430,8 @@ export function HostedCommunityOnboarding({
     ) : (
       <Card
         asChild
-        className={`${FUZZY_SURFACE_CLASS} !py-10 [--ambush-card-textured-min-height:176px]`}
+        className={`${PAGE_SURFACE_CLASS} min-h-[11rem] !py-10`}
         data-testid="hosted-community-create-surface"
-        variant="textured"
       >
         <form id="hosted-community-create-form" onSubmit={create}>
           <div
@@ -443,7 +441,7 @@ export function HostedCommunityOnboarding({
           >
             {creationInput(false)}
             <span
-              className="shrink-0 font-mono !text-[rgb(var(--ambush-hosted-community-surface-fg))]"
+              className="shrink-0 font-mono"
               id="hosted-community-suffix"
               style={{ fontSize: addressFontSize }}
             >
@@ -471,7 +469,6 @@ export function HostedCommunityOnboarding({
         closeButtonClassName={ONBOARDING_INK_ICON_CLASS}
         data-system-color-scheme="light"
         overlayClassName="bg-[rgb(var(--ambush-hosted-community-modal-overlay-bg)/0.25)]"
-        surface="textured"
       >
         <div className="mx-auto flex w-full max-w-sm flex-col items-center py-2 text-center">
           <AmbushMark className="mb-5 h-auto w-9 text-foreground" />
@@ -601,9 +598,8 @@ export function HostedCommunityOnboarding({
             {hasCommunities ? (
               <>
                 <Card
-                  className={`${FUZZY_SURFACE_CLASS} !max-w-[760px]`}
+                  className={`${PAGE_SURFACE_CLASS} !max-w-[760px]`}
                   data-testid="hosted-community-list-surface"
-                  variant="textured"
                 >
                   <section className={COMMUNITY_LIST_CLASS}>
                     <h2 className="text-center text-sm font-medium">
@@ -734,11 +730,7 @@ export function HostedCommunityOnboarding({
             )}
           </>
         ) : (
-          <Card
-            aria-hidden
-            className={`${FUZZY_SURFACE_CLASS} opacity-70`}
-            variant="textured"
-          />
+          <Card aria-hidden className={`${PAGE_SURFACE_CLASS} opacity-70`} />
         )}
       </div>
 

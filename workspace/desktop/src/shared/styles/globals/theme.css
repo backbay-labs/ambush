@@ -69,13 +69,8 @@
     --ambush-gradient-dark-top: #1f1f1f;
     --ambush-gradient-dark-bottom: #1f1f1f;
     --ambush-content-dark: 0 0% 9%;
-    /* Hosted-community onboarding intentionally keeps this light palette in
-       both app themes; semantic tokens keep component code color-agnostic. */
-    --ambush-hosted-community-surface-fg: 41 32 25;
-    --ambush-hosted-community-divider-border: 156 152 147;
-    --ambush-hosted-community-action-bg: 236 207 185;
-    --ambush-hosted-community-action-bg-hover: 244 215 196;
-    --ambush-hosted-community-input-bg: 244 215 196;
+    /* The hosted-community sign-in modal intentionally keeps this light palette
+       in both app themes; semantic tokens keep component code color-agnostic. */
     --ambush-hosted-community-modal-action-fg: 236 207 185;
     --ambush-hosted-community-modal-overlay-bg: 23 23 23;
     --ambush-hosted-community-identity-bg: 244 215 196;

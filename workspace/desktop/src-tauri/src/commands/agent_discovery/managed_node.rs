@@ -3,10 +3,16 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use std::{io::Read, io::Write};
 
+use super::install_report::InstallReporter;
 use crate::managed_agents::{is_npm_global_install, InstallStepResult};
 
 const MANAGED_NODE_VERSION: &str = "v24.18.0";
 const MANAGED_NODE_MAX_BYTES: u64 = 90 * 1024 * 1024;
+
+/// How far the download advances between progress notes. Ten steps is enough to
+/// tell a moving transfer from a stalled one without turning the install log
+/// into a progress bar.
+const DOWNLOAD_NOTE_STEP_PERCENT: u64 = 10;
 
 #[derive(Debug, Clone, Copy)]
 struct ManagedNodeArtifact {
@@ -264,7 +270,9 @@ pub(super) fn managed_node_runtime_supported() -> bool {
         && crate::managed_agents::ambush_managed_node_bin_dir().is_some()
 }
 
-pub(super) fn ensure_managed_node_runtime_blocking() -> Result<(), Box<InstallStepResult>> {
+pub(super) fn ensure_managed_node_runtime_blocking(
+    reporter: &InstallReporter,
+) -> Result<(), Box<InstallStepResult>> {
     if managed_node_runtime_ready() {
         return Ok(());
     }
@@ -278,17 +286,33 @@ pub(super) fn ensure_managed_node_runtime_blocking() -> Result<(), Box<InstallSt
         )));
     };
 
-    let _guard = managed_node_install_lock().lock().map_err(|_| {
-        Box::new(managed_node_failed_step(
-            "managed Node.js install lock poisoned".to_string(),
-        ))
-    })?;
+    // Two installs started together (Claude Code and Codex, say) both need this
+    // runtime, and the loser waits out the winner's whole download. That wait is
+    // correct — there is nothing for it to do until the runtime exists — but it
+    // must not be silent, or the queued card shows a spinner over nothing for
+    // however long the other transfer takes.
+    let _guard = match managed_node_install_lock().try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::WouldBlock) => {
+            reporter.progress("Waiting for the Node.js runtime install…");
+            managed_node_install_lock().lock().map_err(|_| {
+                Box::new(managed_node_failed_step(
+                    "managed Node.js install lock poisoned".to_string(),
+                ))
+            })?
+        }
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            return Err(Box::new(managed_node_failed_step(
+                "managed Node.js install lock poisoned".to_string(),
+            )))
+        }
+    };
 
     if managed_node_runtime_ready() {
         return Ok(());
     }
 
-    install_managed_node_runtime(&root, artifact)
+    install_managed_node_runtime(&root, artifact, reporter)
         .map_err(|err| Box::new(managed_node_failed_step(err)))?;
     if managed_node_runtime_ready() {
         Ok(())
@@ -302,6 +326,7 @@ pub(super) fn ensure_managed_node_runtime_blocking() -> Result<(), Box<InstallSt
 fn install_managed_node_runtime(
     root: &std::path::Path,
     artifact: ManagedNodeArtifact,
+    reporter: &InstallReporter,
 ) -> Result<(), String> {
     let final_dir = root.join(MANAGED_NODE_VERSION).join(artifact.platform);
     let temp_dir = root.join(format!(
@@ -322,8 +347,13 @@ fn install_managed_node_runtime(
         "https://nodejs.org/dist/{MANAGED_NODE_VERSION}/{}",
         artifact.filename
     );
-    download_managed_node_archive(&url, &archive_path, artifact.sha256)?;
+    reporter.progress(&format!(
+        "Downloading Node.js {MANAGED_NODE_VERSION} for {}…",
+        artifact.platform
+    ));
+    download_managed_node_archive(&url, &archive_path, artifact.sha256, reporter)?;
 
+    reporter.progress("Unpacking the Node.js runtime…");
     std::fs::create_dir_all(&temp_dir).map_err(|e| format!("create temp dir: {e}"))?;
     extract_managed_node_archive(&archive_path, &temp_dir, artifact.filename)?;
     let _ = std::fs::remove_file(&archive_path);
@@ -364,6 +394,7 @@ fn download_managed_node_archive(
     url: &str,
     dest: &std::path::Path,
     expected_sha256: &str,
+    reporter: &InstallReporter,
 ) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5 * 60))
@@ -388,11 +419,13 @@ fn download_managed_node_archive(
         }
     }
 
+    let total = response.content_length();
     let mut response = response;
     let mut file =
         std::fs::File::create(dest).map_err(|e| format!("create Node.js archive: {e}"))?;
     let mut hasher = Sha256::new();
     let mut downloaded = 0_u64;
+    let mut noted_milestone = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let read = response
@@ -402,6 +435,9 @@ fn download_managed_node_archive(
             break;
         }
         downloaded += read as u64;
+        if let Some(note) = download_progress_note(downloaded, total, &mut noted_milestone) {
+            reporter.progress(&note);
+        }
         if downloaded > MANAGED_NODE_MAX_BYTES {
             let _ = std::fs::remove_file(dest);
             return Err(format!(
@@ -423,6 +459,44 @@ fn download_managed_node_archive(
         ));
     }
     Ok(())
+}
+
+/// The progress note this chunk earned, or `None` when it landed inside a
+/// milestone already reported. `noted` carries the last milestone across calls.
+///
+/// The milestone is a tenth of the transfer when the server declared a length,
+/// and a whole 10 MB otherwise — nodejs.org always sends `Content-Length`, but a
+/// proxy that strips it must still produce a line that moves, since a note that
+/// only ever says "downloading" cannot distinguish progress from a stall.
+///
+/// Pure so the throttling rule is assertable without a network transfer.
+fn download_progress_note(downloaded: u64, total: Option<u64>, noted: &mut u64) -> Option<String> {
+    const MB: u64 = 1024 * 1024;
+    let (milestone, text) = match total.filter(|total| *total > 0) {
+        Some(total) => {
+            let percent =
+                (downloaded.min(total) * 100 / total / DOWNLOAD_NOTE_STEP_PERCENT).min(10);
+            (
+                percent,
+                format!(
+                    "Downloading Node.js runtime… {}%",
+                    percent * DOWNLOAD_NOTE_STEP_PERCENT
+                ),
+            )
+        }
+        None => {
+            let blocks = downloaded / (10 * MB);
+            (
+                blocks,
+                format!("Downloading Node.js runtime… {} MB", blocks * 10),
+            )
+        }
+    };
+    if milestone == 0 || milestone <= *noted {
+        return None;
+    }
+    *noted = milestone;
+    Some(text)
 }
 
 fn extract_managed_node_archive(

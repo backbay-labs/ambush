@@ -1158,3 +1158,94 @@ test("baked build config keeps Finish enabled without manual provider setup", as
   );
   await expect(page.getByTestId("onboarding-finish")).toBeEnabled();
 });
+
+test("an install that never answers stops claiming to install", async ({
+  page,
+}) => {
+  // Fake timers so the card's own bound can be reached in a test; time flows
+  // normally until the fast-forward, so onboarding navigation is unaffected.
+  await page.clock.install();
+  await page.clock.resume();
+  await installMockBridge(
+    page,
+    {
+      acpRuntimesCatalog: [
+        runtime("claude", "adapter_missing", { status: "unknown" }),
+      ],
+      // Far past the card's bound, so the card — not the mock — is what ends
+      // the wait. This stands in for the real failure: an install whose answer
+      // never arrives, which used to leave the spinner up for the life of the
+      // surface.
+      installAcpRuntimeDelayMs: 60 * 60_000,
+    },
+    { skipCommunitySeed: true, skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+  await navigateToSetupPage(page);
+
+  const install = page.getByTestId("onboarding-runtime-install-claude");
+  const output = page.getByTestId("onboarding-runtime-install-output-claude");
+  const card = page.getByTestId("onboarding-runtime-claude");
+
+  await install.click();
+  // The slot under the spinner says an install is under way — never the
+  // pre-install detail line, which still reports the adapter as missing.
+  await expect(output).toHaveText("Preparing…");
+  await expect(card).not.toContainText("ACP adapter missing");
+  await expect(install).toHaveCount(0);
+
+  await page.clock.fastForward(21 * 60_000);
+
+  const error = page.getByTestId("onboarding-runtime-error-claude");
+  await expect(error).toBeVisible();
+  await expect(error).toHaveAttribute("aria-label", /stopped reporting back/);
+  await expect(install).toHaveText("RETRY INSTALL");
+  await expect(output).toHaveCount(0);
+
+  // The retry gets its own bound rather than inheriting the spent one, so a
+  // second silent install cannot spin on unwatched.
+  await install.click();
+  await expect(output).toHaveText("Preparing…");
+  await page.clock.fastForward(21 * 60_000);
+  await expect(error).toBeVisible();
+  await expect(install).toHaveText("RETRY INSTALL");
+});
+
+test("a failed install shows its hint, not just that it failed", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    {
+      acpRuntimesCatalog: [
+        runtime("claude", "adapter_missing", { status: "unknown" }),
+      ],
+      installAcpRuntimeResult: {
+        success: false,
+        steps: [
+          {
+            step: "adapter",
+            command: "mock install claude",
+            success: false,
+            stdout: "",
+            stderr: "npm error EACCES /private/node-tools",
+            exit_code: 1,
+            hint: "npm could not write to Ambush's private Node tools directory.",
+          },
+        ],
+      },
+    },
+    { skipCommunitySeed: true, skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+  await navigateToSetupPage(page);
+
+  await page.getByTestId("onboarding-runtime-install-claude").click();
+
+  const error = page.getByTestId("onboarding-runtime-error-claude");
+  await expect(error).toContainText("private Node tools directory");
+  // The vendor's own output stays behind the tooltip: a fixed-height card is
+  // the wrong place to publish whatever an installer happened to print.
+  await expect(error).not.toContainText("npm error EACCES");
+  await expect(error).toHaveAttribute("aria-label", /npm error EACCES/);
+});

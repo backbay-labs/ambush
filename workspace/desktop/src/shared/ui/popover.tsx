@@ -3,11 +3,6 @@ import * as PopoverPrimitive from "@radix-ui/react-popover";
 
 import { cn } from "@/shared/lib/cn";
 import {
-  type CardTextureSize,
-  type CardTextureTone,
-  texturedSurfaceClasses,
-} from "@/shared/ui/card";
-import {
   POPOVER_RADIX_MOTION_CLASS,
   POPOVER_RADIX_SIDE_MOTION_CLASS,
   POPOVER_SHADOW_STYLE,
@@ -28,9 +23,6 @@ type PopoverContentProps = React.ComponentPropsWithoutRef<
   typeof PopoverPrimitive.Content
 > & {
   portalled?: boolean;
-  surface?: "default" | "textured";
-  textureSize?: CardTextureSize;
-  textureTone?: CardTextureTone;
 };
 
 const PopoverContent = React.forwardRef<
@@ -42,11 +34,8 @@ const PopoverContent = React.forwardRef<
       className,
       align = "center",
       portalled = true,
-      sideOffset,
+      sideOffset = 4,
       style,
-      surface = "default",
-      textureSize = "regular",
-      textureTone = "light",
       ...props
     },
     ref,
@@ -55,23 +44,15 @@ const PopoverContent = React.forwardRef<
       <PopoverPrimitive.Content
         ref={ref}
         align={align}
-        sideOffset={sideOffset ?? (surface === "textured" ? 24 : 4)}
+        sideOffset={sideOffset}
         className={cn(
-          "z-50 w-72 origin-(--radix-popover-content-transform-origin) outline-hidden",
+          "z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-xl p-4 outline-hidden",
           POPOVER_RADIX_MOTION_CLASS,
           POPOVER_RADIX_SIDE_MOTION_CLASS,
-          surface === "default" && cn("rounded-xl p-4", POPOVER_SURFACE_CLASS),
-          surface === "textured" &&
-            texturedSurfaceClasses({
-              size: textureSize,
-              tone: textureTone,
-            }),
+          POPOVER_SURFACE_CLASS,
           className,
         )}
-        style={{
-          ...(surface === "default" ? POPOVER_SHADOW_STYLE : {}),
-          ...style,
-        }}
+        style={{ ...POPOVER_SHADOW_STYLE, ...style }}
         {...props}
       />
     );

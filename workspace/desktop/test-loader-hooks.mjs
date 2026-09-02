@@ -157,9 +157,10 @@ export async function load(url, context, nextLoad) {
     };
   }
 
-  // Vite handles side-effect CSS imports (e.g. `import "./card-texture.css"`
-  // in shared/ui) at bundle time; node's ESM loader has no CSS support. Serve
-  // them as empty modules so components with style imports stay unit-testable.
+  // Vite handles side-effect CSS imports (e.g. `import
+  // "./ambush-logo-animation.css"` in shared/ui) at bundle time; node's ESM
+  // loader has no CSS support. Serve them as empty modules so components with
+  // style imports stay unit-testable.
   if (url.endsWith(".css")) {
     return {
       format: "module",

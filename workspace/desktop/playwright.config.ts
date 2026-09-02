@@ -172,6 +172,7 @@ export default defineConfig({
       testMatch: [
         "**/agents.spec.ts",
         "**/agent-snapshot-recipient.spec.ts",
+        "**/first-community-configured-relay.spec.ts",
         "**/onboarding.spec.ts",
         "**/stream.spec.ts",
         "**/integration.spec.ts",

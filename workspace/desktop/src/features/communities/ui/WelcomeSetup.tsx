@@ -1,6 +1,11 @@
 import * as React from "react";
 import { Check, Copy } from "lucide-react";
 
+import {
+  canOfferConfiguredCommunity,
+  type ConfiguredCommunity,
+  resolveConfiguredCommunity,
+} from "@/features/communities/configuredCommunity";
 import { HostedCommunityOnboarding } from "@/features/communities/ui/HostedCommunityOnboarding";
 import { useCommunityOnboarding } from "@/features/onboarding/communityOnboarding";
 import { InviteRedeemForm } from "@/features/onboarding/ui/InviteRedeemForm";
@@ -22,15 +27,19 @@ type WelcomeSetupPage = "welcome" | "existing" | "join" | "member" | "owned";
 type WelcomeTransitionMode = "initial" | OnboardingTransitionDirection;
 
 type WelcomeSetupProps = {
+  /** Relay this instance is configured to use, offered as the first option. */
+  defaultRelayUrl?: string;
   initialPage?: WelcomeSetupPage;
   initialTransitionMode?: WelcomeTransitionMode;
   onBack?: () => void;
 };
 
+// A plate option: hover is a step up in lightness, never a glow.
 const COMMUNITY_OPTION_CARD_CLASS =
-  "w-full max-w-[320px] items-center px-6 py-4 text-center text-sm font-normal leading-6 text-foreground [--ambush-card-textured-min-height:88px] transition-[filter] duration-150 ease-out hover:brightness-[0.98] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-foreground/35";
+  "flex min-h-[5.5rem] w-full max-w-[320px] flex-col items-center justify-center border-border bg-card px-6 py-4 text-center text-sm font-normal leading-6 text-foreground transition-colors duration-150 ease-out hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-foreground/35";
 
 export function WelcomeSetup({
+  defaultRelayUrl,
   initialPage = "welcome",
   initialTransitionMode = "initial",
   onBack,
@@ -43,6 +52,8 @@ export function WelcomeSetup({
   // behind the modal never changes out from under the user.
   const [isHostedSignInOpen, setIsHostedSignInOpen] = React.useState(false);
   const [copiedNpub, setCopiedNpub] = React.useState(false);
+  const [configuredCommunity, setConfiguredCommunity] =
+    React.useState<ConfiguredCommunity | null>(null);
   const communityOnboarding = useCommunityOnboarding();
   const identityQuery = useIdentityQuery();
   const systemColorScheme = useSystemColorScheme();
@@ -54,6 +65,19 @@ export function WelcomeSetup({
       ? identityQuery.error.message
       : "Could not load your public key."
     : null;
+
+  // Dev instances are always pointed at a relay, so the community the user is
+  // here to reach is already known. Offer it once it answers for itself.
+  React.useEffect(() => {
+    if (!defaultRelayUrl || !canOfferConfiguredCommunity()) return;
+    let cancelled = false;
+    void resolveConfiguredCommunity(defaultRelayUrl).then((resolved) => {
+      if (!cancelled) setConfiguredCommunity(resolved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultRelayUrl]);
 
   const showPage = React.useCallback(
     (nextPage: WelcomeSetupPage, direction?: OnboardingTransitionDirection) => {
@@ -69,7 +93,12 @@ export function WelcomeSetup({
     (relayUrl: string) => {
       communityOnboarding.start({
         source: "first-community",
-        firstCommunityPage: page === "member" ? "member" : "join",
+        firstCommunityPage:
+          page === "member"
+            ? "member"
+            : page === "welcome"
+              ? "welcome"
+              : "join",
         relayUrl,
       });
     },
@@ -142,12 +171,24 @@ export function WelcomeSetup({
                   one you already have.
                 </p>
               </div>
-              <div className="flex w-full flex-1 translate-y-16 flex-col items-center justify-center gap-20 py-8">
-                <Card
-                  asChild
-                  className={COMMUNITY_OPTION_CARD_CLASS}
-                  variant="textured"
-                >
+              <div className="flex w-full flex-1 flex-col items-center justify-center gap-4 py-8">
+                {configuredCommunity ? (
+                  <Card asChild className={COMMUNITY_OPTION_CARD_CLASS}>
+                    <button
+                      data-testid="community-choice-configured"
+                      onClick={() =>
+                        startConnection(configuredCommunity.relayUrl)
+                      }
+                      type="button"
+                    >
+                      <span>Reconnect to {configuredCommunity.name}</span>
+                      <span className="mt-1 break-words font-mono text-xs text-foreground/60">
+                        {configuredCommunity.relayUrl}
+                      </span>
+                    </button>
+                  </Card>
+                ) : null}
+                <Card asChild className={COMMUNITY_OPTION_CARD_CLASS}>
                   <button
                     data-testid="community-choice-join"
                     onClick={() => showPage("join")}
@@ -156,11 +197,7 @@ export function WelcomeSetup({
                     Join a community
                   </button>
                 </Card>
-                <Card
-                  asChild
-                  className={COMMUNITY_OPTION_CARD_CLASS}
-                  variant="textured"
-                >
+                <Card asChild className={COMMUNITY_OPTION_CARD_CLASS}>
                   <button
                     data-testid="community-choice-create"
                     onClick={beginHostedCommunity}
@@ -169,11 +206,7 @@ export function WelcomeSetup({
                     Create a community
                   </button>
                 </Card>
-                <Card
-                  asChild
-                  className={COMMUNITY_OPTION_CARD_CLASS}
-                  variant="textured"
-                >
+                <Card asChild className={COMMUNITY_OPTION_CARD_CLASS}>
                   <button
                     data-testid="community-choice-existing"
                     onClick={() => showPage("existing")}
@@ -199,12 +232,8 @@ export function WelcomeSetup({
                   Tell us your role so we can find the fastest way back in.
                 </p>
               </div>
-              <div className="flex w-full flex-1 translate-y-16 flex-col items-center justify-center gap-20 py-8">
-                <Card
-                  asChild
-                  className={COMMUNITY_OPTION_CARD_CLASS}
-                  variant="textured"
-                >
+              <div className="flex w-full flex-1 flex-col items-center justify-center gap-4 py-8">
+                <Card asChild className={COMMUNITY_OPTION_CARD_CLASS}>
                   <button
                     data-testid="existing-choice-owner"
                     onClick={beginHostedCommunity}
@@ -213,11 +242,7 @@ export function WelcomeSetup({
                     I own the community
                   </button>
                 </Card>
-                <Card
-                  asChild
-                  className={COMMUNITY_OPTION_CARD_CLASS}
-                  variant="textured"
-                >
+                <Card asChild className={COMMUNITY_OPTION_CARD_CLASS}>
                   <button
                     data-testid="existing-choice-member"
                     onClick={() => showPage("member")}
@@ -257,6 +282,11 @@ export function WelcomeSetup({
               <div className="flex w-full flex-1 flex-col items-center justify-center gap-16">
                 <InviteRedeemForm
                   error={null}
+                  initialValue={
+                    page === "member" && configuredCommunity
+                      ? configuredCommunity.relayUrl
+                      : undefined
+                  }
                   isRedeeming={false}
                   onCancel={() =>
                     showPage(page === "member" ? "existing" : "welcome")

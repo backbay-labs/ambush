@@ -838,9 +838,6 @@ export function EncryptedBackupCreator({
             variant === "spotlight" && "ambush-onboarding-security-theme",
           )}
           data-testid="backup-change-password-dialog"
-          surface={variant === "spotlight" ? "textured" : "default"}
-          textureSize="compact"
-          textureTone={variant === "spotlight" ? "dark" : "light"}
         >
           <AlertDialogHeader>
             <AlertDialogTitle>Create a new backup password?</AlertDialogTitle>

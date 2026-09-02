@@ -11,7 +11,10 @@ import {
 import { useInstallOutputLine } from "@/features/agents/lib/useInstallOutputLine";
 import { describeResolvedCommand } from "@/features/agents/ui/agentUi";
 import type { AcpAuthMethod, AcpRuntimeCatalogEntry } from "@/shared/api/types";
-import { getInstallErrorMessage } from "@/shared/lib/installError";
+import {
+  getInstallErrorHeadline,
+  getInstallErrorMessage,
+} from "@/shared/lib/installError";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
@@ -45,10 +48,29 @@ type SetupStepContentProps = SetupStepProps & {
 
 type InstallResultState = {
   error: string | null;
+  /** The one line the card shows; the full `error` stays in the tooltip. */
+  headline: string | null;
   success: boolean;
 };
 
 type InstallResultsState = Record<string, InstallResultState>;
+
+/**
+ * How long a card keeps claiming an install is running before it stops and says
+ * so. The backend bounds each install command at 15 minutes
+ * (`INSTALL_TIMEOUT`, install_exec.rs) and runs at most a few of them, so a
+ * shorter bound would call a slow-but-working install dead; this sits past it
+ * so only an install that genuinely never reported back is ever surfaced as
+ * one. The point is that the spinner ends at all: a card that can spin forever
+ * tells the user nothing and offers them nothing to do about it.
+ */
+const INSTALL_NO_RESPONSE_MS = 20 * 60_000;
+
+const INSTALL_NO_RESPONSE_MESSAGE =
+  "The installer stopped reporting back. It may still be running in the background — try again in a few minutes.";
+
+/** Stands in for the live output line until the install prints its first one. */
+const INSTALL_PREPARING_TEXT = "Preparing…";
 
 function useSetupStepState(): SetupStepState {
   const runtimesQuery = useAcpRuntimesQueryForced();
@@ -525,34 +547,75 @@ function RuntimeCard({
   // latest mutate() call on a shared instance, silently dropping earlier ones).
   const installMutation = useInstallAcpRuntimeMutation();
   const installError = installResults[runtime.id]?.error ?? null;
-  const isInstalling = installMutation.isPending;
+  const installHeadline = installResults[runtime.id]?.headline ?? null;
+  // The card's own claim, not the mutation's: an install whose answer never
+  // arrives leaves `isPending` set for the life of the surface, and a spinner
+  // with no end is the one state the card must not be able to reach. The
+  // deadline is per click, so a retry is bounded on its own terms rather than
+  // inheriting whatever was left of the first attempt's.
+  const [installStopped, setInstallStopped] = React.useState(false);
+  const [installDeadline, setInstallDeadline] = React.useState<number | null>(
+    null,
+  );
+  const isInstalling = installMutation.isPending && !installStopped;
   const installOutputLine = useInstallOutputLine(runtime.id, isInstalling);
   const isAvailable = runtime.availability === "available";
   const isReady = runtimeIsReadyForOnboarding(runtime);
+  const runtimeId = runtime.id;
+
+  React.useEffect(() => {
+    if (installDeadline === null) return;
+    const timer = window.setTimeout(
+      () => {
+        setInstallStopped(true);
+        onInstallResultsChange((current) => ({
+          ...current,
+          [runtimeId]: {
+            error: INSTALL_NO_RESPONSE_MESSAGE,
+            headline: INSTALL_NO_RESPONSE_MESSAGE,
+            success: false,
+          },
+        }));
+      },
+      Math.max(0, installDeadline - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [installDeadline, onInstallResultsChange, runtimeId]);
 
   function handleInstall() {
+    setInstallStopped(false);
+    setInstallDeadline(Date.now() + INSTALL_NO_RESPONSE_MS);
     onInstallResultsChange((current) => ({
       ...current,
-      [runtime.id]: { error: null, success: false },
+      [runtime.id]: { error: null, headline: null, success: false },
     }));
 
     installMutation.mutate(runtime.id, {
       onSuccess: (result) => {
+        setInstallDeadline(null);
         onInstallResultsChange((current) => ({
           ...current,
           [runtime.id]: result.success
-            ? { error: null, success: true }
+            ? { error: null, headline: null, success: true }
             : {
                 error: getInstallErrorMessage(result),
+                headline: getInstallErrorHeadline(result),
                 success: false,
               },
         }));
       },
       onError: (error) => {
+        setInstallDeadline(null);
+        const message =
+          error instanceof Error ? error.message : "Install failed.";
         onInstallResultsChange((current) => ({
           ...current,
           [runtime.id]: {
-            error: error instanceof Error ? error.message : "Install failed.",
+            error: message,
+            // A rejected invoke never produced a step, so the message is the
+            // command's own error rather than an installer's output — the card
+            // can show it as-is.
+            headline: message,
             success: false,
           },
         }));
@@ -563,13 +626,13 @@ function RuntimeCard({
   return (
     <Card
       className={cn(
-        "group h-[224px] w-full max-w-[288px] select-none items-center px-3 py-1.5 text-center",
-        installError && "ring-1 ring-destructive/40",
-        isReady && "brightness-[0.98]",
+        "group relative flex h-[224px] w-full max-w-[288px] select-none flex-col items-center justify-center px-3 py-1.5 text-center",
+        installError && "border-destructive",
+        // A ready runtime reads as a plate one step brighter than the rest.
+        isReady && "bg-accent",
       )}
       data-ready={isReady ? "true" : "false"}
       data-testid={`onboarding-runtime-${runtime.id}`}
-      variant="textured"
     >
       <RuntimeReadinessIndicator ready={isReady} runtime={runtime} />
 
@@ -586,16 +649,18 @@ function RuntimeCard({
           onInstall={handleInstall}
           runtime={runtime}
         />
-        {isInstalling && installOutputLine ? (
+        {isInstalling ? (
           // Takes the detail text's slot rather than adding a row: the card is
           // fixed-height, and during an install the live line is the more
-          // useful of the two.
+          // useful of the two. It holds the slot even before the first line
+          // arrives, because the alternative — the pre-install detail text —
+          // still says the adapter is missing while Ambush is installing it.
           <p
             aria-live="polite"
             className="max-w-[13rem] truncate font-mono text-2xs leading-4 text-muted-foreground"
             data-testid={`onboarding-runtime-install-output-${runtime.id}`}
           >
-            {installOutputLine}
+            {installOutputLine ?? INSTALL_PREPARING_TEXT}
           </p>
         ) : !isAvailable && runtimeDetailText(runtime) ? (
           <p
@@ -613,7 +678,10 @@ function RuntimeCard({
         <RuntimeErrorTooltip
           className="absolute inset-x-3 bottom-2 flex min-w-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap text-xs leading-4 text-destructive"
           detail={installError}
-          label="Installation failed"
+          // A hint is Ambush's own sentence about what to do next, so it can be
+          // read at a glance; a step's raw output cannot, and stays behind the
+          // tooltip.
+          label={installHeadline ?? "Installation failed"}
           showIcon
           testId={`onboarding-runtime-error-${runtime.id}`}
         />

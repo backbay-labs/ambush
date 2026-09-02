@@ -210,6 +210,27 @@ impl InstallReporter {
         Some(Arc::new(move |line: &str| live.offer(line)))
     }
 
+    /// Report progress from a phase that runs *before* any install command has
+    /// been spawned — today the managed Node.js provision, which transfers tens
+    /// of megabytes and has no child process for the drains to observe.
+    ///
+    /// Without it that phase is entirely invisible: the card shows a bare
+    /// spinner over an empty line for the whole transfer, and the log holds
+    /// nothing between the run header and the first step, so a provision that
+    /// stalled reads exactly like one that is working. Callers report phase
+    /// boundaries, not every byte — each note is a line in the log.
+    ///
+    /// Live emission goes through the same rate window as drained output, so a
+    /// byte-counting caller cannot outrun the UI.
+    pub(super) fn progress(&self, line: &str) {
+        if let Some(log) = &self.log {
+            log.append(&render_note(line, &self.secrets));
+        }
+        if let Some(live) = &self.live {
+            live.offer(line);
+        }
+    }
+
     /// Record one executed attempt of a step, returning the step with secrets
     /// scrubbed out of the output the UI will render.
     ///
@@ -441,6 +462,17 @@ fn render_record(
         record.push_str(&format!("--- hint ---\n{}\n", redact(hint, secrets)));
     }
     record
+}
+
+/// One line of phase progress. It carries the timestamp a step record does, so
+/// the file still reads as one ordered timeline, but none of the command, exit
+/// or elapsed columns — a phase has no command and no exit status to name.
+fn render_note(line: &str, secrets: &Secrets) -> String {
+    format!(
+        "=== {} note {}\n",
+        chrono::Utc::now().to_rfc3339(),
+        redact(line, secrets),
+    )
 }
 
 /// Scrub secrets before anything reaches disk or the UI. The log is written

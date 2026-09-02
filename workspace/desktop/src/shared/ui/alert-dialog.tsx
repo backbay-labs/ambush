@@ -6,11 +6,6 @@ import type { VariantProps } from "class-variance-authority";
 
 import { cn } from "@/shared/lib/cn";
 import { buttonVariants } from "@/shared/ui/button";
-import {
-  type CardTextureSize,
-  type CardTextureTone,
-  texturedSurfaceClasses,
-} from "@/shared/ui/card";
 import { MODAL_BACKDROP_BLUR_CLASS } from "@/shared/ui/modalBackdrop";
 import {
   MODAL_CONTENT_MOTION_CLASS,
@@ -37,60 +32,25 @@ const AlertDialogOverlay = React.forwardRef<
 ));
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName;
 
-type AlertDialogContentProps = React.ComponentPropsWithoutRef<
-  typeof AlertDialogPrimitive.Content
-> & {
-  surface?: "default" | "textured";
-  textureSize?: CardTextureSize;
-  textureTone?: CardTextureTone;
-};
-
 const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
-  AlertDialogContentProps
->(
-  (
-    {
-      className,
-      surface = "default",
-      textureSize = "regular",
-      textureTone = "light",
-      ...props
-    },
-    ref,
-  ) => (
-    <AlertDialogPortal>
-      <AlertDialogOverlay />
-      <div
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPortal>
+    <AlertDialogOverlay />
+    <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center overflow-y-auto p-4">
+      <AlertDialogPrimitive.Content
         className={cn(
-          "pointer-events-none fixed inset-0 z-50 grid place-items-center overflow-y-auto",
-          surface === "textured"
-            ? textureSize === "compact"
-              ? "p-10"
-              : "p-28 max-sm:p-18"
-            : "p-4",
+          "pointer-events-auto grid w-[calc(100vw-2rem)] max-w-md gap-4 rounded-3xl border border-border bg-popover p-6 text-popover-foreground outline-hidden",
+          MODAL_CONTENT_MOTION_CLASS,
+          className,
         )}
-      >
-        <AlertDialogPrimitive.Content
-          className={cn(
-            "pointer-events-auto grid w-[calc(100vw-2rem)] max-w-md gap-4 outline-hidden",
-            surface === "default" &&
-              "rounded-3xl border border-border bg-popover p-6 text-popover-foreground",
-            surface === "textured" &&
-              texturedSurfaceClasses({
-                size: textureSize,
-                tone: textureTone,
-              }),
-            MODAL_CONTENT_MOTION_CLASS,
-            className,
-          )}
-          ref={ref}
-          {...props}
-        />
-      </div>
-    </AlertDialogPortal>
-  ),
-);
+        ref={ref}
+        {...props}
+      />
+    </div>
+  </AlertDialogPortal>
+));
 AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName;
 
 const AlertDialogHeader = ({

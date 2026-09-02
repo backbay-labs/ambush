@@ -550,12 +550,7 @@ export function BackupTestFlow({
                 if (file) void handleFile(file);
               }}
             >
-              <Card
-                className="flex-row items-center gap-2 px-10 py-8 text-sm font-semibold text-foreground"
-                textureSize="compact"
-                textureTone="dark"
-                variant="textured"
-              >
+              <Card className="flex items-center gap-2 px-10 py-8 text-sm font-semibold text-foreground">
                 <FileUp aria-hidden="true" className="size-4" />
                 <span>Drop your backup file here</span>
               </Card>

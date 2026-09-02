@@ -482,3 +482,60 @@ fn test_managed_node_runtime_ready_returns_false_when_binary_absent() {
         "managed_node_runtime_ready must return false when the binary file does not exist"
     );
 }
+
+/// A known length produces one note per tenth, and nothing in between — the
+/// card must be able to tell a moving transfer from a stalled one without the
+/// log turning into a progress bar.
+#[test]
+fn test_download_progress_note_reports_each_tenth_once() {
+    let total = Some(1_000_u64);
+    let mut noted = 0_u64;
+    let mut notes = Vec::new();
+    for chunk in 1..=100 {
+        if let Some(note) = download_progress_note(chunk * 10, total, &mut noted) {
+            notes.push(note);
+        }
+    }
+    assert_eq!(
+        notes,
+        (1..=10)
+            .map(|tenth| format!("Downloading Node.js runtime… {}%", tenth * 10))
+            .collect::<Vec<_>>(),
+        "each tenth must be reported exactly once, in order"
+    );
+}
+
+/// A transfer whose length the server withheld still produces a line that
+/// moves: a note that only ever says "downloading" cannot distinguish progress
+/// from a stall, which is the whole reason this phase reports at all.
+#[test]
+fn test_download_progress_note_falls_back_to_transferred_size() {
+    const MB: u64 = 1024 * 1024;
+    let mut noted = 0_u64;
+    assert_eq!(download_progress_note(9 * MB, None, &mut noted), None);
+    assert_eq!(
+        download_progress_note(10 * MB, None, &mut noted).as_deref(),
+        Some("Downloading Node.js runtime… 10 MB")
+    );
+    assert_eq!(
+        download_progress_note(15 * MB, None, &mut noted),
+        None,
+        "a chunk inside a reported block must not repeat its note"
+    );
+    assert_eq!(
+        download_progress_note(20 * MB, None, &mut noted).as_deref(),
+        Some("Downloading Node.js runtime… 20 MB")
+    );
+}
+
+/// A server that over-declares (or a body that overruns its length) must not
+/// push the reported share past 100%.
+#[test]
+fn test_download_progress_note_clamps_to_complete() {
+    let mut noted = 0_u64;
+    assert_eq!(
+        download_progress_note(5_000, Some(1_000), &mut noted).as_deref(),
+        Some("Downloading Node.js runtime… 100%")
+    );
+    assert_eq!(download_progress_note(6_000, Some(1_000), &mut noted), None);
+}

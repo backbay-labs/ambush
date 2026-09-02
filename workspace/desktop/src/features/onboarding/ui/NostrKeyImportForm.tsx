@@ -286,11 +286,7 @@ export function NostrKeyImportForm({
             Private key
           </label>
           {variant === "spotlight" ? (
-            <Card
-              className="w-full px-8 py-12"
-              data-testid="nostr-import-card"
-              variant="textured"
-            >
+            <Card className="w-full px-8 py-12" data-testid="nostr-import-card">
               <div className="relative w-full">
                 <Input
                   autoComplete="off"
@@ -402,7 +398,7 @@ export function NostrKeyImportForm({
           </div>
           {isDragging ? (
             <fieldset
-              className="absolute inset-[var(--ambush-card-textured-safe-inset)] z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background"
+              className="absolute inset-6 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background"
               data-dragging="true"
               data-testid="nostr-import-backup-drop"
             >

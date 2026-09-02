@@ -36,14 +36,18 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   const importCard = page.getByTestId("nostr-import-card");
   await expect(importCard).toBeVisible();
   await expect(page.getByLabel("Private key", { exact: true })).toBeVisible();
-  // The production card uses a baked nine-slice texture: no runtime SVG
-  // filter, measurement, or texture regeneration during resize.
-  await expect(importCard).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(importCard).toHaveCSS("border-top-width", "0px");
-  await expect(importCard).toHaveCSS("border-image-repeat", "repeat");
-  await expect(importCard).toHaveCSS("border-image-outset", "96px");
-  // Icon SVGs (e.g. the reveal toggle) are fine; a filter would mean the
-  // texture regressed to the runtime SVG pipeline.
+  // An honest plate: a hairline border and the machined chamfer separate it
+  // from the room. No border image, no shadow, no runtime SVG filter — icon
+  // SVGs (e.g. the reveal toggle) carry none of their own either.
+  await expect(importCard).not.toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+  await expect(importCard).toHaveCSS("border-image-source", "none");
+  await expect(importCard).toHaveCSS("border-top-width", "1px");
+  await expect(importCard).toHaveCSS("border-top-style", "solid");
+  await expect(importCard).toHaveCSS("border-top-left-radius", "2px");
+  await expect(importCard).toHaveCSS("box-shadow", "none");
   await expect(importCard.locator("svg filter")).toHaveCount(0);
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/01b-enter-key.png` });
@@ -93,9 +97,6 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   await expect(page.getByTestId("onboarding-next")).toHaveCount(0);
   const optionPanels = page.getByTestId("backup-option-panel");
   await expect(optionPanels).toHaveCount(3);
-  await expect(
-    page.getByTestId("backup-options").locator(".ambush-card-textured"),
-  ).toHaveCount(0);
   await expect(optionPanels.first()).toHaveCSS("padding-left", "24px");
   const titleTops = await optionPanels
     .locator("span.text-lg")
@@ -110,7 +111,6 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   await expect(page.getByTestId("onboarding-page-download")).toBeVisible();
   const passwordPanel = page.getByTestId("backup-password-panel");
   await expect(passwordPanel).toBeVisible();
-  await expect(passwordPanel).not.toHaveClass(/ambush-card-textured/);
   await expect(passwordPanel).toHaveCSS("padding-left", "24px");
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/02d-backup-password.png` });
@@ -118,7 +118,6 @@ test("machine onboarding: landing, backup, setup docked CTAs", async ({
   await page.getByTestId("backup-passphrase-generate").click();
   const generatorPopover = page.getByRole("dialog");
   await expect(generatorPopover).toBeVisible();
-  await expect(generatorPopover).not.toHaveClass(/ambush-card-textured/);
   await waitForAnimations(page);
   await page.screenshot({ path: `${SHOT_DIR}/02e-backup-generator.png` });
   await page.keyboard.press("Escape");

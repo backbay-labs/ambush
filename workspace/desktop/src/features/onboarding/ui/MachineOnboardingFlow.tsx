@@ -436,7 +436,6 @@ export function MachineOnboardingFlow({
                   closeButtonClassName={ONBOARDING_INK_ICON_CLASS}
                   data-system-color-scheme="light"
                   data-testid="backup-recovery-dialog"
-                  surface="textured"
                 >
                   <div className="mx-auto w-full max-w-[35rem] pb-6 pt-10 text-center max-sm:pb-4 max-sm:pt-6">
                     <DialogTitle className="text-balance px-8 text-3xl font-normal text-foreground">
@@ -467,7 +466,6 @@ export function MachineOnboardingFlow({
                   closeButtonClassName={ONBOARDING_INK_ICON_CLASS}
                   data-system-color-scheme="light"
                   data-testid="phone-recovery-dialog"
-                  surface="textured"
                 >
                   <div className="mx-auto flex w-full max-w-[35rem] flex-col items-center pb-6 pt-8 text-center max-sm:pb-4 max-sm:pt-4">
                     <DialogTitle className="text-balance px-8 text-3xl font-normal text-foreground">

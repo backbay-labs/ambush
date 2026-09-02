@@ -70,7 +70,6 @@ export function IdentityKeyHelpDialog() {
         data-system-color-scheme="light"
         data-testid="identity-key-help-dialog"
         overlayVariant="transparent"
-        surface="textured"
       >
         <div className="mx-auto w-full max-w-[35rem] py-14 text-left max-sm:py-6">
           <DialogTitle className="text-balance pr-8 text-3xl font-normal text-foreground">

@@ -320,7 +320,7 @@ fn install_acp_runtime_blocking(
         let use_managed_npm =
             cmds.iter().any(|cmd| is_npm_global_install(cmd)) && managed_node_runtime_supported();
         if use_managed_npm {
-            if let Err(step) = ensure_managed_node_runtime_blocking() {
+            if let Err(step) = ensure_managed_node_runtime_blocking(&reporter) {
                 reporter.record_step(&mut steps, *step);
                 return Ok(reporter.failed(steps));
             }

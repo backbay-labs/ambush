@@ -28,7 +28,7 @@ import { OnboardingFooter } from "./OnboardingFooter";
 
 const POLICY_DISCOVERY_DELAY_MS = 250;
 const POLICY_REVEAL_EASE = [0.23, 1, 0.32, 1] as const;
-const SPOTLIGHT_TEXTURE_CONTENT_CLASS = "mx-auto w-full max-w-[920px]";
+const SPOTLIGHT_CONTENT_CLASS = "mx-auto w-full max-w-[920px]";
 const SPOTLIGHT_OVERFLOW_FADE = {
   WebkitMaskImage:
     "linear-gradient(to right, transparent, black 2rem, black calc(100% - 2rem), transparent)",
@@ -360,10 +360,9 @@ export function InviteRedeemForm({
         <Card
           className="w-[min(calc(100%+12rem),calc(100vw-2rem))] max-w-[1120px] translate-y-8 px-8 py-6"
           data-testid="invite-redeem-input-frame"
-          variant="textured"
         >
           <div
-            className={SPOTLIGHT_TEXTURE_CONTENT_CLASS}
+            className={SPOTLIGHT_CONTENT_CLASS}
             style={SPOTLIGHT_OVERFLOW_FADE}
           >
             <label className="block w-full" htmlFor="invite-input">

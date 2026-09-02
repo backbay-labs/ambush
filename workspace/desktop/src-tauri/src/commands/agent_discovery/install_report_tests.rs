@@ -562,3 +562,82 @@ fn test_run2_output_replaces_stale_run1_state_through_shared_consumer() {
          got: {final_line:?}"
     );
 }
+
+// ── phases that run before any command still report ──────────────────────────
+
+/// The managed Node.js provision runs before the first install command exists,
+/// so it has no drain to speak through. Its progress must still reach both
+/// destinations, or the longest stretch of an install is invisible in the log
+/// and under the spinner alike.
+#[test]
+fn test_progress_reaches_the_log_and_the_live_line() {
+    let h = harness();
+
+    h.reporter.progress("Downloading Node.js runtime… 30%");
+
+    assert!(
+        h.log_contents()
+            .contains("Downloading Node.js runtime… 30%"),
+        "got: {}",
+        h.log_contents()
+    );
+    assert_eq!(
+        h.lines(),
+        vec![Some("Downloading Node.js runtime… 30%".to_string())],
+        "the first note must reach the card without waiting on the rate window"
+    );
+}
+
+/// A note is a phase line, not a step: it must not claim an exit status or an
+/// attempt number the phase never had, and it must not consume the attempt
+/// clock a following step will report its own duration from.
+#[test]
+fn test_progress_note_is_not_recorded_as_a_step() {
+    let h = harness();
+
+    h.reporter.start_attempt();
+    h.reporter.progress("Unpacking the Node.js runtime…");
+    h.reporter
+        .record_attempt(1, outcome("adapter", true, "added 1 package"));
+
+    let log = h.log_contents();
+    assert!(
+        log.contains("note Unpacking the Node.js runtime…"),
+        "got: {log}"
+    );
+    assert!(
+        !log.contains("step=note"),
+        "a phase note must not render as a step record: {log}"
+    );
+    assert_eq!(
+        log.matches("attempt=1").count(),
+        1,
+        "only the executed attempt may claim an attempt number: {log}"
+    );
+    assert!(
+        !log.contains("elapsed=-\n$ curl"),
+        "the step must still report its own elapsed time: {log}"
+    );
+}
+
+/// A note carries the same scrubbing as every other thing the reporter
+/// publishes — the log is written unattended, and a phase line is no less
+/// likely to quote an environment value than a drained one.
+#[test]
+fn test_progress_note_is_redacted() {
+    let h = harness_with_secrets(vec!["s3cr3t-token-value".to_string()]);
+
+    h.reporter
+        .progress("Downloading via proxy https://user:s3cr3t-token-value@proxy.example");
+
+    assert!(
+        !h.log_contents().contains("s3cr3t-token-value"),
+        "got: {}",
+        h.log_contents()
+    );
+    assert!(
+        !format!("{:?}", h.lines()).contains("s3cr3t-token-value"),
+        "got: {:?}",
+        h.lines()
+    );
+}
