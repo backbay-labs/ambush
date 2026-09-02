@@ -36,6 +36,8 @@ use swarm_crypto::{
     DetachedSignature, Keypair, canonical_json_bytes, sha256_hex, verify_detached_signature,
 };
 
+const MAX_STRATEGY_MEMORY_LIST_LIMIT: usize = 4_096;
+
 pub const STRATEGY_MEMORY_STORE_SCHEMA_VERSION: u32 = 1;
 pub const STRATEGY_MEMORY_STATE_KIND: &str = "collective_strategy_memory";
 pub const STRATEGY_MEMORY_STATE_FILE: &str = "state.json";
@@ -992,8 +994,10 @@ impl StrategyMemoryStore for MemoryStrategyMemoryStore {
     }
 
     fn list(&self, limit: usize) -> Result<Vec<StrategyMemoryRecord>, StrategyMemoryStoreError> {
-        if limit == 0 || limit > 256 {
-            return Err(StrategyMemoryStoreError::InvalidLimit(256));
+        if limit == 0 || limit > MAX_STRATEGY_MEMORY_LIST_LIMIT {
+            return Err(StrategyMemoryStoreError::InvalidLimit(
+                MAX_STRATEGY_MEMORY_LIST_LIMIT,
+            ));
         }
         let state = self.read_state()?;
         let records = state
@@ -1904,8 +1908,10 @@ impl StrategyMemoryStore for FileStrategyMemoryStore {
     }
 
     fn list(&self, limit: usize) -> Result<Vec<StrategyMemoryRecord>, StrategyMemoryStoreError> {
-        if limit == 0 || limit > 256 {
-            return Err(StrategyMemoryStoreError::InvalidLimit(256));
+        if limit == 0 || limit > MAX_STRATEGY_MEMORY_LIST_LIMIT {
+            return Err(StrategyMemoryStoreError::InvalidLimit(
+                MAX_STRATEGY_MEMORY_LIST_LIMIT,
+            ));
         }
         let state = self.read_state()?;
         let records = state

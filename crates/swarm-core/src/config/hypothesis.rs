@@ -11,6 +11,11 @@ const DEFAULT_HYPOTHESIS_GRAPH_MAX_CLAIMS_PER_TICK: u16 = 128;
 pub struct HypothesisGraphConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Authenticated graph and strategy-memory persistence. Enabled shipped
+    /// runtimes require a durable local-files root; memory remains available
+    /// for deterministic unit and benchmark harnesses.
+    #[serde(default, skip_serializing_if = "hypothesis_graph_store_is_memory")]
+    pub state_store: BundleStoreConfig,
     #[serde(default = "default_hypothesis_graph_max_nodes")]
     pub max_nodes: usize,
     #[serde(default = "default_hypothesis_graph_max_edges")]
@@ -47,11 +52,17 @@ pub struct HypothesisGraphConfig {
     pub max_claims_per_tick: u16,
 }
 
+fn hypothesis_graph_store_is_memory(store: &BundleStoreConfig) -> bool {
+    matches!(store, BundleStoreConfig::Memory)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HypothesisGraphConfigWire {
     #[serde(default)]
     enabled: bool,
+    #[serde(default)]
+    state_store: BundleStoreConfig,
     #[serde(default = "default_hypothesis_graph_max_nodes")]
     max_nodes: usize,
     #[serde(default = "default_hypothesis_graph_max_edges")]
@@ -96,6 +107,7 @@ impl<'de> Deserialize<'de> for HypothesisGraphConfig {
         let wire = HypothesisGraphConfigWire::deserialize(deserializer)?;
         let config = Self {
             enabled: wire.enabled,
+            state_store: wire.state_store,
             max_nodes: wire.max_nodes,
             max_edges: wire.max_edges,
             max_evidence_bytes: wire.max_evidence_bytes,
@@ -139,6 +151,7 @@ impl Default for HypothesisGraphConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            state_store: BundleStoreConfig::default(),
             max_nodes: default_hypothesis_graph_max_nodes(),
             max_edges: default_hypothesis_graph_max_edges(),
             max_evidence_bytes: default_hypothesis_graph_max_evidence_bytes(),

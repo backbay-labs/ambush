@@ -5050,14 +5050,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let state = state.clone();
                     move |identity| {
                         build_restartable_agent(move || {
-                            Ok(Box::new(StalkerAgent::new_with_signing_key(
+                            let graph_worker = state
+                                .current_hypothesis_graph_worker(
+                                    [
+                                        swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                                        swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                                    ],
+                                    &identity.signing_key,
+                                )
+                                .map_err(|error| error.to_string())?;
+                            let mut agent = StalkerAgent::new_with_signing_key(
                                 identity.id.clone(),
                                 identity.signing_key.clone(),
                                 state.current_replay_store(),
                                 state.current_investigation(),
                                 state.current_substrate(),
                                 state.current_pheromone_config(),
-                            )))
+                            );
+                            if let Some(worker) = graph_worker {
+                                agent = agent
+                                    .with_hypothesis_graph(worker)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            Ok(Box::new(agent))
                         })
                     }
                 },
@@ -5077,19 +5092,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let state = state.clone();
                     move |identity| {
                         build_restartable_agent(move || {
-                            Ok(Box::new(WeaverAgent::new_with_signing_key(
+                            let graph_worker = state
+                                .current_hypothesis_graph_worker(
+                                    [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                                    &identity.signing_key,
+                                )
+                                .map_err(|error| error.to_string())?;
+                            let mut agent = WeaverAgent::new_with_signing_key(
                                 identity.id.clone(),
                                 identity.signing_key.clone(),
                                 state.current_correlation_engine(),
                                 state.current_investigation_store(),
                                 state.current_incident_store(),
-                            )))
+                            );
+                            if let Some(worker) = graph_worker {
+                                agent = agent
+                                    .with_hypothesis_graph(worker)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            Ok(Box::new(agent))
                         })
                     }
                 },
             )?
         {
             admitted_identities.push(weaver_id);
+        }
+        if config.hypothesis_graph.enabled {
+            state
+                .current_hypothesis_graph()
+                .ok_or_else(|| {
+                    std::io::Error::other(
+                        "enabled hypothesis graph was not constructed during runtime startup",
+                    )
+                })?
+                .ensure_workers_registered()
+                .map_err(std::io::Error::other)?;
+            let reconciliation = state.reconcile_hypothesis_graph_replays()?;
+            tracing::info!(
+                examined = reconciliation.examined,
+                admitted = reconciliation.admitted,
+                idempotent = reconciliation.idempotent,
+                failures = reconciliation.failures,
+                "reconciled durable replays into the collective hypothesis graph"
+            );
         }
         dispatcher.set_admitted_identities(admitted_identities);
         let mut dispatcher_handle = Some(tokio::spawn(async move {

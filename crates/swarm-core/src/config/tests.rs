@@ -181,6 +181,71 @@ fn hypothesis_graph_config_round_trips_all_limits() {
 }
 
 #[test]
+fn enabled_hypothesis_graph_requires_durable_detect_async_lanes() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.enabled = true;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `hypothesis_graph.state_store`: must use local_files when the collective graph is enabled"
+    );
+
+    config.hypothesis_graph.state_store = BundleStoreConfig::LocalFiles {
+        directory: "phase286-graph-state".to_string(),
+    };
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `hypothesis_graph.enabled`: collective graph execution is currently restricted to detect_only"
+    );
+
+    config.runtime.mode = RuntimeMode::DetectOnly;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `investigation.enabled`: must be enabled with the collective hypothesis graph"
+    );
+
+    config.investigation.enabled = true;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `correlation.enabled`: must be enabled with the collective hypothesis graph"
+    );
+
+    config.correlation.enabled = true;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `audit.bundle_store`: must use local_files with the collective hypothesis graph"
+    );
+
+    config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: "phase286-replay-state".to_string(),
+    };
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `investigation.bundle_store`: must use local_files with the collective hypothesis graph"
+    );
+
+    config.investigation.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: "phase286-investigation-state".to_string(),
+    };
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `correlation.incident_store`: must use local_files with the collective hypothesis graph"
+    );
+
+    config.correlation.incident_store = BundleStoreConfig::LocalFiles {
+        directory: "phase286-incident-state".to_string(),
+    };
+    assert!(config.validate().is_ok());
+}
+
+#[test]
 fn hypothesis_graph_config_rejects_unbounded_reasoning_limits() {
     let mut config = valid_config(PheromoneBackendConfig::InMemory);
     config.runtime.require_durable_live_response = false;

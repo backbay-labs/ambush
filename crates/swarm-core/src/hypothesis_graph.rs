@@ -4065,6 +4065,7 @@ pub fn validate_completion_kind(
                 TaskKind::FalsifyHypothesis,
                 TaskCompletionKind::HypothesisFalsified
             )
+            | (TaskKind::FalsifyHypothesis, TaskCompletionKind::NoFinding)
     );
     if valid {
         Ok(())
@@ -4310,6 +4311,16 @@ impl TaskTerminalEnvelope {
                 if self.decision_link.is_some() {
                     return Err(GraphAdmissionError::InvalidTransition {
                         reason: "evidence acquisition cannot carry decision lineage".to_string(),
+                    });
+                }
+            }
+            TaskKind::FalsifyHypothesis
+                if self.completion.kind == TaskCompletionKind::NoFinding =>
+            {
+                if self.decision_link.is_some() {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "a no-finding falsification cannot carry decision lineage"
+                            .to_string(),
                     });
                 }
             }

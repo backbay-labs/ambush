@@ -296,12 +296,14 @@ pub(crate) fn coordination_task_targets(
             assessment.disposition,
             HypothesisDisposition::Unresolved | HypothesisDisposition::Contradicts
         ) {
-            targets.insert((
-                TaskKind::FalsifyHypothesis,
-                TaskTarget::Hypothesis {
-                    hypothesis_id: assessment.hypothesis_id.clone(),
-                },
-            ));
+            if assessment.disposition == HypothesisDisposition::Contradicts {
+                targets.insert((
+                    TaskKind::FalsifyHypothesis,
+                    TaskTarget::Hypothesis {
+                        hypothesis_id: assessment.hypothesis_id.clone(),
+                    },
+                ));
+            }
             for evidence_id in &assessment.evidence_ids {
                 targets.insert((
                     TaskKind::AcquireEvidence,
@@ -457,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn durable_target_expansion_contains_every_open_operation_kind() {
+    fn neutral_target_expansion_never_infers_falsification() {
         let seed = seed();
         let targets =
             coordination_task_targets(&seed, &BTreeSet::from([EdgeId::new("edge:admitted")]))
@@ -475,7 +477,7 @@ mod tests {
         assert!(
             targets
                 .iter()
-                .any(|(kind, _)| *kind == TaskKind::FalsifyHypothesis)
+                .all(|(kind, _)| *kind != TaskKind::FalsifyHypothesis)
         );
     }
 }

@@ -39,7 +39,7 @@ use swarm_core::config::{
 };
 use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_core::pheromone::EscalationRecord;
-use swarm_core::types::AgentId;
+use swarm_core::types::{AgentId, ResponseAction};
 use swarm_governance::GovernanceAuthority;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
@@ -74,6 +74,9 @@ use swarm_runtime::evolution::{
     EvolutionProposalReviewState, FormalSafetyGate, StrategyGenome,
 };
 use swarm_runtime::evolution_status::DefaultEvolutionStatusHarness;
+use swarm_runtime::hypothesis_graph::{
+    CollectiveHypothesisService, GraphServiceError, GraphWorkerAdapter,
+};
 use swarm_runtime::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use swarm_runtime::mutation::DefaultEvolutionMutationHarness;
 use swarm_runtime::providence::{
@@ -95,6 +98,7 @@ use swarm_runtime::{RuntimeError, StrategyProposalRouteError, SwarmRuntime};
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
     ConfiguredReplayBundleStore, CorrelatedIncident, IncidentStore, ReplayBundleStore,
+    ReplayStoreError,
 };
 use swarm_whisker::{CompositeDetector, DetectionFinding, TelemetryEvent};
 use tracing::Instrument;
@@ -1184,6 +1188,7 @@ async fn process_runtime_event(
             let stack = state.stack.load_full();
             let detector = state.detector.load_full();
             let swarm_mode = state.current_mode_state().current;
+            let collective_reasoning = state.current_hypothesis_graph().is_some();
             match stack
                 .process_event_with_finding_observer(
                     detector.as_ref(),
@@ -1199,6 +1204,20 @@ async fn process_runtime_event(
                                 .service
                                 .playbook_action_for_finding(finding, swarm_mode)
                                 .filter(|action| !action.requires_governance_receipt())
+                        } else if collective_reasoning {
+                            // The graph is deliberately restricted to
+                            // detect-only operation, but it still requires the
+                            // persisted replay and investigation produced by
+                            // the audited action-request path. Escalation is an
+                            // advisory record in this mode; it cannot execute a
+                            // response adapter.
+                            Some(ResponseAction::Escalate {
+                                summary: format!(
+                                    "collective investigation for finding {}",
+                                    finding.finding_id
+                                ),
+                                urgency: finding.severity,
+                            })
                         } else {
                             None
                         }
@@ -1207,7 +1226,19 @@ async fn process_runtime_event(
                 )
                 .await
             {
-                Ok(_) => {
+                Ok(replay) => {
+                    if let (Some(graph), Some(replay)) =
+                        (state.current_hypothesis_graph(), replay.as_ref())
+                        && let Err(error) = graph.submit_replay(&replay.replay.bundle)
+                    {
+                        tracing::warn!(
+                            correlation_id = %correlation_id,
+                            event_id = %event.event_id,
+                            reason = %error,
+                            module = module_path!(),
+                            "collective hypothesis lane degraded after critical-path persistence"
+                        );
+                    }
                     if let Some(tx) = &state.telemetry_tx {
                         match tx.try_send(event.clone()) {
                             Ok(()) => {}
@@ -1421,6 +1452,20 @@ pub enum IngestBuildError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    HypothesisGraph(#[from] GraphServiceError),
+
+    #[error("hypothesis_graph configuration cannot be hot-reloaded; restart the runtime")]
+    HypothesisGraphReload,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HypothesisGraphReplayReconciliation {
+    pub examined: usize,
+    pub admitted: usize,
+    pub idempotent: usize,
+    pub failures: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1607,6 +1652,7 @@ pub struct IngestState {
     startup_attestation: Option<Arc<StartupAttestationReport>>,
     anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
     runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
+    hypothesis_graph: Option<Arc<CollectiveHypothesisService>>,
 }
 
 impl IngestState {
@@ -1655,7 +1701,14 @@ impl IngestState {
             .transpose()?
             .map(Arc::new);
         let strategy = strategy_status_label(&resolved);
+        let hypothesis_graph_config = resolved.hypothesis_graph.clone();
         let (stack, request_runtime, detector) = Self::build_runtime(resolved)?;
+        let graph_signer = swarm_crypto::Keypair::from_seed(&signing_key.to_bytes());
+        let hypothesis_graph = CollectiveHypothesisService::from_config(
+            &hypothesis_graph_config,
+            graph_signer,
+            stack.service.prometheus_metrics().cloned(),
+        )?;
         let detector_status = Arc::new(ArcSwap::from(Arc::new(DetectorRuntimeStatus::loaded(
             strategy,
         ))));
@@ -1708,6 +1761,7 @@ impl IngestState {
                     transitioned_at_ms: now_ms(),
                 }),
             )),
+            hypothesis_graph,
         };
         state.install_notification_payload_builder();
         Ok(state)
@@ -1720,6 +1774,9 @@ impl IngestState {
     }
 
     pub fn reload(&self, config: SwarmConfig) -> Result<(), IngestBuildError> {
+        if config.hypothesis_graph != self.stack.load_full().service.config.hypothesis_graph {
+            return Err(IngestBuildError::HypothesisGraphReload);
+        }
         let strategy = strategy_status_label(&config);
         let platform_rate_limit = config.platform_api.rate_limit.clone();
         let new_platform_auth = crate::ingest::platform_api::PlatformApiAuthState::from_config(
@@ -2197,6 +2254,77 @@ impl IngestState {
 
     pub fn current_prometheus_metrics(&self) -> Option<CriticalPathMetrics> {
         self.stack.load_full().service.prometheus_metrics().cloned()
+    }
+
+    pub fn current_hypothesis_graph(&self) -> Option<Arc<CollectiveHypothesisService>> {
+        self.hypothesis_graph.clone()
+    }
+
+    pub fn current_hypothesis_graph_worker(
+        &self,
+        capabilities: impl IntoIterator<Item = swarm_core::hypothesis_graph::TaskKind>,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Option<GraphWorkerAdapter>, GraphServiceError> {
+        let signer = swarm_crypto::Keypair::from_seed(&signing_key.to_bytes());
+        self.hypothesis_graph
+            .as_ref()
+            .map(|service| service.worker(capabilities, signer))
+            .transpose()
+    }
+
+    /// Reconcile the bounded recent durable replay window after production
+    /// worker identities have registered. Individual graph failures remain a
+    /// visible degraded lane rather than preventing the detect runtime from
+    /// starting; unreadable replay storage still fails the reconciliation.
+    pub fn reconcile_hypothesis_graph_replays(
+        &self,
+    ) -> Result<HypothesisGraphReplayReconciliation, ReplayStoreError> {
+        let Some(graph) = self.current_hypothesis_graph() else {
+            return Ok(HypothesisGraphReplayReconciliation::default());
+        };
+        let replay_store = self.current_replay_store();
+        let limit = self
+            .stack
+            .load_full()
+            .service
+            .config
+            .hypothesis_graph
+            .max_tasks;
+        let mut records = replay_store.recent(limit)?;
+        records.reverse();
+        let mut report = HypothesisGraphReplayReconciliation::default();
+        for record in records {
+            report.examined = report.examined.saturating_add(1);
+            let Some(replay) = replay_store.load_by_bundle_id(&record.bundle_id)? else {
+                report.failures = report.failures.saturating_add(1);
+                tracing::warn!(
+                    bundle_id = %record.bundle_id,
+                    hunt_id = %record.hunt_id,
+                    module = module_path!(),
+                    "durable replay disappeared during hypothesis graph startup reconciliation"
+                );
+                continue;
+            };
+            match graph.submit_replay(&replay.bundle) {
+                Ok(submission) if submission.idempotent => {
+                    report.idempotent = report.idempotent.saturating_add(1);
+                }
+                Ok(_) => {
+                    report.admitted = report.admitted.saturating_add(1);
+                }
+                Err(error) => {
+                    report.failures = report.failures.saturating_add(1);
+                    tracing::warn!(
+                        bundle_id = %record.bundle_id,
+                        hunt_id = %record.hunt_id,
+                        reason = %error,
+                        module = module_path!(),
+                        "durable replay hypothesis graph startup reconciliation degraded"
+                    );
+                }
+            }
+        }
+        Ok(report)
     }
 
     pub(in crate::ingest) fn platform_api_auth(

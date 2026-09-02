@@ -215,6 +215,24 @@ fn enable_platform_api_with_token_env(config: &mut SwarmConfig, token_env: &str)
     }
 }
 
+fn enable_collective_hypothesis_graph(config: &mut SwarmConfig, directory: &Path) {
+    config.investigation.enabled = true;
+    config.correlation.enabled = true;
+    config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: directory.join("replays").display().to_string(),
+    };
+    config.investigation.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: directory.join("investigations").display().to_string(),
+    };
+    config.correlation.incident_store = BundleStoreConfig::LocalFiles {
+        directory: directory.join("incidents").display().to_string(),
+    };
+    config.hypothesis_graph.enabled = true;
+    config.hypothesis_graph.state_store = BundleStoreConfig::LocalFiles {
+        directory: directory.join("hypothesis-graph").display().to_string(),
+    };
+}
+
 fn mint_platform_context_token(
     config: &SwarmConfig,
     scope: swarm_runtime::providence::ProvidenceContextScope,
@@ -1923,6 +1941,22 @@ fn ingest_state_reload_updates_detector() {
     assert_eq!(state.detector_strategy_name(), "dns_exfiltration");
 }
 
+#[tokio::test]
+async fn ingest_state_rejects_hypothesis_graph_hot_reload() {
+    let mut config = test_config("suspicious_process_tree");
+    let graph_root = temp_path("hypothesis-graph-reload-store");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    let state =
+        IngestState::from_config(temp_path("hypothesis-graph-reload"), config.clone()).unwrap();
+    let mut changed = config;
+    changed.hypothesis_graph.max_tasks += 1;
+    let error = state.reload(changed).unwrap_err();
+    assert!(matches!(
+        error,
+        super::IngestBuildError::HypothesisGraphReload
+    ));
+}
+
 #[test]
 fn ingest_state_reload_from_missing_path_fails() {
     let config_path = temp_path("missing");
@@ -2036,6 +2070,104 @@ async fn handler_rejects_future_timestamp_before_detection_or_deposit() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn handler_projects_persisted_replay_into_enabled_hypothesis_graph() {
+    let mut config = test_config("suspicious_process_tree");
+    let graph_root = temp_path("ingest-enabled-hypothesis-graph");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    let state = IngestState::from_config(temp_path("ingest-enabled-graph-config"), config).unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &ed25519_dalek::SigningKey::from_bytes(&[126; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[127; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    let graph = state.current_hypothesis_graph().unwrap();
+    let response = ingest_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest/events")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&IngestRequest(vec![valid_process_event_json()]))
+                        .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = parse_response(response).await;
+    assert_eq!(body.accepted.len(), 1);
+    assert!(body.rejected.is_empty());
+    let summary = graph.summary().unwrap();
+    assert_eq!(summary.evidence_count, 1);
+    assert_eq!(summary.edge_count, 1);
+    assert_eq!(summary.pending_task_count, 3);
+    assert_eq!(summary.metrics.submissions, 1);
+    drop(graph);
+    drop(state);
+    fs::remove_dir_all(graph_root).unwrap();
+}
+
+#[tokio::test]
+async fn startup_reconciliation_recovers_durable_replays_missing_from_graph() {
+    let mut config = test_config("suspicious_process_tree");
+    let graph_root = temp_path("reconcile-enabled-hypothesis-graph");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    let state =
+        IngestState::from_config(temp_path("reconcile-enabled-graph-config"), config).unwrap();
+    seed_platform_replay_bundle(&state, "reconcile-older", "host-a", 1_700_000_030_000);
+    seed_platform_replay_bundle(&state, "reconcile-newer", "host-b", 1_700_000_030_001);
+    state
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &ed25519_dalek::SigningKey::from_bytes(&[128; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[129; 32]),
+        )
+        .unwrap()
+        .unwrap();
+
+    let first = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(first.examined, 2);
+    assert_eq!(first.admitted, 2);
+    assert_eq!(first.idempotent, 0);
+    assert_eq!(first.failures, 0);
+    let summary = state.current_hypothesis_graph().unwrap().summary().unwrap();
+    assert_eq!(summary.evidence_count, 2);
+    assert_eq!(summary.hypothesis_count, 4);
+    assert_eq!(summary.pending_task_count, 6);
+
+    let retry = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(retry.examined, 2);
+    assert_eq!(retry.admitted, 0);
+    assert_eq!(retry.idempotent, 2);
+    assert_eq!(retry.failures, 0);
+    drop(state);
+    fs::remove_dir_all(graph_root).unwrap();
 }
 
 #[tokio::test]
@@ -2992,6 +3124,153 @@ async fn platform_findings_endpoint_returns_filtered_cursor_paginated_envelope()
     assert_eq!(filtered.data.len(), 1);
     assert_eq!(filtered.data[0].host_id.as_deref(), Some("host-b"));
     assert_eq!(filtered.data[0].finding.event_id, "evt-platform-2");
+}
+
+#[tokio::test]
+async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    let graph_root = temp_path("platform-hypothesis-graph-store");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    let state = IngestState::from_config(temp_path("platform-hypothesis-graph"), config).unwrap();
+    let hunt_id = "evt-platform-hypothesis-graph";
+    let created_at_ms = 1_700_000_020_000;
+    seed_platform_replay_bundle(&state, hunt_id, "host-graph", created_at_ms);
+    let replay = state
+        .current_replay_store()
+        .load_by_hunt_id(hunt_id)
+        .unwrap()
+        .unwrap()
+        .bundle;
+    let graph = state.current_hypothesis_graph().unwrap();
+    let stalker_key = ed25519_dalek::SigningKey::from_bytes(&[123; 32]);
+    let worker = state
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &stalker_key,
+        )
+        .unwrap()
+        .unwrap();
+    state
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[124; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    graph.submit_replay(&replay).unwrap();
+    let completion = worker
+        .complete_stalker_hunt(
+            hunt_id,
+            swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 1),
+            9_800,
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(completion.acquisitions, 1);
+    assert_eq!(completion.falsifications, 1);
+    let graph_id = graph.graph_id().to_string();
+    let app = detect_http_router(state);
+
+    let summaries = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/hypothesis-graphs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(summaries.status(), StatusCode::OK);
+    let summaries: Value = parse_json(summaries).await;
+    assert_eq!(summaries["data"].as_array().unwrap().len(), 1);
+    assert_eq!(summaries["data"][0]["graph_id"], graph_id);
+    assert_eq!(summaries["data"][0]["memory_count"], 1);
+
+    let detail = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request("GET", format!("/v2/api/hypothesis-graphs/{graph_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail: Value = parse_json(detail).await;
+    assert_eq!(
+        detail["data"][0]["graph"]["evidence"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let tasks = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!("/v2/api/hypothesis-graphs/{graph_id}/tasks"),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tasks.status(), StatusCode::OK);
+    let tasks: Value = parse_json(tasks).await;
+    assert_eq!(tasks["data"].as_array().unwrap().len(), 3);
+
+    let memory = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!("/v2/api/hypothesis-graphs/{graph_id}/memory"),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(memory.status(), StatusCode::OK);
+    let memory: Value = parse_json(memory).await;
+    assert_eq!(memory["data"].as_array().unwrap().len(), 1);
+
+    let missing = app
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/hypothesis-graphs/graph:missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn platform_hypothesis_graph_collection_is_empty_when_disabled() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("platform-hypothesis-disabled"), config).unwrap(),
+    );
+    let response = app
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/hypothesis-graphs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = parse_json(response).await;
+    assert!(body["data"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

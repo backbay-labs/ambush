@@ -9,6 +9,7 @@ use swarm_core::types::{AgentId, HuntId, SwarmAction};
 use swarm_spine::{ConfiguredIncidentStore, ConfiguredInvestigationBundleStore};
 
 use swarm_runtime::correlation::CorrelationEngine;
+use swarm_runtime::hypothesis_graph::{GraphServiceError, GraphWorkerAdapter};
 
 pub struct WeaverAgent {
     id: AgentId,
@@ -18,6 +19,7 @@ pub struct WeaverAgent {
     investigation_store: ConfiguredInvestigationBundleStore,
     incident_store: ConfiguredIncidentStore,
     correlated_hunts: HashSet<String>,
+    hypothesis_graph: Option<GraphWorkerAdapter>,
     role: AgentRole,
     health: AgentHealth,
 }
@@ -54,9 +56,66 @@ impl WeaverAgent {
             investigation_store,
             incident_store,
             correlated_hunts: HashSet::new(),
+            hypothesis_graph: None,
             role: AgentRole::Weaver,
             health: AgentHealth::Healthy,
         }
+    }
+
+    /// Install the Challenger capability for the durable collective graph.
+    pub fn with_hypothesis_graph(
+        mut self,
+        worker: GraphWorkerAdapter,
+    ) -> Result<Self, GraphServiceError> {
+        if worker.claimant() != &self.id {
+            return Err(GraphServiceError::WorkerIdentityMismatch {
+                expected: self.id.clone(),
+                observed: worker.claimant().clone(),
+            });
+        }
+        self.hypothesis_graph = Some(worker);
+        Ok(self)
+    }
+
+    fn tick_hypothesis_graph(
+        &mut self,
+        env: &SwarmEnvironment,
+        graph: &GraphWorkerAdapter,
+    ) -> Result<Vec<SwarmAction>, SwarmError> {
+        let now =
+            swarm_core::hypothesis_graph::GraphLogicalTime::new(env.now.saturating_mul(1_000));
+        let Some(context) = graph.next_challenge_context(now).map_err(internal_error)? else {
+            return Ok(Vec::new());
+        };
+        let outcome = self
+            .correlation
+            .correlate_hunt(
+                &self.investigation_store,
+                &self.incident_store,
+                &context.hunt_id,
+            )
+            .map_err(internal_error)?;
+        let Some(outcome) = outcome else {
+            return Ok(Vec::new());
+        };
+        if !graph
+            .complete_challenge(&context.task_id, now)
+            .map_err(internal_error)?
+        {
+            return Ok(Vec::new());
+        }
+        Ok(vec![SwarmAction::PublishFindings {
+            hunt_id: HuntId(context.hunt_id),
+            findings: serde_json::json!({
+                "incident_id": outcome.incident.incident_id,
+                "summary": outcome.incident.summary,
+                "graph_id": graph.graph_id(),
+                "graph_task_id": context.task_id,
+                "evidence_ids": context.evidence_ids,
+                "correlation_confidence": outcome.incident.confidence_score,
+            }),
+            confidence: 1.0,
+        }])
     }
 }
 
@@ -87,6 +146,9 @@ impl SwarmAgent for WeaverAgent {
     }
 
     async fn tick(&mut self, env: &SwarmEnvironment) -> Result<Vec<SwarmAction>, SwarmError> {
+        if let Some(graph) = self.hypothesis_graph.clone() {
+            return self.tick_hypothesis_graph(env, &graph);
+        }
         let mut actions = Vec::new();
 
         for hunt_id in investigation_hunts(&env.pheromones) {
@@ -155,15 +217,22 @@ fn internal_error(error: impl std::error::Error) -> SwarmError {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::WeaverAgent;
+    use ed25519_dalek::SigningKey;
+    use std::sync::Arc;
     use swarm_core::agent::{AgentRole, SwarmAgent, SwarmEnvironment, SwarmMode};
-    use swarm_core::config::{BundleStoreConfig, CorrelationConfig};
+    use swarm_core::config::{BundleStoreConfig, CorrelationConfig, HypothesisGraphConfig};
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
-    use swarm_core::types::{AgentId, Severity, SwarmAction};
+    use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity, SwarmAction};
+    use swarm_crypto::Keypair;
+    use swarm_policy::{ActionRequest, PolicyVerdict};
     use swarm_runtime::correlation::CorrelationEngine;
+    use swarm_runtime::hypothesis_graph::CollectiveHypothesisService;
     use swarm_spine::{
-        ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, InvestigationBundle,
-        InvestigationBundleStore, InvestigationStatus,
+        AuditResponseRecord, AuditTrail, ConfiguredIncidentStore,
+        ConfiguredInvestigationBundleStore, InvestigationBundle, InvestigationBundleStore,
+        InvestigationStatus, PolicyRecord, ReplayBundle,
     };
+    use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
 
     fn investigation_store() -> ConfiguredInvestigationBundleStore {
         ConfiguredInvestigationBundleStore::from_config(&BundleStoreConfig::Memory).unwrap()
@@ -211,6 +280,65 @@ mod tests {
             vote_lineage: Vec::new(),
             decision: swarm_spine::InvestigationDecision::default(),
             failure_reason: None,
+        }
+    }
+
+    fn replay_bundle(hunt_id: &str) -> ReplayBundle {
+        let finding = DetectionFinding {
+            finding_id: format!("finding:{hunt_id}"),
+            event_id: hunt_id.to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.95,
+            evidence: serde_json::json!({"event_id": hunt_id}),
+            strategy_id: "suspicious_process_tree".to_string(),
+        };
+        ReplayBundle {
+            bundle_id: format!("bundle:{hunt_id}"),
+            event: TelemetryEvent {
+                source: "synthetic".to_string(),
+                event_id: hunt_id.to_string(),
+                timestamp: 1_700_000_000,
+                host_id: Some("host-1".to_string()),
+                payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                    parent_process: "winword".to_string(),
+                    process_name: "powershell".to_string(),
+                    command_line: "powershell.exe -enc AAA=".to_string(),
+                    user: Some("alice".to_string()),
+                    executable_path: None,
+                    signer: None,
+                    signature_valid: None,
+                }),
+            },
+            findings: vec![finding.clone()],
+            deposits: Vec::new(),
+            action_request: ActionRequest {
+                hunt_id: HuntId(hunt_id.to_string()),
+                requested_by: AgentId("whisker:graph".to_string()),
+                action: ResponseAction::Escalate {
+                    summary: "correlate graph evidence".to_string(),
+                    urgency: Severity::High,
+                },
+                severity: Severity::High,
+                evidence: serde_json::json!({"event_id": hunt_id}),
+            },
+            rehearsal: None,
+            audit: AuditTrail {
+                trail_id: format!("trail:{hunt_id}"),
+                hunt_id: hunt_id.to_string(),
+                related_receipt_ids: Vec::new(),
+                detection: finding,
+                policy: PolicyRecord {
+                    verdict: PolicyVerdict::Allow,
+                    rule_name: "test.allow".to_string(),
+                    reason: "weaver graph fixture".to_string(),
+                    lease: None,
+                },
+                response: AuditResponseRecord::Skipped {
+                    reason: "graph reasoning is advisory".to_string(),
+                },
+                created_at_ms: 1_700_000_000_000,
+            },
         }
     }
 
@@ -273,5 +401,73 @@ mod tests {
             .expect("publish findings action");
         assert!(findings.get("correlation_confidence").is_some());
         assert!(findings.get("graph_dimensions").is_some());
+    }
+
+    #[tokio::test]
+    async fn weaver_agent_correlates_then_completes_durable_challenge() {
+        let hunt_id = "hunt-graph-weaver";
+        let investigation_store = investigation_store();
+        investigation_store
+            .persist(&completed_investigation(hunt_id))
+            .unwrap();
+        let graph_config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 32,
+            max_claims_per_tick: 16,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph = Arc::new(
+            CollectiveHypothesisService::new(&graph_config, Keypair::from_seed(&[118; 32]), None)
+                .unwrap(),
+        );
+        let weaver_seed = [121; 32];
+        let weaver_signing_key = SigningKey::from_bytes(&weaver_seed);
+        let weaver_id = AgentId::from_verifying_key(&weaver_signing_key.verifying_key());
+        let _stalker_worker = graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&[122; 32]),
+            )
+            .unwrap();
+        let weaver_worker = graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&weaver_seed),
+            )
+            .unwrap();
+        graph.submit_replay(&replay_bundle(hunt_id)).unwrap();
+        let mut agent = WeaverAgent::new_with_signing_key(
+            weaver_id,
+            weaver_signing_key,
+            correlation(),
+            investigation_store,
+            incident_store(),
+        )
+        .with_hypothesis_graph(weaver_worker)
+        .unwrap();
+
+        let actions = agent.tick(&env(hunt_id)).await.unwrap();
+        let findings = actions
+            .iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => Some(findings),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(findings["graph_id"], graph.graph_id().as_str());
+        assert!(findings.get("graph_task_id").is_some());
+        let projection = graph.operator_projection().unwrap();
+        assert_eq!(projection.metrics.completed_challenges, 1);
+        assert_eq!(
+            projection
+                .tasks
+                .iter()
+                .filter(|task| task.state == swarm_core::hypothesis_graph::TaskState::Completed)
+                .count(),
+            1
+        );
     }
 }

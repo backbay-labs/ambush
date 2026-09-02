@@ -10,11 +10,12 @@ use super::hypotheses::{
 };
 use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
-    DecisionKind, DecisionRecord, EvidenceScope, FencingToken, GraphAdmissionError,
-    GraphLogicalTime, GraphProducerRole, GraphResourceLimits, Hypothesis, HypothesisId,
-    LogicalTaskDescriptor, SchedulerBudget, StrategyMemory, StrategyMemoryExpiryEnvelope,
-    TaskCapabilityProof, TaskClaimRequest, TaskId, TaskKind, TaskRecord, TaskState, TaskTarget,
-    TaskTerminalEnvelope, TaskTerminalOutboxEntry, validate_completion_kind,
+    CausalEdge, DecisionKind, DecisionRecord, EvidenceEnvelope, EvidenceScope, FencingToken,
+    GraphAdmissionError, GraphLogicalTime, GraphNode, GraphProducerRole, GraphResourceLimits,
+    Hypothesis, HypothesisId, LogicalTaskDescriptor, SchedulerBudget, StrategyMemory,
+    StrategyMemoryExpiryEnvelope, TaskCapabilityProof, TaskClaimRequest, TaskId, TaskKind,
+    TaskRecord, TaskState, TaskTarget, TaskTerminalEnvelope, TaskTerminalOutboxEntry,
+    validate_completion_kind,
 };
 use swarm_core::types::AgentId;
 use swarm_spine::hypothesis_graph_store::{
@@ -321,6 +322,28 @@ impl HypothesisTaskLedger {
         claimant: AgentId,
         evidence_scope: EvidenceScope,
     ) -> Result<HypothesisCoordinationResult, GraphStoreError> {
+        let claimants = [
+            TaskKind::AcquireEvidence,
+            TaskKind::ChallengeEdge,
+            TaskKind::FalsifyHypothesis,
+        ]
+        .into_iter()
+        .map(|kind| (kind, claimant.clone()))
+        .collect();
+        self.coordinate_seed_for_claimants(store, revision, seed, &claimants, evidence_scope)
+    }
+
+    /// Assign each durable task kind to the identity that will actually sign
+    /// its claim and terminal publication. Missing capability registrations
+    /// fail before any candidate state is committed.
+    pub fn coordinate_seed_for_claimants(
+        &mut self,
+        store: &dyn HypothesisGraphStore,
+        revision: &GraphStoreRevision,
+        seed: &HypothesisSeedInput,
+        claimants: &BTreeMap<TaskKind, AgentId>,
+        evidence_scope: EvidenceScope,
+    ) -> Result<HypothesisCoordinationResult, GraphStoreError> {
         coordinate_seed_once(CoordinatorContext {
             scheduler_budget: &mut self.scheduler_budget,
             config: &self.config,
@@ -328,10 +351,37 @@ impl HypothesisTaskLedger {
             store,
             revision,
             seed,
-            claimant,
+            claimants: claimants.clone(),
             evidence_scope,
             signer: None,
             decisions: Vec::new(),
+            graph_records: None,
+        })
+    }
+
+    /// Atomically admit normalized graph records together with the competing
+    /// hypotheses and deterministic tasks derived from the same replay.
+    pub(crate) fn coordinate_graph_seed_for_claimants(
+        &mut self,
+        store: &dyn HypothesisGraphStore,
+        revision: &GraphStoreRevision,
+        seed: &HypothesisSeedInput,
+        claimants: &BTreeMap<TaskKind, AgentId>,
+        evidence_scope: EvidenceScope,
+        graph_records: GraphSeedRecords,
+    ) -> Result<HypothesisCoordinationResult, GraphStoreError> {
+        coordinate_seed_once(CoordinatorContext {
+            scheduler_budget: &mut self.scheduler_budget,
+            config: &self.config,
+            limits: &self.limits,
+            store,
+            revision,
+            seed,
+            claimants: claimants.clone(),
+            evidence_scope,
+            signer: None,
+            decisions: Vec::new(),
+            graph_records: Some(graph_records),
         })
     }
 
@@ -344,6 +394,14 @@ impl HypothesisTaskLedger {
         &mut self,
         input: CoordinatorDecisionInput<'_>,
     ) -> Result<HypothesisCoordinationResult, GraphStoreError> {
+        let claimants = [
+            TaskKind::AcquireEvidence,
+            TaskKind::ChallengeEdge,
+            TaskKind::FalsifyHypothesis,
+        ]
+        .into_iter()
+        .map(|kind| (kind, input.claimant.clone()))
+        .collect();
         coordinate_seed_once(CoordinatorContext {
             scheduler_budget: &mut self.scheduler_budget,
             config: &self.config,
@@ -351,10 +409,11 @@ impl HypothesisTaskLedger {
             store: input.store,
             revision: input.revision,
             seed: input.seed,
-            claimant: input.claimant,
+            claimants,
             evidence_scope: input.evidence_scope,
             signer: Some(input.signer),
             decisions: input.decisions,
+            graph_records: None,
         })
     }
 
@@ -405,6 +464,85 @@ impl HypothesisTaskLedger {
         // backend result must be treated as a failed admission, with local
         // usage remaining byte-for-byte unchanged even if the backend
         // reported success.
+        let claim = TaskClaim::from_task(&result.task, capability_proof)?;
+        if result.idempotent {
+            self.restore_local_budget(&snapshot)?;
+        } else {
+            self.scheduler_budget = next_budget;
+        }
+        Ok(claim)
+    }
+
+    /// Claim pending work or recover the same logical task after its fenced
+    /// lease expires. Expiry remains a distinct fencing barrier, while expiry,
+    /// replacement lease, and configured claim-budget charge commit in one
+    /// durable store generation.
+    pub fn claim_or_reclaim_task(
+        &mut self,
+        store: &dyn HypothesisGraphStore,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        capability_proof: TaskCapabilityProof,
+    ) -> Result<TaskClaim, GraphStoreError> {
+        request.validate().map_err(GraphStoreError::Admission)?;
+        capability_proof
+            .validate_for_claim(&request)
+            .map_err(GraphStoreError::Admission)?;
+        let snapshot = store.snapshot()?;
+        let entry = snapshot
+            .state()
+            .tasks
+            .get(&request.task_id)
+            .ok_or_else(|| GraphStoreError::TaskNotFound {
+                task_id: request.task_id.to_string(),
+            })?;
+        match entry.task.state {
+            TaskState::Pending => {
+                self.claim_task(store, request, now, lease_duration_ms, capability_proof)
+            }
+            TaskState::Claimed
+                if entry
+                    .task
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| now >= lease.expires_at) =>
+            {
+                self.reclaim_expired_task(store, request, now, lease_duration_ms, capability_proof)
+            }
+            TaskState::Expired => {
+                self.reclaim_expired_task(store, request, now, lease_duration_ms, capability_proof)
+            }
+            TaskState::Claimed | TaskState::Completed | TaskState::Failed => {
+                self.claim_task(store, request, now, lease_duration_ms, capability_proof)
+            }
+        }
+    }
+
+    fn reclaim_expired_task(
+        &mut self,
+        store: &dyn HypothesisGraphStore,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        capability_proof: TaskCapabilityProof,
+    ) -> Result<TaskClaim, GraphStoreError> {
+        let snapshot = store.snapshot()?;
+        let revision = snapshot.revision().clone();
+        let persisted_budget = self.budget_for_snapshot(&snapshot, now)?;
+        let mut next_budget = persisted_budget.clone();
+        next_budget
+            .admit_at(&self.config, now, 0, 1)
+            .map_err(GraphStoreError::Admission)?;
+        let task_id = request.task_id.to_string();
+        let result = store.reclaim_task_cas_with_budget(
+            &revision,
+            &task_id,
+            request,
+            now,
+            lease_duration_ms,
+            next_budget.clone(),
+        )?;
         let claim = TaskClaim::from_task(&result.task, capability_proof)?;
         if result.idempotent {
             self.restore_local_budget(&snapshot)?;
@@ -555,6 +693,46 @@ pub struct HypothesisCoordinationResult {
     pub task_ids: Vec<TaskId>,
 }
 
+/// Normalized graph records that must become visible in the same durable
+/// generation as their competing hypotheses and reasoning tasks. Keeping
+/// these records inside the coordinator transaction prevents a budget or
+/// validation failure from publishing orphan evidence without its work.
+#[derive(Debug, Clone)]
+pub(crate) struct GraphSeedRecords {
+    evidence: EvidenceEnvelope,
+    nodes: Vec<GraphNode>,
+    edge: CausalEdge,
+}
+
+impl GraphSeedRecords {
+    pub(crate) fn new(evidence: EvidenceEnvelope, nodes: Vec<GraphNode>, edge: CausalEdge) -> Self {
+        Self {
+            evidence,
+            nodes,
+            edge,
+        }
+    }
+
+    fn admit_into(self, state: &mut GraphStoreState) -> Result<bool, GraphStoreError> {
+        let prior_version = state.graph.version;
+        state
+            .graph
+            .admit_evidence(self.evidence)
+            .map_err(GraphStoreError::Admission)?;
+        for node in self.nodes {
+            state
+                .graph
+                .admit_node(node)
+                .map_err(GraphStoreError::Admission)?;
+        }
+        state
+            .graph
+            .admit_edge(self.edge)
+            .map_err(GraphStoreError::Admission)?;
+        Ok(state.graph.version != prior_version)
+    }
+}
+
 /// Runtime coordinator for seed admission. It owns the config-bound ledger and
 /// the admitted record signer; graph state remains in the injected durable
 /// store. Decision requests cannot bypass this signer.
@@ -638,6 +816,37 @@ impl DurableHypothesisCoordinator {
             .coordinate_seed(store, revision, seed, claimant, evidence_scope)
     }
 
+    pub fn coordinate_seed_for_claimants(
+        &mut self,
+        store: &dyn HypothesisGraphStore,
+        revision: &GraphStoreRevision,
+        seed: &HypothesisSeedInput,
+        claimants: &BTreeMap<TaskKind, AgentId>,
+        evidence_scope: EvidenceScope,
+    ) -> Result<HypothesisCoordinationResult, GraphStoreError> {
+        self.ledger
+            .coordinate_seed_for_claimants(store, revision, seed, claimants, evidence_scope)
+    }
+
+    pub(crate) fn coordinate_graph_seed_for_claimants(
+        &mut self,
+        store: &dyn HypothesisGraphStore,
+        revision: &GraphStoreRevision,
+        seed: &HypothesisSeedInput,
+        claimants: &BTreeMap<TaskKind, AgentId>,
+        evidence_scope: EvidenceScope,
+        graph_records: GraphSeedRecords,
+    ) -> Result<HypothesisCoordinationResult, GraphStoreError> {
+        self.ledger.coordinate_graph_seed_for_claimants(
+            store,
+            revision,
+            seed,
+            claimants,
+            evidence_scope,
+            graph_records,
+        )
+    }
+
     pub fn coordinate_seed_with_decisions(
         &mut self,
         store: &dyn HypothesisGraphStore,
@@ -708,10 +917,11 @@ struct CoordinatorContext<'a> {
     store: &'a dyn HypothesisGraphStore,
     revision: &'a GraphStoreRevision,
     seed: &'a HypothesisSeedInput,
-    claimant: AgentId,
+    claimants: BTreeMap<TaskKind, AgentId>,
     evidence_scope: EvidenceScope,
     signer: Option<&'a dyn GraphRecordSigner>,
     decisions: Vec<DecisionRecord>,
+    graph_records: Option<GraphSeedRecords>,
 }
 
 fn validate_decisive_assessment_decisions(
@@ -760,10 +970,11 @@ fn coordinate_seed_once(
         store,
         revision,
         seed,
-        claimant,
+        claimants,
         evidence_scope,
         signer,
         decisions,
+        graph_records,
     } = context;
     let snapshot = store.snapshot()?;
     if snapshot.revision() != revision {
@@ -777,6 +988,15 @@ fn coordinate_seed_once(
     if snapshot.state().graph_id != seed.graph_id {
         return Err(GraphStoreError::InvalidState {
             reason: "hypothesis seed graph ID differs from durable graph".to_string(),
+        });
+    }
+    if graph_records.is_some()
+        && snapshot.state().migration_marker
+            == swarm_spine::hypothesis_graph_store::GRAPH_STATE_MIGRATION_LEGACY
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: "atomic graph seed admission requires an initialized reasoning store"
+                .to_string(),
         });
     }
     let mut next_budget = budget_from_snapshot(config, &snapshot, seed.logical_time)?;
@@ -797,9 +1017,12 @@ fn coordinate_seed_once(
         competing_hypotheses(seed, limits).map_err(GraphStoreError::Admission)?;
 
     let mut next = snapshot.state().clone();
+    let mut changed = match graph_records {
+        Some(records) => records.admit_into(&mut next)?,
+        None => false,
+    };
     let mut hypothesis_ids = candidate_hypotheses.keys().cloned().collect::<Vec<_>>();
     hypothesis_ids.sort();
-    let mut changed = false;
     for (hypothesis_id, candidate) in candidate_hypotheses {
         match next.hypotheses.get(&hypothesis_id) {
             Some(existing) if existing != &candidate => {
@@ -886,7 +1109,18 @@ fn coordinate_seed_once(
         changed = true;
     }
 
-    let edge_ids = next.graph.edges.keys().cloned().collect::<BTreeSet<_>>();
+    let seed_evidence_ids = seed
+        .assessments
+        .iter()
+        .flat_map(|assessment| assessment.evidence_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let edge_ids = next
+        .graph
+        .edges
+        .values()
+        .filter(|edge| !edge.source_evidence_ids.is_disjoint(&seed_evidence_ids))
+        .map(|edge| edge.edge_id.clone())
+        .collect::<BTreeSet<_>>();
     let task_targets =
         coordination_task_targets(seed, &edge_ids).map_err(GraphStoreError::Admission)?;
     let mut task_ids = Vec::with_capacity(task_targets.len());
@@ -917,12 +1151,19 @@ fn coordinate_seed_once(
             });
         }
         let role = role_for_task_kind(kind);
+        let claimant =
+            claimants
+                .get(&kind)
+                .cloned()
+                .ok_or_else(|| GraphStoreError::InvalidState {
+                    reason: format!("no claimant is registered for {kind:?} tasks"),
+                })?;
         let request = TaskClaimRequest::new(
             descriptor.task_id.clone(),
             kind,
             target,
             role,
-            claimant.clone(),
+            claimant,
             evidence_scope.clone(),
             seed.logical_time,
         )
@@ -1765,7 +2006,7 @@ mod tests {
     fn custom_scheduler_store_rejects_mismatched_deployment_policy() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 4,
+            max_work_units_per_tick: 3,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2506,7 +2747,7 @@ mod tests {
     fn coordinator_durably_commits_competing_tasks_once() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 4,
+            max_work_units_per_tick: 3,
             max_claims_per_tick: 4,
             ..HypothesisGraphConfig::default()
         };
@@ -2529,16 +2770,39 @@ mod tests {
                 asset.clone(),
             ))
             .unwrap();
+        let evidence = EvidenceEnvelope::new(
+            EvidenceSourceFamily::Process,
+            "coordinator-sensor",
+            SourceLineage::new("normalizer", "coordinator:evidence").unwrap(),
+            EvidenceClock::observed(GraphLogicalTime::new(10)),
+            OrderingClaim::Unknown,
+            TypedEvidencePayload::Process {
+                signal_kind: "process_start".to_string(),
+                process_digest: "coordinator:process".to_string(),
+                parent_process_digest: None,
+                entity_ids: vec![actor.node_id.clone(), asset.node_id.clone()],
+                content_digest: "coordinator:content".to_string(),
+            },
+        )
+        .unwrap()
+        .sign_with(
+            &coordinator_key,
+            GraphProducerRole::Normalizer,
+            "normalizer:coordinator",
+        )
+        .unwrap();
+        let evidence_id = evidence.evidence_id.clone();
+        graph.admit_evidence(evidence).unwrap();
         let edge = swarm_core::hypothesis_graph::CausalEdge::new(
             &actor.node_id,
             &asset.node_id,
             swarm_core::hypothesis_graph::CausalRelation::Contacts,
-            0,
-            [],
+            5_000,
+            [evidence_id.clone()],
             GraphProducerRole::Hunter,
             AgentId::from_public_key_hex(&coordinator_key.public_key().to_hex()),
             GraphLogicalTime::new(10),
-            swarm_core::hypothesis_graph::EdgeState::Rejected,
+            swarm_core::hypothesis_graph::EdgeState::Proposed,
         )
         .unwrap()
         .signed_with(&coordinator_key, "hunter:coordinator")
@@ -2546,18 +2810,34 @@ mod tests {
         graph.admit_edge(edge).unwrap();
         let store =
             MemoryHypothesisGraphStore::new_with_config(graph, coordinator_key, &config).unwrap();
-        let evidence_id = swarm_core::hypothesis_graph::EvidenceId::new("evidence:unit");
-        let seed = HypothesisSeedInput::from_normalized_evidence(
+        let first_hypothesis = HypothesisId::new("hypothesis:one");
+        let second_hypothesis = HypothesisId::new("hypothesis:two");
+        let seed = HypothesisSeedInput::new(
             graph_id,
+            vec![first_hypothesis.clone(), second_hypothesis.clone()],
             vec![
-                HypothesisId::new("hypothesis:one"),
-                HypothesisId::new("hypothesis:two"),
+                HypothesisSeedAssessment {
+                    hypothesis_id: first_hypothesis,
+                    evidence_ids: vec![evidence_id.clone()],
+                    disposition: HypothesisDisposition::Unresolved,
+                    provenance: evidence_id.clone(),
+                },
+                HypothesisSeedAssessment {
+                    hypothesis_id: second_hypothesis,
+                    evidence_ids: vec![evidence_id.clone()],
+                    disposition: HypothesisDisposition::Contradicts,
+                    provenance: evidence_id.clone(),
+                },
             ],
-            vec![evidence_id.clone()],
             GraphLogicalTime::new(10),
         )
         .unwrap();
-        let scope = EvidenceScope::new([], [evidence_id], []).unwrap();
+        let scope = EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [evidence_id],
+            [actor.node_id, asset.node_id],
+        )
+        .unwrap();
         let signer_key = key(18);
         let claimant = AgentId::from_public_key_hex(&signer_key.public_key().to_hex());
         let signer = KeypairGraphRecordSigner::with_admission(
@@ -2578,9 +2858,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(first.hypothesis_ids.len(), 2);
-        assert_eq!(first.task_ids.len(), 4);
+        assert_eq!(first.task_ids.len(), 3);
         assert_eq!(first.snapshot.state().hypotheses.len(), 2);
-        assert_eq!(first.snapshot.state().tasks.len(), 4);
+        assert_eq!(first.snapshot.state().tasks.len(), 3);
         let task_kinds = first
             .snapshot
             .state()
@@ -2591,15 +2871,15 @@ mod tests {
         assert!(task_kinds.contains(&TaskKind::AcquireEvidence));
         assert!(task_kinds.contains(&TaskKind::ChallengeEdge));
         assert!(task_kinds.contains(&TaskKind::FalsifyHypothesis));
-        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 4);
+        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 3);
 
         let retried = coordinator
             .coordinate_seed(&store, first.snapshot.revision(), &seed, claimant, scope)
             .unwrap();
         assert_eq!(retried.snapshot.revision(), first.snapshot.revision());
-        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 4);
+        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 3);
 
-        // A fresh process restores the four consumed units from the signed
+        // A fresh process restores the three consumed units from the signed
         // generation. A retry remains idempotent, while a distinct seed at
         // the same tick is rejected before its CAS because the restored
         // budget is exhausted.
@@ -2723,7 +3003,7 @@ mod tests {
                 .scheduler_budget()
                 .unwrap()
                 .work_units_used(),
-            4
+            1
         );
     }
 
@@ -2909,7 +3189,7 @@ mod tests {
         assert!(decision.evidence_ids.is_empty());
         assert!(decision.witness.is_some());
         assert_eq!(decision.producer_identity, claimant);
-        assert_eq!(result.snapshot.state().tasks.len(), 3);
+        assert_eq!(result.snapshot.state().tasks.len(), 1);
     }
 
     #[test]

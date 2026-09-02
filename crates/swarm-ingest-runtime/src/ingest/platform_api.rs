@@ -27,6 +27,7 @@ use swarm_core::config::{
 use swarm_core::http_rate_limit::{
     HttpRateLimitRejection, HttpRateLimitStatus, HttpRateLimitThreshold,
 };
+use swarm_core::hypothesis_graph::{GraphId, TaskRecord};
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{ProvidenceIncidentReconciliation, ResponseRehearsalPreview, Severity};
 use swarm_pheromone::{DepositQuery, PheromoneSubstrate};
@@ -35,12 +36,16 @@ use swarm_runtime::alert_tuning::{AlertTuningReport, build_alert_tuning_report};
 use swarm_runtime::escalation::standard_threat_classes;
 use swarm_runtime::evasion_coverage::EvasionCoverageSnapshot;
 use swarm_runtime::http::tls_identity::TlsClientIdentity;
+use swarm_runtime::hypothesis_graph::{
+    GraphOperatorProjection, GraphServiceError, GraphSummaryProjection,
+};
 use swarm_runtime::providence::verify_providence_context_token;
 use swarm_runtime::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
 use swarm_runtime::service::{OperatorBearerTokenStatus, RuntimeDegradationStatus};
 use swarm_spine::{
     FalsePositiveMeasurementReport, IncidentStore, InvestigationBundleStore, InvestigationStatus,
-    ReplayBundleLookup, ReplayBundleStore, summarize_false_positive_measurements,
+    ReplayBundleLookup, ReplayBundleStore, StrategyMemoryRecord,
+    summarize_false_positive_measurements,
 };
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
@@ -835,6 +840,22 @@ pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
         )
         .route("/stream/findings", get(platform_findings_stream_handler))
         .route("/runtime/status", get(platform_runtime_status_handler))
+        .route(
+            "/hypothesis-graphs",
+            get(platform_hypothesis_graphs_handler),
+        )
+        .route(
+            "/hypothesis-graphs/{graph_id}",
+            get(platform_hypothesis_graph_handler),
+        )
+        .route(
+            "/hypothesis-graphs/{graph_id}/tasks",
+            get(platform_hypothesis_graph_tasks_handler),
+        )
+        .route(
+            "/hypothesis-graphs/{graph_id}/memory",
+            get(platform_hypothesis_graph_memory_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_platform_api_key_auth_resolved,
@@ -1066,6 +1087,100 @@ fn retry_after_seconds(retry_after_ms: u64) -> u64 {
 }
 
 // --- Handlers ---
+
+fn map_hypothesis_graph_error(error: GraphServiceError) -> PlatformApiError {
+    match error {
+        GraphServiceError::GraphMismatch { observed, .. } => {
+            PlatformApiError::not_found(format!("hypothesis graph `{observed}` was not found"))
+        }
+        error => PlatformApiError::service_unavailable(format!(
+            "hypothesis graph state is unavailable: {error}"
+        )),
+    }
+}
+
+fn require_hypothesis_graph(
+    state: &IngestState,
+) -> Result<Arc<swarm_runtime::hypothesis_graph::CollectiveHypothesisService>, PlatformApiError> {
+    state
+        .current_hypothesis_graph()
+        .ok_or_else(|| PlatformApiError::not_found("collective hypothesis graph is not enabled"))
+}
+
+async fn platform_hypothesis_graphs_handler(
+    Extension(principal): Extension<PlatformApiPrincipal>,
+    State(state): State<IngestState>,
+) -> Result<Json<PlatformApiEnvelope<GraphSummaryProjection>>, PlatformApiError> {
+    let summaries = state
+        .current_hypothesis_graph()
+        .map(|service| service.summary().map(|summary| vec![summary]))
+        .transpose()
+        .map_err(map_hypothesis_graph_error)?
+        .unwrap_or_default();
+    tracing::debug!(
+        platform_api_principal = %principal.name,
+        endpoint = "/v2/api/hypothesis-graphs",
+        returned = summaries.len(),
+        "served hypothesis graph summaries"
+    );
+    Ok(Json(PlatformApiEnvelope::new(summaries, None)))
+}
+
+async fn platform_hypothesis_graph_handler(
+    Extension(principal): Extension<PlatformApiPrincipal>,
+    State(state): State<IngestState>,
+    AxumPath(graph_id): AxumPath<String>,
+) -> Result<Json<PlatformApiEnvelope<GraphOperatorProjection>>, PlatformApiError> {
+    let graph_id = GraphId::new(graph_id);
+    let projection = require_hypothesis_graph(&state)?
+        .operator_projection_for(&graph_id)
+        .map_err(map_hypothesis_graph_error)?;
+    tracing::debug!(
+        platform_api_principal = %principal.name,
+        endpoint = "/v2/api/hypothesis-graphs/{graph_id}",
+        graph_id = %graph_id,
+        "served hypothesis graph detail"
+    );
+    Ok(Json(PlatformApiEnvelope::new(vec![projection], None)))
+}
+
+async fn platform_hypothesis_graph_tasks_handler(
+    Extension(principal): Extension<PlatformApiPrincipal>,
+    State(state): State<IngestState>,
+    AxumPath(graph_id): AxumPath<String>,
+) -> Result<Json<PlatformApiEnvelope<TaskRecord>>, PlatformApiError> {
+    let graph_id = GraphId::new(graph_id);
+    let tasks = require_hypothesis_graph(&state)?
+        .operator_tasks_for(&graph_id)
+        .map_err(map_hypothesis_graph_error)?;
+    tracing::debug!(
+        platform_api_principal = %principal.name,
+        endpoint = "/v2/api/hypothesis-graphs/{graph_id}/tasks",
+        graph_id = %graph_id,
+        returned = tasks.len(),
+        "served hypothesis graph tasks"
+    );
+    Ok(Json(PlatformApiEnvelope::new(tasks, None)))
+}
+
+async fn platform_hypothesis_graph_memory_handler(
+    Extension(principal): Extension<PlatformApiPrincipal>,
+    State(state): State<IngestState>,
+    AxumPath(graph_id): AxumPath<String>,
+) -> Result<Json<PlatformApiEnvelope<StrategyMemoryRecord>>, PlatformApiError> {
+    let graph_id = GraphId::new(graph_id);
+    let memory = require_hypothesis_graph(&state)?
+        .operator_memory_for(&graph_id)
+        .map_err(map_hypothesis_graph_error)?;
+    tracing::debug!(
+        platform_api_principal = %principal.name,
+        endpoint = "/v2/api/hypothesis-graphs/{graph_id}/memory",
+        graph_id = %graph_id,
+        returned = memory.len(),
+        "served hypothesis graph memory"
+    );
+    Ok(Json(PlatformApiEnvelope::new(memory, None)))
+}
 
 async fn platform_findings_handler(
     Extension(principal): Extension<PlatformApiPrincipal>,

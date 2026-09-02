@@ -441,9 +441,21 @@ run_exact duplicate_claim_fixture_100 \
 run_exact memory_replay_changes_priority_deterministically \
   cargo test -p swarm-runtime --test collective_hypothesis_graph \
     memory_replay_changes_priority_deterministically -- --exact --nocapture
+run_exact failed_coordination_does_not_publish_partial_graph \
+  cargo test -p swarm-runtime --test collective_hypothesis_graph \
+    failed_coordination_does_not_publish_partial_graph -- --exact --nocapture
 run_exact seed_signal_converges_through_real_runtime \
   cargo test -p swarm-runtime --test collective_hypothesis_graph \
     seed_signal_converges_through_real_runtime -- --exact --nocapture
+run_exact benign_or_ambiguous_investigation_closes_falsification_without_false_memory \
+  cargo test -p swarm-runtime --test collective_hypothesis_graph \
+    benign_or_ambiguous_investigation_closes_falsification_without_false_memory -- --exact --nocapture
+run_exact older_hunt_completion_is_ordered_after_newer_replay_high_water \
+  cargo test -p swarm-runtime --test collective_hypothesis_graph \
+    older_hunt_completion_is_ordered_after_newer_replay_high_water -- --exact --nocapture
+run_exact enabled_service_restores_graph_tasks_and_memory_after_restart \
+  cargo test -p swarm-runtime --test collective_hypothesis_graph \
+    enabled_service_restores_graph_tasks_and_memory_after_restart -- --exact --nocapture
 run_exact disabled_hypothesis_graph_preserves_legacy_runtime \
   cargo test -p swarm-runtime --test collective_hypothesis_graph \
     disabled_hypothesis_graph_preserves_legacy_runtime -- --exact --nocapture

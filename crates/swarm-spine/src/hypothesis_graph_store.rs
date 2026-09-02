@@ -4666,18 +4666,43 @@ fn reclaim_task_op(
             reason: "reclaim request task ID differs from target".to_string(),
         });
     }
-    let old = state
+    let mut old = state
         .tasks
         .get(&TaskId::new(task_id))
         .ok_or_else(|| GraphStoreError::TaskNotFound {
             task_id: task_id.to_string(),
         })?
         .clone();
-    if old.task.state != TaskState::Expired {
-        return Err(GraphStoreError::InvalidTransition {
-            reason: "reclaim requires an expired task".to_string(),
-        });
-    }
+    let generation_increment = match old.task.state {
+        TaskState::Expired => 1,
+        TaskState::Claimed
+            if old
+                .task
+                .lease
+                .as_ref()
+                .is_some_and(|lease| now >= lease.expires_at) =>
+        {
+            old.task = old
+                .task
+                .clone()
+                .expire(now, limits.max_task_lease_ms)
+                .map_err(GraphStoreError::Admission)?;
+            // Expiry is a distinct fencing barrier even though its terminal
+            // record and the replacement claim commit atomically.
+            next_fence(state)?;
+            2
+        }
+        TaskState::Claimed => {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "reclaim cannot replace an active task lease".to_string(),
+            });
+        }
+        TaskState::Pending | TaskState::Completed | TaskState::Failed => {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "reclaim requires an expired task or elapsed claimed lease".to_string(),
+            });
+        }
+    };
     if old.task.request.kind != request.kind
         || old.task.request.target != request.target
         || old.task.request.role != request.role
@@ -4720,13 +4745,12 @@ fn reclaim_task_op(
     })?;
     entry.history.push(old.task);
     entry.task = task;
-    entry.generation =
-        entry
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| GraphStoreError::InvalidState {
-                reason: "task generation overflow".to_string(),
-            })?;
+    entry.generation = entry
+        .generation
+        .checked_add(generation_increment)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "task generation overflow".to_string(),
+        })?;
     Ok(StateMutation {
         value: TaskMutationMarker {
             task: entry.task.clone(),
@@ -4755,7 +4779,13 @@ fn reclaim_task_with_budget_op(
     let prior_budget = state.scheduler_budget.clone();
     let task_key = TaskId::new(task_id);
     let idempotent = state.tasks.get(&task_key).is_some_and(|entry| {
-        entry.task.state == TaskState::Claimed && same_claim_identity(&entry.task.request, &request)
+        entry.task.state == TaskState::Claimed
+            && entry
+                .task
+                .lease
+                .as_ref()
+                .is_some_and(|lease| now < lease.expires_at)
+            && same_claim_identity(&entry.task.request, &request)
     });
     if idempotent {
         let entry = state
@@ -4764,16 +4794,6 @@ fn reclaim_task_with_budget_op(
             .ok_or_else(|| GraphStoreError::TaskNotFound {
                 task_id: task_id.to_string(),
             })?;
-        if entry
-            .task
-            .lease
-            .as_ref()
-            .is_some_and(|lease| now >= lease.expires_at)
-        {
-            return Err(GraphStoreError::TaskExpiredNeedsReclaim {
-                task_id: task_key.clone(),
-            });
-        }
         validate_exact_scheduler_budget_delta(
             prior_budget.as_ref(),
             Some(&scheduler_budget),
