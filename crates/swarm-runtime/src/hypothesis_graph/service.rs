@@ -32,8 +32,8 @@ use swarm_crypto::{
 };
 use swarm_spine::hypothesis_graph_store::{
     ConfiguredHypothesisGraphStore, GRAPH_STATE_MIGRATION_HYPOTHESES, GRAPH_STATE_MIGRATION_LEGACY,
-    GRAPH_STORE_STATE_FILE, GraphStoreError, GraphStoreSnapshot, GraphStoreState,
-    HypothesisGraphStore, ReasoningStateUpdate,
+    GraphStoreError, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
+    ReasoningStateUpdate,
 };
 use swarm_spine::{
     FileStrategyMemoryStore, MemoryStrategyMemoryStore, ReplayBundle, StrategyMemoryRecord,
@@ -112,6 +112,9 @@ pub enum GraphServiceError {
         expected: GraphId,
         observed: GraphId,
     },
+
+    #[error("graph collection cursor does not identify a retained campaign")]
+    InvalidCollectionCursor,
 
     #[error(
         "graph campaign `{graph_id}` reached capacity with {outstanding_tasks} outstanding tasks"
@@ -216,6 +219,7 @@ struct CollectiveHypothesisState {
     coordinator: DurableHypothesisCoordinator,
     metrics: GraphServiceMetrics,
     worker_claimants: BTreeMap<TaskKind, AgentId>,
+    pending_worker_publications: BTreeMap<(u64, TaskId), PendingWorkerPublication>,
     memory_projection_dirty: bool,
 }
 
@@ -225,6 +229,17 @@ struct HypothesisCampaign {
     graph_id: GraphId,
     store: Arc<dyn HypothesisGraphStore>,
     memory: StrategyMemoryProjector,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingWorkerPublication {
+    campaign_index: u64,
+    graph_id: GraphId,
+    task_id: TaskId,
+    hunt_id: String,
+    task_kind: TaskKind,
+    completion_kind: TaskCompletionKind,
+    evidence_ids: BTreeSet<EvidenceId>,
 }
 
 struct CampaignRegistry {
@@ -798,12 +813,12 @@ fn load_campaigns(
             }
             indexes.sort_unstable();
             let head_path = root.join(CAMPAIGN_HEAD_FILE);
-            let initial_state_exists =
-                fs::symlink_metadata(root.join("graph").join(GRAPH_STORE_STATE_FILE)).is_ok();
+            let initial_store_exists = fs::symlink_metadata(root.join("graph")).is_ok()
+                || fs::symlink_metadata(root.join("strategy-memory")).is_ok();
             let head = match fs::symlink_metadata(&head_path) {
                 Ok(_) => Some(load_campaign_head(&head_path, signer)?),
                 Err(source) if source.kind() == io::ErrorKind::NotFound => {
-                    if initial_state_exists || !indexes.is_empty() {
+                    if !indexes.is_empty() {
                         return Err(GraphServiceError::MissingCampaignHead { path: head_path });
                     }
                     None
@@ -826,6 +841,16 @@ fn load_campaigns(
                 Some(&root.join("strategy-memory")),
             )?];
             if head.is_none() {
+                // Initial activation has the same crash window as campaign
+                // rotation: opening the durable stores can commit generation
+                // one before the signed head is installed.  An unheaded base
+                // store is recoverable only when the complete graph and
+                // strategy-memory pair authenticates as pristine.  This
+                // rejects populated, partially reused, or tampered state while
+                // allowing the interrupted first activation to finish.
+                if initial_store_exists {
+                    validate_unactivated_campaign(&campaigns[0], root, config)?;
+                }
                 persist_campaign_head(root, signer, 0)?;
             }
             for index in indexes
@@ -906,6 +931,7 @@ impl CollectiveHypothesisService {
         )?;
         let mut service_metrics = GraphServiceMetrics::default();
         service_metrics.snapshot.campaign_rotations = active.index;
+        let pending_worker_publications = pending_worker_publications(&campaigns)?;
         let service = Self {
             config: config.clone(),
             campaigns: RwLock::new(CampaignRegistry { campaigns }),
@@ -917,6 +943,7 @@ impl CollectiveHypothesisService {
                 coordinator,
                 metrics: service_metrics,
                 worker_claimants: BTreeMap::new(),
+                pending_worker_publications,
                 memory_projection_dirty: false,
             }),
             prometheus,
@@ -957,6 +984,22 @@ impl CollectiveHypothesisService {
             .ok_or_else(|| {
                 GraphStoreError::InvalidState {
                     reason: "collective hypothesis service has no active campaign".to_string(),
+                }
+                .into()
+            })
+    }
+
+    fn campaign_at(&self, index: u64) -> Result<HypothesisCampaign, GraphServiceError> {
+        self.campaigns
+            .read()
+            .map_err(|_| GraphServiceError::Poisoned)?
+            .campaigns
+            .iter()
+            .find(|campaign| campaign.index == index)
+            .cloned()
+            .ok_or_else(|| {
+                GraphStoreError::InvalidState {
+                    reason: format!("worker publication references missing campaign {index}"),
                 }
                 .into()
             })
@@ -1388,11 +1431,55 @@ impl CollectiveHypothesisService {
     }
 
     pub fn summaries(&self) -> Result<Vec<GraphSummaryProjection>, GraphServiceError> {
-        self.repair_memory_projection()?;
-        self.campaigns()?
+        Ok(self
+            .summary_page(None, usize::MAX)?
             .into_iter()
+            .map(|(_, summary)| summary)
+            .collect())
+    }
+
+    /// Return a bounded newest-first page over immutable campaign indexes.
+    /// Only selected campaigns are authenticated and summarized, so retained
+    /// history cannot make a single collection request load every graph.
+    pub fn summary_page(
+        &self,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<(u64, GraphSummaryProjection)>, GraphServiceError> {
+        if limit == 0 {
+            return Err(GraphStoreError::InvalidState {
+                reason: "operator graph summary page limit must be positive".to_string(),
+            }
+            .into());
+        }
+        self.repair_memory_projection()?;
+        let campaigns = self
+            .campaigns
+            .read()
+            .map_err(|_| GraphServiceError::Poisoned)?;
+        if let Some((index, graph_id)) = after
+            && !campaigns
+                .campaigns
+                .iter()
+                .any(|campaign| campaign.index == index && campaign.graph_id.as_str() == graph_id)
+        {
+            return Err(GraphServiceError::InvalidCollectionCursor);
+        }
+        let selected = campaigns
+            .campaigns
+            .iter()
             .rev()
-            .map(|campaign| self.summary_for_campaign(&campaign))
+            .filter(|campaign| after.is_none_or(|(index, _)| campaign.index < index))
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        drop(campaigns);
+        selected
+            .into_iter()
+            .map(|campaign| {
+                self.summary_for_campaign(&campaign)
+                    .map(|summary| (campaign.index, summary))
+            })
             .collect()
     }
 
@@ -1500,7 +1587,7 @@ impl CollectiveHypothesisService {
     pub fn operator_task_page_for(
         &self,
         graph_id: &GraphId,
-        after: Option<(u64, &str)>,
+        after: Option<(GraphLogicalTime, &str)>,
         limit: usize,
     ) -> Result<Vec<TaskRecord>, GraphServiceError> {
         let campaign = self.campaign_for(graph_id)?;
@@ -1764,6 +1851,15 @@ pub struct StalkerGraphPublication {
     pub completion: StalkerGraphCompletion,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WeaverGraphPublication {
+    pub graph_id: GraphId,
+    pub task_id: TaskId,
+    pub hunt_id: String,
+    pub evidence_ids: BTreeSet<EvidenceId>,
+    pub no_finding: bool,
+}
+
 struct TerminalPublication {
     kind: TaskCompletionKind,
     evidence: Vec<swarm_core::hypothesis_graph::EvidenceEnvelope>,
@@ -1820,25 +1916,42 @@ impl GraphWorkerAdapter {
                 TaskKind::AcquireEvidence,
             ));
         }
-        let mut hunts = BTreeSet::new();
-        for campaign in self.service.campaigns()? {
-            let snapshot = campaign.store.snapshot()?;
-            for task in snapshot.tasks().filter(|task| {
-                self.capabilities.contains(&task.task.request.kind)
-                    && (task_is_visible_to_claimant(
-                        task.task.state,
-                        &task.task.request.claimant,
-                        &self.claimant,
-                    ) || snapshot
-                        .terminal_outbox()
-                        .contains_key(&task.task.request.task_id))
-            }) {
-                if let Some(hunt_id) = hunt_for_evidence_scope(
-                    &task.task.request.evidence_scope.evidence_ids,
-                    snapshot.graph(),
-                ) {
-                    hunts.insert(hunt_id);
-                }
+        let state = self
+            .service
+            .state
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?;
+        let mut hunts = state
+            .pending_worker_publications
+            .values()
+            .filter(|publication| {
+                matches!(
+                    publication.task_kind,
+                    TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
+                ) && self.capabilities.contains(&publication.task_kind)
+            })
+            .map(|publication| publication.hunt_id.clone())
+            .collect::<BTreeSet<_>>();
+        drop(state);
+        // Campaign rotation refuses outstanding tasks, so live recovery only
+        // needs to inspect the active graph. Archived campaigns are consulted
+        // exclusively through the bounded pending-publication index above.
+        let campaign = self.service.active_campaign()?;
+        let snapshot = campaign.store.snapshot()?;
+        for task in snapshot.tasks().filter(|task| {
+            self.capabilities.contains(&task.task.request.kind)
+                && task_is_visible_to_claimant(
+                    task.task.state,
+                    &task.task.request.claimant,
+                    &self.claimant,
+                )
+                && !task_is_terminal(task.task.state)
+        }) {
+            if let Some(hunt_id) = hunt_for_evidence_scope(
+                &task.task.request.evidence_scope.evidence_ids,
+                snapshot.graph(),
+            ) {
+                hunts.insert(hunt_id);
             }
         }
         Ok(hunts.into_iter().collect())
@@ -1848,7 +1961,24 @@ impl GraphWorkerAdapter {
         &self,
         hunt_id: &str,
     ) -> Result<Option<StalkerGraphPublication>, GraphServiceError> {
-        for campaign in self.service.campaigns()?.into_iter().rev() {
+        let campaign_indexes = self
+            .service
+            .state
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?
+            .pending_worker_publications
+            .values()
+            .filter(|publication| {
+                publication.hunt_id == hunt_id
+                    && matches!(
+                        publication.task_kind,
+                        TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
+                    )
+            })
+            .map(|publication| publication.campaign_index)
+            .collect::<BTreeSet<_>>();
+        for campaign_index in campaign_indexes.into_iter().rev() {
+            let campaign = self.service.campaign_at(campaign_index)?;
             let snapshot = campaign.store.snapshot()?;
             let tasks = snapshot
                 .tasks()
@@ -1907,6 +2037,116 @@ impl GraphWorkerAdapter {
             }));
         }
         Ok(None)
+    }
+
+    pub fn outstanding_weaver_publications(
+        &self,
+    ) -> Result<Vec<WeaverGraphPublication>, GraphServiceError> {
+        if !self.capabilities.contains(&TaskKind::ChallengeEdge) {
+            return Err(GraphServiceError::MissingCapability(
+                TaskKind::ChallengeEdge,
+            ));
+        }
+        let state = self
+            .service
+            .state
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?;
+        let limit =
+            usize::try_from(self.service.config.max_work_units_per_tick).unwrap_or(usize::MAX);
+        Ok(state
+            .pending_worker_publications
+            .values()
+            .filter(|publication| publication.task_kind == TaskKind::ChallengeEdge)
+            .take(limit)
+            .map(|publication| WeaverGraphPublication {
+                graph_id: publication.graph_id.clone(),
+                task_id: publication.task_id.clone(),
+                hunt_id: publication.hunt_id.clone(),
+                evidence_ids: publication.evidence_ids.clone(),
+                no_finding: publication.completion_kind == TaskCompletionKind::NoFinding,
+            })
+            .collect())
+    }
+
+    pub fn acknowledge_stalker_publication(&self, hunt_id: &str) -> Result<(), GraphServiceError> {
+        if !self.capabilities.contains(&TaskKind::AcquireEvidence)
+            && !self.capabilities.contains(&TaskKind::FalsifyHypothesis)
+        {
+            return Err(GraphServiceError::MissingCapability(
+                TaskKind::AcquireEvidence,
+            ));
+        }
+        self.acknowledge_publications(|publication| {
+            publication.hunt_id == hunt_id
+                && matches!(
+                    publication.task_kind,
+                    TaskKind::AcquireEvidence | TaskKind::FalsifyHypothesis
+                )
+        })
+    }
+
+    pub fn acknowledge_weaver_publication(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<(), GraphServiceError> {
+        if !self.capabilities.contains(&TaskKind::ChallengeEdge) {
+            return Err(GraphServiceError::MissingCapability(
+                TaskKind::ChallengeEdge,
+            ));
+        }
+        self.acknowledge_publications(|publication| {
+            publication.task_kind == TaskKind::ChallengeEdge && &publication.task_id == task_id
+        })
+    }
+
+    fn acknowledge_publications(
+        &self,
+        predicate: impl Fn(&PendingWorkerPublication) -> bool,
+    ) -> Result<(), GraphServiceError> {
+        let _operation = self
+            .service
+            .operation
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?;
+        let selected = self
+            .service
+            .state
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?
+            .pending_worker_publications
+            .iter()
+            .filter(|(_, publication)| predicate(publication))
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        let mut by_campaign = BTreeMap::<u64, BTreeSet<TaskId>>::new();
+        for (campaign_index, task_id) in &selected {
+            by_campaign
+                .entry(*campaign_index)
+                .or_default()
+                .insert(task_id.clone());
+        }
+        for (campaign_index, task_ids) in by_campaign {
+            let campaign = self.service.campaign_at(campaign_index)?;
+            let snapshot = campaign.store.snapshot()?;
+            let mut next = snapshot.state().clone();
+            let before = next.terminal_publication_acks.len();
+            next.terminal_publication_acks.extend(task_ids);
+            if next.terminal_publication_acks.len() != before {
+                next.generation = snapshot.revision().generation;
+                next.predecessor_digest = snapshot.state().predecessor_digest.clone();
+                campaign.store.compare_and_swap(snapshot.revision(), next)?;
+            }
+        }
+        let mut state = self
+            .service
+            .state
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?;
+        for key in selected {
+            state.pending_worker_publications.remove(&key);
+        }
+        Ok(())
     }
 
     pub fn claim_next(
@@ -2619,6 +2859,14 @@ impl GraphWorkerAdapter {
                 }
             }
         }
+        if let Some(publication) =
+            pending_worker_publication_for_task(&campaign, &committed, &task_id)?
+        {
+            state.pending_worker_publications.insert(
+                (publication.campaign_index, publication.task_id.clone()),
+                publication,
+            );
+        }
         drop(state);
         if let Some(metrics) = &self.service.prometheus {
             metrics.observe_hypothesis_graph_completion(task_kind, &completion_kind);
@@ -2775,6 +3023,56 @@ fn hunt_for_evidence_scope(
         .filter_map(|evidence_id| graph.evidence.get(evidence_id))
         .map(|evidence| evidence.lineage.source_record_id.clone())
         .next()
+}
+
+fn pending_worker_publication_for_task(
+    campaign: &HypothesisCampaign,
+    snapshot: &GraphStoreSnapshot,
+    task_id: &TaskId,
+) -> Result<Option<PendingWorkerPublication>, GraphServiceError> {
+    if snapshot.state().terminal_publication_acks.contains(task_id) {
+        return Ok(None);
+    }
+    let Some(task) = snapshot.state().tasks.get(task_id).map(|task| &task.task) else {
+        return Err(GraphStoreError::InvalidState {
+            reason: "terminal publication index references an unknown task".to_string(),
+        }
+        .into());
+    };
+    let Some(outbox) = snapshot.terminal_outbox().get(task_id) else {
+        return Ok(None);
+    };
+    let Some(hunt_id) =
+        hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot.graph())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(PendingWorkerPublication {
+        campaign_index: campaign.index,
+        graph_id: campaign.graph_id.clone(),
+        task_id: task_id.clone(),
+        hunt_id,
+        task_kind: task.request.kind,
+        completion_kind: outbox.envelope.completion.kind.clone(),
+        evidence_ids: task.request.evidence_scope.evidence_ids.clone(),
+    }))
+}
+
+fn pending_worker_publications(
+    campaigns: &[HypothesisCampaign],
+) -> Result<BTreeMap<(u64, TaskId), PendingWorkerPublication>, GraphServiceError> {
+    let mut pending = BTreeMap::new();
+    for campaign in campaigns {
+        let snapshot = campaign.store.snapshot()?;
+        for task_id in snapshot.terminal_outbox().keys() {
+            if let Some(publication) =
+                pending_worker_publication_for_task(campaign, &snapshot, task_id)?
+            {
+                pending.insert((campaign.index, task_id.clone()), publication);
+            }
+        }
+    }
+    Ok(pending)
 }
 
 fn evidence_for_scope(
@@ -2983,6 +3281,76 @@ mod tests {
             0
         );
         drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restart_recovers_pristine_initial_campaign_before_head_activation() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-phase286-unheaded-initial-campaign-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            state_store: BundleStoreConfig::LocalFiles {
+                directory: root.display().to_string(),
+            },
+            ..HypothesisGraphConfig::default()
+        };
+        let signer = Keypair::from_seed(&[15; 32]);
+        let initial = CollectiveHypothesisService::new(&config, signer.clone(), None).unwrap();
+        let expected_graph_id = initial.graph_id();
+        drop(initial);
+
+        fs::remove_file(root.join(CAMPAIGN_HEAD_FILE)).unwrap();
+        let restarted = CollectiveHypothesisService::new(&config, signer, None).unwrap();
+
+        assert_eq!(restarted.graph_id(), expected_graph_id);
+        assert_eq!(restarted.summaries().unwrap().len(), 1);
+        assert_eq!(
+            load_campaign_head(&root.join(CAMPAIGN_HEAD_FILE), &restarted.signer)
+                .unwrap()
+                .latest_index,
+            0
+        );
+        drop(restarted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restart_rejects_populated_initial_campaign_without_head() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-phase286-unheaded-populated-campaign-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            state_store: BundleStoreConfig::LocalFiles {
+                directory: root.display().to_string(),
+            },
+            ..HypothesisGraphConfig::default()
+        };
+        let signer = Keypair::from_seed(&[16; 32]);
+        let initial = CollectiveHypothesisService::new(&config, signer.clone(), None).unwrap();
+        let store = initial.store().unwrap();
+        let snapshot = store.snapshot().unwrap();
+        let mut populated = snapshot.state().clone();
+        populated.logical_time_high_water = GraphLogicalTime::new(1);
+        populated.generation = snapshot.revision().generation;
+        populated.predecessor_digest = snapshot.state().predecessor_digest.clone();
+        store
+            .compare_and_swap(snapshot.revision(), populated)
+            .unwrap();
+        drop(store);
+        drop(initial);
+        fs::remove_file(root.join(CAMPAIGN_HEAD_FILE)).unwrap();
+
+        assert!(matches!(
+            CollectiveHypothesisService::new(&config, signer, None),
+            Err(GraphServiceError::InvalidCampaignEntry { .. })
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -4649,7 +4649,10 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
     let second_task_page = service
         .operator_task_page_for(
             &first.graph_id,
-            Some((task_cursor.generation, task_cursor.request.task_id.as_str())),
+            Some((
+                task_cursor.request.requested_at,
+                task_cursor.request.task_id.as_str(),
+            )),
             2,
         )
         .unwrap();

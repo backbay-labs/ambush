@@ -162,9 +162,16 @@ impl StalkerAgent {
             .collect::<Vec<_>>()
         {
             match self.investigation.acknowledge_graph_findings(&hunt_id) {
-                Ok(Some(_)) => {
-                    self.pending_graph_publication_acks.remove(&hunt_id);
-                }
+                Ok(Some(_)) => match graph.acknowledge_stalker_publication(&hunt_id) {
+                    Ok(()) => {
+                        self.pending_graph_publication_acks.remove(&hunt_id);
+                    }
+                    Err(error) => {
+                        if first_error.is_none() {
+                            first_error = Some(agent_tick_error(error));
+                        }
+                    }
+                },
                 Ok(None) => {}
                 Err(error) => {
                     if first_error.is_none() {
@@ -242,6 +249,11 @@ impl StalkerAgent {
             }
         };
         if investigation.bundle.graph_findings_published || self.published_hunts.contains(hunt_id) {
+            if investigation.bundle.graph_findings_published {
+                graph
+                    .acknowledge_stalker_publication(hunt_id)
+                    .map_err(agent_tick_error)?;
+            }
             self.published_hunts.insert(hunt_id.to_string());
             return Ok(actions);
         }

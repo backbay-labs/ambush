@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use swarm_core::agent::{
     AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmEvent,
 };
+use swarm_core::hypothesis_graph::TaskId;
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
 use swarm_spine::{
     ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, IncidentStore,
@@ -12,7 +13,9 @@ use swarm_spine::{
 };
 
 use swarm_runtime::correlation::{CorrelationEngine, CorrelationOutcome};
-use swarm_runtime::hypothesis_graph::{GraphServiceError, GraphWorkerAdapter};
+use swarm_runtime::hypothesis_graph::{
+    GraphServiceError, GraphWorkerAdapter, WeaverGraphPublication,
+};
 
 pub struct WeaverAgent {
     id: AgentId,
@@ -22,6 +25,8 @@ pub struct WeaverAgent {
     investigation_store: ConfiguredInvestigationBundleStore,
     incident_store: ConfiguredIncidentStore,
     correlated_hunts: HashSet<String>,
+    published_graph_tasks: HashSet<TaskId>,
+    pending_graph_publication_acks: HashSet<TaskId>,
     hypothesis_graph: Option<GraphWorkerAdapter>,
     role: AgentRole,
     health: AgentHealth,
@@ -59,6 +64,8 @@ impl WeaverAgent {
             investigation_store,
             incident_store,
             correlated_hunts: HashSet::new(),
+            published_graph_tasks: HashSet::new(),
+            pending_graph_publication_acks: HashSet::new(),
             hypothesis_graph: None,
             role: AgentRole::Weaver,
             health: AgentHealth::Healthy,
@@ -85,6 +92,27 @@ impl WeaverAgent {
         env: &SwarmEnvironment,
         graph: &GraphWorkerAdapter,
     ) -> Result<Vec<SwarmAction>, SwarmError> {
+        // A previous tick's actions crossed the synchronous dispatcher
+        // boundary before this tick began. Acknowledge their signed graph
+        // outboxes now; a crash before this point deliberately replays them.
+        for task_id in self
+            .pending_graph_publication_acks
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            graph
+                .acknowledge_weaver_publication(&task_id)
+                .map_err(internal_error)?;
+            self.pending_graph_publication_acks.remove(&task_id);
+            self.published_graph_tasks.remove(&task_id);
+        }
+
+        let replay = self.pending_weaver_publication_actions(graph)?;
+        if !replay.is_empty() {
+            return Ok(replay);
+        }
+
         let now =
             swarm_core::hypothesis_graph::GraphLogicalTime::new(env.now.saturating_mul(1_000));
         let Some(context) = graph.next_challenge_context(now).map_err(internal_error)? else {
@@ -108,51 +136,133 @@ impl WeaverAgent {
                 {
                     return Ok(Vec::new());
                 }
-                return Ok(vec![SwarmAction::PublishFindings {
-                    hunt_id: HuntId(context.hunt_id),
-                    findings: serde_json::json!({
-                        "graph_id": context.graph_id,
-                        "graph_task_id": context.task_id,
-                        "evidence_ids": context.evidence_ids,
-                        "investigation_completed_at_ms": investigation.bundle.completed_at_ms,
-                        "investigation_status": investigation.bundle.status,
-                        "failure_reason": investigation.bundle.failure_reason,
-                        "challenge_no_finding": true,
-                    }),
-                    confidence: 0.0,
-                }]);
+                return self.pending_weaver_publication_actions(graph);
             }
             InvestigationStatus::Completed => {}
         }
-        let outcome = self.correlate_challenge_once(
-            &context.hunt_id,
-            investigation
-                .bundle
-                .completed_at_ms
-                .unwrap_or(investigation.bundle.queued_at_ms),
-        )?;
-        let Some(outcome) = outcome else {
+        if self
+            .correlate_challenge_once(
+                &context.hunt_id,
+                investigation
+                    .bundle
+                    .completed_at_ms
+                    .unwrap_or(investigation.bundle.queued_at_ms),
+            )?
+            .is_none()
+        {
             return Ok(Vec::new());
-        };
+        }
         if !graph
             .complete_challenge(&context.task_id, now)
             .map_err(internal_error)?
         {
             return Ok(Vec::new());
         }
-        Ok(vec![SwarmAction::PublishFindings {
-            hunt_id: HuntId(context.hunt_id),
+        self.pending_weaver_publication_actions(graph)
+    }
+
+    fn pending_weaver_publication_actions(
+        &mut self,
+        graph: &GraphWorkerAdapter,
+    ) -> Result<Vec<SwarmAction>, SwarmError> {
+        let mut actions = Vec::new();
+        let mut first_error = None;
+        for publication in graph
+            .outstanding_weaver_publications()
+            .map_err(internal_error)?
+        {
+            if self.published_graph_tasks.contains(&publication.task_id) {
+                continue;
+            }
+            match self.weaver_publication_action(&publication) {
+                Ok(action) => {
+                    self.published_graph_tasks
+                        .insert(publication.task_id.clone());
+                    self.pending_graph_publication_acks
+                        .insert(publication.task_id.clone());
+                    actions.push(action);
+                }
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        if actions.is_empty()
+            && let Some(error) = first_error
+        {
+            return Err(error);
+        }
+        Ok(actions)
+    }
+
+    fn weaver_publication_action(
+        &self,
+        publication: &WeaverGraphPublication,
+    ) -> Result<SwarmAction, SwarmError> {
+        let investigation = self
+            .investigation_store
+            .load_by_hunt_id(&publication.hunt_id)
+            .map_err(internal_error)?
+            .ok_or_else(|| {
+                internal_error(std::io::Error::other(format!(
+                    "durable Weaver publication `{}` has no investigation",
+                    publication.task_id
+                )))
+            })?;
+        let publication_id = format!(
+            "weaver-findings:{}:{}:{}",
+            publication.graph_id, publication.task_id, investigation.bundle.investigation_id
+        );
+        if publication.no_finding {
+            if !matches!(
+                investigation.bundle.status,
+                InvestigationStatus::Failed | InvestigationStatus::TimedOut
+            ) {
+                return Err(internal_error(std::io::Error::other(format!(
+                    "Weaver no-finding publication `{}` has non-failed investigation status",
+                    publication.task_id
+                ))));
+            }
+            return Ok(SwarmAction::PublishFindings {
+                hunt_id: HuntId(publication.hunt_id.clone()),
+                findings: serde_json::json!({
+                    "graph_id": publication.graph_id,
+                    "graph_task_id": publication.task_id,
+                    "publication_id": publication_id,
+                    "evidence_ids": publication.evidence_ids,
+                    "investigation_completed_at_ms": investigation.bundle.completed_at_ms,
+                    "investigation_status": investigation.bundle.status,
+                    "failure_reason": investigation.bundle.failure_reason,
+                    "challenge_no_finding": true,
+                }),
+                confidence: 0.0,
+            });
+        }
+        let stable_created_at_ms = investigation
+            .bundle
+            .completed_at_ms
+            .unwrap_or(investigation.bundle.queued_at_ms);
+        let outcome = self
+            .correlate_challenge_once(&publication.hunt_id, stable_created_at_ms)?
+            .ok_or_else(|| {
+                internal_error(std::io::Error::other(format!(
+                    "durable Weaver publication `{}` has no correlated incident",
+                    publication.task_id
+                )))
+            })?;
+        Ok(SwarmAction::PublishFindings {
+            hunt_id: HuntId(publication.hunt_id.clone()),
             findings: serde_json::json!({
                 "incident_id": outcome.incident.incident_id,
                 "summary": outcome.incident.summary,
-                "graph_id": context.graph_id,
-                "graph_task_id": context.task_id,
-                "evidence_ids": context.evidence_ids,
+                "graph_id": publication.graph_id,
+                "graph_task_id": publication.task_id,
+                "publication_id": publication_id,
+                "evidence_ids": publication.evidence_ids,
                 "investigation_completed_at_ms": investigation.bundle.completed_at_ms,
                 "correlation_confidence": outcome.incident.confidence_score,
             }),
             confidence: 1.0,
-        }])
+        })
     }
 
     fn correlate_challenge_once(
@@ -562,6 +672,148 @@ mod tests {
                 .count(),
             1
         );
+        assert!(agent.tick(&env(hunt_id)).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn weaver_replays_committed_publication_after_crash_then_durably_acks() {
+        let hunt_id = "hunt-graph-weaver-publication-crash";
+        let graph_root = std::env::temp_dir().join(format!(
+            "swarm-weaver-publication-restart-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&graph_root);
+        let investigation_store = investigation_store();
+        investigation_store
+            .persist(&completed_investigation(hunt_id))
+            .unwrap();
+        let incidents = incident_store();
+        let graph_config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 32,
+            max_claims_per_tick: 16,
+            state_store: BundleStoreConfig::LocalFiles {
+                directory: graph_root.display().to_string(),
+            },
+            ..HypothesisGraphConfig::default()
+        };
+        let graph_signer = Keypair::from_seed(&[126; 32]);
+        let graph = Arc::new(
+            CollectiveHypothesisService::new(&graph_config, graph_signer.clone(), None).unwrap(),
+        );
+        graph
+            .worker(
+                [
+                    swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                    swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                ],
+                Keypair::from_seed(&[127; 32]),
+            )
+            .unwrap();
+        let weaver_seed = [128; 32];
+        let signing_key = SigningKey::from_bytes(&weaver_seed);
+        let weaver_id = AgentId::from_verifying_key(&signing_key.verifying_key());
+        let worker = graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&weaver_seed),
+            )
+            .unwrap();
+        graph.submit_replay(&replay_bundle(hunt_id)).unwrap();
+        let mut agent = WeaverAgent::new_with_signing_key(
+            weaver_id.clone(),
+            signing_key.clone(),
+            correlation(),
+            investigation_store.clone(),
+            incidents.clone(),
+        )
+        .with_hypothesis_graph(worker)
+        .unwrap();
+
+        let first_publication = agent
+            .tick(&env(hunt_id))
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => {
+                    findings["publication_id"].as_str().map(ToString::to_string)
+                }
+                _ => None,
+            })
+            .unwrap();
+        drop(agent);
+
+        let replacement_worker = graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&weaver_seed),
+            )
+            .unwrap();
+        let mut replacement = WeaverAgent::new_with_signing_key(
+            weaver_id.clone(),
+            signing_key.clone(),
+            correlation(),
+            investigation_store.clone(),
+            incidents.clone(),
+        )
+        .with_hypothesis_graph(replacement_worker)
+        .unwrap();
+        let replayed_publication = replacement
+            .tick(&env(hunt_id))
+            .await
+            .unwrap()
+            .into_iter()
+            .find_map(|action| match action {
+                SwarmAction::PublishFindings { findings, .. } => {
+                    findings["publication_id"].as_str().map(ToString::to_string)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(replayed_publication, first_publication);
+        assert!(replacement.tick(&env(hunt_id)).await.unwrap().is_empty());
+        let store = graph.store().unwrap();
+        let acknowledged = store.snapshot().unwrap();
+        assert_eq!(acknowledged.state().terminal_publication_acks.len(), 1);
+        let mut regressed = acknowledged.state().clone();
+        regressed.terminal_publication_acks.clear();
+        regressed.generation = acknowledged.revision().generation;
+        regressed.predecessor_digest = acknowledged.state().predecessor_digest.clone();
+        assert!(matches!(
+            store.compare_and_swap(acknowledged.revision(), regressed),
+            Err(swarm_spine::hypothesis_graph_store::GraphStoreError::InvalidState { reason })
+                if reason.contains("removed a terminal publication acknowledgement")
+        ));
+        drop(store);
+        drop(replacement);
+        drop(graph);
+
+        let graph =
+            Arc::new(CollectiveHypothesisService::new(&graph_config, graph_signer, None).unwrap());
+        let final_worker = graph
+            .worker(
+                [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                Keypair::from_seed(&weaver_seed),
+            )
+            .unwrap();
+        let mut final_agent = WeaverAgent::new_with_signing_key(
+            weaver_id,
+            signing_key,
+            correlation(),
+            investigation_store,
+            incidents,
+        )
+        .with_hypothesis_graph(final_worker)
+        .unwrap();
+        let final_actions = final_agent.tick(&env(hunt_id)).await.unwrap();
+        assert!(
+            final_actions.is_empty(),
+            "durably acknowledged publication replayed after restart: {final_actions:?}"
+        );
+        drop(final_agent);
+        drop(graph);
+        std::fs::remove_dir_all(graph_root).unwrap();
     }
 
     #[tokio::test]

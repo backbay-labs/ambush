@@ -3757,6 +3757,54 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
     );
     assert_eq!(rotated_summaries["data"][1]["graph_id"], graph_id);
 
+    let first_summary_page = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request("GET", "/v2/api/hypothesis-graphs?page_size=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_summary_page.status(), StatusCode::OK);
+    let first_summary_page: Value = parse_json(first_summary_page).await;
+    assert_eq!(first_summary_page["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        first_summary_page["data"][0]["graph_id"],
+        third_submission.graph_id.to_string()
+    );
+    let summary_cursor = first_summary_page["cursor"].as_str().unwrap();
+    let second_summary_page = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!("/v2/api/hypothesis-graphs?page_size=1&cursor={summary_cursor}"),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_summary_page.status(), StatusCode::OK);
+    let second_summary_page: Value = parse_json(second_summary_page).await;
+    assert_eq!(second_summary_page["data"].as_array().unwrap().len(), 1);
+    assert_eq!(second_summary_page["data"][0]["graph_id"], graph_id);
+    assert!(second_summary_page.get("cursor").is_none());
+    let forged_summary_cursor = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                "/v2/api/hypothesis-graphs?page_size=1&cursor=0:graph:forged",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forged_summary_cursor.status(), StatusCode::BAD_REQUEST);
+
     let invalid_page = app
         .clone()
         .oneshot(
@@ -3780,6 +3828,129 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         .await
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn platform_task_cursor_remains_complete_while_unreturned_tasks_transition() {
+    let mut config = test_config("suspicious_process_tree");
+    enable_platform_api(&mut config);
+    let graph_root = temp_path("platform-hypothesis-task-stable-cursor-store");
+    enable_collective_hypothesis_graph(&mut config, &graph_root);
+    let state =
+        IngestState::from_config(temp_path("platform-hypothesis-task-stable-cursor"), config)
+            .unwrap();
+    let hunt_id = "evt-platform-hypothesis-task-stable-cursor";
+    let created_at_ms = 1_700_000_030_000;
+    seed_platform_replay_bundle(&state, hunt_id, "host-graph", created_at_ms);
+    let replay = state
+        .current_replay_store()
+        .load_by_hunt_id(hunt_id)
+        .unwrap()
+        .unwrap()
+        .bundle;
+    let graph = state.current_hypothesis_graph().unwrap();
+    let stalker = state
+        .current_hypothesis_graph_worker(
+            [
+                swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+            ],
+            &ed25519_dalek::SigningKey::from_bytes(&[133; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    let weaver = state
+        .current_hypothesis_graph_worker(
+            [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+            &ed25519_dalek::SigningKey::from_bytes(&[134; 32]),
+        )
+        .unwrap()
+        .unwrap();
+    let submission = graph.submit_replay(&replay).unwrap();
+    let graph_id = submission.graph_id.to_string();
+    let expected = submission
+        .task_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<std::collections::BTreeSet<_>>();
+    let app = detect_http_router(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!("/v2/api/hypothesis-graphs/{graph_id}/tasks?page_size=1"),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first: Value = parse_json(first).await;
+    let mut observed = std::collections::BTreeSet::from([first["data"][0]["request"]["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string()]);
+    let mut cursor = first["cursor"].as_str().unwrap().to_string();
+
+    stalker
+        .complete_stalker_hunt(
+            hunt_id,
+            swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 1),
+            9_000,
+            false,
+            true,
+        )
+        .unwrap();
+    let challenge = weaver
+        .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+            created_at_ms + 2,
+        ))
+        .unwrap()
+        .unwrap();
+    assert!(
+        weaver
+            .complete_challenge(
+                &challenge.task_id,
+                swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 3),
+            )
+            .unwrap()
+    );
+
+    loop {
+        let response = app
+            .clone()
+            .oneshot(
+                authorized_platform_api_request(
+                    "GET",
+                    format!(
+                        "/v2/api/hypothesis-graphs/{graph_id}/tasks?page_size=1&cursor={cursor}"
+                    ),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let page: Value = parse_json(response).await;
+        let task_id = page["data"][0]["request"]["task_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            observed.insert(task_id),
+            "task pagination duplicated an item"
+        );
+        let Some(next) = page.get("cursor").and_then(Value::as_str) else {
+            break;
+        };
+        cursor = next.to_string();
+    }
+
+    assert_eq!(observed, expected);
 }
 
 #[tokio::test]

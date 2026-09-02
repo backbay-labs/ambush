@@ -502,6 +502,12 @@ pub struct GraphStoreState {
     pub task_tombstones: BTreeMap<TaskId, TaskMonotonicity>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub terminal_outbox: BTreeMap<TaskId, TaskTerminalOutboxEntry>,
+    /// One-way durable delivery acknowledgements for terminal worker
+    /// publications. Entries remain in the authenticated outbox for audit,
+    /// while recovery indexes can enumerate only publications not present in
+    /// this set.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub terminal_publication_acks: BTreeSet<TaskId>,
     pub fencing_counter: u64,
     #[serde(
         default = "default_graph_limits",
@@ -656,6 +662,7 @@ impl GraphStoreState {
             logical_task_descriptors: BTreeMap::new(),
             task_tombstones: BTreeMap::new(),
             terminal_outbox: BTreeMap::new(),
+            terminal_publication_acks: BTreeSet::new(),
             fencing_counter: 0,
             limits,
             cross_graph_links: std::collections::BTreeSet::new(),
@@ -757,6 +764,7 @@ impl GraphStoreState {
         }
         if self.logical_task_descriptors.len() > limits.max_tasks
             || self.terminal_outbox.len() > limits.max_tasks
+            || self.terminal_publication_acks.len() > limits.max_tasks
         {
             return Err(GraphStoreError::ResourceLimit {
                 resource: "reasoning.tasks".to_string(),
@@ -1025,6 +1033,15 @@ impl GraphStoreState {
                         }
                     }
                 }
+            }
+        }
+        for task_id in &self.terminal_publication_acks {
+            if !self.terminal_outbox.contains_key(task_id) {
+                return Err(GraphStoreError::InvalidState {
+                    reason:
+                        "terminal publication acknowledgement references an unknown outbox entry"
+                            .to_string(),
+                });
             }
         }
         // Coordinator-authored decisions must be signed by a producer that
@@ -1450,6 +1467,7 @@ impl LegacyGraphStoreState {
                 .map(|(task_id, tombstone)| (task_id, tombstone.into_current()))
                 .collect(),
             terminal_outbox: BTreeMap::new(),
+            terminal_publication_acks: BTreeSet::new(),
             fencing_counter: self.fencing_counter,
             limits: GraphResourceLimits::default(),
             cross_graph_links: std::collections::BTreeSet::new(),
@@ -3226,7 +3244,8 @@ fn validate_reasoning_cas_transition(
     if candidate.migration_marker < GRAPH_STATE_MIGRATION_HYPOTHESES
         && (candidate.tasks != current.tasks
             || candidate.logical_task_descriptors != current.logical_task_descriptors
-            || candidate.terminal_outbox != current.terminal_outbox)
+            || candidate.terminal_outbox != current.terminal_outbox
+            || candidate.terminal_publication_acks != current.terminal_publication_acks)
     {
         return Err(GraphStoreError::InvalidState {
             reason: "task replacement requires the reasoning-state migration marker".to_string(),
@@ -3407,6 +3426,30 @@ fn validate_reasoning_cas_transition(
         if next != prior {
             return Err(GraphStoreError::InvalidState {
                 reason: "reasoning CAS rewrote an existing terminal outbox entry".to_string(),
+            });
+        }
+    }
+    if !current
+        .terminal_publication_acks
+        .is_subset(&candidate.terminal_publication_acks)
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: "reasoning CAS removed a terminal publication acknowledgement".to_string(),
+        });
+    }
+    for task_id in &candidate.terminal_publication_acks {
+        if !candidate.terminal_outbox.contains_key(task_id) {
+            return Err(GraphStoreError::InvalidState {
+                reason: "terminal publication acknowledgement references an unknown outbox entry"
+                    .to_string(),
+            });
+        }
+        if !current.terminal_publication_acks.contains(task_id)
+            && !current.terminal_outbox.contains_key(task_id)
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "terminal publication cannot be acknowledged in its commit transition"
+                    .to_string(),
             });
         }
     }
@@ -5078,7 +5121,7 @@ pub trait HypothesisGraphStore: Send + Sync {
     /// compatibility for test stores while applying identical cursor rules.
     fn task_page(
         &self,
-        after: Option<(u64, &str)>,
+        after: Option<(GraphLogicalTime, &str)>,
         limit: usize,
     ) -> Result<Vec<TaskRecord>, GraphStoreError> {
         let snapshot = self.snapshot()?;
@@ -5227,7 +5270,7 @@ const MAX_GRAPH_TASK_PAGE_LIMIT: usize = 4_096;
 
 fn bounded_task_page(
     state: &GraphStoreState,
-    after: Option<(u64, &str)>,
+    after: Option<(GraphLogicalTime, &str)>,
     limit: usize,
 ) -> Result<Vec<TaskRecord>, GraphStoreError> {
     if limit == 0 || limit > MAX_GRAPH_TASK_PAGE_LIMIT {
@@ -5240,9 +5283,10 @@ fn bounded_task_page(
     let mut page = Vec::with_capacity(limit.min(state.tasks.len()));
     for durable in state.tasks.values() {
         let task = &durable.task;
-        let after_cursor = after.is_none_or(|(generation, stable_id)| {
-            task.generation < generation
-                || (task.generation == generation && task.request.task_id.as_str() < stable_id)
+        let after_cursor = after.is_none_or(|(requested_at, stable_id)| {
+            task.request.requested_at < requested_at
+                || (task.request.requested_at == requested_at
+                    && task.request.task_id.as_str() < stable_id)
         });
         if !after_cursor {
             continue;
@@ -5252,13 +5296,17 @@ fn bounded_task_page(
                 let candidate: &&TaskRecord = candidate;
                 let left = *candidate;
                 let right = task;
-                right.generation.cmp(&left.generation).then_with(|| {
-                    right
-                        .request
-                        .task_id
-                        .as_str()
-                        .cmp(left.request.task_id.as_str())
-                })
+                right
+                    .request
+                    .requested_at
+                    .cmp(&left.request.requested_at)
+                    .then_with(|| {
+                        right
+                            .request
+                            .task_id
+                            .as_str()
+                            .cmp(left.request.task_id.as_str())
+                    })
             })
             .unwrap_or_else(|position| position);
         if insertion >= limit {
@@ -5436,7 +5484,7 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn task_page(
         &self,
-        after: Option<(u64, &str)>,
+        after: Option<(GraphLogicalTime, &str)>,
         limit: usize,
     ) -> Result<Vec<TaskRecord>, GraphStoreError> {
         let guard = self
@@ -5498,6 +5546,7 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
             current.logical_task_descriptors = state.logical_task_descriptors;
             current.task_tombstones = state.task_tombstones;
             current.terminal_outbox = state.terminal_outbox;
+            current.terminal_publication_acks = state.terminal_publication_acks;
             current.fencing_counter = state.fencing_counter;
             current.limits = state.limits;
             current.cross_graph_links = state.cross_graph_links;
@@ -8563,7 +8612,7 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn task_page(
         &self,
-        after: Option<(u64, &str)>,
+        after: Option<(GraphLogicalTime, &str)>,
         limit: usize,
     ) -> Result<Vec<TaskRecord>, GraphStoreError> {
         let authenticated = self.read_signed()?;
@@ -8615,6 +8664,7 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
             current.logical_task_descriptors = state.logical_task_descriptors.clone();
             current.task_tombstones = state.task_tombstones.clone();
             current.terminal_outbox = state.terminal_outbox.clone();
+            current.terminal_publication_acks = state.terminal_publication_acks.clone();
             current.fencing_counter = state.fencing_counter;
             current.limits = state.limits.clone();
             current.cross_graph_links = state.cross_graph_links.clone();
@@ -8938,7 +8988,7 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
 
     fn task_page(
         &self,
-        after: Option<(u64, &str)>,
+        after: Option<(GraphLogicalTime, &str)>,
         limit: usize,
     ) -> Result<Vec<TaskRecord>, GraphStoreError> {
         match self {

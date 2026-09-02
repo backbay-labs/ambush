@@ -50,7 +50,7 @@ pub use normalize::{
 pub use service::{
     ClaimedGraphTask, CollectiveHypothesisService, GraphChallengeContext, GraphOperatorProjection,
     GraphServiceError, GraphServiceMetricsSnapshot, GraphSubmission, GraphSummaryProjection,
-    GraphWorkerAdapter, StalkerGraphCompletion,
+    GraphWorkerAdapter, StalkerGraphCompletion, WeaverGraphPublication,
 };
 pub use tasks::{
     DurableHypothesisCoordinator, HypothesisCoordinationResult, HypothesisTaskLedger, TaskClaim,
