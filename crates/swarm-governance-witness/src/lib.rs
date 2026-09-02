@@ -1771,6 +1771,17 @@ mod deadline_state_machine_tests {
         path_variable: &str,
         expected_role: &str,
     ) -> ProtocolResult<async_nats::Client> {
+        connect_deadline_role_with_request_timeout(path_variable, expected_role, None).await
+    }
+
+    async fn connect_deadline_role_with_request_timeout(
+        path_variable: &str,
+        expected_role: &str,
+        request_timeout_millis: Option<u64>,
+    ) -> ProtocolResult<async_nats::Client> {
+        if request_timeout_millis == Some(0) {
+            return Err(ProtocolError::WitnessOutcomeMismatch);
+        }
         let path =
             std::env::var(path_variable).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
         let raw = std::fs::read(path).map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
@@ -1788,9 +1799,19 @@ mod deadline_state_machine_tests {
             .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
         let ca = std::env::var("SWARM_NATS_TLS_CA_PATH")
             .map_err(|_| ProtocolError::WitnessOutcomeMismatch)?;
-        async_nats::ConnectOptions::with_user_and_password(credential.username, credential.password)
-            .require_tls(true)
-            .add_root_certificates(ca.into())
+        let options = async_nats::ConnectOptions::with_user_and_password(
+            credential.username,
+            credential.password,
+        )
+        .require_tls(true)
+        .add_root_certificates(ca.into());
+        let options = match request_timeout_millis {
+            Some(request_timeout_millis) => {
+                options.request_timeout(Some(Duration::from_millis(request_timeout_millis)))
+            }
+            None => options,
+        };
+        options
             .connect(url)
             .await
             .map_err(|_| ProtocolError::WitnessOutcomeMismatch)
@@ -3544,10 +3565,18 @@ mod deadline_state_machine_tests {
             omission: RelaySubscriptionOmissionV1,
             private_release: Option<RelayPrivateReleaseControlV1>,
         ) -> ProtocolResult<Self> {
-            let public_client =
-                connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?;
-            let private_client =
-                connect_deadline_role("SWARM_NATS_RELAY_CREDENTIAL_PATH", "relay").await?;
+            let public_client = connect_deadline_role_with_request_timeout(
+                "SWARM_NATS_RELAY_CREDENTIAL_PATH",
+                "relay",
+                Some(PUBLIC_RESPONSE_GRANT_MILLIS),
+            )
+            .await?;
+            let private_client = connect_deadline_role_with_request_timeout(
+                "SWARM_NATS_RELAY_CREDENTIAL_PATH",
+                "relay",
+                Some(STORE_RESPONSE_GRANT_MILLIS),
+            )
+            .await?;
             let public_client_id = public_client.server_info().client_id;
             let private_client_id = private_client.server_info().client_id;
             if public_client_id == 0

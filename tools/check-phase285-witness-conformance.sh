@@ -12131,6 +12131,69 @@ if (
 startup_region = library.split("async fn start_selective_with_private_release(", 1)[1].split(
     "async fn stop_and_confirm(mut self)", 1
 )[0]
+timeout_helper_marker = "async fn connect_deadline_role_with_request_timeout("
+timeout_helper_end = "async fn private_deadline_request_route()"
+if library.count(timeout_helper_marker) != 1 or library.count(timeout_helper_end) != 1:
+    raise SystemExit("relay_recreation_source_guard[timeout-helper-cardinality]")
+timeout_helper = library.split(timeout_helper_marker, 1)[1].split(timeout_helper_end, 1)[0]
+timeout_helper_fragments = (
+    ("optional-timeout", "request_timeout_millis: Option<u64>"),
+    ("nonzero-timeout", "request_timeout_millis == Some(0)"),
+    (
+        "request-timeout-binding",
+        "options.request_timeout(Some(Duration::from_millis(request_timeout_millis)))",
+    ),
+    ("ambient-default-preserved", "None => options"),
+)
+
+def validate_timeout_helper(source):
+    for reason, fragment in timeout_helper_fragments:
+        if source.count(fragment) != 1:
+            raise ValueError(reason)
+
+validate_timeout_helper(timeout_helper)
+for reason, fragment in timeout_helper_fragments:
+    candidate = timeout_helper.replace(fragment, "", 1)
+    try:
+        validate_timeout_helper(candidate)
+    except ValueError as error:
+        if str(error) != reason:
+            raise SystemExit(
+                f"relay_recreation_source_guard[timeout-helper-wrong-reason:{reason}:{error}]"
+            )
+    else:
+        raise SystemExit(
+            f"relay_recreation_source_guard[timeout-helper-mutation-survived:{reason}]"
+        )
+print(
+    "relay_recreation_timeout_helper_mutations "
+    "optional=1 nonzero=1 binding=1 ambient_default=1 passed=1"
+)
+relay_timeout_fragments = (
+    (
+        "public-relay-timeout",
+        'connect_deadline_role_with_request_timeout(\n'
+        '                "SWARM_NATS_RELAY_CREDENTIAL_PATH",\n'
+        '                "relay",\n'
+        '                Some(PUBLIC_RESPONSE_GRANT_MILLIS),\n'
+        "            )",
+    ),
+    (
+        "private-relay-timeout",
+        'connect_deadline_role_with_request_timeout(\n'
+        '                "SWARM_NATS_RELAY_CREDENTIAL_PATH",\n'
+        '                "relay",\n'
+        '                Some(STORE_RESPONSE_GRANT_MILLIS),\n'
+        "            )",
+    ),
+)
+
+def validate_relay_timeout_bindings(source):
+    for reason, fragment in relay_timeout_fragments:
+        if source.count(fragment) != 1:
+            raise ValueError(reason)
+
+validate_relay_timeout_bindings(startup_region)
 startup_markers = (
     "let mut public_subscriptions = Vec::new();",
     "let mut private_subscriptions = Vec::new();",
@@ -12145,6 +12208,29 @@ if not (
     < startup_region.index(startup_markers[2])
 ):
     raise SystemExit("relay_recreation_source_guard[startup-spawn-order]")
+for reason, fragment in relay_timeout_fragments:
+    if reason == "public-relay-timeout":
+        replacement = fragment.replace(
+            "PUBLIC_RESPONSE_GRANT_MILLIS", "STORE_RESPONSE_GRANT_MILLIS"
+        )
+    else:
+        replacement = fragment.replace(
+            "STORE_RESPONSE_GRANT_MILLIS", "PUBLIC_RESPONSE_GRANT_MILLIS"
+        )
+    candidate = startup_region.replace(fragment, replacement, 1)
+    try:
+        validate_relay_timeout_bindings(candidate)
+    except ValueError as error:
+        if str(error) != "public-relay-timeout":
+            raise SystemExit(
+                f"relay_recreation_source_guard[timeout-wrong-reason:{reason}:{error}]"
+            )
+    else:
+        raise SystemExit(f"relay_recreation_source_guard[timeout-mutation-survived:{reason}]")
+print(
+    "relay_recreation_timeout_mutations "
+    "public_response_grant=1 private_response_grant=1 passed=1"
+)
 if (
     library.count("fn exact_public_relay_subjects() -> BTreeSet<String>") != 1
     or library.count("fn exact_private_relay_subjects() -> BTreeSet<String>") != 1
