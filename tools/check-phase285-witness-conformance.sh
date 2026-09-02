@@ -11972,6 +11972,127 @@ print(
     "relay_recreation_observation_mutations "
     "strict_connz=1 root_curl=1 bounded_capture=1 passed=1"
 )
+
+def validate_observation_relay_handoff(source):
+    runner_marker = "async fn run_worker_observation_test_async() -> Vec<u8>"
+    end_marker = "struct LedgerBoundCompleteReceiptV1"
+    if source.count(runner_marker) != 1 or source.count(end_marker) != 1:
+        raise ValueError("observation-runner")
+    observation = source.split(runner_marker, 1)[1].split(end_marker, 1)[0]
+    fragments = (
+        (
+            "bootstrap-unheld",
+            'LiveRelayLegsV1::start(false).await,\n'
+            '                "observation bootstrap relay legs startup",',
+        ),
+        (
+            "bootstrap-commit",
+            "observation_commit_with_exact_retry(",
+        ),
+        (
+            "bootstrap-teardown",
+            "bootstrap_legs.stop_and_confirm().await,",
+        ),
+        (
+            "observation-held",
+            'LiveRelayLegsV1::start(true).await,\n'
+            '                "observation held relay legs startup",',
+        ),
+        (
+            "replacement-readiness",
+            ".confirm_ready(bootstrap_public_client_id, bootstrap_private_client_id)",
+        ),
+        ("replacement-install", "relay_legs = Some(observation_legs);"),
+        ("observation-clear", "observer.clear();"),
+        ("held-response", "relay.held_response.recv()"),
+    )
+    for reason, fragment in fragments:
+        if observation.count(fragment) != 1:
+            raise ValueError(reason)
+    if [observation.index(fragment) for _, fragment in fragments] != sorted(
+        observation.index(fragment) for _, fragment in fragments
+    ):
+        raise ValueError("handoff-order")
+
+validate_observation_relay_handoff(library)
+handoff_mutants = (
+    (
+        "bootstrap-held",
+        "LiveRelayLegsV1::start(false).await,\n"
+        '                "observation bootstrap relay legs startup",',
+        "LiveRelayLegsV1::start(true).await,\n"
+        '                "observation bootstrap relay legs startup",',
+        "bootstrap-unheld",
+    ),
+    (
+        "observation-unheld",
+        "LiveRelayLegsV1::start(true).await,\n"
+        '                "observation held relay legs startup",',
+        "LiveRelayLegsV1::start(false).await,\n"
+        '                "observation held relay legs startup",',
+        "observation-held",
+    ),
+    (
+        "bootstrap-abort-only",
+        "bootstrap_legs.stop_and_confirm().await,",
+        "bootstrap_legs.abort_only_for_control().await,",
+        "bootstrap-teardown",
+    ),
+    (
+        "skip-replacement-readiness",
+        ".confirm_ready(bootstrap_public_client_id, bootstrap_private_client_id)",
+        ".confirm_ready_control(bootstrap_public_client_id, bootstrap_private_client_id)",
+        "replacement-readiness",
+    ),
+    (
+        "skip-replacement-install",
+        "relay_legs = Some(observation_legs);",
+        "relay_legs = None;",
+        "replacement-install",
+    ),
+)
+for name, old, new, expected in handoff_mutants:
+    if library.count(old) != 1:
+        raise SystemExit(f"relay_recreation_source_guard[handoff-anchor:{name}]")
+    candidate = library.replace(old, new, 1)
+    try:
+        validate_observation_relay_handoff(candidate)
+    except ValueError as error:
+        if str(error) != expected:
+            raise SystemExit(
+                f"relay_recreation_source_guard[handoff-wrong-reason:{name}:{error}]"
+            )
+    else:
+        raise SystemExit(f"relay_recreation_source_guard[handoff-survived:{name}]")
+held_start_anchor = (
+    "            let observation_legs = must(\n"
+    "                LiveRelayLegsV1::start(true).await,"
+)
+clear_anchor = "\n\n        observer.clear();\n        facts.reads.store(0, Ordering::SeqCst);"
+if library.count(held_start_anchor) != 1 or library.count(clear_anchor) != 1:
+    raise SystemExit("relay_recreation_source_guard[handoff-anchor:premature-clear]")
+candidate = library.replace(
+    held_start_anchor,
+    "            observer.clear();\n" + held_start_anchor,
+    1,
+).replace(
+    clear_anchor,
+    "\n\n        facts.reads.store(0, Ordering::SeqCst);",
+    1,
+)
+try:
+    validate_observation_relay_handoff(candidate)
+except ValueError as error:
+    if str(error) != "handoff-order":
+        raise SystemExit(
+            f"relay_recreation_source_guard[handoff-wrong-reason:premature-clear:{error}]"
+        )
+else:
+    raise SystemExit("relay_recreation_source_guard[handoff-survived:premature-clear]")
+print(
+    "relay_recreation_handoff_mutations "
+    "bootstrap_unheld=1 observation_held=1 teardown=1 readiness=1 install=1 ordering=1 passed=1"
+)
 connz_region = library.split(
     "fn relay_connz_records(value: &serde_json::Value)", 1
 )[1].split("fn relay_record_subjects(", 1)[0]
@@ -12041,7 +12162,7 @@ if (
     or library.count("let task_inventory_valid = self.tasks.len() == 12;") != 1
     or library.count("WitnessServiceOperationV1::") < 9
     or library.count("LiveRelayLegsV1::start_after_private_release(") != 2
-    or normalized.count(".stop_and_confirm().await") != 4
+    or normalized.count(".stop_and_confirm().await") != 5
 ):
     raise SystemExit("relay_recreation_source_guard[cardinality]")
 reason_counts = {

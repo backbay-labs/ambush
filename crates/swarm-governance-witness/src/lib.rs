@@ -4728,8 +4728,8 @@ mod deadline_state_machine_tests {
         let relay_enabled = std::env::var_os("PHASE285_RELAY_TOPOLOGY_TOKEN").is_some();
         let mut relay_legs = if relay_enabled {
             Some(must(
-                LiveRelayLegsV1::start(true).await,
-                "relay legs startup",
+                LiveRelayLegsV1::start(false).await,
+                "observation bootstrap relay legs startup",
             ))
         } else {
             None
@@ -4883,6 +4883,28 @@ mod deadline_state_machine_tests {
         );
         if let Some(committed) = committed {
             must(committed.validate(), "observation Commit attestation");
+        }
+
+        if relay_enabled {
+            let bootstrap_legs =
+                must_some(relay_legs.take(), "observation bootstrap relay legs absent");
+            let bootstrap_public_client_id = bootstrap_legs.public_client_id;
+            let bootstrap_private_client_id = bootstrap_legs.private_client_id;
+            must(
+                bootstrap_legs.stop_and_confirm().await,
+                "observation bootstrap relay teardown",
+            );
+            let observation_legs = must(
+                LiveRelayLegsV1::start(true).await,
+                "observation held relay legs startup",
+            );
+            must(
+                observation_legs
+                    .confirm_ready(bootstrap_public_client_id, bootstrap_private_client_id)
+                    .await,
+                "observation held relay readiness",
+            );
+            relay_legs = Some(observation_legs);
         }
 
         observer.clear();
