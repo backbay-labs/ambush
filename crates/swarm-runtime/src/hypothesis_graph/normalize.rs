@@ -867,6 +867,7 @@ fn identity_payload(
             signal_kind: "authentication_event".to_string(),
             principal_digest,
             credential_digest: Some(credential_digest),
+            success: authentication.success,
             entity_ids,
             content_digest,
         },
@@ -930,8 +931,6 @@ fn kubernetes_payload(
         &subresource,
         &resource_name,
         &api_group,
-        &verb,
-        &request_digest,
     ))?;
     let actor = ActorNode::new(
         digest_projection(&("kubernetes_user", &username, &groups))?,

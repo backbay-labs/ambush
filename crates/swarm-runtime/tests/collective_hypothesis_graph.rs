@@ -480,6 +480,58 @@ fn exact_envelope_is_idempotent_but_same_id_different_content_is_rejected() {
 }
 
 #[test]
+fn kubernetes_resource_identity_is_stable_across_operations() {
+    let signer = key(110);
+    let create = normalize_telemetry_event(
+        &kubernetes_event("kube:stable:create", "create"),
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer-kubernetes",
+    )
+    .unwrap();
+    let mut update_event = kubernetes_event("kube:stable:update", "update");
+    update_event.payload = match update_event.payload {
+        TelemetryPayload::KubernetesAudit(mut payload) => {
+            payload.request_object = serde_json::json!({
+                "metadata": {"name": "api"},
+                "spec": {"replicas": 3}
+            });
+            TelemetryPayload::KubernetesAudit(payload)
+        }
+        _ => unreachable!(),
+    };
+    let update = normalize_telemetry_event(
+        &update_event,
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer-kubernetes",
+    )
+    .unwrap();
+    let identity = |envelope: &EvidenceEnvelope| match &envelope.payload {
+        TypedEvidencePayload::KubernetesAudit {
+            resource_digest,
+            entity_ids,
+            content_digest,
+            ..
+        } => (
+            resource_digest.clone(),
+            entity_ids[1].clone(),
+            content_digest.clone(),
+        ),
+        other => panic!("expected Kubernetes payload, got {other:?}"),
+    };
+    let create_identity = identity(&create);
+    let update_identity = identity(&update);
+
+    assert_eq!(create_identity.0, update_identity.0);
+    assert_eq!(create_identity.1, update_identity.1);
+    assert_ne!(create_identity.2, update_identity.2);
+    assert_ne!(create.evidence_id, update.evidence_id);
+}
+
+#[test]
 fn wrong_or_unadmitted_witness_key_fails_closed() {
     let admitted_key = key(31);
     let unadmitted_key = key(32);

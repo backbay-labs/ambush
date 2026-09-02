@@ -817,6 +817,35 @@ impl FileReplayBundleStore {
             .map_err(|source| ReplayStoreError::Parse { path, source })
     }
 
+    /// Repair the sequence projection for one record from the authoritative
+    /// replay index. The index is committed before these direct-lookup files,
+    /// so an interrupted append can legitimately leave either sidecar stale.
+    /// Idempotent retry must finish that commit instead of returning early.
+    fn repair_sequence_projection(
+        &self,
+        index: &ReplayIndex,
+        record: &ReplayBundleRecord,
+    ) -> Result<(), ReplayStoreError> {
+        let record_is_current = self
+            .read_sequence_record(record.store_sequence)
+            .is_ok_and(|persisted| persisted == *record);
+        if !record_is_current {
+            self.write_json_atomically(&self.sequence_record_path(record.store_sequence), record)?;
+        }
+        let head_is_current = self
+            .read_sequence_head()
+            .is_ok_and(|head| head.next_sequence == index.next_sequence);
+        if !head_is_current {
+            self.write_json_atomically(
+                &self.sequence_head_path(),
+                &ReplaySequenceHead {
+                    next_sequence: index.next_sequence,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// Materialize the direct sequence lookup once when opening a legacy
     /// store. Steady-state reconciliation then reads only the requested page,
     /// and checkpoint commits never rewrite the lifetime replay index.
@@ -915,6 +944,7 @@ impl ReplayBundleStore for FileReplayBundleStore {
                     bundle_id: bundle.bundle_id.clone(),
                 });
             }
+            self.repair_sequence_projection(&index, existing_record)?;
             return Ok(existing_record.clone());
         }
         index.next_sequence =
@@ -929,13 +959,7 @@ impl ReplayBundleStore for FileReplayBundleStore {
         let record = ReplayBundleRecord::from_bundle(bundle, bundle_path, store_sequence);
         index.entries.push(record.clone());
         self.write_index(&index)?;
-        self.write_json_atomically(&self.sequence_record_path(store_sequence), &record)?;
-        self.write_json_atomically(
-            &self.sequence_head_path(),
-            &ReplaySequenceHead {
-                next_sequence: index.next_sequence,
-            },
-        )?;
+        self.repair_sequence_projection(&index, &record)?;
         Ok(record)
     }
 
@@ -1413,6 +1437,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let file = FileReplayBundleStore::open(&root).unwrap();
         assert_monotonic_sequence_scan(&file);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn idempotent_retry_repairs_an_index_only_file_commit() {
+        let root = std::env::temp_dir().join(format!(
+            "swarm-spine-index-only-recovery-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileReplayBundleStore::open(&root).unwrap();
+        let bundle = sample_bundle();
+
+        std::fs::remove_dir_all(store.sequences_dir()).unwrap();
+        std::fs::write(store.sequences_dir(), b"block sequence sidecar writes").unwrap();
+        assert!(matches!(
+            store.persist(&bundle),
+            Err(ReplayStoreError::Write { .. })
+        ));
+        assert!(
+            store
+                .load_by_bundle_id(&bundle.bundle_id)
+                .unwrap()
+                .is_some(),
+            "the authoritative index commit must be observable after the sidecar failure"
+        );
+
+        std::fs::remove_file(store.sequences_dir()).unwrap();
+        std::fs::create_dir_all(store.sequences_dir()).unwrap();
+        let repaired = store.persist(&bundle).unwrap();
+        assert_eq!(repaired.store_sequence, 1);
+        assert_eq!(
+            store.scan_after_sequence(0, 1).unwrap(),
+            vec![repaired.clone()]
+        );
+        assert_eq!(
+            store
+                .load_by_store_sequence(repaired.store_sequence)
+                .unwrap()
+                .unwrap()
+                .record,
+            repaired
+        );
+
         let _ = std::fs::remove_dir_all(root);
     }
 

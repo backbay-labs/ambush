@@ -219,6 +219,11 @@ pub struct GraphSummaryProjection {
 struct CollectiveHypothesisState {
     coordinator: DurableHypothesisCoordinator,
     metrics: GraphServiceMetrics,
+    /// Authenticated evidence directory rebuilt from durable campaign
+    /// snapshots at startup and updated immediately after each graph commit.
+    /// Replay admission can therefore locate one archived campaign without
+    /// opening every retained graph on the hot path.
+    evidence_campaigns: BTreeMap<EvidenceId, u64>,
     worker_claimants: BTreeMap<TaskKind, AgentId>,
     pending_worker_publications: BTreeMap<(u64, TaskId), PendingWorkerPublication>,
     pending_stalker_acquisition_hunts: BTreeSet<String>,
@@ -955,6 +960,7 @@ impl CollectiveHypothesisService {
         )?;
         let mut service_metrics = GraphServiceMetrics::default();
         service_metrics.snapshot.campaign_rotations = active.index;
+        let evidence_campaigns = evidence_campaign_index(&campaigns)?;
         let pending_worker_publications = pending_worker_publications(&campaigns)?;
         let pending_stalker_acquisition_hunts = pending_worker_publications
             .values()
@@ -977,6 +983,7 @@ impl CollectiveHypothesisService {
             state: Mutex::new(CollectiveHypothesisState {
                 coordinator,
                 metrics: service_metrics,
+                evidence_campaigns,
                 worker_claimants: BTreeMap::new(),
                 pending_worker_publications,
                 pending_stalker_acquisition_hunts,
@@ -1369,6 +1376,13 @@ impl CollectiveHypothesisService {
                 Err(error) => return Err(error.into()),
             }
         };
+        let replaced_campaign = state
+            .evidence_campaigns
+            .insert(evidence_id.clone(), campaign.index);
+        debug_assert!(
+            replaced_campaign.is_none(),
+            "serialized replay admission replaced an existing evidence campaign"
+        );
         self.observe_state(result.snapshot.state());
         Ok(GraphSubmission {
             graph_id: campaign.graph_id,
@@ -1384,35 +1398,48 @@ impl CollectiveHypothesisService {
         &self,
         evidence_id: &EvidenceId,
     ) -> Result<Option<GraphSubmission>, GraphServiceError> {
-        for campaign in self.campaigns()? {
-            let snapshot = campaign.store.snapshot()?;
-            if !snapshot.graph().evidence.contains_key(evidence_id) {
-                continue;
+        let campaign_index = self
+            .state
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?
+            .evidence_campaigns
+            .get(evidence_id)
+            .copied();
+        let Some(campaign_index) = campaign_index else {
+            return Ok(None);
+        };
+        let campaign = self.campaign_at(campaign_index)?;
+        let snapshot = campaign.store.snapshot()?;
+        if !snapshot.graph().evidence.contains_key(evidence_id) {
+            return Err(GraphStoreError::InvalidState {
+                reason: format!(
+                    "evidence campaign index maps `{evidence_id}` to campaign {campaign_index}, which does not contain it"
+                ),
             }
-            let task_ids = snapshot
-                .tasks()
-                .filter(|task| {
-                    task.task
-                        .request
-                        .evidence_scope
-                        .evidence_ids
-                        .contains(evidence_id)
-                })
-                .map(|task| task.task.request.task_id.clone())
-                .collect();
-            return Ok(Some(GraphSubmission {
-                graph_id: campaign.graph_id,
-                evidence_id: evidence_id.clone(),
-                hypothesis_ids: vec![
-                    scoped_hypothesis_id("malicious-activity", evidence_id),
-                    scoped_hypothesis_id("benign-authorized-activity", evidence_id),
-                ],
-                task_ids,
-                generation: snapshot.revision().generation,
-                idempotent: true,
-            }));
+            .into());
         }
-        Ok(None)
+        let task_ids = snapshot
+            .tasks()
+            .filter(|task| {
+                task.task
+                    .request
+                    .evidence_scope
+                    .evidence_ids
+                    .contains(evidence_id)
+            })
+            .map(|task| task.task.request.task_id.clone())
+            .collect();
+        Ok(Some(GraphSubmission {
+            graph_id: campaign.graph_id,
+            evidence_id: evidence_id.clone(),
+            hypothesis_ids: vec![
+                scoped_hypothesis_id("malicious-activity", evidence_id),
+                scoped_hypothesis_id("benign-authorized-activity", evidence_id),
+            ],
+            task_ids,
+            generation: snapshot.revision().generation,
+            idempotent: true,
+        }))
     }
 
     fn rotate_campaign(
@@ -3573,6 +3600,29 @@ fn pending_worker_publication_for_retry_exhaustion(
         evidence_ids: task.request.evidence_scope.evidence_ids.clone(),
         retry_exhaustion_failure_summary: Some(outbox.failure_summary_digest.clone()),
     }))
+}
+
+fn evidence_campaign_index(
+    campaigns: &[HypothesisCampaign],
+) -> Result<BTreeMap<EvidenceId, u64>, GraphServiceError> {
+    let mut evidence_campaigns = BTreeMap::new();
+    for campaign in campaigns {
+        // A store snapshot verifies the signed graph envelope before any
+        // derived lookup entry is trusted.
+        let snapshot = campaign.store.snapshot()?;
+        for evidence_id in snapshot.graph().evidence.keys() {
+            if let Some(previous) = evidence_campaigns.insert(evidence_id.clone(), campaign.index) {
+                return Err(GraphStoreError::InvalidState {
+                    reason: format!(
+                        "evidence `{evidence_id}` is present in campaigns {previous} and {}",
+                        campaign.index
+                    ),
+                }
+                .into());
+            }
+        }
+    }
+    Ok(evidence_campaigns)
 }
 
 fn pending_worker_publications(

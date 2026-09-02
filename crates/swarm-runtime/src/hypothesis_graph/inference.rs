@@ -151,9 +151,20 @@ pub fn infer_causal_relations(
         )?],
         TypedEvidencePayload::Identity {
             credential_digest: Some(_),
+            success: true,
             ..
-        }
-        | TypedEvidencePayload::Cloudtrail { .. } => vec![inferred(
+        } => vec![inferred(
+            entity_ids,
+            0,
+            1,
+            CausalRelation::Assumes,
+            signal_kind,
+        )?],
+        TypedEvidencePayload::Cloudtrail {
+            event_name,
+            error_code: None,
+            ..
+        } if event_name.eq_ignore_ascii_case("AssumeRole") => vec![inferred(
             entity_ids,
             0,
             1,
@@ -187,7 +198,8 @@ pub fn infer_causal_relations(
         )?],
         TypedEvidencePayload::Process { .. }
         | TypedEvidencePayload::Identity { .. }
-        | TypedEvidencePayload::KubernetesAudit { .. } => Vec::new(),
+        | TypedEvidencePayload::KubernetesAudit { .. }
+        | TypedEvidencePayload::Cloudtrail { .. } => Vec::new(),
     };
     Ok(candidates)
 }
@@ -235,6 +247,69 @@ mod tests {
                     .expect("non-creating verb should be valid")
                     .is_empty(),
                 "verb `{verb}` must not infer a creates edge"
+            );
+        }
+    }
+
+    #[test]
+    fn authentication_inference_requires_a_successful_outcome() {
+        let payload = |success| TypedEvidencePayload::Identity {
+            signal_kind: "authentication_event".to_string(),
+            principal_digest: "principal".to_string(),
+            credential_digest: Some("credential".to_string()),
+            success,
+            entity_ids: vec![GraphNodeId::new("actor"), GraphNodeId::new("credential")],
+            content_digest: "0".repeat(64),
+        };
+
+        let success = infer_causal_relations(&payload(true)).expect("success should infer");
+        assert_eq!(success.len(), 1);
+        assert_eq!(success[0].relation, CausalRelation::Assumes);
+        assert!(
+            infer_causal_relations(&payload(false))
+                .expect("failure should remain valid evidence")
+                .is_empty(),
+            "failed authentication must not assert credential assumption"
+        );
+    }
+
+    #[test]
+    fn cloudtrail_inference_requires_a_successful_assume_role_event() {
+        let payload =
+            |event_name: &str, error_code: Option<&str>| TypedEvidencePayload::Cloudtrail {
+                signal_kind: "cloudtrail".to_string(),
+                event_id: format!("event:{event_name}"),
+                event_name: event_name.to_string(),
+                event_source: "sts.amazonaws.com".to_string(),
+                principal_digest: "principal".to_string(),
+                account_digest: "account".to_string(),
+                source_ip_digest: None,
+                request_digest: "1".repeat(64),
+                response_digest: "2".repeat(64),
+                mfa_authenticated: None,
+                region: Some("us-east-1".to_string()),
+                error_code: error_code.map(str::to_string),
+                error_message: None,
+                entity_ids: vec![GraphNodeId::new("actor"), GraphNodeId::new("account")],
+                content_digest: "0".repeat(64),
+            };
+
+        let assumed = infer_causal_relations(&payload("AssumeRole", None))
+            .expect("successful AssumeRole should infer");
+        assert_eq!(assumed.len(), 1);
+        assert_eq!(assumed[0].relation, CausalRelation::Assumes);
+        for candidate in [
+            payload("CreateAccessKey", None),
+            payload("ConsoleLogin", None),
+            payload("RunInstances", None),
+            payload("GetSecretValue", None),
+            payload("AssumeRole", Some("AccessDenied")),
+        ] {
+            assert!(
+                infer_causal_relations(&candidate)
+                    .expect("non-assumption evidence should remain valid")
+                    .is_empty(),
+                "only a successful AssumeRole event may assert an Assumes edge"
             );
         }
     }
