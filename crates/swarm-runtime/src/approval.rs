@@ -916,7 +916,8 @@ impl Drop for ApprovalWorkflowWriteJournal {
     }
 }
 
-fn record_approval_workflow_write(
+fn rename_and_record_approval_workflow_write(
+    source: &Path,
     path: &Path,
     replacement: ApprovalWorkflowFileSnapshot,
 ) -> io::Result<()> {
@@ -924,6 +925,11 @@ fn record_approval_workflow_write(
         let mut journal = journal
             .try_borrow_mut()
             .map_err(|_| io::Error::other("approval write journal is borrowed"))?;
+        // Acquire the only fallible journal capability before changing the
+        // namespace. Once rename succeeds, BTreeMap insertion is non-fallible,
+        // so rollback can always authenticate the exact replacement inode.
+        // A failed rename leaves any prior entry for this path intact.
+        fs::rename(source, path)?;
         if let Some(journal) = journal.as_mut() {
             journal.insert(path.to_path_buf(), replacement);
         }
@@ -4227,7 +4233,7 @@ where
             #[cfg(unix)]
             gid: temp_metadata.gid(),
         };
-        fs::rename(&temp_path, path)?;
+        rename_and_record_approval_workflow_write(&temp_path, path, replacement.clone())?;
         let named = capture_workflow_snapshot_file(path)?.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -4240,7 +4246,6 @@ where
                 "approval replacement identity changed during rename",
             ));
         }
-        record_approval_workflow_write(path, replacement)?;
         #[cfg(unix)]
         fs::File::open(parent)?.sync_all()?;
         Ok(())
@@ -4311,6 +4316,38 @@ mod tests {
             fs::read(identity_path).unwrap(),
             workflow_lock_file_identity(&metadata),
         )
+    }
+
+    #[test]
+    fn failed_second_rename_preserves_the_prior_authenticated_workflow_write() {
+        let temp = TestDir::new("rename-journal-order");
+        let target = temp.child("target.json");
+        let first_source = temp.child("first.tmp");
+        fs::write(&first_source, b"first replacement").unwrap();
+        let first = capture_workflow_snapshot_file(&first_source)
+            .unwrap()
+            .unwrap();
+
+        let journal = ApprovalWorkflowWriteJournal::begin().unwrap();
+        rename_and_record_approval_workflow_write(&first_source, &target, first.clone()).unwrap();
+
+        let missing_second_source = temp.child("missing-second.tmp");
+        let speculative = first.clone();
+        assert!(
+            rename_and_record_approval_workflow_write(
+                &missing_second_source,
+                &target,
+                speculative,
+            )
+            .is_err()
+        );
+        let writes = journal.finish().unwrap();
+
+        assert_eq!(writes.get(&target), Some(&first));
+        assert_eq!(
+            capture_workflow_snapshot_file(&target).unwrap(),
+            Some(first)
+        );
     }
 
     fn wait_for_file(path: &Path) {

@@ -197,7 +197,9 @@ fn build_platform_openapi_spec() -> Value {
                     "description": "Returns the graph's bounded durable claim, lease, and terminal task records.",
                     "parameters": [
                         { "$ref": "#/components/parameters/SchemaVersionHeader" },
-                        { "$ref": "#/components/parameters/GraphIdPath" }
+                        { "$ref": "#/components/parameters/GraphIdPath" },
+                        { "$ref": "#/components/parameters/Cursor" },
+                        { "$ref": "#/components/parameters/PageSize" }
                     ],
                     "responses": hypothesis_graph_responses("#/components/schemas/HypothesisGraphTasksPage")
                 }
@@ -210,7 +212,9 @@ fn build_platform_openapi_spec() -> Value {
                     "description": "Returns authenticated strategy-memory records projected only after their terminal graph publication committed.",
                     "parameters": [
                         { "$ref": "#/components/parameters/SchemaVersionHeader" },
-                        { "$ref": "#/components/parameters/GraphIdPath" }
+                        { "$ref": "#/components/parameters/GraphIdPath" },
+                        { "$ref": "#/components/parameters/Cursor" },
+                        { "$ref": "#/components/parameters/PageSize" }
                     ],
                     "responses": hypothesis_graph_responses("#/components/schemas/HypothesisGraphMemoryPage")
                 }

@@ -45,6 +45,11 @@ use swarm_runtime_http::serve::serve_with_listener;
 const RELOAD_DEBOUNCE_MS: u64 = 500;
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 const CONCENTRATION_MONITOR_INTERVAL_MS: u64 = 100;
+const HYPOTHESIS_GRAPH_ADMISSION_RETRY_INTERVAL_SECS: u64 = 5;
+
+fn hypothesis_graph_admission_requires_retry(failures: usize) -> bool {
+    failures > 0
+}
 
 // Keep the detector crate independent of a direct libc dependency while still
 // requesting the descriptor protections required for artifact reads and
@@ -5126,6 +5131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             admitted_identities.push(weaver_id);
         }
+        let mut hypothesis_graph_admission_retry_pending = false;
         if config.hypothesis_graph.enabled {
             state
                 .current_hypothesis_graph()
@@ -5144,59 +5150,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 failures = reconciliation.failures,
                 "reconciled durable replays into the collective hypothesis graph"
             );
+            hypothesis_graph_admission_retry_pending =
+                hypothesis_graph_admission_requires_retry(reconciliation.failures);
         }
         let mut hypothesis_graph_admission_handle = hypothesis_graph_admission_notify.map(|notify| {
             let state = state.clone();
             let mut shutdown = shutdown_rx.clone();
             tokio::spawn(async move {
+                let mut retry_pending = hypothesis_graph_admission_retry_pending;
+                let mut retry_interval = tokio::time::interval(Duration::from_secs(
+                    HYPOTHESIS_GRAPH_ADMISSION_RETRY_INTERVAL_SECS,
+                ));
+                retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                // `interval` ticks immediately once. Consume that tick so a
+                // blocked startup reconciliation observes the configured
+                // retry delay instead of spinning a second full-store scan.
+                retry_interval.tick().await;
                 loop {
                     tokio::select! {
                         changed = shutdown.changed() => {
                             if changed.is_err() || *shutdown.borrow() {
                                 break;
                             }
+                            continue;
                         }
-                        () = notify.notified() => {
-                            let reconciliation_state = state.clone();
-                            match tokio::task::spawn_blocking(move || {
-                                reconciliation_state.reconcile_hypothesis_graph_replays()
-                            })
-                            .await
-                            {
-                                Ok(Ok(report)) if report.failures == 0 => {
-                                    tracing::debug!(
-                                        examined = report.examined,
-                                        admitted = report.admitted,
-                                        idempotent = report.idempotent,
-                                        failures = report.failures,
-                                        "reconciled durable replay queue into the collective hypothesis graph"
-                                    );
-                                }
-                                Ok(Ok(report)) => {
-                                    tracing::warn!(
-                                        examined = report.examined,
-                                        admitted = report.admitted,
-                                        idempotent = report.idempotent,
-                                        failures = report.failures,
-                                        module = module_path!(),
-                                        "durable replay queue reconciliation left collective hypothesis admissions degraded"
-                                    );
-                                }
-                                Ok(Err(error)) => {
-                                    tracing::warn!(
-                                        reason = %error,
-                                        module = module_path!(),
-                                        "durable replay queue reconciliation failed"
-                                    );
-                                }
-                                Err(error) => {
-                                    tracing::error!(
-                                        reason = %error,
-                                        module = module_path!(),
-                                        "durable replay queue worker panicked"
-                                    );
-                                }
-                            }
+                        () = notify.notified() => {}
+                        _ = retry_interval.tick(), if retry_pending => {}
+                    }
+                    let reconciliation_state = state.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        reconciliation_state.reconcile_hypothesis_graph_replays()
+                    })
+                    .await
+                    {
+                        Ok(Ok(report)) if report.failures == 0 => {
+                            retry_pending = false;
+                            tracing::debug!(
+                                examined = report.examined,
+                                admitted = report.admitted,
+                                idempotent = report.idempotent,
+                                failures = report.failures,
+                                "reconciled durable replay queue into the collective hypothesis graph"
+                            );
+                        }
+                        Ok(Ok(report)) => {
+                            retry_pending =
+                                hypothesis_graph_admission_requires_retry(report.failures);
+                            tracing::warn!(
+                                examined = report.examined,
+                                admitted = report.admitted,
+                                idempotent = report.idempotent,
+                                failures = report.failures,
+                                module = module_path!(),
+                                "durable replay queue reconciliation left collective hypothesis admissions degraded"
+                            );
+                        }
+                        Ok(Err(error)) => {
+                            retry_pending = true;
+                            tracing::warn!(
+                                reason = %error,
+                                module = module_path!(),
+                                "durable replay queue reconciliation failed"
+                            );
+                        }
+                        Err(error) => {
+                            retry_pending = true;
+                            tracing::error!(
+                                reason = %error,
+                                module = module_path!(),
+                                "durable replay queue worker panicked"
+                            );
                         }
                     }
                 }
@@ -5628,7 +5651,8 @@ mod tests {
         ensure_governance_authority_lock_pair, governance_artifact_record,
         governance_artifact_record_at, governance_artifact_set, governance_artifact_snapshot,
         governance_policy_for_bootstrap, governance_quarantine_expected_copy_name,
-        governance_selection_lock_path, inject_governance_rollback_cleanup_failure_on_call,
+        governance_selection_lock_path, hypothesis_graph_admission_requires_retry,
+        inject_governance_rollback_cleanup_failure_on_call,
         install_governance_artifact_read_barrier, install_governance_authority_hard_link_barrier,
         install_governance_authority_sidecar_create_barrier,
         install_governance_authority_source_open_barrier,
@@ -5650,6 +5674,13 @@ mod tests {
     use std::sync::Arc;
     use swarm_core::agent::{AgentRole, SwarmModeState};
     use swarm_ingest_runtime::ingest::IngestState;
+
+    #[test]
+    fn graph_admission_retry_tracks_remaining_durable_failures() {
+        assert!(!hypothesis_graph_admission_requires_retry(0));
+        assert!(hypothesis_graph_admission_requires_retry(1));
+        assert!(hypothesis_graph_admission_requires_retry(usize::MAX));
+    }
     use swarm_pheromone::ConfiguredPheromoneSubstrate;
     use swarm_runtime::agent_identity::{
         AgentKeyLoadStatus, FileAgentIdentityRegistry, FileAgentKeyStore, RegistryAdmission,

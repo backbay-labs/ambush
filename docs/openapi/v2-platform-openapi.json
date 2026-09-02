@@ -1717,6 +1717,12 @@
           },
           {
             "$ref": "#/components/parameters/GraphIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -1817,6 +1823,12 @@
           },
           {
             "$ref": "#/components/parameters/GraphIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {

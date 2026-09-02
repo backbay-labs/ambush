@@ -4657,6 +4657,35 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
         archived.digest
     );
     drop(restarted);
+
+    let head_path = root.join("campaign-head.json");
+    let authenticated_head = fs::read(&head_path).unwrap();
+    let mut tampered_head: serde_json::Value = serde_json::from_slice(&authenticated_head).unwrap();
+    tampered_head["latest_index"] = serde_json::json!(0);
+    fs::write(&head_path, serde_json::to_vec(&tampered_head).unwrap()).unwrap();
+    assert!(matches!(
+        CollectiveHypothesisService::new(&config, key(141), None),
+        Err(swarm_runtime::hypothesis_graph::GraphServiceError::InvalidCampaignHead { .. })
+    ));
+
+    fs::write(&head_path, &authenticated_head).unwrap();
+    fs::remove_file(&head_path).unwrap();
+    assert!(matches!(
+        CollectiveHypothesisService::new(&config, key(141), None),
+        Err(swarm_runtime::hypothesis_graph::GraphServiceError::MissingCampaignHead { .. })
+    ));
+
+    fs::write(&head_path, &authenticated_head).unwrap();
+    fs::remove_dir_all(root.join("campaigns").join("1")).unwrap();
+    assert!(matches!(
+        CollectiveHypothesisService::new(&config, key(141), None),
+        Err(
+            swarm_runtime::hypothesis_graph::GraphServiceError::CampaignIndexMismatch {
+                latest_index: 1,
+                ..
+            }
+        )
+    ));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -4725,7 +4754,7 @@ fn committed_completion_survives_a_persistently_unavailable_memory_projection() 
             key(148),
         )
         .unwrap();
-    service.worker([TaskKind::ChallengeEdge], key(149)).unwrap();
+    let weaver = service.worker([TaskKind::ChallengeEdge], key(149)).unwrap();
     let replay = production_replay_bundle(
         "hunt:phase286:persistent-memory-projection-failure",
         1_700_000_120_000,
@@ -4735,6 +4764,26 @@ fn committed_completion_survives_a_persistently_unavailable_memory_projection() 
     let memory_root = root.join("strategy-memory");
     fs::rename(&memory_root, root.join("strategy-memory-unavailable")).unwrap();
     fs::write(&memory_root, b"projection backend unavailable").unwrap();
+
+    let admitted_while_degraded = service
+        .submit_replay(&production_replay_bundle(
+            "hunt:phase286:admitted-during-memory-projection-failure",
+            1_700_000_120_100,
+        ))
+        .unwrap();
+    assert!(!admitted_while_degraded.idempotent);
+    assert!(
+        weaver
+            .next_challenge_context(GraphLogicalTime::new(1_700_000_120_101))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        weaver
+            .claim_next(GraphLogicalTime::new(1_700_000_120_101))
+            .unwrap()
+            .is_some()
+    );
 
     let completion = stalker
         .complete_stalker_hunt(

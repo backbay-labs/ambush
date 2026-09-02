@@ -331,40 +331,47 @@ where
                         continue;
                     };
 
-                    let started_at_ms = now_ms();
-                    let mut running_bundle = job.bundle.clone();
-                    let starvation_boost = starvation_boost_basis_points(
-                        running_bundle.queued_at_ms,
-                        started_at_ms,
-                        &worker_config,
-                    );
-                    running_bundle.priority.starvation_boost_basis_points = starvation_boost;
-                    running_bundle.priority.total_basis_points =
-                        base_priority(&running_bundle).saturating_add(starvation_boost);
-                    running_bundle = running_bundle.with_status(
-                        InvestigationStatus::Running,
-                        Some(started_at_ms),
-                        None,
-                    );
-                    // Publish `Running` before acquiring the non-reclaimable
-                    // execution fence.  If this write fails, an exact retry
-                    // remains eligible to execute.  If a remote owner reaches
-                    // a terminal state first, the store's monotonic transition
-                    // guard rejects this stale `Running` write before it can
-                    // contend for the fence.
-                    if let Err(error) = worker_store.persist(&running_bundle) {
-                        worker_scheduler
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
-                            .finish(&running_bundle.investigation_id);
-                        let mut guard = worker_state
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner());
-                        guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
-                        guard.failed_jobs = guard.failed_jobs.saturating_add(1);
-                        guard.last_failure_reason = Some(error.to_string());
-                        continue;
-                    }
+                    let worker_started_at_ms = now_ms();
+                    let recovered_running = job.bundle.status == InvestigationStatus::Running;
+                    let running_bundle = if recovered_running {
+                        // The original start is the durable deadline boundary.
+                        // Rewriting it on every restart/requeue would grant an
+                        // unbounded sequence of fresh execution budgets.
+                        job.bundle.clone()
+                    } else {
+                        let mut running_bundle = job.bundle.clone();
+                        let starvation_boost = starvation_boost_basis_points(
+                            running_bundle.queued_at_ms,
+                            worker_started_at_ms,
+                            &worker_config,
+                        );
+                        running_bundle.priority.starvation_boost_basis_points = starvation_boost;
+                        running_bundle.priority.total_basis_points =
+                            base_priority(&running_bundle).saturating_add(starvation_boost);
+                        running_bundle = running_bundle.with_status(
+                            InvestigationStatus::Running,
+                            Some(worker_started_at_ms),
+                            None,
+                        );
+                        // Publish `Running` before acquiring the non-reclaimable
+                        // execution fence. If this write fails, an exact retry
+                        // remains eligible to execute. A recovered Running record
+                        // is deliberately not rewritten before its fence check.
+                        if let Err(error) = worker_store.persist(&running_bundle) {
+                            worker_scheduler
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .finish(&running_bundle.investigation_id);
+                            let mut guard = worker_state
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner());
+                            guard.queued_jobs = guard.queued_jobs.saturating_sub(1);
+                            guard.failed_jobs = guard.failed_jobs.saturating_add(1);
+                            guard.last_failure_reason = Some(error.to_string());
+                            continue;
+                        }
+                        running_bundle
+                    };
                     match worker_store.claim_execution(&job.bundle) {
                         Ok(InvestigationExecutionClaim::Acquired) => {}
                         Ok(InvestigationExecutionClaim::AlreadyAcquired) => {
@@ -405,8 +412,15 @@ where
                         }
                     }
 
+                    let started_at_ms =
+                        running_bundle.started_at_ms.unwrap_or(worker_started_at_ms);
+                    let elapsed_ms =
+                        u64::try_from(worker_started_at_ms.saturating_sub(started_at_ms))
+                            .unwrap_or_default();
+                    let remaining_budget_ms =
+                        worker_config.time_budget_ms.saturating_sub(elapsed_ms);
                     let result = timeout(
-                        Duration::from_millis(worker_config.time_budget_ms),
+                        Duration::from_millis(remaining_budget_ms),
                         worker_strategy.investigate(&job.replay),
                     )
                     .await;
@@ -1163,7 +1177,7 @@ fn now_ms() -> i64 {
 mod tests {
     use super::{
         InvestigationCoordinator, InvestigationOutcome, InvestigationStatus, InvestigationStrategy,
-        compute_priority,
+        compute_priority, now_ms,
     };
     use async_trait::async_trait;
     use std::collections::BTreeMap;
@@ -1604,13 +1618,15 @@ mod tests {
             "investigation:feedback:{}",
             sha256_hex(operation_id.as_bytes())
         );
+        let started_at_ms = now_ms();
+        let queued_at_ms = started_at_ms.saturating_sub(10);
         let running = InvestigationBundle::queued_from_bundle(
             &replay,
             investigation_id,
-            1_700_000_000_000,
-            compute_priority(&replay, 1_700_000_000_000),
+            queued_at_ms,
+            compute_priority(&replay, queued_at_ms),
         )
-        .with_status(InvestigationStatus::Running, Some(1_700_000_000_100), None);
+        .with_status(InvestigationStatus::Running, Some(started_at_ms), None);
         store.persist(&running).unwrap();
 
         let coordinator = InvestigationCoordinator::new(
@@ -1622,7 +1638,7 @@ mod tests {
             store,
         );
         coordinator
-            .submit_idempotent(&replay, operation_id, 1_700_000_000_000)
+            .submit_idempotent(&replay, operation_id, queued_at_ms)
             .unwrap()
             .unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1713,6 +1729,50 @@ mod tests {
                 .is_some_and(|reason| reason.contains("past its 10 ms budget"))
         );
         assert_eq!(restarted.recent(8).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn restart_does_not_extend_a_fenced_running_investigation_deadline() {
+        let store = MemoryInvestigationBundleStore::default();
+        let replay = sample_replay();
+        let queued_at_ms = now_ms().saturating_sub(10);
+        let original_started_at_ms = now_ms();
+        let running = InvestigationBundle::queued_from_bundle(
+            &replay,
+            format!("investigation:{}:fenced-running", replay.audit.hunt_id),
+            queued_at_ms,
+            compute_priority(&replay, queued_at_ms),
+        )
+        .with_status(
+            InvestigationStatus::Running,
+            Some(original_started_at_ms),
+            None,
+        );
+        store.persist(&running).unwrap();
+        assert_eq!(
+            store.claim_execution(&running).unwrap(),
+            InvestigationExecutionClaim::Acquired
+        );
+
+        let restarted = InvestigationCoordinator::new(
+            config(true, 500),
+            SlowInvestigator {
+                delay_ms: 1,
+                fail: false,
+            },
+            store,
+        );
+        restarted.resume_unfinished(&replay, &running).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let recovered = restarted.load_by_hunt_id("hunt-1").unwrap().unwrap();
+        assert_eq!(recovered.bundle.status, InvestigationStatus::Running);
+        assert_eq!(
+            recovered.bundle.started_at_ms,
+            Some(original_started_at_ms),
+            "a claimant rebinding must not reset the durable deadline"
+        );
+        assert_eq!(restarted.snapshot().completed_jobs, 0);
     }
 
     #[tokio::test]

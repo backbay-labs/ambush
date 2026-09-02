@@ -6,8 +6,12 @@
 //! response authority.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -23,11 +27,13 @@ use swarm_core::hypothesis_graph::{
     TaskRecord, TaskState, TaskTarget, TaskTerminalEnvelope,
 };
 use swarm_core::types::AgentId;
-use swarm_crypto::{Keypair, sha256_hex};
+use swarm_crypto::{
+    DetachedSignature, Keypair, canonical_json_bytes, sha256_hex, verify_detached_signature,
+};
 use swarm_spine::hypothesis_graph_store::{
     ConfiguredHypothesisGraphStore, GRAPH_STATE_MIGRATION_HYPOTHESES, GRAPH_STATE_MIGRATION_LEGACY,
-    GraphStoreError, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
-    ReasoningStateUpdate,
+    GRAPH_STORE_STATE_FILE, GraphStoreError, GraphStoreSnapshot, GraphStoreState,
+    HypothesisGraphStore, ReasoningStateUpdate,
 };
 use swarm_spine::{
     FileStrategyMemoryStore, MemoryStrategyMemoryStore, ReplayBundle, StrategyMemoryRecord,
@@ -43,6 +49,17 @@ use super::{DurableHypothesisCoordinator, KeypairGraphRecordSigner, TaskClaim, W
 use crate::detection::metrics::CriticalPathMetrics;
 
 const GRAPH_LEASE_MS: u64 = 30_000;
+const CAMPAIGN_HEAD_SCHEMA_VERSION: u32 = 1;
+const CAMPAIGN_HEAD_STATE_KIND: &str = "collective-hypothesis-campaign-head";
+const CAMPAIGN_HEAD_FILE: &str = "campaign-head.json";
+const MAX_CAMPAIGN_HEAD_BYTES: u64 = 64 * 1024;
+static NEXT_CAMPAIGN_HEAD_TEMP: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+const CAMPAIGN_HEAD_O_NOFOLLOW: i32 = 0x20000;
+#[cfg(target_os = "macos")]
+const CAMPAIGN_HEAD_O_NOFOLLOW: i32 = 0x100;
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+const CAMPAIGN_HEAD_O_NOFOLLOW: i32 = 0;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GraphServiceError {
@@ -109,6 +126,20 @@ pub enum GraphServiceError {
 
     #[error("invalid graph campaign entry `{path}`")]
     InvalidCampaignEntry { path: PathBuf },
+
+    #[error("graph campaign high-water head is missing at `{path}`")]
+    MissingCampaignHead { path: PathBuf },
+
+    #[error("graph campaign high-water head is invalid at `{path}`: {reason}")]
+    InvalidCampaignHead { path: PathBuf, reason: String },
+
+    #[error(
+        "graph campaign set does not match authenticated high-water {latest_index}: observed {observed_indexes:?}"
+    )]
+    CampaignIndexMismatch {
+        latest_index: u64,
+        observed_indexes: Vec<u64>,
+    },
 
     #[error("graph campaign I/O failed at `{path}`: {source}")]
     CampaignIo {
@@ -314,6 +345,334 @@ fn open_campaign(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignedCampaignHead {
+    schema_version: u32,
+    state_kind: String,
+    stream_id: String,
+    latest_index: u64,
+    signature: DetachedSignature,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct CampaignHeadSigningMaterial<'a> {
+    schema_version: u32,
+    state_kind: &'a str,
+    stream_id: &'a str,
+    latest_index: u64,
+}
+
+fn campaign_head_stream_id(root: &Path, signer: &Keypair) -> Result<String, GraphServiceError> {
+    let canonical_root =
+        fs::canonicalize(root).map_err(|source| GraphServiceError::CampaignIo {
+            path: root.to_path_buf(),
+            source,
+        })?;
+    Ok(format!(
+        "{}:{}",
+        graph_id_for_campaign(signer, 0),
+        sha256_hex(canonical_root.to_string_lossy().as_bytes())
+    ))
+}
+
+fn sign_campaign_head(
+    root: &Path,
+    signer: &Keypair,
+    latest_index: u64,
+) -> Result<SignedCampaignHead, GraphServiceError> {
+    let stream_id = campaign_head_stream_id(root, signer)?;
+    let material = CampaignHeadSigningMaterial {
+        schema_version: CAMPAIGN_HEAD_SCHEMA_VERSION,
+        state_kind: CAMPAIGN_HEAD_STATE_KIND,
+        stream_id: &stream_id,
+        latest_index,
+    };
+    let bytes = canonical_json_bytes(&material).map_err(|error| {
+        GraphServiceError::InvalidCampaignHead {
+            path: PathBuf::from(CAMPAIGN_HEAD_FILE),
+            reason: error.to_string(),
+        }
+    })?;
+    Ok(SignedCampaignHead {
+        schema_version: CAMPAIGN_HEAD_SCHEMA_VERSION,
+        state_kind: CAMPAIGN_HEAD_STATE_KIND.to_string(),
+        stream_id,
+        latest_index,
+        signature: DetachedSignature {
+            algorithm: "ed25519".to_string(),
+            key_id: sha256_hex(signer.public_key().as_bytes()),
+            public_key_hex: signer.public_key().to_hex(),
+            signature_hex: signer.sign(&bytes).to_hex(),
+        },
+    })
+}
+
+fn verify_campaign_head(
+    root: &Path,
+    path: &Path,
+    head: &SignedCampaignHead,
+    signer: &Keypair,
+) -> Result<(), GraphServiceError> {
+    let expected_stream_id = campaign_head_stream_id(root, signer)?;
+    if head.schema_version != CAMPAIGN_HEAD_SCHEMA_VERSION
+        || head.state_kind != CAMPAIGN_HEAD_STATE_KIND
+        || head.stream_id != expected_stream_id
+    {
+        return Err(GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: "schema, state kind, or stream identity mismatch".to_string(),
+        });
+    }
+    let material = CampaignHeadSigningMaterial {
+        schema_version: head.schema_version,
+        state_kind: &head.state_kind,
+        stream_id: &head.stream_id,
+        latest_index: head.latest_index,
+    };
+    let bytes = canonical_json_bytes(&material).map_err(|error| {
+        GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        }
+    })?;
+    verify_detached_signature(&bytes, &head.signature).map_err(|error| {
+        GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        }
+    })?;
+    let expected_signer = AgentId::from_public_key_hex(&signer.public_key().to_hex());
+    let observed_signer = AgentId::from_public_key_hex(&head.signature.public_key_hex);
+    if observed_signer != expected_signer {
+        return Err(GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: format!(
+                "signer mismatch: expected `{expected_signer}`, observed `{observed_signer}`"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn load_campaign_head(
+    path: &Path,
+    signer: &Keypair,
+) -> Result<SignedCampaignHead, GraphServiceError> {
+    let root = path
+        .parent()
+        .ok_or_else(|| GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: "campaign head has no state-store parent".to_string(),
+        })?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(CAMPAIGN_HEAD_O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|source| GraphServiceError::CampaignIo {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let descriptor_metadata = file
+        .metadata()
+        .map_err(|source| GraphServiceError::CampaignIo {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let named_metadata =
+        fs::symlink_metadata(path).map_err(|source| GraphServiceError::CampaignIo {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let descriptor_identity = campaign_head_file_identity(&descriptor_metadata);
+    if !descriptor_metadata.file_type().is_file()
+        || !named_metadata.file_type().is_file()
+        || descriptor_identity != campaign_head_file_identity(&named_metadata)
+    {
+        return Err(GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: "head must remain bound to one regular non-symlink file".to_string(),
+        });
+    }
+    if descriptor_metadata.len() > MAX_CAMPAIGN_HEAD_BYTES {
+        return Err(GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: format!("head exceeds the {MAX_CAMPAIGN_HEAD_BYTES}-byte persistence limit"),
+        });
+    }
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(MAX_CAMPAIGN_HEAD_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| GraphServiceError::CampaignIo {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CAMPAIGN_HEAD_BYTES {
+        return Err(GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: format!("head exceeds the {MAX_CAMPAIGN_HEAD_BYTES}-byte persistence limit"),
+        });
+    }
+    let final_named_metadata =
+        fs::symlink_metadata(path).map_err(|source| GraphServiceError::CampaignIo {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !final_named_metadata.file_type().is_file()
+        || descriptor_identity != campaign_head_file_identity(&final_named_metadata)
+    {
+        return Err(GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: "head path changed while it was being authenticated".to_string(),
+        });
+    }
+    let head: SignedCampaignHead =
+        serde_json::from_slice(&bytes).map_err(|error| GraphServiceError::InvalidCampaignHead {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    verify_campaign_head(root, path, &head, signer)?;
+    Ok(head)
+}
+
+#[cfg(unix)]
+fn campaign_head_file_identity(metadata: &fs::Metadata) -> String {
+    format!("unix:{}:{}", metadata.dev(), metadata.ino())
+}
+
+#[cfg(windows)]
+fn campaign_head_file_identity(metadata: &fs::Metadata) -> String {
+    format!(
+        "windows:{}:{}",
+        metadata.volume_serial_number().unwrap_or_default(),
+        metadata.file_index().unwrap_or_default()
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn campaign_head_file_identity(metadata: &fs::Metadata) -> String {
+    format!("other:{}:{:?}", metadata.len(), metadata.modified().ok())
+}
+
+fn persist_campaign_head(
+    root: &Path,
+    signer: &Keypair,
+    latest_index: u64,
+) -> Result<(), GraphServiceError> {
+    fs::create_dir_all(root).map_err(|source| GraphServiceError::CampaignIo {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let path = root.join(CAMPAIGN_HEAD_FILE);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+                return Err(GraphServiceError::InvalidCampaignHead {
+                    path,
+                    reason: "head must be a regular non-symlink file".to_string(),
+                });
+            }
+            let current = load_campaign_head(&path, signer)?;
+            let advances_once = current.latest_index.checked_add(1) == Some(latest_index);
+            if current.latest_index != latest_index && !advances_once {
+                return Err(GraphServiceError::InvalidCampaignHead {
+                    path,
+                    reason: format!(
+                        "campaign high-water must remain at {} or advance exactly once, observed {latest_index}",
+                        current.latest_index
+                    ),
+                });
+            }
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(GraphServiceError::CampaignIo {
+                path: path.clone(),
+                source,
+            });
+        }
+    }
+    let head = sign_campaign_head(root, signer, latest_index)?;
+    let bytes =
+        serde_json::to_vec(&head).map_err(|error| GraphServiceError::InvalidCampaignHead {
+            path: path.clone(),
+            reason: error.to_string(),
+        })?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CAMPAIGN_HEAD_BYTES {
+        return Err(GraphServiceError::InvalidCampaignHead {
+            path,
+            reason: format!("head exceeds the {MAX_CAMPAIGN_HEAD_BYTES}-byte persistence limit"),
+        });
+    }
+    let (temp_path, mut file) = loop {
+        let nonce = NEXT_CAMPAIGN_HEAD_TEMP.fetch_add(1, Ordering::Relaxed);
+        let candidate = root.join(format!(
+            ".{CAMPAIGN_HEAD_FILE}.tmp-{}-{nonce}",
+            std::process::id()
+        ));
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(GraphServiceError::CampaignIo {
+                    path: candidate,
+                    source,
+                });
+            }
+        }
+    };
+    let write_result = (|| -> Result<(), io::Error> {
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        fs::rename(&temp_path, &path)?;
+        fs::File::open(root)?.sync_all()?;
+        Ok(())
+    })();
+    if let Err(source) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(GraphServiceError::CampaignIo { path, source });
+    }
+    let persisted = load_campaign_head(&path, signer)?;
+    if persisted.latest_index != latest_index {
+        return Err(GraphServiceError::InvalidCampaignHead {
+            path,
+            reason: format!(
+                "post-commit campaign high-water mismatch: expected {latest_index}, observed {}",
+                persisted.latest_index
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_campaign_indexes(latest_index: u64, indexes: &[u64]) -> Result<(), GraphServiceError> {
+    let contiguous = u64::try_from(indexes.len()) == Ok(latest_index)
+        && indexes.iter().copied().enumerate().all(|(offset, index)| {
+            u64::try_from(offset).ok().and_then(|v| v.checked_add(1)) == Some(index)
+        });
+    if !contiguous {
+        return Err(GraphServiceError::CampaignIndexMismatch {
+            latest_index,
+            observed_indexes: indexes.to_vec(),
+        });
+    }
+    Ok(())
+}
+
 fn load_campaigns(
     config: &HypothesisGraphConfig,
     signer: &Keypair,
@@ -324,13 +683,6 @@ fn load_campaigns(
         }
         BundleStoreConfig::LocalFiles { directory } => {
             let root = Path::new(directory);
-            let mut campaigns = vec![open_campaign(
-                0,
-                config,
-                signer,
-                Some(&root.join("graph")),
-                Some(&root.join("strategy-memory")),
-            )?];
             let campaign_root = root.join("campaigns");
             let mut indexes = Vec::new();
             match fs::read_dir(&campaign_root) {
@@ -354,7 +706,11 @@ fn load_campaigns(
                         let Ok(index) = name.parse::<u64>() else {
                             return Err(GraphServiceError::InvalidCampaignEntry { path });
                         };
-                        if index == 0 || !file_type.is_dir() || file_type.is_symlink() {
+                        if index == 0
+                            || name != index.to_string()
+                            || !file_type.is_dir()
+                            || file_type.is_symlink()
+                        {
                             return Err(GraphServiceError::InvalidCampaignEntry { path });
                         }
                         indexes.push(index);
@@ -369,15 +725,45 @@ fn load_campaigns(
                 }
             }
             indexes.sort_unstable();
-            indexes.dedup();
+            let head_path = root.join(CAMPAIGN_HEAD_FILE);
+            let initial_state_exists =
+                fs::symlink_metadata(root.join("graph").join(GRAPH_STORE_STATE_FILE)).is_ok();
+            let head = match fs::symlink_metadata(&head_path) {
+                Ok(_) => Some(load_campaign_head(&head_path, signer)?),
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                    if initial_state_exists || !indexes.is_empty() {
+                        return Err(GraphServiceError::MissingCampaignHead { path: head_path });
+                    }
+                    None
+                }
+                Err(source) => {
+                    return Err(GraphServiceError::CampaignIo {
+                        path: head_path,
+                        source,
+                    });
+                }
+            };
+            let latest_index = head.as_ref().map_or(0, |head| head.latest_index);
+            validate_campaign_indexes(latest_index, &indexes)?;
+
+            let mut campaigns = vec![open_campaign(
+                0,
+                config,
+                signer,
+                Some(&root.join("graph")),
+                Some(&root.join("strategy-memory")),
+            )?];
+            if head.is_none() {
+                persist_campaign_head(root, signer, 0)?;
+            }
             for index in indexes {
-                let root = campaign_root.join(index.to_string());
+                let campaign_directory = campaign_root.join(index.to_string());
                 campaigns.push(open_campaign(
                     index,
                     config,
                     signer,
-                    Some(&root.join("graph")),
-                    Some(&root.join("strategy-memory")),
+                    Some(&campaign_directory.join("graph")),
+                    Some(&campaign_directory.join("strategy-memory")),
                 )?);
             }
             Ok((campaigns, Some(campaign_root)))
@@ -570,7 +956,7 @@ impl CollectiveHypothesisService {
             .operation
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
-        self.repair_memory_projection()?;
+        let _memory_projection_available = self.repair_memory_projection_for_work()?;
         let result = self.submit_replay_inner(replay);
         let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
         match &result {
@@ -862,6 +1248,20 @@ impl CollectiveHypothesisService {
             campaign.store.as_ref(),
             record_signer,
         )?;
+        if let Some(campaign_root) = &self.campaign_root {
+            let state_root =
+                campaign_root
+                    .parent()
+                    .ok_or_else(|| GraphServiceError::InvalidCampaignHead {
+                        path: campaign_root.clone(),
+                        reason: "campaign directory has no state-store parent".to_string(),
+                    })?;
+            // The signed head is the durable activation point. It lives
+            // outside the numbered campaign directory, so deletion or rollback
+            // of the newest campaign is detected before an older index can be
+            // reactivated or reused on restart.
+            persist_campaign_head(state_root, &self.signer, index)?;
+        }
         {
             let mut campaigns = self
                 .campaigns
@@ -1037,6 +1437,40 @@ impl CollectiveHypothesisService {
         Ok(())
     }
 
+    fn repair_memory_projection_for_work(&self) -> Result<bool, GraphServiceError> {
+        match self.repair_memory_projection() {
+            Ok(()) => Ok(true),
+            Err(GraphServiceError::Memory(error)) => {
+                self.record_advisory_memory_failure(&error)?;
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn record_advisory_memory_failure(
+        &self,
+        error: &StrategyMemoryStoreError,
+    ) -> Result<(), GraphServiceError> {
+        let mut state = self.state.lock().map_err(|_| GraphServiceError::Poisoned)?;
+        state.memory_projection_dirty = true;
+        state.metrics.snapshot.memory_projection_failures = state
+            .metrics
+            .snapshot
+            .memory_projection_failures
+            .saturating_add(1);
+        drop(state);
+        if let Some(metrics) = &self.prometheus {
+            metrics.observe_hypothesis_graph_memory_projection_failure();
+        }
+        tracing::warn!(
+            reason = %error,
+            graph_id = %self.graph_id(),
+            "strategy-memory projection is degraded; collective reasoning is continuing with base task priorities"
+        );
+        Ok(())
+    }
+
     fn record_post_commit_memory_projection(
         &self,
         result: Result<MemoryProjectionReport, StrategyMemoryStoreError>,
@@ -1051,16 +1485,9 @@ impl CollectiveHypothesisService {
                     .saturating_add(u64::try_from(projection.inserted).unwrap_or(u64::MAX));
                 Ok(projection.inserted)
             }
-            Err(_error) => {
-                state.memory_projection_dirty = true;
-                state.metrics.snapshot.memory_projection_failures = state
-                    .metrics
-                    .snapshot
-                    .memory_projection_failures
-                    .saturating_add(1);
-                if let Some(metrics) = &self.prometheus {
-                    metrics.observe_hypothesis_graph_memory_projection_failure();
-                }
+            Err(error) => {
+                drop(state);
+                self.record_advisory_memory_failure(&error)?;
                 // The graph terminal and its embedded memory have already
                 // committed atomically. Treat the external memory index as a
                 // repairable projection: returning an error here would make
@@ -1087,6 +1514,7 @@ impl CollectiveHypothesisService {
 
     fn priority_for_task(
         &self,
+        campaign: &HypothesisCampaign,
         task: &TaskRecord,
         snapshot: &GraphStoreSnapshot,
         now: GraphLogicalTime,
@@ -1099,7 +1527,6 @@ impl CollectiveHypothesisService {
             }
         };
         let mut best = MemoryPriorityProjection::unchanged(base);
-        let campaign = self.active_campaign()?;
         for hypothesis_id in candidates {
             let projected = campaign.memory.priority_for_context(
                 &campaign.graph_id,
@@ -1116,6 +1543,47 @@ impl CollectiveHypothesisService {
             }
         }
         Ok(best)
+    }
+
+    fn priority_projections_for_tasks(
+        &self,
+        campaign: &HypothesisCampaign,
+        tasks: &[TaskRecord],
+        snapshot: &GraphStoreSnapshot,
+        now: GraphLogicalTime,
+        use_memory_priority: bool,
+    ) -> Result<Vec<MemoryPriorityProjection>, GraphServiceError> {
+        let base_priorities = || {
+            tasks
+                .iter()
+                .map(|task| {
+                    MemoryPriorityProjection::unchanged(base_task_priority(task.request.kind))
+                })
+                .collect::<Vec<_>>()
+        };
+        if !use_memory_priority {
+            return Ok(base_priorities());
+        }
+        let attempted = tasks
+            .iter()
+            .map(|task| self.priority_for_task(campaign, task, snapshot, now))
+            .collect::<Result<Vec<_>, GraphServiceError>>();
+        self.resolve_advisory_priorities(base_priorities(), attempted)
+    }
+
+    fn resolve_advisory_priorities(
+        &self,
+        base_priorities: Vec<MemoryPriorityProjection>,
+        attempted: Result<Vec<MemoryPriorityProjection>, GraphServiceError>,
+    ) -> Result<Vec<MemoryPriorityProjection>, GraphServiceError> {
+        match attempted {
+            Ok(priorities) => Ok(priorities),
+            Err(GraphServiceError::Memory(error)) => {
+                self.record_advisory_memory_failure(&error)?;
+                Ok(base_priorities)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn nonretrograde_time(
@@ -1219,11 +1687,11 @@ impl GraphWorkerAdapter {
         let snapshot = campaign.store.snapshot()?;
         let mut hunts = BTreeSet::new();
         for task in snapshot.tasks().filter(|task| {
-            task.task.request.claimant == self.claimant
-                && self.capabilities.contains(&task.task.request.kind)
-                && matches!(
+            self.capabilities.contains(&task.task.request.kind)
+                && task_is_visible_to_claimant(
                     task.task.state,
-                    TaskState::Pending | TaskState::Claimed | TaskState::Expired
+                    &task.task.request.claimant,
+                    &self.claimant,
                 )
         }) {
             if let Some(hunt_id) = hunt_for_evidence_scope(
@@ -1244,8 +1712,8 @@ impl GraphWorkerAdapter {
         // completion paths intentionally bypass this preflight: once a graph
         // terminal commits, a still-failing projection must not prevent the
         // adapter from returning that completion to its agent.
-        self.service.repair_memory_projection()?;
-        self.claim_matching(now, true, |_, _| true)
+        let memory_priority_available = self.service.repair_memory_projection_for_work()?;
+        self.claim_matching(now, memory_priority_available, |_, _| true)
     }
 
     fn claim_matching<F>(
@@ -1258,35 +1726,39 @@ impl GraphWorkerAdapter {
         F: Fn(&TaskRecord, &GraphStoreSnapshot) -> bool,
     {
         let campaign = self.service.active_campaign()?;
-        let mut state = self
-            .service
-            .state
-            .lock()
-            .map_err(|_| GraphServiceError::Poisoned)?;
         loop {
             let snapshot = campaign.store.snapshot()?;
-            let mut candidates = snapshot
+            let eligible = snapshot
                 .tasks()
                 .filter(|task| {
                     task_is_claimable_at(&task.task, now)
                         && self.capabilities.contains(&task.task.request.kind)
                         && predicate(&task.task, &snapshot)
                 })
-                .map(|task| {
-                    let priority = if use_memory_priority {
-                        self.service.priority_for_task(&task.task, &snapshot, now)?
-                    } else {
-                        MemoryPriorityProjection::unchanged(base_task_priority(
-                            task.task.request.kind,
-                        ))
-                    };
+                .map(|task| (task.task.clone(), task.generation))
+                .collect::<Vec<_>>();
+            let eligible_tasks = eligible
+                .iter()
+                .map(|(task, _)| task.clone())
+                .collect::<Vec<_>>();
+            let priorities = self.service.priority_projections_for_tasks(
+                &campaign,
+                &eligible_tasks,
+                &snapshot,
+                now,
+                use_memory_priority,
+            )?;
+            let mut candidates = eligible
+                .into_iter()
+                .zip(priorities)
+                .map(|((task, generation), priority)| {
                     let key = swarm_core::hypothesis_graph::GraphSchedulerKey::new(
-                        task.task.request.requested_at,
-                        task.task.request.kind,
+                        task.request.requested_at,
+                        task.request.kind,
                         priority.adjusted_priority_basis_points,
-                        task.task.request.task_id.clone(),
+                        task.request.task_id.clone(),
                     )?;
-                    Ok((key, task.task.clone(), task.generation))
+                    Ok((key, task, generation))
                 })
                 .collect::<Result<Vec<_>, GraphServiceError>>()?;
             candidates.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1350,6 +1822,28 @@ impl GraphWorkerAdapter {
                 worker_scope(request.kind),
             )?;
             let lease_ms = GRAPH_LEASE_MS.min(self.service.config.max_lease_ms).max(1);
+            let mut state = self
+                .service
+                .state
+                .lock()
+                .map_err(|_| GraphServiceError::Poisoned)?;
+            // Priority lookup intentionally happens outside the coordinator
+            // mutex so an advisory-memory failure can record degradation
+            // without recursively locking service state. Revalidate the
+            // selected durable generation after acquiring the claim mutex;
+            // another worker may have won while priorities were computed.
+            let current_snapshot = campaign.store.snapshot()?;
+            let still_current = current_snapshot
+                .state()
+                .tasks
+                .get(&request.task_id)
+                .is_some_and(|record| {
+                    record.generation == task_generation && task_is_claimable_at(&record.task, now)
+                });
+            if !still_current {
+                drop(state);
+                continue;
+            }
             let claim = state.coordinator.ledger_mut().claim_or_reclaim_task(
                 campaign.store.as_ref(),
                 request.clone(),
@@ -1517,24 +2011,35 @@ impl GraphWorkerAdapter {
                 TaskKind::ChallengeEdge,
             ));
         }
-        self.service.repair_memory_projection()?;
+        let memory_priority_available = self.service.repair_memory_projection_for_work()?;
         let campaign = self.service.active_campaign()?;
         let snapshot = campaign.store.snapshot()?;
-        let mut candidates = snapshot
+        let eligible = snapshot
             .tasks()
             .filter(|task| {
                 task_is_claimable_at(&task.task, now)
                     && task.task.request.kind == TaskKind::ChallengeEdge
             })
-            .map(|task| {
-                let priority = self.service.priority_for_task(&task.task, &snapshot, now)?;
+            .map(|task| task.task.clone())
+            .collect::<Vec<_>>();
+        let priorities = self.service.priority_projections_for_tasks(
+            &campaign,
+            &eligible,
+            &snapshot,
+            now,
+            memory_priority_available,
+        )?;
+        let mut candidates = eligible
+            .into_iter()
+            .zip(priorities)
+            .map(|(task, priority)| {
                 let key = swarm_core::hypothesis_graph::GraphSchedulerKey::new(
-                    task.task.request.requested_at,
-                    task.task.request.kind,
+                    task.request.requested_at,
+                    task.request.kind,
                     priority.adjusted_priority_basis_points,
-                    task.task.request.task_id.clone(),
+                    task.request.task_id.clone(),
                 )?;
-                Ok((key, task.task.clone()))
+                Ok((key, task))
             })
             .collect::<Result<Vec<_>, GraphServiceError>>()?;
         candidates.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1927,6 +2432,21 @@ fn task_blocks_worker_rebind(state: TaskState) -> bool {
     matches!(state, TaskState::Pending | TaskState::Claimed)
 }
 
+fn task_is_visible_to_claimant(
+    state: TaskState,
+    persisted_claimant: &AgentId,
+    current_claimant: &AgentId,
+) -> bool {
+    match state {
+        // Expiry releases the prior claimant. A replacement worker registered
+        // after restart must rediscover the task so its next claim can issue a
+        // fresh claimant-bound request and fencing token.
+        TaskState::Expired => true,
+        TaskState::Pending | TaskState::Claimed => persisted_claimant == current_claimant,
+        TaskState::Completed | TaskState::Failed => false,
+    }
+}
+
 const fn base_task_priority(kind: TaskKind) -> u16 {
     match kind {
         TaskKind::AcquireEvidence => 7_000,
@@ -2147,6 +2667,28 @@ mod tests {
     }
 
     #[test]
+    fn expired_tasks_are_visible_after_claimant_rebinding() {
+        let prior = AgentId::new("agent", "prior");
+        let replacement = AgentId::new("agent", "replacement");
+
+        assert!(task_is_visible_to_claimant(
+            TaskState::Expired,
+            &prior,
+            &replacement
+        ));
+        assert!(!task_is_visible_to_claimant(
+            TaskState::Pending,
+            &prior,
+            &replacement
+        ));
+        assert!(!task_is_visible_to_claimant(
+            TaskState::Claimed,
+            &prior,
+            &replacement
+        ));
+    }
+
+    #[test]
     fn post_commit_memory_failure_returns_completion_and_marks_repair_dirty() {
         let config = HypothesisGraphConfig {
             enabled: true,
@@ -2166,5 +2708,31 @@ mod tests {
         assert!(state.memory_projection_dirty);
         assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);
         assert_eq!(state.metrics.snapshot.memory_records_projected, 0);
+    }
+
+    #[test]
+    fn memory_priority_failure_falls_back_to_base_priority() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            ..HypothesisGraphConfig::default()
+        };
+        let service =
+            CollectiveHypothesisService::new(&config, Keypair::from_seed(&[13; 32]), None).unwrap();
+        let base = vec![MemoryPriorityProjection::unchanged(4_200)];
+        let resolved = service
+            .resolve_advisory_priorities(
+                base.clone(),
+                Err(GraphServiceError::Memory(
+                    StrategyMemoryStoreError::InvalidState {
+                        reason: "injected priority lookup outage".to_string(),
+                    },
+                )),
+            )
+            .unwrap();
+
+        assert_eq!(resolved, base);
+        let state = service.state.lock().unwrap();
+        assert!(state.memory_projection_dirty);
+        assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);
     }
 }

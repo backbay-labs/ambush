@@ -3449,7 +3449,7 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
     assert_eq!(completion.acquisitions, 1);
     assert_eq!(completion.falsifications, 1);
     let graph_id = graph.graph_id().to_string();
-    let app = detect_http_router(state);
+    let app = detect_http_router(state.clone());
 
     let summaries = app
         .clone()
@@ -3501,6 +3501,41 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
     let tasks: Value = parse_json(tasks).await;
     assert_eq!(tasks["data"].as_array().unwrap().len(), 3);
 
+    let first_task_page = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!("/v2/api/hypothesis-graphs/{graph_id}/tasks?page_size=2"),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_task_page.status(), StatusCode::OK);
+    let first_task_page: Value = parse_json(first_task_page).await;
+    assert_eq!(first_task_page["data"].as_array().unwrap().len(), 2);
+    let task_cursor = first_task_page["cursor"].as_str().unwrap();
+    let second_task_page = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!(
+                    "/v2/api/hypothesis-graphs/{graph_id}/tasks?page_size=2&cursor={task_cursor}"
+                ),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_task_page.status(), StatusCode::OK);
+    let second_task_page: Value = parse_json(second_task_page).await;
+    assert_eq!(second_task_page["data"].as_array().unwrap().len(), 1);
+    assert!(second_task_page.get("cursor").is_none());
+
     let memory = app
         .clone()
         .oneshot(
@@ -3516,6 +3551,84 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
     assert_eq!(memory.status(), StatusCode::OK);
     let memory: Value = parse_json(memory).await;
     assert_eq!(memory["data"].as_array().unwrap().len(), 1);
+
+    let second_hunt_id = "evt-platform-hypothesis-graph-second";
+    seed_platform_replay_bundle(&state, second_hunt_id, "host-graph", created_at_ms + 10);
+    let second_replay = state
+        .current_replay_store()
+        .load_by_hunt_id(second_hunt_id)
+        .unwrap()
+        .unwrap()
+        .bundle;
+    graph.submit_replay(&second_replay).unwrap();
+    let second_completion = worker
+        .complete_stalker_hunt(
+            second_hunt_id,
+            swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 11),
+            9_700,
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(second_completion.memory_records_projected, 1);
+
+    let first_memory_page = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!("/v2/api/hypothesis-graphs/{graph_id}/memory?page_size=1"),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_memory_page.status(), StatusCode::OK);
+    let first_memory_page: Value = parse_json(first_memory_page).await;
+    assert_eq!(first_memory_page["data"].as_array().unwrap().len(), 1);
+    let memory_cursor = first_memory_page["cursor"].as_str().unwrap();
+    let first_memory_id = first_memory_page["data"][0]["memory"]["memory_id"]
+        .as_str()
+        .unwrap();
+    let second_memory_page = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!(
+                    "/v2/api/hypothesis-graphs/{graph_id}/memory?page_size=1&cursor={memory_cursor}"
+                ),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_memory_page.status(), StatusCode::OK);
+    let second_memory_page: Value = parse_json(second_memory_page).await;
+    assert_eq!(second_memory_page["data"].as_array().unwrap().len(), 1);
+    assert_ne!(
+        second_memory_page["data"][0]["memory"]["memory_id"]
+            .as_str()
+            .unwrap(),
+        first_memory_id
+    );
+    assert!(second_memory_page.get("cursor").is_none());
+
+    let invalid_page = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!("/v2/api/hypothesis-graphs/{graph_id}/tasks?page_size=0"),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_page.status(), StatusCode::BAD_REQUEST);
 
     let missing = app
         .oneshot(
