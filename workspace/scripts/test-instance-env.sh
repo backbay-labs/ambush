@@ -2,7 +2,9 @@
 # Regression test for the combined-repository layout: worktree identity is
 # derived from the outer checkout, while desktop assets resolve below the
 # nested workspace product root.
-set -euo pipefail
+set -Eeuo pipefail
+
+trap 'printf "desktop identity contract failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
 product_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_script="$product_root/scripts/instance-env.sh"
