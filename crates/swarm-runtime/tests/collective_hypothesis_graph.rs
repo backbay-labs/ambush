@@ -12,15 +12,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use swarm_core::config::HypothesisGraphConfig;
 use swarm_core::hypothesis_graph::{
-    ActorNode, CausalEdge, CausalRelation, ConfidenceDistribution, DecisionKind, DecisionRecord,
-    EdgeState, EventNode, EvidenceClock, EvidenceEnvelope, EvidenceScope, EvidenceSourceFamily,
-    EvidenceUtility, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode, GraphNodeId,
-    GraphProducerRole, GraphResourceLimits, Hypothesis, HypothesisDelta, HypothesisGraph,
-    HypothesisId, KillChainClaim as CoreKillChainClaim, KillChainStage, LogicalTaskDescriptor,
-    MemoryOutcome, MemoryProvenance, OrderingClaim, SchedulerBudget, SourceLineage, StrategyMemory,
+    ActorNode, CausalEdge, CausalRelation, DecisionKind, DecisionRecord, EdgeState, EventNode,
+    EvidenceClock, EvidenceEnvelope, EvidenceScope, EvidenceSourceFamily, EvidenceUtility,
+    GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode, GraphNodeId, GraphProducerRole,
+    GraphResourceLimits, HypothesisDelta, HypothesisGraph, HypothesisId,
+    KillChainClaim as CoreKillChainClaim, KillChainStage, LogicalTaskDescriptor, MemoryOutcome,
+    MemoryProvenance, OrderingClaim, SchedulerBudget, SourceLineage, StrategyMemory,
     StrategyMemoryExpiryEnvelope, TaskCapabilityProof, TaskClaimRequest, TaskCompletion,
     TaskCompletionKind, TaskDecisionLink, TaskId, TaskKind, TaskTarget, TaskTerminalEnvelope,
-    TypedEvidencePayload, UncertaintyReason,
+    TypedEvidencePayload,
 };
 use swarm_core::types::AgentId;
 use swarm_core::{
@@ -32,14 +32,14 @@ use swarm_crypto::Keypair;
 use swarm_runtime::hypothesis_graph::{
     DeterministicScheduler, DurableHypothesisCoordinator, EvidenceAdmissionError,
     EvidenceAdmissionOutcome, EvidenceRegistry, FixedGraphClock, GraphRecordSigner,
-    HypothesisGraphRuntime, HypothesisTaskLedger, KeypairGraphRecordSigner,
+    HypothesisGraphRuntime, HypothesisSeedInput, HypothesisTaskLedger, KeypairGraphRecordSigner,
     MAX_RAW_PROJECTION_BYTES, MAX_RAW_PROJECTION_DEPTH, MAX_RAW_PROJECTION_NODES,
     MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, WitnessAdmission, normalize_source_timestamp,
     normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
 };
 use swarm_spine::{
     FileHypothesisGraphStore, GraphStoreError, GraphStoreRevision, GraphStoreSnapshot,
-    GraphStoreState, HypothesisGraphStore, MemoryHypothesisGraphStore, ReasoningStateUpdate,
+    HypothesisGraphStore, MemoryHypothesisGraphStore,
 };
 
 fn key(seed: u8) -> Keypair {
@@ -2271,7 +2271,7 @@ fn containment_fixture() -> ContainmentFixture {
         8_000,
         [evidence_id.clone()],
         GraphProducerRole::Hunter,
-        producer,
+        producer.clone(),
         GraphLogicalTime::new(1),
         EdgeState::Proposed,
     )
@@ -2292,29 +2292,38 @@ fn containment_fixture() -> ContainmentFixture {
     )
     .unwrap();
     let hypothesis_id = HypothesisId::new("hypothesis:containment");
-    let hypothesis = Hypothesis::new(
-        hypothesis_id.clone(),
-        ConfidenceDistribution::uniform_two(),
-        [UncertaintyReason::InsufficientEvidence],
-        [],
-    )
-    .unwrap()
-    .with_claims([edge_id.clone()]);
     let store = MemoryHypothesisGraphStore::new_with_config(graph, signer, &config).unwrap();
     let initial = store.snapshot().unwrap();
-    let state = GraphStoreState::with_reasoning_state(
-        initial.state().clone(),
-        ReasoningStateUpdate::migration_to_hypotheses(
-            config.resource_limits(),
-            GraphLogicalTime::new(1),
-        )
-        .with_hypotheses(BTreeMap::from([(hypothesis_id.clone(), hypothesis)]))
-        .with_scheduler_budget(
-            SchedulerBudget::new_with_config(&config, GraphLogicalTime::new(1)).unwrap(),
-        ),
+    let mut ledger = HypothesisTaskLedger::from_config(&config, GraphLogicalTime::new(1)).unwrap();
+    let seed = HypothesisSeedInput::from_normalized_evidence(
+        initial.state().graph_id.clone(),
+        vec![
+            hypothesis_id.clone(),
+            HypothesisId::new("hypothesis:containment-control"),
+        ],
+        vec![evidence_id.clone()],
+        GraphLogicalTime::new(1),
     )
     .unwrap();
-    let snapshot = store.compare_and_swap(initial.revision(), state).unwrap();
+    let seeded = ledger
+        .coordinate_seed(
+            &store,
+            initial.revision(),
+            &seed,
+            producer,
+            EvidenceScope::new([], [evidence_id.clone()], []).unwrap(),
+        )
+        .unwrap();
+    let mut with_claim = seeded.snapshot.state().clone();
+    with_claim
+        .hypotheses
+        .get_mut(&hypothesis_id)
+        .unwrap()
+        .claims
+        .insert(edge_id.clone());
+    let snapshot = store
+        .compare_and_swap(seeded.snapshot.revision(), with_claim)
+        .unwrap();
     ContainmentFixture {
         snapshot,
         hypothesis_id,
@@ -2638,14 +2647,28 @@ struct TerminalTaskFixture {
 
 fn terminal_task_fixture() -> TerminalTaskFixture {
     let claimant_key = key(91);
-    let evidence = normalize_telemetry_event(
-        &process_event("terminal:evidence", "curl https://terminal.example"),
-        &clock(),
-        &claimant_key,
-        GraphProducerRole::Normalizer,
-        "normalizer:terminal",
+    let evidence = EvidenceEnvelope::new(
+        EvidenceSourceFamily::Process,
+        "terminal:evidence",
+        SourceLineage::new("fixture", "terminal:evidence").unwrap(),
+        EvidenceClock::observed(GraphLogicalTime::new(150)),
+        OrderingClaim::Unknown,
+        TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest: "process:terminal".to_string(),
+            parent_process_digest: None,
+            entity_ids: Vec::new(),
+            content_digest: "digest:terminal".to_string(),
+        },
     )
     .unwrap();
+    let evidence = evidence
+        .sign_with(
+            &claimant_key,
+            GraphProducerRole::Normalizer,
+            "normalizer:terminal",
+        )
+        .unwrap();
     let graph_id = GraphId::new("graph:terminal-cas");
     let config = HypothesisGraphConfig {
         enabled: true,
@@ -3448,14 +3471,28 @@ struct DecisionTaskFixture {
 fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTaskFixture {
     let claimant_key = key(95);
     let claimant = AgentId::from_public_key_hex(&claimant_key.public_key().to_hex());
-    let evidence = normalize_telemetry_event(
-        &process_event("decision:evidence", "curl https://decision.example"),
-        &clock(),
-        &claimant_key,
-        GraphProducerRole::Normalizer,
-        "normalizer:decision",
+    let evidence = EvidenceEnvelope::new(
+        EvidenceSourceFamily::Process,
+        "decision:evidence",
+        SourceLineage::new("fixture", "decision:evidence").unwrap(),
+        EvidenceClock::observed(GraphLogicalTime::new(150)),
+        OrderingClaim::Unknown,
+        TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest: "process:decision".to_string(),
+            parent_process_digest: None,
+            entity_ids: Vec::new(),
+            content_digest: "digest:decision".to_string(),
+        },
     )
     .unwrap();
+    let evidence = evidence
+        .sign_with(
+            &claimant_key,
+            GraphProducerRole::Normalizer,
+            "normalizer:decision",
+        )
+        .unwrap();
     let graph_id = GraphId::new("graph:decision-cas");
     let config = HypothesisGraphConfig {
         enabled: true,
@@ -3507,7 +3544,7 @@ fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTas
         kind,
         target.clone(),
         role,
-        claimant,
+        claimant.clone(),
         EvidenceScope::new(
             [EvidenceSourceFamily::Process],
             [evidence.evidence_id.clone()],
@@ -3520,29 +3557,40 @@ fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTas
     let store = MemoryHypothesisGraphStore::new_with_config(graph, key(96), &config).unwrap();
     let mut ledger =
         HypothesisTaskLedger::from_config(&config, GraphLogicalTime::new(100)).unwrap();
-    let hypothesis = Hypothesis::new(
-        hypothesis_id.clone(),
-        ConfidenceDistribution::uniform_two(),
-        [],
-        [],
-    )
-    .unwrap()
-    .with_claims([edge_id.clone()]);
     let initial = store.snapshot().unwrap();
-    let reasoning_state = GraphStoreState::with_reasoning_state(
-        initial.state().clone(),
-        ReasoningStateUpdate::migration_to_hypotheses(
-            config.resource_limits(),
-            GraphLogicalTime::new(100),
-        )
-        .with_hypotheses(BTreeMap::from([(hypothesis_id.clone(), hypothesis)]))
-        .with_scheduler_budget(
-            SchedulerBudget::new_with_config(&config, GraphLogicalTime::new(100)).unwrap(),
-        ),
+    let seed = HypothesisSeedInput::from_normalized_evidence(
+        initial.state().graph_id.clone(),
+        vec![
+            hypothesis_id.clone(),
+            HypothesisId::new("hypothesis:decision-control"),
+        ],
+        vec![evidence.evidence_id.clone()],
+        GraphLogicalTime::new(100),
     )
     .unwrap();
+    let seeded = ledger
+        .coordinate_seed(
+            &store,
+            initial.revision(),
+            &seed,
+            claimant,
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [evidence.evidence_id.clone()],
+                [],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut with_claim = seeded.snapshot.state().clone();
+    with_claim
+        .hypotheses
+        .get_mut(&hypothesis_id)
+        .unwrap()
+        .claims
+        .insert(edge_id.clone());
     let reasoning_snapshot = store
-        .compare_and_swap(initial.revision(), reasoning_state)
+        .compare_and_swap(seeded.snapshot.revision(), with_claim)
         .unwrap();
     ledger
         .create_task(

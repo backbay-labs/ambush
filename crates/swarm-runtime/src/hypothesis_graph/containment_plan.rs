@@ -671,13 +671,15 @@ mod tests {
     use swarm_core::hypothesis_graph::{
         ActorNode, ApprovalClass, CausalEdge, CausalRelation, ConfidenceDistribution,
         ContainmentOptionKind, EdgeState, EventNode, EvidenceClock, EvidenceEnvelope,
-        EvidenceSourceFamily, GraphNode, GraphProducerRole, Hypothesis, HypothesisGraph,
-        KillChainClaim as CoreKillChainClaim, KillChainStage, OrderingClaim, SourceLineage,
-        TypedEvidencePayload, UncertaintyReason,
+        EvidenceScope, EvidenceSourceFamily, GraphNode, GraphProducerRole, Hypothesis,
+        HypothesisGraph, KillChainClaim as CoreKillChainClaim, KillChainStage,
+        LogicalTaskDescriptor, OrderingClaim, SourceLineage, TaskClaimRequest, TaskKind,
+        TaskRecord, TaskState, TaskTarget, TypedEvidencePayload, UncertaintyReason,
     };
     use swarm_core::types::AgentId;
     use swarm_spine::hypothesis_graph_store::{
-        GraphStoreState, HypothesisGraphStore, MemoryHypothesisGraphStore, ReasoningStateUpdate,
+        DurableTaskRecord, GRAPH_STORE_SCHEMA_VERSION, GraphStoreState, HypothesisGraphStore,
+        MemoryHypothesisGraphStore, ReasoningStateUpdate,
     };
 
     struct SnapshotFixture {
@@ -769,7 +771,7 @@ mod tests {
             8_000,
             [evidence_id.clone()],
             GraphProducerRole::Hunter,
-            producer,
+            producer.clone(),
             GraphLogicalTime::new(1),
             EdgeState::Proposed,
         )
@@ -796,11 +798,53 @@ mod tests {
             [UncertaintyReason::InsufficientEvidence],
             [],
         )
-        .expect("hypothesis must be valid")
-        .with_claims([edge_id.clone()]);
+        .expect("hypothesis must be valid");
         let store = MemoryHypothesisGraphStore::new_with_config(graph, signer, &config)
             .expect("store must be valid");
         let initial = HypothesisGraphStore::snapshot(&store).expect("initial snapshot");
+        let target = TaskTarget::Hypothesis {
+            hypothesis_id: hypothesis_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            initial.state().graph_id.clone(),
+            target.clone(),
+            TaskKind::FalsifyHypothesis,
+            "29".repeat(32),
+        )
+        .expect("descriptor must be valid");
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            descriptor.kind,
+            target,
+            GraphProducerRole::Falsifier,
+            producer,
+            EvidenceScope::new([], [evidence_id.clone()], []).expect("task scope must be valid"),
+            GraphLogicalTime::new(1),
+        )
+        .expect("request must be valid");
+        let task = DurableTaskRecord {
+            schema_version: GRAPH_STORE_SCHEMA_VERSION,
+            task: TaskRecord {
+                schema_version: swarm_core::hypothesis_graph::HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+                request,
+                state: TaskState::Pending,
+                generation: 1,
+                attempts: 1,
+                lease: None,
+                completion: None,
+                terminal_history: Vec::new(),
+            },
+            generation: 1,
+            history: Vec::new(),
+        };
+        let mut scheduler_budget = swarm_core::hypothesis_graph::SchedulerBudget::new_with_config(
+            &config,
+            GraphLogicalTime::new(1),
+        )
+        .expect("scheduler budget must be valid");
+        scheduler_budget
+            .admit_at(&config, GraphLogicalTime::new(1), 1, 0)
+            .expect("fixture task must be charged");
         let state = GraphStoreState::with_reasoning_state(
             initial.state().clone(),
             ReasoningStateUpdate::migration_to_hypotheses(
@@ -808,18 +852,27 @@ mod tests {
                 GraphLogicalTime::new(1),
             )
             .with_hypotheses(BTreeMap::from([(hypothesis_id.clone(), hypothesis)]))
-            .with_scheduler_budget(
-                swarm_core::hypothesis_graph::SchedulerBudget::new_with_config(
-                    &config,
-                    GraphLogicalTime::new(1),
-                )
-                .expect("scheduler budget must be valid"),
-            ),
+            .with_tasks(BTreeMap::from([(descriptor.task_id.clone(), task)]))
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor,
+            )]))
+            .with_scheduler_budget(scheduler_budget),
         )
         .expect("reasoning state must be valid");
-        let snapshot = store
+        let seeded = store
             .compare_and_swap(initial.revision(), state)
             .expect("persisted snapshot must be valid");
+        let mut claimed = seeded.state().clone();
+        claimed
+            .hypotheses
+            .get_mut(&hypothesis_id)
+            .expect("seeded hypothesis")
+            .claims
+            .insert(edge_id.clone());
+        let snapshot = store
+            .compare_and_swap(seeded.revision(), claimed)
+            .expect("claim append must be valid");
         SnapshotFixture {
             snapshot,
             hypothesis_id,

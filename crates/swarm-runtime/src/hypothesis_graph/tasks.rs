@@ -19,7 +19,8 @@ use swarm_core::hypothesis_graph::{
 use swarm_core::types::AgentId;
 use swarm_spine::hypothesis_graph_store::{
     DurableTaskRecord, GraphStoreError, GraphStoreRevision, GraphStoreSnapshot, GraphStoreState,
-    HypothesisGraphStore, ReasoningStateUpdate, TaskMonotonicity,
+    HypothesisGraphStore, ReasoningStateUpdate, TaskFailure, TaskFailureOutboxEntry,
+    TaskMonotonicity, TaskTerminalResult,
 };
 
 /// A runtime claim is ephemeral.  Its capability proof and the persisted
@@ -54,6 +55,9 @@ impl TaskClaim {
                 reason: "claim capability is not bound to the task".to_string(),
             });
         }
+        capability_proof
+            .validate_for_claim(&task.request)
+            .map_err(GraphStoreError::Admission)?;
         Ok(Self {
             task_id: task.request.task_id.clone(),
             idempotency_key: task.request.idempotency_key.clone(),
@@ -412,6 +416,69 @@ impl HypothesisTaskLedger {
             self.scheduler_budget = next_budget;
         }
         Ok(claim)
+    }
+
+    /// Publish a worker failure as a descriptor-, capability-, lease-, and
+    /// fence-bound terminal record in the same signed store generation as the
+    /// Failed task state. The generic failure surface remains unavailable to
+    /// reasoning streams because it carries none of this authority.
+    pub fn fail_task_once(
+        &mut self,
+        store: &dyn HypothesisGraphStore,
+        revision: &GraphStoreRevision,
+        claim: &TaskClaim,
+        failed_at: GraphLogicalTime,
+        summary_digest: impl Into<String>,
+        signer: &swarm_crypto::Keypair,
+    ) -> Result<TaskTerminalResult, GraphStoreError> {
+        let snapshot = store.snapshot()?;
+        if snapshot.revision() != revision {
+            return Err(GraphStoreError::StalePredecessor {
+                expected_generation: revision.generation,
+                expected_digest: revision.digest.clone(),
+                observed_generation: snapshot.revision().generation,
+                observed_digest: snapshot.revision().digest.clone(),
+            });
+        }
+        let task = snapshot.state().tasks.get(&claim.task_id).ok_or_else(|| {
+            GraphStoreError::TaskNotFound {
+                task_id: claim.task_id.to_string(),
+            }
+        })?;
+        let descriptor = snapshot
+            .state()
+            .logical_task_descriptors
+            .get(&claim.task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "reasoning failure task has no logical descriptor".to_string(),
+            })?;
+        let lease = task
+            .task
+            .lease
+            .as_ref()
+            .ok_or_else(|| GraphStoreError::InvalidTransition {
+                reason: "reasoning failure requires the active task lease".to_string(),
+            })?;
+        if claim.idempotency_key != task.task.request.idempotency_key
+            || claim.claimant != task.task.request.claimant
+            || claim.capability != task.task.request.kind
+            || claim.lease_id != lease.lease_id
+            || claim.fencing_token != lease.fencing_token
+        {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "runtime claim does not bind the active durable task".to_string(),
+            });
+        }
+        let failure = TaskFailure::new(claim.claimant.clone(), failed_at, summary_digest)?;
+        let publication = TaskFailureOutboxEntry::new(
+            &task.task,
+            descriptor,
+            failure,
+            claim.capability_proof.clone(),
+            signer,
+            "reasoning-task-failure",
+        )?;
+        store.fail_reasoning_task_cas(revision, task.generation, publication)
     }
 
     /// Validate and commit a terminal task plus all reasoning publications in
@@ -971,6 +1038,7 @@ fn coordinate_seed_once(
         .with_tasks(next.tasks)
         .with_logical_task_descriptors(next.logical_task_descriptors)
         .with_terminal_outbox(next.terminal_outbox)
+        .with_task_failure_outbox(next.task_failure_outbox)
         .with_cross_graph_links(next.cross_graph_links)
         .with_projection_digests(
             next.result_projection_digest,
@@ -2258,19 +2326,29 @@ mod tests {
             .create_task(&store, initial.revision(), descriptor, request.clone())
             .unwrap();
         let before_hypothesis = store.snapshot().unwrap();
-        let mut with_hypothesis = before_hypothesis.state().clone();
-        let memory_hypothesis = Hypothesis::new(
-            swarm_core::hypothesis_graph::HypothesisId::new("hypothesis:memory"),
-            swarm_core::hypothesis_graph::ConfidenceDistribution::uniform_two(),
-            [],
-            [],
+        let seed = HypothesisSeedInput::from_normalized_evidence(
+            graph_id.clone(),
+            vec![
+                HypothesisId::new("hypothesis:memory"),
+                HypothesisId::new("hypothesis:memory-alternative"),
+            ],
+            vec![evidence.evidence_id.clone()],
+            GraphLogicalTime::new(100),
         )
         .unwrap();
-        with_hypothesis
-            .hypotheses
-            .insert(memory_hypothesis.hypothesis_id.clone(), memory_hypothesis);
-        store
-            .compare_and_swap(before_hypothesis.revision(), with_hypothesis)
+        ledger
+            .coordinate_seed(
+                &store,
+                before_hypothesis.revision(),
+                &seed,
+                claimant.clone(),
+                EvidenceScope::new(
+                    [EvidenceSourceFamily::Process],
+                    [evidence.evidence_id.clone()],
+                    [],
+                )
+                .unwrap(),
+            )
             .unwrap();
         store.set_reject_cas(false);
         let capability = TaskCapabilityProof::signed_with(
@@ -2514,6 +2592,130 @@ mod tests {
             .unwrap();
         assert_eq!(retried, first);
         assert_eq!(ledger.scheduler_budget(), &budget_after_first);
+    }
+
+    #[test]
+    fn runtime_claim_rejects_retry_capability_for_a_different_requested_at() {
+        let graph_id = swarm_core::hypothesis_graph::GraphId::new("graph:retry-capability");
+        let (_descriptor, persisted_request, claimant_key) =
+            evidence_task_request(&graph_id, "retry-capability", 22, 10);
+        let retry_request = TaskClaimRequest::new(
+            persisted_request.task_id.clone(),
+            persisted_request.kind,
+            persisted_request.target.clone(),
+            persisted_request.role,
+            persisted_request.claimant.clone(),
+            persisted_request.evidence_scope.clone(),
+            GraphLogicalTime::new(11),
+        )
+        .unwrap();
+        assert_eq!(
+            persisted_request.idempotency_key,
+            retry_request.idempotency_key
+        );
+        let lease = swarm_core::hypothesis_graph::TaskLease::new(
+            swarm_core::hypothesis_graph::LeaseId::new("lease:retry-capability"),
+            persisted_request.claimant.clone(),
+            GraphLogicalTime::new(10),
+            GraphLogicalTime::new(20),
+            FencingToken::new(1),
+        )
+        .unwrap();
+        let task =
+            swarm_core::hypothesis_graph::TaskRecord::claimed(persisted_request.clone(), lease)
+                .unwrap();
+        let retry_capability = TaskCapabilityProof::signed_with(
+            retry_request.task_id.clone(),
+            retry_request.claimant.clone(),
+            retry_request.role,
+            retry_request.kind,
+            retry_request.canonical_digest().unwrap(),
+            &claimant_key,
+            "hunter:retry-capability",
+        )
+        .unwrap();
+        assert!(matches!(
+            TaskClaim::from_task(&task, retry_capability),
+            Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+                if reason.contains("canonical claim")
+        ));
+    }
+
+    #[test]
+    fn runtime_failure_commits_failed_state_and_outbox_once() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 4,
+            max_claims_per_tick: 4,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph_id = swarm_core::hypothesis_graph::GraphId::new("graph:runtime-failure");
+        let graph = swarm_core::hypothesis_graph::HypothesisGraph::new(
+            graph_id.clone(),
+            config.resource_limits(),
+        )
+        .unwrap();
+        let store = MemoryHypothesisGraphStore::new_with_config(graph, key(23), &config).unwrap();
+        let (descriptor, request, claimant_key) =
+            evidence_task_request(&graph_id, "runtime-failure", 24, 10);
+        let mut ledger =
+            HypothesisTaskLedger::from_config(&config, GraphLogicalTime::new(10)).unwrap();
+        let initial = store.snapshot().unwrap();
+        let created = ledger
+            .create_task(&store, initial.revision(), descriptor, request.clone())
+            .unwrap();
+        let capability = TaskCapabilityProof::signed_with(
+            request.task_id.clone(),
+            request.claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &claimant_key,
+            "hunter:runtime-failure",
+        )
+        .unwrap();
+        let claim = ledger
+            .claim_task(
+                &store,
+                request.clone(),
+                GraphLogicalTime::new(10),
+                10,
+                capability,
+            )
+            .unwrap();
+        let claimed = store.snapshot().unwrap();
+        assert!(claimed.revision().generation > created.revision().generation);
+        let failed = ledger
+            .fail_task_once(
+                &store,
+                claimed.revision(),
+                &claim,
+                GraphLogicalTime::new(15),
+                "digest:runtime-failure",
+                &claimant_key,
+            )
+            .unwrap();
+        assert_eq!(failed.task.state, TaskState::Failed);
+        let after = store.snapshot().unwrap();
+        assert!(after.task_failure_outbox().contains_key(&request.task_id));
+        assert!(!after.terminal_outbox().contains_key(&request.task_id));
+        let before_retry = after.canonical_bytes().unwrap();
+        assert!(
+            ledger
+                .fail_task_once(
+                    &store,
+                    after.revision(),
+                    &claim,
+                    GraphLogicalTime::new(15),
+                    "digest:runtime-failure",
+                    &claimant_key,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_retry
+        );
     }
 
     #[test]
