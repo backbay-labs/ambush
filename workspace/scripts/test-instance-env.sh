@@ -16,6 +16,24 @@ mkdir -p "$main"
 git -C "$main" init -q -b main
 git -C "$main" -c user.name=fixture -c user.email=fixture@invalid commit -q --allow-empty -m init
 
+# The product lives one directory below the combined repository root. Git may
+# report --git-dir as an absolute path and --git-common-dir relative to that
+# nested product directory; those spellings still identify the same main
+# checkout and must not enable a worktree-scoped app identity.
+main_workspace="$main/workspace"
+mkdir -p "$main_workspace/scripts" "$main_workspace/desktop"
+cp "$source_script" "$main_workspace/scripts/instance-env.sh"
+main_result="$(
+  cd "$main_workspace/desktop"
+  bash -c '
+    source "$1"
+    printf "%s\n%s\n%s\n" "${AMBUSH_INSTANCE_SLUG-unset}" "${VITE_DEV_BRANCH-unset}" "$AMBUSH_TAURI_CONFIG"
+  ' _ "$main_workspace/scripts/instance-env.sh"
+)"
+[[ "$(sed -n '1p' <<< "$main_result")" == "unset" ]]
+[[ "$(sed -n '2p' <<< "$main_result")" == "unset" ]]
+printf '%s\n' "$main_result" | grep -Fq '"identifier":"com.backbay.ambush.app.dev"'
+
 worktree="$tmp/Nested_Worktree"
 git -C "$main" worktree add -q -b feature/test "$worktree"
 worktree_hash=$(python3 -c 'import hashlib, os, sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:8])' "$worktree")

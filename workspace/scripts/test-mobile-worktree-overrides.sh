@@ -57,6 +57,26 @@ else
   pass "main checkout removes stale worktree override files"
 fi
 
+# Combined-repository main checkout: the product script runs from `workspace/`
+# while the Git directory belongs to its parent. Relative and absolute Git path
+# spellings must normalize to the same location, so stale overrides are removed
+# rather than replaced with a bogus worktree identity.
+nested_main="$tmp/nested-main-checkout"
+mkdir -p "$nested_main"
+git -C "$nested_main" init -q -b main
+git -C "$nested_main" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+mkdir -p "$nested_main/workspace/scripts" "$nested_main/workspace/mobile/ios/Flutter" "$nested_main/workspace/mobile/android"
+cp "$script" "$nested_main/workspace/scripts/mobile-worktree-overrides.sh"
+echo stale > "$nested_main/workspace/mobile/ios/Flutter/WorktreeOverrides.xcconfig"
+echo stale > "$nested_main/workspace/mobile/android/worktree.properties"
+"$nested_main/workspace/scripts/mobile-worktree-overrides.sh" > /dev/null
+if [[ -e "$nested_main/workspace/mobile/ios/Flutter/WorktreeOverrides.xcconfig" || \
+      -e "$nested_main/workspace/mobile/android/worktree.properties" ]]; then
+  fail "nested main checkout must remove stale worktree override files"
+else
+  pass "nested main checkout normalizes Git paths before worktree detection"
+fi
+
 # ── Nested product root: identity still keys to the outer worktree ──────────
 nested_repo="$tmp/nested-main"
 mkdir -p "$nested_repo"

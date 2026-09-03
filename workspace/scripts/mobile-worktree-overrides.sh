@@ -36,8 +36,8 @@ android_props="$repo_root/mobile/android/worktree.properties"
 # scripts/instance-env.sh).
 in_worktree=0
 if git -C "$repo_root" rev-parse --is-inside-work-tree &>/dev/null; then
-    git_dir=$(git -C "$repo_root" rev-parse --git-dir)
-    git_common_dir=$(git -C "$repo_root" rev-parse --git-common-dir 2>/dev/null)
+    git_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-dir)
+    git_common_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
     if [[ -n "$git_common_dir" && "$git_dir" != "$git_common_dir" ]]; then
         in_worktree=1
     fi

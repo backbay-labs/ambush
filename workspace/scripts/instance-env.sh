@@ -38,8 +38,8 @@ unset VITE_DEV_BRANCH AMBUSH_WORKTREE_PATH_SLUG AMBUSH_LEGACY_BRANCH_SLUG
 # working tree these are identical; in any worktree (whether under .worktrees/,
 # .claude/worktrees/, or elsewhere on disk) they differ.
 if git -C "$WORKSPACE_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
-    GIT_DIR=$(git -C "$WORKSPACE_ROOT" rev-parse --git-dir)
-    GIT_COMMON_DIR=$(git -C "$WORKSPACE_ROOT" rev-parse --git-common-dir 2>/dev/null)
+    GIT_DIR=$(git -C "$WORKSPACE_ROOT" rev-parse --path-format=absolute --git-dir)
+    GIT_COMMON_DIR=$(git -C "$WORKSPACE_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
     if [[ -n "$GIT_COMMON_DIR" && "$GIT_DIR" != "$GIT_COMMON_DIR" ]]; then
         WORKTREE_NAME=$(basename "$WORKTREE_ROOT")
         BRANCH_NAME=$(git -C "$WORKSPACE_ROOT" rev-parse --abbrev-ref HEAD)
