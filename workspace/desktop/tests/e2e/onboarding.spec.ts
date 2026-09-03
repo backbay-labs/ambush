@@ -8,7 +8,6 @@ import {
   TEST_IDENTITIES,
 } from "../helpers/bridge";
 import { expectEmojiMartStylesInstalled } from "../helpers/css";
-import { installFakeCamera } from "../helpers/fakeCamera";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
   seedActiveIdentity,
@@ -1936,7 +1935,6 @@ test("connected first-community profile keeps Back bottom-left and balances the 
       transactionStorageKey: COMMUNITY_ONBOARDING_TRANSACTION_STORAGE_KEY,
     },
   );
-  await installFakeCamera(page, { failRequests: 1 });
   const uploadedAvatarUrl = "https://mock.relay/media/community-avatar.png";
   let avatarRequestCount = 0;
   await page.route(`${uploadedAvatarUrl}*`, async (route) => {
