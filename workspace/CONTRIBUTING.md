@@ -137,7 +137,7 @@ clippy`, `just test-unit`, and `just test` need no GTK.
 ```bash
 # 1. Clone the repo
 git clone https://github.com/backbay-labs/ambush.git
-cd ambush
+cd ambush/workspace
 
 # 2. Activate Hermit (optional but recommended)
 . ./bin/activate-hermit

@@ -57,6 +57,28 @@ else
   pass "main checkout removes stale worktree override files"
 fi
 
+# ── Nested product root: identity still keys to the outer worktree ──────────
+nested_repo="$tmp/nested-main"
+mkdir -p "$nested_repo"
+git -C "$nested_repo" init -q -b main
+git -C "$nested_repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+nested_wt="$tmp/Nested_Worktree"
+git -C "$nested_repo" worktree add -q -b nested-branch "$nested_wt"
+mkdir -p "$nested_wt/workspace/scripts" "$nested_wt/workspace/mobile/ios/Flutter" "$nested_wt/workspace/mobile/android"
+cp "$script" "$nested_wt/workspace/scripts/mobile-worktree-overrides.sh"
+nested_out="$("$nested_wt/workspace/scripts/mobile-worktree-overrides.sh")"
+nested_ios="$nested_wt/workspace/mobile/ios/Flutter/WorktreeOverrides.xcconfig"
+if grep -q '^BUNDLE_IDENTIFIER = com\.backbay\.ambush\.dogfood\.mobile\.nested-worktree$' "$nested_ios"; then
+  pass "nested product identity keys to the outer worktree directory"
+else
+  fail "nested product identity must not key to the literal workspace directory, got: $(cat "$nested_ios")"
+fi
+if printf '%s' "$nested_out" | grep -q 'Worktree Nested_Worktree'; then
+  pass "nested product run reports the outer worktree name"
+else
+  fail "nested product run must report the outer worktree name, got: $nested_out"
+fi
+
 # ── Worktree: identity from DIRECTORY name, label from branch ────────────────
 wt="$tmp/Feature_Work-1"
 make_worktree "$repo" "$wt" "tho/Fix_Thing-2"
@@ -64,7 +86,7 @@ out="$("$wt/scripts/mobile-worktree-overrides.sh")"
 ios="$wt/mobile/ios/Flutter/WorktreeOverrides.xcconfig"
 android="$wt/mobile/android/worktree.properties"
 [[ -f "$ios" && -f "$android" ]] || fail "worktree must write both override files"
-grep -q '^BUNDLE_IDENTIFIER = xyz\.block\.ambush\.dogfood\.mobile\.feature-work-1$' "$ios" \
+grep -q '^BUNDLE_IDENTIFIER = com\.backbay\.ambush\.dogfood\.mobile\.feature-work-1$' "$ios" \
   && pass "iOS bundle identifier keys to the sanitized worktree directory name" \
   || fail "iOS bundle identifier must key to the worktree dir, got: $(cat "$ios")"
 grep -q '^APP_DISPLAY_NAME = Ambush (Fix_Thing-2)$' "$ios" \
@@ -86,7 +108,7 @@ printf '%s' "$out" | grep -q 'Worktree Feature_Work-1' \
 # ── Branch switch in the same worktree: identity stable, label follows ───────
 git -C "$wt" checkout -q -b "another/branch-name"
 "$wt/scripts/mobile-worktree-overrides.sh" > /dev/null
-grep -q '^BUNDLE_IDENTIFIER = xyz\.block\.ambush\.dogfood\.mobile\.feature-work-1$' "$ios" \
+grep -q '^BUNDLE_IDENTIFIER = com\.backbay\.ambush\.dogfood\.mobile\.feature-work-1$' "$ios" \
   && grep -q '^applicationIdSuffix=\.feature_work_1$' "$android" \
   && pass "branch switch keeps the install identity stable (per worktree)" \
   || fail "install identity must not change on branch switch"
@@ -156,7 +178,7 @@ gradle="$repo_root/mobile/android/app/build.gradle.kts"
 manifest="$repo_root/mobile/android/app/src/main/AndroidManifest.xml"
 plist="$repo_root/mobile/ios/Runner/Info.plist"
 
-grep -q '^BUNDLE_IDENTIFIER = xyz\.block\.ambush\.dogfood\.mobile$' "$debug_xcconfig" \
+grep -q '^BUNDLE_IDENTIFIER = com\.backbay\.ambush\.dogfood\.mobile$' "$debug_xcconfig" \
   && pass "Debug.xcconfig defaults to the dogfood bundle identifier" \
   || fail "Debug.xcconfig must default to com.backbay.ambush.dogfood.mobile"
 grep -q 'WorktreeOverrides.xcconfig' "$debug_xcconfig" \
@@ -176,7 +198,7 @@ grep -q '^ios_prefix="com.backbay.ambush.dogfood.mobile\."$' "$clean_script" \
 grep -q 'WorktreeOverrides' "$release_xcconfig" \
   && fail "Release.xcconfig must not include WorktreeOverrides.xcconfig" \
   || pass "Release.xcconfig does not include WorktreeOverrides"
-grep -q '^BUNDLE_IDENTIFIER = xyz\.block\.ambush\.mobile$' "$release_xcconfig" \
+grep -q '^BUNDLE_IDENTIFIER = com\.backbay\.ambush\.mobile$' "$release_xcconfig" \
   && pass "Release.xcconfig keeps the production bundle identifier" \
   || fail "Release.xcconfig must keep BUNDLE_IDENTIFIER = com.backbay.ambush.mobile"
 grep -q '^APP_DISPLAY_NAME = Ambush$' "$release_xcconfig" \
@@ -271,14 +293,14 @@ chmod +x "$stub_bin/adb"
 # No xcrun stub: the iOS pass is skipped when xcrun is absent, which also
 # keeps this test honest on Linux CI.
 clean_out="$(PATH="$stub_bin:/usr/bin:/bin" bash "$clean_script" --dry-run)"
-printf '%s\n' "$clean_out" | grep -q 'xyz\.block\.ambush\.mobile\.feature_work_1' \
+printf '%s\n' "$clean_out" | grep -q 'com\.backbay\.ambush\.mobile\.feature_work_1' \
   && pass "cleanup targets worktree-suffixed Android installs" \
   || fail "cleanup must list suffixed installs, got: $clean_out"
-printf '%s\n' "$clean_out" | grep -q 'xyz\.block\.ambush\.mobile\.w_2fast' \
+printf '%s\n' "$clean_out" | grep -q 'com\.backbay\.ambush\.mobile\.w_2fast' \
   && pass "cleanup targets letter-prefixed suffixed installs" \
   || fail "cleanup must list w_-prefixed installs, got: $clean_out"
 printf '%s\n' "$clean_out" | grep -q 'mobile\.feature_work_1' || true
-if printf '%s\n' "$clean_out" | grep -Eq '(would uninstall|uninstalling).*xyz\.block\.ambush\.mobile$'; then
+if printf '%s\n' "$clean_out" | grep -Eq '(would uninstall|uninstalling).*com\.backbay\.ambush\.mobile$'; then
   fail "cleanup must never target the production Android app id"
 else
   pass "cleanup preserves the production Android app id"

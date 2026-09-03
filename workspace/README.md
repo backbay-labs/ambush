@@ -151,7 +151,7 @@ You'll need [Docker](https://docs.docker.com/get-docker/) and [Hermit](https://c
 
 **Once:**
 ```bash
-git clone https://github.com/backbay-labs/ambush.git && cd ambush
+git clone https://github.com/backbay-labs/ambush.git && cd ambush/workspace
 . ./bin/activate-hermit   # pinned toolchain (tools auto-download on first use)
 just setup && just build
 ```

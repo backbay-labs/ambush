@@ -143,7 +143,7 @@ case "$command" in
       fi
       fail "could not dispatch App-backed publication for $tag: $dispatch_output"
     fi
-    run_url="$(printf '%s\n' "$dispatch_output" | awk '/^https:\/\/github\.com\/block\/ambush\/actions\/runs\/[0-9]+$/ { if (found) exit 2; found = $0 } END { if (found) print found }')" || \
+    run_url="$(printf '%s\n' "$dispatch_output" | awk '/^https:\/\/github\.com\/backbay-labs\/ambush\/actions\/runs\/[0-9]+$/ { if (found) exit 2; found = $0 } END { if (found) print found }')" || \
       fail "GitHub returned multiple workflow run URLs for one candidate dispatch"
     [[ -n "$run_url" ]] || \
       fail "GitHub accepted the candidate dispatch but returned no workflow run URL"

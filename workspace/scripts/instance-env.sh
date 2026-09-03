@@ -7,7 +7,8 @@
 #   AMBUSH_TAURI_CONFIG
 #   AMBUSH_PRIVATE_KEY (worktrees only, when AMBUSH_SHARE_IDENTITY=1)
 
-WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+WORKSPACE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+WORKTREE_ROOT=$(git -C "$WORKSPACE_ROOT" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$WORKSPACE_ROOT")
 
 # Derive a stable base port from the worktree root so the same worktree always
 # gets the same ports. This keeps the Tauri dev config stable between runs and
@@ -34,11 +35,11 @@ unset VITE_DEV_BRANCH
 # Worktree detection: compare --git-dir to --git-common-dir. In the main
 # working tree these are identical; in any worktree (whether under .worktrees/,
 # .claude/worktrees/, or elsewhere on disk) they differ.
-if git rev-parse --is-inside-work-tree &>/dev/null; then
-    GIT_DIR=$(git rev-parse --git-dir)
-    GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null)
+if git -C "$WORKSPACE_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
+    GIT_DIR=$(git -C "$WORKSPACE_ROOT" rev-parse --git-dir)
+    GIT_COMMON_DIR=$(git -C "$WORKSPACE_ROOT" rev-parse --git-common-dir 2>/dev/null)
     if [[ -n "$GIT_COMMON_DIR" && "$GIT_DIR" != "$GIT_COMMON_DIR" ]]; then
-        BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
+        BRANCH_NAME=$(git -C "$WORKSPACE_ROOT" rev-parse --abbrev-ref HEAD)
         export AMBUSH_WORKTREE_LABEL="${BRANCH_NAME##*/}"
         export AMBUSH_INSTANCE_SLUG=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
 
@@ -80,11 +81,11 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
             fi
         fi
 
-        ICON_DIR="$WORKTREE_ROOT/desktop/src-tauri/target/dev-icons"
+        ICON_DIR="$WORKSPACE_ROOT/desktop/src-tauri/target/dev-icons"
         mkdir -p "$ICON_DIR"
         DEV_ICON="$ICON_DIR/icon.icns"
-        GENERATE_DEV_ICON="$WORKTREE_ROOT/scripts/generate-dev-icon.swift"
-        BASE_ICON="$WORKTREE_ROOT/desktop/src-tauri/icons/icon.icns"
+        GENERATE_DEV_ICON="$WORKSPACE_ROOT/scripts/generate-dev-icon.swift"
+        BASE_ICON="$WORKSPACE_ROOT/desktop/src-tauri/icons/icon.icns"
 
         if swift "$GENERATE_DEV_ICON" "$BASE_ICON" "$DEV_ICON" "$AMBUSH_WORKTREE_LABEL"; then
             echo "🌳 Worktree: ${AMBUSH_WORKTREE_LABEL}"

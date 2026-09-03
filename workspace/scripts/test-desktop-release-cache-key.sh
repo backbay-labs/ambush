@@ -7,6 +7,10 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp -R "$repo_root"/. "$tmp/repo"
 cd "$tmp/repo"
+git init -q
+git add -A
+git -c user.name=fixture -c user.email=fixture@invalid -c commit.gpgsign=false \
+  commit -q -m fixture
 
 args=(--platform Linux --target x86_64-unknown-linux-gnu --features mesh-llm --native-inputs ubuntu-24.04-mold)
 original=$("$key_script" "${args[@]}")

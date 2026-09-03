@@ -26,6 +26,7 @@ set -euo pipefail
 unset GIT_DIR GIT_WORK_TREE
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+worktree_root="$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$repo_root")"
 ios_overrides="$repo_root/mobile/ios/Flutter/WorktreeOverrides.xcconfig"
 android_props="$repo_root/mobile/android/worktree.properties"
 
@@ -49,7 +50,7 @@ fi
 # Install identity comes from the worktree directory name: stable across
 # branch switches, so one worktree keeps one installed app (and its login
 # state) no matter how many branches it visits.
-worktree_name="$(basename "$repo_root")"
+worktree_name="$(basename "$worktree_root")"
 
 # Display label is context only: the branch name, or a short SHA when the
 # worktree is detached. Sanitized to [A-Za-z0-9._-] so no valid Git ref can

@@ -32,7 +32,7 @@ cleanup() {
     managed="$(kubectl --context "$CONTEXT" get namespace "$NAMESPACE" \
         -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)"
     binding="$(kubectl --context "$CONTEXT" get namespace "$NAMESPACE" \
-        -o jsonpath='{.metadata.labels.ambush\.block\.xyz/binding-version}' 2>/dev/null || true)"
+        -o jsonpath='{.metadata.labels.ambush\.backbay\.com/binding-version}' 2>/dev/null || true)"
     if [[ "$managed" != "$MANAGED_BY" || "$binding" != "$BINDING_VERSION" ]]; then
         echo "REFUSING cleanup: namespace ownership markers changed: $NAMESPACE" >&2
         return 1
