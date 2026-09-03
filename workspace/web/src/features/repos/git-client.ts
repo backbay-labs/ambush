@@ -21,6 +21,7 @@ import {
   readBlob,
   readTree,
   resolveRef,
+  writeRef,
 } from "isomorphic-git";
 import http from "isomorphic-git/http/web";
 import { makeNip98AuthHeader } from "@/shared/lib/nip98";
@@ -84,20 +85,24 @@ export async function ensureClone(
   }
 
   if (exists) {
-    try {
-      await fetch({
-        fs,
-        http,
-        dir,
-        url,
-        ref,
-        depth: 1,
-        singleBranch: true,
-        headers,
-      });
-    } catch {
-      // fetch may fail if ref hasn't changed — that's fine
-    }
+    await fetch({
+      fs,
+      http,
+      dir,
+      url,
+      ref,
+      depth: 1,
+      singleBranch: true,
+      headers,
+    });
+    const fetchedOid = await resolveRef({ fs, dir, ref: "FETCH_HEAD" });
+    await writeRef({
+      fs,
+      dir,
+      ref: `refs/heads/${ref}`,
+      value: fetchedOid,
+      force: true,
+    });
   } else {
     await clone({
       fs,

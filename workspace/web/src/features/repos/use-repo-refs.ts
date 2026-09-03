@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { queryEvents, type NostrEvent } from "@/shared/lib/nostr-client";
-import { relayWsUrl } from "@/shared/lib/relay-url";
+import { relayHttpBaseUrl, relayWsUrl } from "@/shared/lib/relay-url";
 import { dedup } from "./use-repos";
 
 export interface RepoRefs {
@@ -48,15 +48,33 @@ function parseRefs(events: NostrEvent[]): RepoRefs {
   return { branches, tags, head };
 }
 
-async function fetchRepoRefs(repoId: string): Promise<RepoRefs> {
-  // TODO: Filter by `authors: [relayPubkey]` once the relay's own pubkey is
-  // exposed to the client. Without this, a user with ReposWrite permission
-  // could publish fake kind:30618 events with spoofed refs.
+async function fetchRelaySigningPubkey(): Promise<string> {
+  const response = await fetch(relayHttpBaseUrl(), {
+    headers: { Accept: "application/nostr+json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load relay signing pubkey (${response.status})`);
+  }
+
+  const document = (await response.json()) as { self?: unknown };
+  if (
+    typeof document.self !== "string" ||
+    !/^[0-9a-f]{64}$/i.test(document.self)
+  ) {
+    throw new Error("NIP-11 did not advertise a valid relay signing pubkey");
+  }
+  return document.self.toLowerCase();
+}
+
+export async function fetchRepoRefs(repoId: string): Promise<RepoRefs> {
+  const relayPubkey = await fetchRelaySigningPubkey();
   const events = await queryEvents(relayWsUrl(), {
+    authors: [relayPubkey],
     kinds: [30618],
     "#d": [repoId],
   });
-  return parseRefs(events);
+  return parseRefs(events.filter((event) => event.pubkey === relayPubkey));
 }
 
 export function useRepoRefs(repoId: string, { preview = false } = {}) {

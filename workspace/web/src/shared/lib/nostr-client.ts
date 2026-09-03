@@ -167,8 +167,8 @@ export function queryEvents(
     ws.addEventListener("close", () => {
       if (!settled) {
         settled = true;
-        clearTimeout(timeout);
-        resolve(events);
+        cleanup();
+        reject(new Error("WebSocket closed before EOSE"));
       }
     });
   });
