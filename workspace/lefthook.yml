@@ -39,9 +39,11 @@
 # toolchain regardless of the invoking shell — the hook self-pins, so a Homebrew
 # flutter/dart ahead on PATH can no longer cause false lane failures.
 # The workspace lives under workspace/ of the merged repository (2026-09-02), so the
-# rc path is repo-root-relative and every lane below declares `root: workspace/`:
-# lefthook then runs the command from workspace/ and filters {files}/{staged_files}
-# to that subtree with the prefix stripped, which keeps the globs unchanged.
+# rc path is repo-root-relative and every lane below declares `root: workspace/`,
+# which makes lefthook run the command FROM workspace/. Glob and exclude patterns
+# are still matched against repository-relative paths (verified 2026-09-02: with
+# `root:` set, `crates/**` matched nothing and `workspace/crates/**` matched), so
+# every pattern below carries the workspace/ prefix.
 # Hooks are installed with LEFTHOOK_CONFIG pointing here (see `just hooks`), and
 # bin/.lefthookrc exports the same variable for the generated dispatchers.
 rc: workspace/bin/.lefthookrc
@@ -51,30 +53,30 @@ pre-commit:
   commands:
     rust-fmt:
       root: workspace/
-      glob: ["crates/**", "examples/countdown-bot/**"]
+      glob: ["workspace/crates/**", "workspace/examples/countdown-bot/**"]
       run: just fmt
       stage_fixed: true
     desktop-tauri-fmt:
       root: workspace/
-      glob: ["desktop/src-tauri/**"]
+      glob: ["workspace/desktop/src-tauri/**"]
       run: just desktop-tauri-fmt
       stage_fixed: true
     desktop-fix:
       root: workspace/
       # A lockfile-only change has no desktop source for Biome to rewrite.
-      glob: ["desktop/**"]
-      exclude: ["desktop/src-tauri/**"]
+      glob: ["workspace/desktop/**"]
+      exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-fix
       stage_fixed: true
     web-fix:
       root: workspace/
       # A lockfile-only change has no web source for Biome to rewrite.
-      glob: ["web/**"]
+      glob: ["workspace/web/**"]
       run: just web-fix
       stage_fixed: true
     mobile-fmt:
       root: workspace/
-      glob: ["mobile/**"]
+      glob: ["workspace/mobile/**"]
       run: just mobile-fmt
       stage_fixed: true
 
@@ -108,25 +110,25 @@ pre-push:
     rust-tests:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["crates/**", "migrations/**", "schema/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "scripts/run-tests.sh", "Justfile"]
+      glob: ["workspace/crates/**", "workspace/migrations/**", "workspace/schema/**", "workspace/Cargo.toml", "workspace/Cargo.lock", "workspace/rust-toolchain.toml", "workspace/deny.toml", "workspace/scripts/run-tests.sh", "workspace/Justfile"]
       run: just test-unit
     desktop-check:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["desktop/**", "pnpm-lock.yaml"]
-      exclude: ["desktop/src-tauri/**"]
+      glob: ["workspace/desktop/**", "workspace/pnpm-lock.yaml"]
+      exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-check
     desktop-typecheck:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["desktop/**", "pnpm-lock.yaml"]
-      exclude: ["desktop/src-tauri/**"]
+      glob: ["workspace/desktop/**", "workspace/pnpm-lock.yaml"]
+      exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-typecheck
     desktop-test:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["desktop/**", "pnpm-lock.yaml"]
-      exclude: ["desktop/src-tauri/**"]
+      glob: ["workspace/desktop/**", "workspace/pnpm-lock.yaml"]
+      exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-test
     desktop-tauri-checks:
       root: workspace/
@@ -134,12 +136,12 @@ pre-push:
       # affect the Tauri crate or its path dependencies. Run clippy and tests
       # serially so parallel pre-push hooks do not contend for Cargo's lock.
       files: git diff --name-only origin/main...HEAD
-      glob: ["desktop/src-tauri/**", "crates/**", "migrations/**", "schema/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "deny.toml", "scripts/run-tests.sh", "Justfile"]
+      glob: ["workspace/desktop/src-tauri/**", "workspace/crates/**", "workspace/migrations/**", "workspace/schema/**", "workspace/Cargo.toml", "workspace/Cargo.lock", "workspace/rust-toolchain.toml", "workspace/deny.toml", "workspace/scripts/run-tests.sh", "workspace/Justfile"]
       run: just desktop-tauri-clippy && just desktop-tauri-test
     mobile-checks:
       root: workspace/
       # Run analysis and tests serially so parallel pre-push hooks do not
       # contend for shared Flutter state (.dart_tool, shader bundle).
       files: git diff --name-only origin/main...HEAD
-      glob: ["mobile/**"]
+      glob: ["workspace/mobile/**"]
       run: just mobile-check && just mobile-test
