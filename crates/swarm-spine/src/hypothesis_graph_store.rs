@@ -3701,12 +3701,11 @@ fn validate_reasoning_cas_transition(
                     // Re-run the publication against the claimed predecessor,
                     // not only the materialized terminal candidate.
                     outbox
-                        .validate_for_task_at_with_history(
+                        .validate_for_task_at(
                             &prior.task,
                             descriptor,
                             limits,
                             current.logical_time_high_water,
-                            &current.hypotheses,
                         )
                         .map_err(GraphStoreError::Admission)?;
                     outbox
@@ -13391,7 +13390,12 @@ mod tests {
             target,
             GraphProducerRole::Falsifier,
             producer,
-            EvidenceScope::new([EvidenceSourceFamily::Process], [], []).unwrap(),
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [EvidenceId::new("evidence:forged-history-scope")],
+                [],
+            )
+            .unwrap(),
             tick,
         )
         .unwrap();

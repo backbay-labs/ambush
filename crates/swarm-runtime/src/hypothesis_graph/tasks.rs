@@ -602,12 +602,11 @@ impl HypothesisTaskLedger {
         )
         .map_err(GraphStoreError::Admission)?;
         publication
-            .validate_for_task_at_with_history(
+            .validate_for_task_at(
                 &entry.task,
                 descriptor,
                 &self.limits,
                 snapshot.state().logical_time_high_water,
-                &snapshot.state().hypotheses,
             )
             .map_err(GraphStoreError::Admission)?;
         commit_terminal_once(store, revision, claim, publication)
@@ -1324,12 +1323,11 @@ pub fn commit_terminal_once(
         .validate_for_claim(&entry.task.request)
         .map_err(GraphStoreError::Admission)?;
     publication
-        .validate_for_task_at_with_history(
+        .validate_for_task_at(
             &entry.task,
             descriptor,
             &snapshot.state().limits,
             snapshot.state().logical_time_high_water,
-            &snapshot.state().hypotheses,
         )
         .map_err(GraphStoreError::Admission)?;
     publication
@@ -1928,7 +1926,14 @@ mod tests {
                 target,
                 role,
                 claimant.clone(),
-                EvidenceScope::new([EvidenceSourceFamily::Process], [], []).unwrap(),
+                EvidenceScope::new(
+                    [EvidenceSourceFamily::Process],
+                    [swarm_core::hypothesis_graph::EvidenceId::new(
+                        "evidence:missing-task-target",
+                    )],
+                    [],
+                )
+                .unwrap(),
                 GraphLogicalTime::new(10),
             )
             .unwrap();
@@ -2839,6 +2844,199 @@ mod tests {
     }
 
     #[test]
+    fn decision_from_another_task_never_grants_terminal_retry_privilege() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 16,
+            max_claims_per_tick: 8,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph_id = swarm_core::hypothesis_graph::GraphId::new("graph:task-bound-retry");
+        let signer_key = key(83);
+        let claimant = AgentId::from_public_key_hex(&signer_key.public_key().to_hex());
+        let evidence = EvidenceEnvelope::new(
+            EvidenceSourceFamily::Process,
+            "task-bound-retry-sensor",
+            SourceLineage::new("normalizer", "task-bound-retry:evidence").unwrap(),
+            EvidenceClock::observed(GraphLogicalTime::new(10)),
+            OrderingClaim::Unknown,
+            TypedEvidencePayload::Process {
+                signal_kind: "process_start".to_string(),
+                process_digest: "task-bound-retry:process".to_string(),
+                parent_process_digest: None,
+                entity_ids: Vec::new(),
+                content_digest: "task-bound-retry:content".to_string(),
+            },
+        )
+        .unwrap()
+        .sign_with(
+            &signer_key,
+            GraphProducerRole::Normalizer,
+            "normalizer:task-bound-retry",
+        )
+        .unwrap();
+        let mut graph = swarm_core::hypothesis_graph::HypothesisGraph::new(
+            graph_id.clone(),
+            config.resource_limits(),
+        )
+        .unwrap();
+        graph.admit_evidence(evidence.clone()).unwrap();
+        let store = MemoryHypothesisGraphStore::new_with_config(graph, key(84), &config).unwrap();
+        let signer = KeypairGraphRecordSigner::with_admission(
+            signer_key.clone(),
+            &WitnessAdmission::from_key(&signer_key),
+        )
+        .unwrap();
+        let falsified_id = HypothesisId::new("hypothesis:task-bound-retry");
+        let seed = HypothesisSeedInput::from_normalized_evidence(
+            graph_id.clone(),
+            vec![
+                falsified_id.clone(),
+                HypothesisId::new("hypothesis:task-bound-alternative"),
+            ],
+            vec![evidence.evidence_id.clone()],
+            GraphLogicalTime::new(10),
+        )
+        .unwrap();
+        let decision = DecisionRecord::new(
+            DecisionKind::Falsify,
+            falsified_id.clone(),
+            [evidence.evidence_id.clone()],
+            GraphProducerRole::Falsifier,
+            claimant.clone(),
+            GraphLogicalTime::new(10),
+            "first task's admitted decision",
+        )
+        .unwrap();
+        let mut coordinator =
+            DurableHypothesisCoordinator::new(&config, GraphLogicalTime::new(10), signer).unwrap();
+        let initial = store.snapshot().unwrap();
+        let coordinated = coordinator
+            .coordinate_seed_with_decisions(
+                &store,
+                initial.revision(),
+                &seed,
+                claimant.clone(),
+                EvidenceScope::new([], [evidence.evidence_id.clone()], []).unwrap(),
+                vec![decision],
+            )
+            .unwrap();
+        let admitted_decision =
+            coordinated.snapshot.state().hypotheses[&falsified_id].decision_history[0].clone();
+
+        // A distinct logical task for the same hypothesis cannot replay the
+        // first task's decision after advancing the graph high-water.
+        let target = TaskTarget::Hypothesis {
+            hypothesis_id: falsified_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            graph_id,
+            target.clone(),
+            TaskKind::FalsifyHypothesis,
+            "83".repeat(32),
+        )
+        .unwrap();
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            TaskKind::FalsifyHypothesis,
+            target.clone(),
+            GraphProducerRole::Falsifier,
+            claimant.clone(),
+            EvidenceScope::new([], [evidence.evidence_id.clone()], []).unwrap(),
+            GraphLogicalTime::new(20),
+        )
+        .unwrap();
+        let created = coordinator
+            .ledger_mut()
+            .create_task(
+                &store,
+                coordinated.snapshot.revision(),
+                descriptor,
+                request.clone(),
+            )
+            .unwrap();
+        let capability = TaskCapabilityProof::signed_with(
+            request.task_id.clone(),
+            claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &signer_key,
+            "falsifier:task-bound-retry",
+        )
+        .unwrap();
+        let claim = coordinator
+            .ledger_mut()
+            .claim_task(
+                &store,
+                request,
+                GraphLogicalTime::new(20),
+                1_000,
+                capability,
+            )
+            .unwrap();
+        let claimed = store.snapshot().unwrap();
+        assert!(claimed.revision().generation > created.revision().generation);
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::HypothesisFalsified,
+            claimant.clone(),
+            GraphLogicalTime::new(20),
+            [evidence.evidence_id.clone()],
+            "digest:task-bound-retry",
+        )
+        .unwrap();
+        let decision_link = swarm_core::hypothesis_graph::TaskDecisionLink::new(
+            claim.task_id.clone(),
+            target,
+            [evidence.evidence_id.clone()],
+            Some(admitted_decision.decision_id.clone()),
+        )
+        .unwrap();
+        let envelope = TaskTerminalEnvelope::new(
+            claim.task_id.clone(),
+            claim.idempotency_key.clone(),
+            claim.lease_id.clone(),
+            claim.fencing_token,
+            completion,
+            Some(decision_link),
+            claimant,
+            claim.capability_proof.clone(),
+        )
+        .unwrap()
+        .signed_with(&signer_key, "falsifier:task-bound-retry")
+        .unwrap();
+        let before = claimed.canonical_bytes().unwrap();
+
+        assert!(matches!(
+            coordinator.ledger_mut().accept_terminal_once(
+                &store,
+                claimed.revision(),
+                &claim,
+                envelope,
+                vec![evidence],
+                Some(admitted_decision),
+                None,
+                None,
+            ),
+            Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+                if reason.contains("back-dated before the logical-time high-water")
+        ));
+        let after = store.snapshot().unwrap();
+        assert_eq!(after.canonical_bytes().unwrap(), before);
+        assert_eq!(
+            after.state().tasks[&claim.task_id].task.state,
+            TaskState::Claimed
+        );
+        assert!(!after.state().terminal_outbox.contains_key(&claim.task_id));
+        assert_eq!(
+            after.state().hypotheses[&falsified_id]
+                .decision_history
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn coordinator_durably_commits_competing_tasks_once() {
         let config = HypothesisGraphConfig {
             enabled: true,
@@ -2914,9 +3112,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(first.hypothesis_ids.len(), 2);
-        assert_eq!(first.task_ids.len(), 4);
+        assert_eq!(first.task_ids.len(), 3);
         assert_eq!(first.snapshot.state().hypotheses.len(), 2);
-        assert_eq!(first.snapshot.state().tasks.len(), 4);
+        assert_eq!(first.snapshot.state().tasks.len(), 3);
         let task_kinds = first
             .snapshot
             .state()
@@ -2925,17 +3123,17 @@ mod tests {
             .map(|entry| entry.task.request.kind)
             .collect::<BTreeSet<_>>();
         assert!(task_kinds.contains(&TaskKind::AcquireEvidence));
-        assert!(task_kinds.contains(&TaskKind::ChallengeEdge));
+        assert!(!task_kinds.contains(&TaskKind::ChallengeEdge));
         assert!(task_kinds.contains(&TaskKind::FalsifyHypothesis));
-        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 4);
+        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 3);
 
         let retried = coordinator
             .coordinate_seed(&store, first.snapshot.revision(), &seed, claimant, scope)
             .unwrap();
         assert_eq!(retried.snapshot.revision(), first.snapshot.revision());
-        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 4);
+        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 3);
 
-        // A fresh process restores the four consumed units from the signed
+        // A fresh process restores the three consumed units from the signed
         // generation. A retry remains idempotent, while a distinct seed at
         // the same tick is rejected before its CAS because the restored
         // budget is exhausted.
@@ -3059,7 +3257,7 @@ mod tests {
                 .scheduler_budget()
                 .unwrap()
                 .work_units_used(),
-            4
+            3
         );
     }
 
