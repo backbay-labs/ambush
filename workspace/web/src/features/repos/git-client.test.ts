@@ -37,7 +37,7 @@ describe("ensureClone", () => {
   });
 
   it("advances the local branch to FETCH_HEAD after an existing clone is fetched", async () => {
-    await ensureClone("alice", "demo", "main");
+    const result = await ensureClone("alice", "demo", "main");
 
     expect(git.resolveRef).toHaveBeenCalledWith(
       expect.objectContaining({ ref: "FETCH_HEAD" }),
@@ -49,6 +49,20 @@ describe("ensureClone", () => {
         force: true,
       }),
     );
+    expect(result.oid).toBe("b".repeat(40));
+  });
+
+  it("returns the checked-out oid after creating a new clone", async () => {
+    stat.mockRejectedValue(new Error("not cloned"));
+    git.clone.mockResolvedValue(undefined);
+    git.resolveRef.mockResolvedValue("c".repeat(40));
+
+    const result = await ensureClone("alice", "demo", "main");
+
+    expect(git.resolveRef).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: "main" }),
+    );
+    expect(result.oid).toBe("c".repeat(40));
   });
 
   it("does not hide a failed refresh behind stale repository data", async () => {

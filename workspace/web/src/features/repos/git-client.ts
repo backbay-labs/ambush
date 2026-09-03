@@ -70,7 +70,7 @@ export async function ensureClone(
   owner: string,
   repoName: string,
   ref: string,
-): Promise<{ fs: LightningFS; dir: string }> {
+): Promise<{ fs: LightningFS; dir: string; oid: string }> {
   const fs = getFs(owner, repoName);
   const dir = getDir(owner, repoName);
   const url = repoGitUrl(owner, repoName);
@@ -84,6 +84,7 @@ export async function ensureClone(
     // repo not cloned yet
   }
 
+  let oid: string;
   if (exists) {
     await fetch({
       fs,
@@ -103,6 +104,7 @@ export async function ensureClone(
       value: fetchedOid,
       force: true,
     });
+    oid = fetchedOid;
   } else {
     await clone({
       fs,
@@ -115,9 +117,10 @@ export async function ensureClone(
       noTags: true,
       headers,
     });
+    oid = await resolveRef({ fs, dir, ref });
   }
 
-  return { fs, dir };
+  return { fs, dir, oid };
 }
 
 export interface TreeEntry {
