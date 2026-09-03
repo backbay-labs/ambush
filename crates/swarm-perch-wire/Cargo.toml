@@ -1,0 +1,28 @@
+# The transport-neutral wire contract for the operator console (00-DECISIONS D2,
+# W3-27). This crate depends on NO package whose name starts with `swarm-`:
+# engine-domain conversion and `RuntimeEvent` narrowing live in
+# `swarm-perch-bridge`, and the Tauri process verifies this crate's canonical
+# bytes with its own `ed25519-dalek`. `tools/check-workspace-layering.sh` and
+# a `cargo metadata` assertion in CI enforce the boundary.
+#
+# `serde_json_canonicalizer` is pinned exactly because these bytes are a
+# cross-process signature contract, not a presentation detail.
+
+[package]
+name = "swarm-perch-wire"
+description = "Wire types for the operator console: seven kind:9 marker cards, the kind:46010 hold notice, and the 26000-26006 ephemeral frames"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+serde_json_canonicalizer = "=0.3.2"
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true

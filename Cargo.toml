@@ -21,6 +21,7 @@ members = [
     "crates/swarm-spine",
     "crates/swarm-guard",
     "crates/swarm-crypto",
+    "crates/swarm-perch-wire",
 ]
 # The Ambush workspace (relay, desktop, web, mobile) is a second Cargo workspace
 # under workspace/ with its own toolchain pin; see docs/plans/ambush-ui/integration/00-DECISIONS.md D2.
