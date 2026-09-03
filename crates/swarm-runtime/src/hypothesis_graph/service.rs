@@ -179,6 +179,9 @@ pub struct GraphServiceMetricsSnapshot {
     pub completed_challenges: u64,
     pub completed_falsifications: u64,
     pub falsification_no_findings: u64,
+    pub failed_acquisitions: u64,
+    pub failed_challenges: u64,
+    pub failed_falsifications: u64,
     pub memory_records_projected: u64,
     pub memory_projection_failures: u64,
     pub campaign_rotations: u64,
@@ -217,6 +220,7 @@ pub struct GraphSummaryProjection {
     pub hypothesis_count: usize,
     pub pending_task_count: usize,
     pub completed_task_count: usize,
+    pub failed_task_count: usize,
     pub memory_count: usize,
     pub logical_time_high_water: GraphLogicalTime,
     pub metrics: GraphServiceMetricsSnapshot,
@@ -256,9 +260,9 @@ struct PendingWorkerPublication {
     task_id: TaskId,
     hunt_id: String,
     task_kind: TaskKind,
-    completion_kind: TaskCompletionKind,
+    completion_kind: Option<TaskCompletionKind>,
     evidence_ids: BTreeSet<EvidenceId>,
-    retry_exhaustion_failure_summary: Option<String>,
+    failure_summary: Option<String>,
 }
 
 struct CampaignRegistry {
@@ -785,6 +789,8 @@ fn validate_unactivated_campaign(
         && state.logical_task_descriptors.is_empty()
         && state.task_tombstones.is_empty()
         && state.terminal_outbox.is_empty()
+        && state.retry_exhaustion_outbox.is_empty()
+        && state.task_failure_outbox.is_empty()
         && state.fencing_counter == 0
         && state.cross_graph_links.is_empty()
         && state.result_projection_digest.is_none()
@@ -950,7 +956,7 @@ fn load_campaigns(
                 validate_unactivated_campaign(&unactivated, &campaign_directory, config)?;
             }
             let graph_incarnation_id = head
-                .ok_or_else(|| GraphServiceError::MissingCampaignHead { path: head_path })?
+                .ok_or(GraphServiceError::MissingCampaignHead { path: head_path })?
                 .graph_incarnation_id;
             Ok((campaigns, Some(campaign_root), graph_incarnation_id))
         }
@@ -1755,6 +1761,10 @@ impl CollectiveHypothesisService {
             .tasks()
             .filter(|task| task.task.state == TaskState::Completed)
             .count();
+        let failed_task_count = snapshot
+            .tasks()
+            .filter(|task| task.task.state == TaskState::Failed)
+            .count();
         Ok(GraphSummaryProjection {
             graph_id: campaign.graph_id.clone(),
             generation: snapshot.revision().generation,
@@ -1767,6 +1777,7 @@ impl CollectiveHypothesisService {
             hypothesis_count: snapshot.hypotheses().len(),
             pending_task_count,
             completed_task_count,
+            failed_task_count,
             memory_count,
             logical_time_high_water: snapshot.state().logical_time_high_water,
             metrics,
@@ -1804,7 +1815,8 @@ impl CollectiveHypothesisService {
             terminal_publications: snapshot
                 .terminal_outbox()
                 .len()
-                .saturating_add(snapshot.retry_exhaustion_outbox().len()),
+                .saturating_add(snapshot.retry_exhaustion_outbox().len())
+                .saturating_add(snapshot.task_failure_outbox().len()),
             memory,
             logical_time_high_water: snapshot.state().logical_time_high_water,
             metrics,
@@ -2004,7 +2016,11 @@ impl CollectiveHypothesisService {
             metrics.observe_hypothesis_graph_state(
                 state.hypotheses.len(),
                 pending,
-                state.terminal_outbox.len(),
+                state
+                    .terminal_outbox
+                    .len()
+                    .saturating_add(state.retry_exhaustion_outbox.len())
+                    .saturating_add(state.task_failure_outbox.len()),
             );
         }
     }
@@ -2122,6 +2138,8 @@ pub struct StalkerGraphCompletion {
     pub acquisition_no_findings: usize,
     pub falsifications: usize,
     pub falsification_no_findings: usize,
+    pub acquisition_failures: usize,
+    pub falsification_failures: usize,
     pub memory_records_projected: usize,
 }
 
@@ -2129,6 +2147,7 @@ pub struct StalkerGraphCompletion {
 pub struct StalkerGraphPublication {
     pub graph_id: GraphId,
     pub completion: StalkerGraphCompletion,
+    pub failure_summaries: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2138,9 +2157,10 @@ pub struct WeaverGraphPublication {
     pub hunt_id: String,
     pub evidence_ids: BTreeSet<EvidenceId>,
     pub no_finding: bool,
-    /// Present only for a store-authenticated retry-exhaustion terminal. This
-    /// distinguishes scheduler failure from a worker-authored no-finding.
-    pub retry_exhaustion_failure_summary: Option<String>,
+    /// Present only for a store-authenticated terminal failure. This keeps
+    /// worker-authored failures and scheduler retry exhaustion distinct from
+    /// a semantic no-finding completion.
+    pub failure_summary: Option<String>,
 }
 
 struct TerminalPublication {
@@ -2314,22 +2334,44 @@ impl GraphWorkerAdapter {
                 return Ok(None);
             }
             let mut completion = StalkerGraphCompletion::default();
+            let mut failure_summaries = BTreeSet::new();
             for task in tasks {
                 let task_id = &task.task.request.task_id;
                 let worker_publication = snapshot
                     .terminal_outbox()
                     .get(task_id)
                     .filter(|publication| publication.publication_acknowledged == Some(false));
-                let terminal_kind = worker_publication
-                    .map(|publication| publication.envelope.completion.kind.clone())
+                let retry_failure = snapshot
+                    .retry_exhaustion_outbox()
+                    .get(task_id)
+                    .filter(|publication| !publication.publication_acknowledged);
+                let worker_failure = snapshot
+                    .task_failure_outbox()
+                    .get(task_id)
+                    .filter(|publication| !publication.publication_acknowledged);
+                if let Some(summary) = retry_failure
+                    .map(|publication| &publication.failure_summary_digest)
                     .or_else(|| {
-                        snapshot
-                            .retry_exhaustion_outbox()
-                            .get(task_id)
-                            .is_some_and(|publication| !publication.publication_acknowledged)
-                            .then_some(TaskCompletionKind::NoFinding)
-                    });
-                let Some(terminal_kind) = terminal_kind else {
+                        worker_failure.map(|publication| &publication.failure.summary_digest)
+                    })
+                {
+                    failure_summaries.insert(summary.clone());
+                    match task.task.request.kind {
+                        TaskKind::AcquireEvidence => {
+                            completion.acquisition_failures =
+                                completion.acquisition_failures.saturating_add(1);
+                        }
+                        TaskKind::FalsifyHypothesis => {
+                            completion.falsification_failures =
+                                completion.falsification_failures.saturating_add(1);
+                        }
+                        TaskKind::ChallengeEdge => {}
+                    }
+                    continue;
+                }
+                let Some(terminal_kind) = worker_publication
+                    .map(|publication| publication.envelope.completion.kind.clone())
+                else {
                     continue;
                 };
                 match (task.task.request.kind, terminal_kind) {
@@ -2358,10 +2400,13 @@ impl GraphWorkerAdapter {
                 .acquisitions
                 .saturating_add(completion.acquisition_no_findings)
                 .saturating_add(completion.falsifications)
-                .saturating_add(completion.falsification_no_findings);
+                .saturating_add(completion.falsification_no_findings)
+                .saturating_add(completion.acquisition_failures)
+                .saturating_add(completion.falsification_failures);
             return Ok((terminal_count > 0).then_some(StalkerGraphPublication {
                 graph_id: campaign.graph_id,
                 completion,
+                failure_summaries,
             }));
         }
         Ok(None)
@@ -2392,10 +2437,8 @@ impl GraphWorkerAdapter {
                 task_id: publication.task_id.clone(),
                 hunt_id: publication.hunt_id.clone(),
                 evidence_ids: publication.evidence_ids.clone(),
-                no_finding: publication.completion_kind == TaskCompletionKind::NoFinding,
-                retry_exhaustion_failure_summary: publication
-                    .retry_exhaustion_failure_summary
-                    .clone(),
+                no_finding: publication.completion_kind == Some(TaskCompletionKind::NoFinding),
+                failure_summary: publication.failure_summary.clone(),
             })
             .collect())
     }
@@ -2470,6 +2513,11 @@ impl GraphWorkerAdapter {
                         changed = true;
                     }
                 } else if let Some(publication) = next.retry_exhaustion_outbox.get_mut(&task_id) {
+                    if !publication.publication_acknowledged {
+                        publication.publication_acknowledged = true;
+                        changed = true;
+                    }
+                } else if let Some(publication) = next.task_failure_outbox.get_mut(&task_id) {
                     if !publication.publication_acknowledged {
                         publication.publication_acknowledged = true;
                         changed = true;
@@ -2607,16 +2655,29 @@ impl GraphWorkerAdapter {
                         .map_err(|_| GraphServiceError::Poisoned)?;
                     match publication.task_kind {
                         TaskKind::AcquireEvidence => {
+                            state.metrics.snapshot.failed_acquisitions =
+                                state.metrics.snapshot.failed_acquisitions.saturating_add(1);
                             state
                                 .pending_stalker_acquisition_hunts
                                 .insert(publication.hunt_id.clone());
                         }
                         TaskKind::FalsifyHypothesis => {
+                            state.metrics.snapshot.failed_falsifications = state
+                                .metrics
+                                .snapshot
+                                .failed_falsifications
+                                .saturating_add(1);
                             state
                                 .pending_stalker_falsification_hunts
                                 .insert(publication.hunt_id.clone());
                         }
-                        TaskKind::ChallengeEdge => {}
+                        TaskKind::ChallengeEdge => {
+                            state.metrics.snapshot.failed_challenges =
+                                state.metrics.snapshot.failed_challenges.saturating_add(1);
+                        }
+                    }
+                    if let Some(metrics) = &self.service.prometheus {
+                        metrics.observe_hypothesis_graph_failure(publication.task_kind);
                     }
                     state.pending_worker_publications.insert(
                         (publication.campaign_index, publication.task_id.clone()),
@@ -2768,10 +2829,32 @@ impl GraphWorkerAdapter {
                 self.claim_matching(completed_at, false, |task, snapshot| {
                     task.request.kind == TaskKind::FalsifyHypothesis
                         && task_matches_hunt(task, hunt_id, snapshot)
+                        && task_targets_scoped_hypothesis(
+                            task,
+                            snapshot,
+                            "benign-authorized-activity",
+                        )
                 })?
             {
                 let projected = self.complete_falsification(claimed, completed_at)?;
                 report.falsifications = report.falsifications.saturating_add(1);
+                report.memory_records_projected =
+                    report.memory_records_projected.saturating_add(projected);
+            }
+            // Every alternative carries explicit falsification work. A
+            // high-confidence malicious selection falsifies the benign
+            // alternative above; the corresponding attempt to disprove the
+            // selected malicious alternative terminates as no-finding.
+            while let Some(claimed) =
+                self.claim_matching(completed_at, false, |task, snapshot| {
+                    task.request.kind == TaskKind::FalsifyHypothesis
+                        && task_matches_hunt(task, hunt_id, snapshot)
+                        && task_targets_scoped_hypothesis(task, snapshot, "malicious-activity")
+                })?
+            {
+                let projected = self.complete_falsification_no_finding(claimed, completed_at)?;
+                report.falsification_no_findings =
+                    report.falsification_no_findings.saturating_add(1);
                 report.memory_records_projected =
                     report.memory_records_projected.saturating_add(projected);
             }
@@ -2792,14 +2875,15 @@ impl GraphWorkerAdapter {
         Ok(report)
     }
 
-    /// Close Stalker-owned graph work when its durable investigation reached
-    /// a terminal failure and cannot produce a semantic finding. These signed
-    /// no-finding publications keep failed jobs from remaining claimable on
-    /// every subsequent tick and restart.
+    /// Fail Stalker-owned graph work when its durable investigation reached a
+    /// terminal failure. These signed failure publications preserve the
+    /// distinction from a completed investigation that found no evidence and
+    /// keep failed jobs from remaining claimable after a restart.
     pub fn close_failed_stalker_hunt(
         &self,
         hunt_id: &str,
         completed_at: GraphLogicalTime,
+        failure_summary_digest: &str,
     ) -> Result<StalkerGraphCompletion, GraphServiceError> {
         let _operation = self
             .service
@@ -2817,10 +2901,8 @@ impl GraphWorkerAdapter {
             task.request.kind == TaskKind::AcquireEvidence
                 && task_matches_hunt(task, hunt_id, snapshot)
         })? {
-            let projected = self.complete_acquisition_no_finding(claimed, completed_at)?;
-            report.acquisition_no_findings = report.acquisition_no_findings.saturating_add(1);
-            report.memory_records_projected =
-                report.memory_records_projected.saturating_add(projected);
+            self.fail_claimed(claimed, completed_at, failure_summary_digest)?;
+            report.acquisition_failures = report.acquisition_failures.saturating_add(1);
         }
         if self.capabilities.contains(&TaskKind::FalsifyHypothesis) {
             while let Some(claimed) =
@@ -2829,11 +2911,8 @@ impl GraphWorkerAdapter {
                         && task_matches_hunt(task, hunt_id, snapshot)
                 })?
             {
-                let projected = self.complete_falsification_no_finding(claimed, completed_at)?;
-                report.falsification_no_findings =
-                    report.falsification_no_findings.saturating_add(1);
-                report.memory_records_projected =
-                    report.memory_records_projected.saturating_add(projected);
+                self.fail_claimed(claimed, completed_at, failure_summary_digest)?;
+                report.falsification_failures = report.falsification_failures.saturating_add(1);
             }
         }
         Ok(report)
@@ -2914,42 +2993,28 @@ impl GraphWorkerAdapter {
         Ok(true)
     }
 
-    /// Complete a challenge without a semantic finding when its durable
-    /// investigation terminated unsuccessfully. The scoped evidence remains
-    /// attached to the signed terminal so validation can prove what was
-    /// investigated without manufacturing a challenge decision.
-    pub fn complete_challenge_no_finding(
+    /// Fail a challenge when its durable investigation terminated
+    /// unsuccessfully. The task, lease, fencing token, worker capability,
+    /// failure digest, and delivery outbox are committed in one signed CAS.
+    pub fn fail_challenge(
         &self,
         task_id: &TaskId,
-        completed_at: GraphLogicalTime,
+        failed_at: GraphLogicalTime,
+        failure_summary_digest: &str,
     ) -> Result<bool, GraphServiceError> {
         let _operation = self
             .service
             .operation
             .lock()
             .map_err(|_| GraphServiceError::Poisoned)?;
-        let completed_at = self.service.nonretrograde_time(completed_at)?;
-        let Some(claimed) = self.claim_matching(completed_at, false, |task, _| {
+        let failed_at = self.service.nonretrograde_time(failed_at)?;
+        let Some(claimed) = self.claim_matching(failed_at, false, |task, _| {
             task.request.kind == TaskKind::ChallengeEdge && &task.request.task_id == task_id
         })?
         else {
             return Ok(false);
         };
-        let evidence_ids = claimed.request.evidence_scope.evidence_ids.clone();
-        let evidence = evidence_for_scope(
-            &evidence_ids,
-            &self.service.active_campaign()?.store.snapshot()?,
-        )?;
-        self.accept_terminal(
-            claimed,
-            completed_at,
-            TerminalPublication {
-                kind: TaskCompletionKind::NoFinding,
-                evidence,
-                decision: None,
-                memory: None,
-            },
-        )?;
+        self.fail_claimed(claimed, failed_at, failure_summary_digest)?;
         Ok(true)
     }
 
@@ -2974,26 +3039,6 @@ impl GraphWorkerAdapter {
             TerminalPublication {
                 kind: TaskCompletionKind::EvidenceAdded,
                 evidence: vec![evidence],
-                decision: None,
-                memory: None,
-            },
-        )
-    }
-
-    fn complete_acquisition_no_finding(
-        &self,
-        claimed: ClaimedGraphTask,
-        completed_at: GraphLogicalTime,
-    ) -> Result<usize, GraphServiceError> {
-        let TaskTarget::Evidence { .. } = &claimed.request.target else {
-            return Err(GraphServiceError::TaskUnavailable(claimed.claim.task_id));
-        };
-        self.accept_terminal(
-            claimed,
-            completed_at,
-            TerminalPublication {
-                kind: TaskCompletionKind::NoFinding,
-                evidence: Vec::new(),
                 decision: None,
                 memory: None,
             },
@@ -3282,6 +3327,72 @@ impl GraphWorkerAdapter {
         let current = campaign.store.snapshot()?;
         self.service.observe_state(current.state());
         Ok(projected)
+    }
+
+    fn fail_claimed(
+        &self,
+        claimed: ClaimedGraphTask,
+        failed_at: GraphLogicalTime,
+        failure_summary_digest: &str,
+    ) -> Result<(), GraphServiceError> {
+        if !self.capabilities.contains(&claimed.request.kind) {
+            return Err(GraphServiceError::MissingCapability(claimed.request.kind));
+        }
+        let campaign = self.service.active_campaign()?;
+        let task_id = claimed.claim.task_id.clone();
+        let task_kind = claimed.request.kind;
+        let mut state = self
+            .service
+            .state
+            .lock()
+            .map_err(|_| GraphServiceError::Poisoned)?;
+        let snapshot = campaign.store.snapshot()?;
+        state.coordinator.ledger_mut().fail_task_once(
+            campaign.store.as_ref(),
+            snapshot.revision(),
+            &claimed.claim,
+            failed_at,
+            failure_summary_digest,
+            &self.signer,
+        )?;
+        let committed = campaign.store.snapshot()?;
+        let publication = pending_worker_publication_for_failure(&campaign, &committed, &task_id)?
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "failed reasoning task has no pending durable publication".to_string(),
+            })?;
+        match task_kind {
+            TaskKind::AcquireEvidence => {
+                state.metrics.snapshot.failed_acquisitions =
+                    state.metrics.snapshot.failed_acquisitions.saturating_add(1);
+                state
+                    .pending_stalker_acquisition_hunts
+                    .insert(publication.hunt_id.clone());
+            }
+            TaskKind::ChallengeEdge => {
+                state.metrics.snapshot.failed_challenges =
+                    state.metrics.snapshot.failed_challenges.saturating_add(1);
+            }
+            TaskKind::FalsifyHypothesis => {
+                state.metrics.snapshot.failed_falsifications = state
+                    .metrics
+                    .snapshot
+                    .failed_falsifications
+                    .saturating_add(1);
+                state
+                    .pending_stalker_falsification_hunts
+                    .insert(publication.hunt_id.clone());
+            }
+        }
+        state.pending_worker_publications.insert(
+            (publication.campaign_index, publication.task_id.clone()),
+            publication,
+        );
+        drop(state);
+        if let Some(metrics) = &self.service.prometheus {
+            metrics.observe_hypothesis_graph_failure(task_kind);
+        }
+        self.service.observe_state(committed.state());
+        Ok(())
     }
 }
 
@@ -3592,10 +3703,11 @@ fn campaign_requires_rotation(
         .into_iter()
         .filter(|edge_id| !state.graph.edges.contains_key(*edge_id))
         .count();
-    // Every admitted replay creates one falsification task, and a successful
-    // falsification can append one strategy-memory record. Count committed
-    // memories plus only nonterminal reservations: no-finding and exhausted
-    // terminal tasks cannot publish memory and must release their capacity.
+    // Every admitted replay creates one memory-producing falsification task
+    // for its benign alternative plus a no-finding falsification probe for
+    // the malicious alternative. Reserve memory only for the former: a
+    // no-finding or exhausted task cannot publish memory and must not consume
+    // capacity indefinitely.
     let committed_memory_records = state
         .terminal_outbox
         .values()
@@ -3607,6 +3719,16 @@ fn campaign_requires_rotation(
         .filter(|task| {
             task.task.request.kind == TaskKind::FalsifyHypothesis
                 && !task_is_terminal(task.task.state)
+                && matches!(
+                    &task.task.request.target,
+                    TaskTarget::Hypothesis { hypothesis_id }
+                        if task.task.request.evidence_scope.evidence_ids.iter().any(
+                            |evidence_id| scoped_hypothesis_id(
+                                "benign-authorized-activity",
+                                evidence_id,
+                            ) == *hypothesis_id
+                        )
+                )
         })
         .count();
     Ok(
@@ -3797,6 +3919,18 @@ fn task_matches_hunt(task: &TaskRecord, hunt_id: &str, snapshot: &GraphStoreSnap
         .is_some_and(|evidence| evidence.lineage.source_record_id == hunt_id)
 }
 
+fn task_targets_scoped_hypothesis(
+    task: &TaskRecord,
+    snapshot: &GraphStoreSnapshot,
+    kind: &str,
+) -> bool {
+    let TaskTarget::Hypothesis { hypothesis_id } = &task.request.target else {
+        return false;
+    };
+    primary_replay_evidence_id(&task.request.evidence_scope.evidence_ids, snapshot)
+        .is_ok_and(|evidence_id| scoped_hypothesis_id(kind, &evidence_id) == *hypothesis_id)
+}
+
 fn hunt_for_evidence_scope(
     evidence_ids: &BTreeSet<EvidenceId>,
     snapshot: &GraphStoreSnapshot,
@@ -3837,9 +3971,9 @@ fn pending_worker_publication_for_task(
         task_id: task_id.clone(),
         hunt_id,
         task_kind: task.request.kind,
-        completion_kind: outbox.envelope.completion.kind.clone(),
+        completion_kind: Some(outbox.envelope.completion.kind.clone()),
         evidence_ids: task.request.evidence_scope.evidence_ids.clone(),
-        retry_exhaustion_failure_summary: None,
+        failure_summary: None,
     }))
 }
 
@@ -3867,9 +4001,39 @@ fn pending_worker_publication_for_retry_exhaustion(
         task_id: task_id.clone(),
         hunt_id,
         task_kind: task.request.kind,
-        completion_kind: TaskCompletionKind::NoFinding,
+        completion_kind: None,
         evidence_ids: task.request.evidence_scope.evidence_ids.clone(),
-        retry_exhaustion_failure_summary: Some(outbox.failure_summary_digest.clone()),
+        failure_summary: Some(outbox.failure_summary_digest.clone()),
+    }))
+}
+
+fn pending_worker_publication_for_failure(
+    campaign: &HypothesisCampaign,
+    snapshot: &GraphStoreSnapshot,
+    task_id: &TaskId,
+) -> Result<Option<PendingWorkerPublication>, GraphServiceError> {
+    let Some(task) = snapshot.state().tasks.get(task_id).map(|task| &task.task) else {
+        return Err(GraphStoreError::InvalidState {
+            reason: "task-failure publication index references an unknown task".to_string(),
+        }
+        .into());
+    };
+    let Some(outbox) = snapshot.task_failure_outbox().get(task_id) else {
+        return Ok(None);
+    };
+    if outbox.publication_acknowledged {
+        return Ok(None);
+    }
+    let hunt_id = hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot)?;
+    Ok(Some(PendingWorkerPublication {
+        campaign_index: campaign.index,
+        graph_id: campaign.graph_id.clone(),
+        task_id: task_id.clone(),
+        hunt_id,
+        task_kind: task.request.kind,
+        completion_kind: None,
+        evidence_ids: task.request.evidence_scope.evidence_ids.clone(),
+        failure_summary: Some(outbox.failure.summary_digest.clone()),
     }))
 }
 
@@ -3912,6 +4076,13 @@ fn pending_worker_publications(
         for task_id in snapshot.retry_exhaustion_outbox().keys() {
             if let Some(publication) =
                 pending_worker_publication_for_retry_exhaustion(campaign, &snapshot, task_id)?
+            {
+                pending.insert((campaign.index, task_id.clone()), publication);
+            }
+        }
+        for task_id in snapshot.task_failure_outbox().keys() {
+            if let Some(publication) =
+                pending_worker_publication_for_failure(campaign, &snapshot, task_id)?
             {
                 pending.insert((campaign.index, task_id.clone()), publication);
             }

@@ -367,6 +367,18 @@
             "minimum": 0,
             "type": "integer"
           },
+          "failed_acquisitions": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_challenges": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_falsifications": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "falsification_no_findings": {
             "minimum": 0,
             "type": "integer"
@@ -395,6 +407,9 @@
           "completed_challenges",
           "completed_falsifications",
           "falsification_no_findings",
+          "failed_acquisitions",
+          "failed_challenges",
+          "failed_falsifications",
           "memory_records_projected",
           "memory_projection_failures",
           "campaign_rotations"
@@ -570,6 +585,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "failed_task_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "generation": {
             "minimum": 0,
             "type": "integer"
@@ -616,6 +635,7 @@
           "hypothesis_count",
           "pending_task_count",
           "completed_task_count",
+          "failed_task_count",
           "memory_count",
           "logical_time_high_water",
           "metrics"

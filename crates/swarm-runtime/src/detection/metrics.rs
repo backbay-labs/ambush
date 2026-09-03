@@ -531,6 +531,20 @@ impl CriticalPathMetrics {
             .inc();
     }
 
+    pub fn observe_hypothesis_graph_failure(&self, kind: TaskKind) {
+        let task_kind = match kind {
+            TaskKind::AcquireEvidence => "acquire_evidence",
+            TaskKind::ChallengeEdge => "challenge_edge",
+            TaskKind::FalsifyHypothesis => "falsify_hypothesis",
+        };
+        self.hypothesis_graph_completions_total
+            .get_or_create(&HypothesisGraphTaskLabels {
+                task_kind: task_kind.to_string(),
+                outcome: "failed".to_string(),
+            })
+            .inc();
+    }
+
     pub fn observe_hypothesis_graph_state(
         &self,
         hypotheses: usize,
@@ -570,6 +584,33 @@ pub fn encode_metrics(metrics: &CriticalPathMetrics) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{CriticalPathMetrics, encode_metrics};
+    use swarm_core::hypothesis_graph::{TaskCompletionKind, TaskKind};
+
+    #[test]
+    fn encode_metrics_distinguishes_reasoning_failures_from_no_findings() {
+        let metrics = CriticalPathMetrics::new();
+        metrics.observe_hypothesis_graph_completion(
+            TaskKind::ChallengeEdge,
+            &TaskCompletionKind::NoFinding,
+        );
+        metrics.observe_hypothesis_graph_failure(TaskKind::ChallengeEdge);
+        metrics.observe_hypothesis_graph_state(2, 3, 4);
+
+        let encoded = encode_metrics(&metrics);
+        assert!(encoded.contains(
+            "swarm_hypothesis_graph_completions_total{outcome=\"no_finding\",task_kind=\"challenge_edge\"} 1"
+        ) || encoded.contains(
+            "swarm_hypothesis_graph_completions_total{task_kind=\"challenge_edge\",outcome=\"no_finding\"} 1"
+        ));
+        assert!(encoded.contains(
+            "swarm_hypothesis_graph_completions_total{outcome=\"failed\",task_kind=\"challenge_edge\"} 1"
+        ) || encoded.contains(
+            "swarm_hypothesis_graph_completions_total{task_kind=\"challenge_edge\",outcome=\"failed\"} 1"
+        ));
+        assert!(encoded.contains("swarm_hypothesis_graph_hypotheses 2"));
+        assert!(encoded.contains("swarm_hypothesis_graph_pending_tasks 3"));
+        assert!(encoded.contains("swarm_hypothesis_graph_terminal_publications 4"));
+    }
 
     #[test]
     fn encode_metrics_renders_all_histograms() {

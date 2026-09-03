@@ -2288,6 +2288,13 @@ impl HypothesisGraph {
         {
             return Err(GraphAdmissionError::UnknownEvidence);
         }
+        if let Some(supersedes) = &edge.supersedes
+            && !self.edges.contains_key(supersedes)
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "superseding edge references an edge that is not admitted".to_string(),
+            });
+        }
         edge.validate_identity_admission(&self.evidence)?;
         edge.validate_temporal_admission(&self.evidence)?;
         self.validate_edge_topology(&edge)?;
@@ -2520,6 +2527,13 @@ impl HypothesisGraph {
                 .any(|evidence_id| !self.evidence.contains_key(evidence_id))
             {
                 return Err(GraphAdmissionError::UnknownEvidence);
+            }
+            if let Some(supersedes) = &edge.supersedes
+                && !self.edges.contains_key(supersedes)
+            {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "superseding edge references an edge that is not admitted".to_string(),
+                });
             }
             edge.validate_identity_admission(&self.evidence)?;
             edge.validate_temporal_admission(&self.evidence)?;
@@ -3646,6 +3660,7 @@ impl TaskClaimRequest {
         validate_agent_id("task.claimant", &claimant)?;
         requested_at.validate()?;
         validate_task_kind_target(kind, &target)?;
+        validate_task_target_scope(kind, &target, &evidence_scope)?;
         validate_task_kind_role(kind, role)?;
         let material = (&task_id, kind, &target, role, &claimant, &evidence_scope);
         let idempotency_key =
@@ -3697,6 +3712,7 @@ impl TaskClaimRequest {
         self.evidence_scope.validate()?;
         self.target.validate()?;
         validate_task_kind_target(self.kind, &self.target)?;
+        validate_task_target_scope(self.kind, &self.target, &self.evidence_scope)?;
         validate_task_kind_role(self.kind, self.role)?;
         if self.idempotency_key != self.derive_idempotency_key()? {
             return Err(GraphAdmissionError::InvalidTransition {
@@ -3720,6 +3736,21 @@ fn validate_task_kind_target(
     if !matches {
         return Err(GraphAdmissionError::InvalidTransition {
             reason: "task kind does not match its typed target".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_task_target_scope(
+    kind: TaskKind,
+    target: &TaskTarget,
+    evidence_scope: &EvidenceScope,
+) -> Result<(), GraphAdmissionError> {
+    if let (TaskKind::AcquireEvidence, TaskTarget::Evidence { evidence_id }) = (kind, target)
+        && !evidence_scope.evidence_ids.contains(evidence_id)
+    {
+        return Err(GraphAdmissionError::InvalidTransition {
+            reason: "evidence acquisition target is outside the claim evidence scope".to_string(),
         });
     }
     Ok(())
@@ -4674,10 +4705,13 @@ impl TaskTerminalOutboxEntry {
                         });
                     }
                 };
-                if decision.kind != expected_kind
-                    || decision.producer_role != task.request.role
-                    || decision.producer_identity != task.request.claimant
-                {
+                if decision.producer_identity != task.request.claimant {
+                    return Err(GraphAdmissionError::InvalidWitness {
+                        reason: "terminal decision producer is not the claiming identity"
+                            .to_string(),
+                    });
+                }
+                if decision.kind != expected_kind || decision.producer_role != task.request.role {
                     return Err(GraphAdmissionError::InvalidTransition {
                         reason:
                             "terminal decision kind, producer role, and producer identity do not match the claimed task"
@@ -4760,6 +4794,28 @@ impl TaskTerminalOutboxEntry {
         let mut evidence_ids = BTreeSet::new();
         for evidence in &self.evidence {
             evidence.validate()?;
+            let uncertainty = i64::try_from(evidence.clock.uncertainty_ms).map_err(|_| {
+                GraphAdmissionError::InvalidField {
+                    field: "terminal_outbox.evidence.clock.uncertainty_ms".to_string(),
+                    reason: "does not fit in logical time".to_string(),
+                }
+            })?;
+            let earliest_observation = evidence
+                .clock
+                .observed_at
+                .as_millis()
+                .saturating_sub(uncertainty);
+            if earliest_observation > self.envelope.completion.completed_at.as_millis()
+                || evidence
+                    .clock
+                    .ingested_at
+                    .is_some_and(|ingested_at| ingested_at > self.envelope.completion.completed_at)
+            {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "terminal evidence is future-dated beyond its uncertainty window"
+                        .to_string(),
+                });
+            }
             if !evidence_ids.insert(evidence.evidence_id.clone()) {
                 return Err(GraphAdmissionError::IdCollision {
                     id: evidence.evidence_id.0.clone(),
@@ -8435,11 +8491,19 @@ mod tests {
     }
 
     fn envelope(id: &str, role: GraphProducerRole) -> EvidenceEnvelope {
+        envelope_at(id, role, GraphLogicalTime::new(1_700_000_000_100))
+    }
+
+    fn envelope_at(
+        id: &str,
+        role: GraphProducerRole,
+        observed_at: GraphLogicalTime,
+    ) -> EvidenceEnvelope {
         EvidenceEnvelope::new(
             EvidenceSourceFamily::Process,
             id,
             SourceLineage::new("fixture", id).expect("lineage"),
-            EvidenceClock::observed(GraphLogicalTime::new(1_700_000_000_100)),
+            EvidenceClock::observed(observed_at),
             OrderingClaim::Unknown,
             TypedEvidencePayload::Signal {
                 signal_kind: "test_signal".to_string(),
@@ -10135,15 +10199,24 @@ mod tests {
         assert_eq!(legacy.publication_acknowledged, None);
     }
 
-    fn outbox_evidence_fixture() -> (
-        TaskRecord,
-        LogicalTaskDescriptor,
-        TaskTerminalOutboxEntry,
-        Keypair,
-    ) {
+    fn outbox_evidence_fixture_at(
+        observed_at: GraphLogicalTime,
+    ) -> Result<
+        (
+            TaskRecord,
+            LogicalTaskDescriptor,
+            TaskTerminalOutboxEntry,
+            Keypair,
+        ),
+        GraphAdmissionError,
+    > {
         let key = signer();
         let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
-        let evidence = envelope("record:outbox-evidence", GraphProducerRole::Normalizer);
+        let evidence = envelope_at(
+            "record:outbox-evidence",
+            GraphProducerRole::Normalizer,
+            observed_at,
+        );
         let graph_id = GraphId::new("graph:outbox-evidence");
         let target = TaskTarget::Evidence {
             evidence_id: evidence.evidence_id.clone(),
@@ -10221,9 +10294,17 @@ mod tests {
             None,
             claimant,
             &GraphResourceLimits::default(),
-        )
-        .expect("outbox entry");
-        (task, descriptor, entry, key)
+        )?;
+        Ok((task, descriptor, entry, key))
+    }
+
+    fn outbox_evidence_fixture() -> (
+        TaskRecord,
+        LogicalTaskDescriptor,
+        TaskTerminalOutboxEntry,
+        Keypair,
+    ) {
+        outbox_evidence_fixture_at(GraphLogicalTime::new(120)).expect("outbox entry")
     }
 
     fn outbox_memory(
@@ -10266,7 +10347,11 @@ mod tests {
         let key = signer();
         let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
         let hypothesis_id = HypothesisId::new("hypothesis:terminal-falsify");
-        let evidence = envelope("record:terminal-falsify", GraphProducerRole::Normalizer);
+        let evidence = envelope_at(
+            "record:terminal-falsify",
+            GraphProducerRole::Normalizer,
+            GraphLogicalTime::new(120),
+        );
         let target = TaskTarget::Hypothesis {
             hypothesis_id: hypothesis_id.clone(),
         };
@@ -10476,9 +10561,10 @@ mod tests {
     fn terminal_outbox_rejects_individually_valid_decision_for_wrong_task_kind() {
         let key = signer();
         let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
-        let evidence = envelope(
+        let evidence = envelope_at(
             "record:wrong-terminal-decision",
             GraphProducerRole::Normalizer,
+            GraphLogicalTime::new(140),
         );
         let hypothesis_id = HypothesisId::new("hypothesis:wrong-terminal-decision");
         let target = TaskTarget::Hypothesis {
@@ -10579,11 +10665,17 @@ mod tests {
             producer_key_id: claimant.clone(),
             publication_acknowledged: Some(false),
         };
-        assert!(matches!(
-            publication.validate_for_task(&task, &descriptor, &GraphResourceLimits::default()),
-            Err(GraphAdmissionError::InvalidTransition { ref reason })
-                if reason.contains("decision kind, producer role, and producer identity")
-        ));
+        let error = publication
+            .validate_for_task(&task, &descriptor, &GraphResourceLimits::default())
+            .expect_err("support decision must not complete falsification work");
+        assert!(
+            matches!(
+                &error,
+                GraphAdmissionError::InvalidTransition { reason }
+                    if reason.contains("decision kind, producer role, and producer identity")
+            ),
+            "unexpected rejection: {error:?}"
+        );
 
         let attacker_key = Keypair::from_seed(&[91_u8; 32]);
         let attacker = AgentId::from_public_key_hex(&attacker_key.public_key().to_hex());
@@ -10644,8 +10736,8 @@ mod tests {
                 &descriptor,
                 &GraphResourceLimits::default()
             ),
-            Err(GraphAdmissionError::InvalidTransition { ref reason })
-                if reason.contains("producer identity")
+            Err(GraphAdmissionError::InvalidWitness { ref reason })
+                if reason.contains("claiming identity")
         ));
     }
 
@@ -10729,6 +10821,69 @@ mod tests {
             Err(GraphAdmissionError::InvalidTransition { reason })
                 if reason.contains("after terminal completion")
         ));
+    }
+
+    #[test]
+    fn terminal_outbox_rejects_future_evidence_and_non_claimant_decisions() {
+        assert!(matches!(
+            outbox_evidence_fixture_at(GraphLogicalTime::new(151)),
+            Err(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("future-dated")
+        ));
+
+        let limits = GraphResourceLimits::default();
+        let (task, descriptor, mut entry) =
+            falsify_outbox_fixture(DecisionKind::Falsify, GraphLogicalTime::new(140));
+        let attacker_key = Keypair::from_seed(&[8_u8; 32]);
+        let attacker = AgentId::from_public_key_hex(&attacker_key.public_key().to_hex());
+        let evidence_id = entry.evidence[0].evidence_id.clone();
+        let decision = DecisionRecord::new(
+            DecisionKind::Falsify,
+            match &task.request.target {
+                TaskTarget::Hypothesis { hypothesis_id } => hypothesis_id.clone(),
+                _ => unreachable!("falsification fixture target"),
+            },
+            [evidence_id.clone()],
+            GraphProducerRole::Falsifier,
+            attacker,
+            GraphLogicalTime::new(140),
+            "non-claimant decision",
+        )
+        .expect("attacker decision")
+        .signed_with(&attacker_key, "attacker-falsifier")
+        .expect("attacker decision signature");
+        let decision_link = TaskDecisionLink::new(
+            task.request.task_id.clone(),
+            task.request.target.clone(),
+            [evidence_id],
+            Some(decision.decision_id.clone()),
+        )
+        .expect("attacker decision link");
+        entry.envelope = TaskTerminalEnvelope::new(
+            entry.envelope.task_id.clone(),
+            entry.envelope.idempotency_key.clone(),
+            entry.envelope.lease_id.clone(),
+            entry.envelope.fencing_token,
+            entry.envelope.completion.clone(),
+            Some(decision_link),
+            entry.envelope.producer.clone(),
+            entry.envelope.capability.clone(),
+        )
+        .expect("terminal envelope")
+        .signed_with(&signer(), "terminal-falsify-worker")
+        .expect("terminal signature");
+        entry.decision = Some(decision);
+        let error = entry
+            .validate_for_task(&task, &descriptor, &limits)
+            .expect_err("non-claimant decision must be rejected");
+        assert!(
+            matches!(
+                &error,
+                GraphAdmissionError::InvalidWitness { reason }
+                    if reason.contains("claiming identity")
+            ),
+            "unexpected rejection: {error:?}"
+        );
     }
 
     #[test]
@@ -11065,7 +11220,11 @@ mod tests {
             );
         };
 
-        let wrong_evidence = envelope("record:outbox-wrong-target", GraphProducerRole::Normalizer);
+        let wrong_evidence = envelope_at(
+            "record:outbox-wrong-target",
+            GraphProducerRole::Normalizer,
+            GraphLogicalTime::new(120),
+        );
         let wrong_completion = TaskCompletion::new(
             TaskCompletionKind::EvidenceAdded,
             valid.envelope.producer.clone(),
@@ -11107,68 +11266,12 @@ mod tests {
         assert_rejected_at(&wrong_target, &wrong_target_committed);
 
         let mut extra_evidence = valid.clone();
-        extra_evidence.evidence.push(envelope(
+        extra_evidence.evidence.push(envelope_at(
             "record:outbox-extra",
             GraphProducerRole::Normalizer,
+            GraphLogicalTime::new(120),
         ));
         assert_rejected_at(&extra_evidence, &committed);
-
-        let mut out_of_scope_task = task.clone();
-        out_of_scope_task.request.evidence_scope = EvidenceScope::new(
-            [EvidenceSourceFamily::Process],
-            [EvidenceId::new("evidence:outside-claim")],
-            [GraphNodeId::new("node:event:outbox-evidence")],
-        )
-        .expect("out-of-scope claim");
-        out_of_scope_task.request.idempotency_key = out_of_scope_task
-            .request
-            .derive_idempotency_key()
-            .expect("out-of-scope idempotency key");
-        let claimant = out_of_scope_task.request.claimant.clone();
-        let capability = TaskCapabilityProof::new(
-            out_of_scope_task.request.task_id.clone(),
-            claimant.clone(),
-            out_of_scope_task.request.role,
-            out_of_scope_task.request.kind,
-            out_of_scope_task
-                .request
-                .canonical_digest()
-                .expect("out-of-scope claim digest"),
-            &key,
-            "outbox-evidence-worker",
-        )
-        .expect("out-of-scope capability");
-        let out_of_scope_envelope = TaskTerminalEnvelope::new(
-            out_of_scope_task.request.task_id.clone(),
-            out_of_scope_task.request.idempotency_key.clone(),
-            valid.envelope.lease_id.clone(),
-            valid.envelope.fencing_token,
-            valid.envelope.completion.clone(),
-            None,
-            claimant.clone(),
-            capability,
-        )
-        .expect("out-of-scope terminal envelope")
-        .signed_with(&key, "outbox-evidence-worker")
-        .expect("out-of-scope terminal signature");
-        let out_of_scope = TaskTerminalOutboxEntry {
-            envelope: out_of_scope_envelope,
-            evidence: Vec::new(),
-            decision: None,
-            memory: None,
-            memory_expiry: None,
-            producer_key_id: claimant,
-            publication_acknowledged: Some(false),
-        };
-        let out_of_scope_committed = out_of_scope_task
-            .clone()
-            .complete(
-                out_of_scope.envelope.completion.clone(),
-                out_of_scope.envelope.fencing_token,
-                limits.max_task_lease_ms,
-            )
-            .expect("out-of-scope committed task");
-        assert_rejected_at(&out_of_scope, &out_of_scope_committed);
     }
 
     #[test]
@@ -11428,5 +11531,75 @@ mod tests {
         let mut unknown = expiry;
         unknown.schema_version = STRATEGY_MEMORY_EXPIRY_SCHEMA_VERSION + 1;
         assert!(unknown.validate().is_err());
+    }
+
+    #[test]
+    fn acquisition_target_must_be_inside_claim_scope() {
+        let result = TaskClaimRequest::new(
+            TaskId::new("task:scope-bound-acquisition"),
+            TaskKind::AcquireEvidence,
+            TaskTarget::Evidence {
+                evidence_id: EvidenceId::new("evidence:target"),
+            },
+            GraphProducerRole::Hunter,
+            AgentId("agent:scope-bound-hunter".to_string()),
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [EvidenceId::new("evidence:other")],
+                [],
+            )
+            .unwrap(),
+            GraphLogicalTime::new(10),
+        );
+        assert!(matches!(
+            result,
+            Err(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("outside the claim evidence scope")
+        ));
+    }
+
+    #[test]
+    fn superseding_edge_requires_an_admitted_predecessor() {
+        let mut graph = HypothesisGraph::new(
+            GraphId::new("graph:supersession"),
+            GraphResourceLimits::default(),
+        )
+        .unwrap();
+        let actor = GraphNode::Actor(ActorNode::new("actor:supersession", "actor").unwrap());
+        let event = GraphNode::Event(
+            EventNode::new("seed", "event:supersession", GraphLogicalTime::new(100)).unwrap(),
+        );
+        let actor_id = actor.id().clone();
+        let event_id = event.id().clone();
+        graph.admit_node(actor).unwrap();
+        graph.admit_node(event).unwrap();
+        let evidence = envelope("record:supersession", GraphProducerRole::Hunter);
+        let evidence_id = evidence.evidence_id.clone();
+        let producer = evidence.witness.producer_identity.clone();
+        graph.admit_evidence(evidence).unwrap();
+        let edge = CausalEdge::new(
+            &actor_id,
+            &event_id,
+            CausalRelation::ObservedIn,
+            8_000,
+            [evidence_id],
+            GraphProducerRole::Hunter,
+            producer,
+            GraphLogicalTime::new(1_700_000_000_100),
+            EdgeState::Proposed,
+        )
+        .unwrap()
+        .signed_with(&signer(), "hunter-a")
+        .unwrap();
+        let mut dangling = edge.clone();
+        dangling.supersedes = Some(EdgeId::new("edge:missing"));
+        dangling = dangling.signed_with(&signer(), "hunter-a").unwrap();
+        assert!(matches!(
+            graph.admit_edge(dangling),
+            Err(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("not admitted")
+        ));
+        graph.admit_edge(edge).unwrap();
+        assert!(graph.validate().is_ok());
     }
 }

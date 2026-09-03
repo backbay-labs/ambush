@@ -8,6 +8,7 @@ use swarm_core::agent::{
 use swarm_core::config::PheromoneConfig;
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
+use swarm_crypto::sha256_hex;
 use swarm_pheromone::{
     ConfiguredPheromoneSubstrate, DepositSigningPayload, PheromoneSubstrate, SubstrateError,
 };
@@ -294,8 +295,16 @@ impl StalkerAgent {
             // Outstanding work prevents campaign rotation before this point.
             // Capture the campaign identity before the terminal commit so a
             // concurrent post-commit rotation cannot relabel the publication.
+            let failure_summary_digest = sha256_hex(
+                format!(
+                    "{:?}\0{}",
+                    investigation.bundle.status,
+                    investigation.bundle.failure_reason.as_deref().unwrap_or("")
+                )
+                .as_bytes(),
+            );
             graph
-                .close_failed_stalker_hunt(hunt_id, worker_now)
+                .close_failed_stalker_hunt(hunt_id, worker_now, &failure_summary_digest)
                 .map_err(agent_tick_error)?;
             let Some(publication) = graph
                 .committed_stalker_publication(hunt_id)
@@ -305,6 +314,7 @@ impl StalkerAgent {
             };
             let graph_id = publication.graph_id;
             let completion = publication.completion;
+            let failure_summaries = publication.failure_summaries;
             let publication_id = format!(
                 "stalker-findings:{}:{}:{}",
                 graph_id, hunt_id, investigation.bundle.investigation_id
@@ -322,8 +332,9 @@ impl StalkerAgent {
                     "failure_reason": investigation.bundle.failure_reason,
                     "graph_id": graph_id,
                     "publication_id": publication_id,
-                    "acquisition_no_findings": completion.acquisition_no_findings,
-                    "falsification_no_findings": completion.falsification_no_findings,
+                    "acquisition_failures": completion.acquisition_failures,
+                    "falsification_failures": completion.falsification_failures,
+                    "task_failure_summaries": failure_summaries,
                     "memory_records_projected": completion.memory_records_projected,
                 }),
                 confidence: 0.0,
@@ -955,7 +966,7 @@ mod tests {
         assert_eq!(findings["graph_id"], graph.graph_id().as_str());
         assert_eq!(findings["acquisitions_completed"], 1);
         assert_eq!(findings["falsifications_completed"], 1);
-        assert_eq!(findings["falsification_no_findings"], 0);
+        assert_eq!(findings["falsification_no_findings"], 1);
         assert_eq!(findings["memory_records_projected"], 1);
         assert!(
             !second_actions
@@ -963,7 +974,7 @@ mod tests {
                 .any(|action| matches!(action, SwarmAction::DepositPheromone { .. }))
         );
         assert!(substrate.recent_deposits(10).await.unwrap().is_empty());
-        assert_eq!(graph.summary().unwrap().completed_task_count, 2);
+        assert_eq!(graph.summary().unwrap().completed_task_count, 3);
     }
 
     #[tokio::test]
@@ -1182,7 +1193,7 @@ mod tests {
         let summary = graph.summary().unwrap();
         assert_eq!(summary.evidence_count, 1);
         assert_eq!(summary.hypothesis_count, 2);
-        assert_eq!(summary.pending_task_count, 3);
+        assert_eq!(summary.pending_task_count, 4);
     }
 
     #[tokio::test]
@@ -1283,11 +1294,11 @@ mod tests {
                 .iter()
                 .any(|action| matches!(action, SwarmAction::PublishFindings { .. }))
         );
-        assert_eq!(graph.summary().unwrap().completed_task_count, 2);
+        assert_eq!(graph.summary().unwrap().completed_task_count, 3);
     }
 
     #[tokio::test]
-    async fn stalker_closes_failed_investigation_work_once_as_no_finding() {
+    async fn stalker_closes_failed_investigation_work_once_as_failure() {
         let hunt_id = "hunt-graph-stalker-failure";
         let pheromone = pheromone_config();
         let replay_store = replay_store();
@@ -1368,11 +1379,18 @@ mod tests {
             })
             .unwrap();
         assert_eq!(findings["investigation_status"], "timed_out");
-        assert_eq!(findings["acquisition_no_findings"], 1);
-        assert_eq!(findings["falsification_no_findings"], 1);
+        assert_eq!(findings["acquisition_failures"], 1);
+        assert_eq!(findings["falsification_failures"], 2);
+        assert_eq!(
+            findings["task_failure_summaries"].as_array().map(Vec::len),
+            Some(1)
+        );
         let summary = graph.summary().unwrap();
-        assert_eq!(summary.completed_task_count, 2);
+        assert_eq!(summary.completed_task_count, 0);
+        assert_eq!(summary.failed_task_count, 3);
         assert_eq!(summary.pending_task_count, 1);
+        assert_eq!(summary.metrics.failed_acquisitions, 1);
+        assert_eq!(summary.metrics.failed_falsifications, 2);
         assert!(agent.tick(&env(hunt_id)).await.unwrap().is_empty());
     }
 
@@ -1452,7 +1470,7 @@ mod tests {
             SwarmAction::PublishFindings { findings, .. }
                 if findings["investigation_completed_at_ms"] == 1_700_000_000_020_i64
         )));
-        assert_eq!(graph.summary().unwrap().completed_task_count, 2);
+        assert_eq!(graph.summary().unwrap().completed_task_count, 3);
         assert!(matches!(
             claimed.request.kind,
             swarm_core::hypothesis_graph::TaskKind::AcquireEvidence
@@ -1540,7 +1558,7 @@ mod tests {
             action,
             SwarmAction::PublishFindings { hunt_id, .. } if hunt_id.0 == first_hunt
         )));
-        assert_eq!(graph.summary().unwrap().completed_task_count, 2);
+        assert_eq!(graph.summary().unwrap().completed_task_count, 3);
         assert!(agent.tick(&multi_hunt_env).await.is_err());
     }
 

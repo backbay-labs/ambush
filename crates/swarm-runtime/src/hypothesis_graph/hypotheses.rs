@@ -152,6 +152,16 @@ impl HypothesisSeedInput {
                 .then_with(|| left.evidence_ids.cmp(&right.evidence_ids))
         });
         assessments.dedup();
+        let assessed_candidates = assessments
+            .iter()
+            .map(|assessment| assessment.hypothesis_id.clone())
+            .collect::<BTreeSet<_>>();
+        if assessed_candidates != candidates {
+            return Err(GraphAdmissionError::InvalidField {
+                field: "hypothesis_seed.assessments".to_string(),
+                reason: "every candidate hypothesis requires at least one assessment".to_string(),
+            });
+        }
         Ok(Self {
             graph_id,
             candidate_hypothesis_ids,
@@ -292,18 +302,22 @@ pub(crate) fn coordination_task_targets(
     seed.validate()?;
     let mut targets = BTreeSet::new();
     for assessment in &seed.assessments {
+        // Every durable alternative carries an explicit falsification task,
+        // including an alternative that arrives with an initial support or
+        // refutation decision. Besides keeping all reasoning falsifiable,
+        // this is the marker-1 store's structural proof that a newly admitted
+        // hypothesis came through coordinated seed expansion rather than a
+        // caller-crafted direct CAS.
+        targets.insert((
+            TaskKind::FalsifyHypothesis,
+            TaskTarget::Hypothesis {
+                hypothesis_id: assessment.hypothesis_id.clone(),
+            },
+        ));
         if matches!(
             assessment.disposition,
             HypothesisDisposition::Unresolved | HypothesisDisposition::Contradicts
         ) {
-            if assessment.disposition == HypothesisDisposition::Contradicts {
-                targets.insert((
-                    TaskKind::FalsifyHypothesis,
-                    TaskTarget::Hypothesis {
-                        hypothesis_id: assessment.hypothesis_id.clone(),
-                    },
-                ));
-            }
             for evidence_id in &assessment.evidence_ids {
                 targets.insert((
                     TaskKind::AcquireEvidence,
@@ -445,21 +459,51 @@ mod tests {
             disposition: HypothesisDisposition::Unresolved,
             provenance: evidence.clone(),
         };
+        let second_assessment = HypothesisSeedAssessment {
+            hypothesis_id: second.clone(),
+            evidence_ids: vec![evidence.clone()],
+            disposition: HypothesisDisposition::Unresolved,
+            provenance: evidence.clone(),
+        };
         let seed = HypothesisSeedInput::new(
             GraphId::new("graph:hypothesis-unit"),
             vec![second.clone(), first.clone()],
-            vec![assessment.clone(), assessment],
+            vec![assessment.clone(), assessment, second_assessment],
             GraphLogicalTime::new(10),
         )
         .expect("set-like seed input must canonicalize");
 
         assert_eq!(seed.candidate_hypothesis_ids, vec![first, second]);
-        assert_eq!(seed.assessments.len(), 1);
+        assert_eq!(seed.assessments.len(), 2);
         assert_eq!(seed.assessments[0].evidence_ids, vec![evidence]);
     }
 
     #[test]
-    fn neutral_target_expansion_never_infers_falsification() {
+    fn every_candidate_requires_an_assessment() {
+        let first = HypothesisId::new("hypothesis:first");
+        let second = HypothesisId::new("hypothesis:second");
+        let evidence = EvidenceId::new("evidence:seed");
+        let result = HypothesisSeedInput::new(
+            GraphId::new("graph:hypothesis-unit"),
+            vec![first.clone(), second],
+            vec![HypothesisSeedAssessment {
+                hypothesis_id: first,
+                evidence_ids: vec![evidence.clone()],
+                disposition: HypothesisDisposition::Unresolved,
+                provenance: evidence,
+            }],
+            GraphLogicalTime::new(10),
+        );
+        assert!(matches!(
+            result,
+            Err(GraphAdmissionError::InvalidField { field, reason })
+                if field == "hypothesis_seed.assessments"
+                    && reason.contains("every candidate")
+        ));
+    }
+
+    #[test]
+    fn durable_target_expansion_contains_every_open_operation_kind() {
         let seed = seed();
         let targets =
             coordination_task_targets(&seed, &BTreeSet::from([EdgeId::new("edge:admitted")]))
@@ -477,7 +521,7 @@ mod tests {
         assert!(
             targets
                 .iter()
-                .all(|(kind, _)| *kind != TaskKind::FalsifyHypothesis)
+                .any(|(kind, _)| *kind == TaskKind::FalsifyHypothesis)
         );
     }
 }

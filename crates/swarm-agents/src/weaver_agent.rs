@@ -7,6 +7,7 @@ use swarm_core::agent::{
 };
 use swarm_core::hypothesis_graph::{TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY, TaskId};
 use swarm_core::types::{AgentId, HuntId, SwarmAction};
+use swarm_crypto::sha256_hex;
 use swarm_spine::{
     ConfiguredIncidentStore, ConfiguredInvestigationBundleStore, IncidentStore,
     InvestigationBundleStore, InvestigationStatus,
@@ -130,8 +131,16 @@ impl WeaverAgent {
                 return Ok(Vec::new());
             }
             InvestigationStatus::Failed | InvestigationStatus::TimedOut => {
+                let failure_summary_digest = sha256_hex(
+                    format!(
+                        "{:?}\0{}",
+                        investigation.bundle.status,
+                        investigation.bundle.failure_reason.as_deref().unwrap_or("")
+                    )
+                    .as_bytes(),
+                );
                 if !graph
-                    .complete_challenge_no_finding(&context.task_id, now)
+                    .fail_challenge(&context.task_id, now, &failure_summary_digest)
                     .map_err(internal_error)?
                 {
                     return Ok(Vec::new());
@@ -212,9 +221,8 @@ impl WeaverAgent {
             "weaver-findings:{}:{}:{}",
             publication.graph_id, publication.task_id, investigation.bundle.investigation_id
         );
-        if publication.no_finding {
-            let retry_exhausted = publication.retry_exhaustion_failure_summary.as_deref()
-                == Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY);
+        if let Some(failure_summary) = &publication.failure_summary {
+            let retry_exhausted = failure_summary == TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY;
             if !retry_exhausted
                 && !matches!(
                     investigation.bundle.status,
@@ -222,7 +230,7 @@ impl WeaverAgent {
                 )
             {
                 return Err(internal_error(std::io::Error::other(format!(
-                    "Weaver worker no-finding publication `{}` has non-failed investigation status",
+                    "Weaver failure publication `{}` has non-failed investigation status",
                     publication.task_id
                 ))));
             }
@@ -236,7 +244,26 @@ impl WeaverAgent {
                     "investigation_completed_at_ms": investigation.bundle.completed_at_ms,
                     "investigation_status": investigation.bundle.status,
                     "failure_reason": investigation.bundle.failure_reason,
-                    "task_failure_summary": publication.retry_exhaustion_failure_summary,
+                    "task_failure_summary": failure_summary,
+                    "challenge_failed": true,
+                    "challenge_no_finding": false,
+                }),
+                confidence: 0.0,
+            });
+        }
+        if publication.no_finding {
+            return Ok(SwarmAction::PublishFindings {
+                hunt_id: HuntId(publication.hunt_id.clone()),
+                findings: serde_json::json!({
+                    "graph_id": publication.graph_id,
+                    "graph_task_id": publication.task_id,
+                    "publication_id": publication_id,
+                    "evidence_ids": publication.evidence_ids,
+                    "investigation_completed_at_ms": investigation.bundle.completed_at_ms,
+                    "investigation_status": investigation.bundle.status,
+                    "failure_reason": investigation.bundle.failure_reason,
+                    "task_failure_summary": null,
+                    "challenge_failed": false,
                     "challenge_no_finding": true,
                 }),
                 confidence: 0.0,
@@ -909,7 +936,8 @@ mod tests {
             })
             .unwrap();
         assert_eq!(findings["investigation_status"], "completed");
-        assert_eq!(findings["challenge_no_finding"], true);
+        assert_eq!(findings["challenge_failed"], true);
+        assert_eq!(findings["challenge_no_finding"], false);
         assert_eq!(
             findings["task_failure_summary"],
             swarm_core::hypothesis_graph::TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY
@@ -992,8 +1020,12 @@ mod tests {
             })
             .unwrap();
         assert_eq!(findings["investigation_status"], "failed");
-        assert_eq!(findings["challenge_no_finding"], true);
-        assert_eq!(graph.summary().unwrap().completed_task_count, 1);
+        assert_eq!(findings["challenge_failed"], true);
+        assert_eq!(findings["challenge_no_finding"], false);
+        let summary = graph.summary().unwrap();
+        assert_eq!(summary.completed_task_count, 0);
+        assert_eq!(summary.failed_task_count, 1);
+        assert_eq!(summary.metrics.failed_challenges, 1);
         assert!(agent.tick(&env(hunt_id)).await.unwrap().is_empty());
     }
 }

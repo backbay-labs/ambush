@@ -2191,7 +2191,7 @@ async fn handler_queues_durable_replay_without_graph_io_on_request_path() {
     let summary = graph.summary().unwrap();
     assert_eq!(summary.evidence_count, 1);
     assert_eq!(summary.edge_count, 3);
-    assert_eq!(summary.pending_task_count, 5);
+    assert_eq!(summary.pending_task_count, 6);
     assert_eq!(summary.metrics.submissions, 1);
     drop(graph);
     drop(state);
@@ -2233,7 +2233,7 @@ async fn startup_reconciliation_recovers_durable_replays_missing_from_graph() {
     let summary = state.current_hypothesis_graph().unwrap().summary().unwrap();
     assert_eq!(summary.evidence_count, 2);
     assert_eq!(summary.hypothesis_count, 4);
-    assert_eq!(summary.pending_task_count, 10);
+    assert_eq!(summary.pending_task_count, 12);
 
     let retry = state.reconcile_hypothesis_graph_replays().unwrap();
     assert_eq!(retry.examined, 0);
@@ -2249,7 +2249,7 @@ async fn scheduler_budget_retries_share_each_reconciliation_tick_and_converge() 
     let mut config = test_config("suspicious_process_tree");
     let graph_root = temp_path("reconcile-scheduler-budget-retry");
     enable_collective_hypothesis_graph(&mut config, &graph_root);
-    config.hypothesis_graph.max_work_units_per_tick = 5;
+    config.hypothesis_graph.max_work_units_per_tick = 6;
     let state =
         IngestState::from_config(temp_path("reconcile-scheduler-budget-retry-config"), config)
             .unwrap();
@@ -2763,7 +2763,7 @@ async fn infrastructure_detector_replays_reach_enabled_collective_graph() {
     assert_eq!(reconciliation.failures, 0);
     let summary = state.current_hypothesis_graph().unwrap().summary().unwrap();
     assert_eq!(summary.evidence_count, 3);
-    assert_eq!(summary.pending_task_count, 9);
+    assert_eq!(summary.pending_task_count, 12);
     let projection = state
         .current_hypothesis_graph()
         .unwrap()
@@ -2797,7 +2797,7 @@ async fn reconciliation_retries_old_failed_replays_beyond_graph_task_capacity() 
     let mut config = test_config("suspicious_process_tree");
     let graph_root = temp_path("reconcile-all-replays-beyond-task-capacity");
     enable_collective_hypothesis_graph(&mut config, &graph_root);
-    config.hypothesis_graph.max_tasks = 5;
+    config.hypothesis_graph.max_tasks = 6;
     let state = IngestState::from_config(
         temp_path("reconcile-all-replays-beyond-task-capacity-config"),
         config,
@@ -3970,7 +3970,7 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         .unwrap();
     assert_eq!(tasks.status(), StatusCode::OK);
     let tasks: Value = parse_json(tasks).await;
-    assert_eq!(tasks["data"].as_array().unwrap().len(), 5);
+    assert_eq!(tasks["data"].as_array().unwrap().len(), 6);
 
     let first_task_page = app
         .clone()
@@ -4022,7 +4022,7 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         .unwrap();
     assert_eq!(third_task_page.status(), StatusCode::OK);
     let third_task_page: Value = parse_json(third_task_page).await;
-    assert_eq!(third_task_page["data"].as_array().unwrap().len(), 1);
+    assert_eq!(third_task_page["data"].as_array().unwrap().len(), 2);
     assert!(third_task_page.get("cursor").is_none());
 
     let memory = app

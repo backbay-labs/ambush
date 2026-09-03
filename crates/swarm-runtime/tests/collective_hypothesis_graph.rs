@@ -15,15 +15,15 @@ use swarm_core::config::{
     BundleStoreConfig, HypothesisGraphConfig, MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES,
 };
 use swarm_core::hypothesis_graph::{
-    ActorNode, CausalEdge, CausalRelation, ConfidenceDistribution, DecisionKind, DecisionRecord,
-    EdgeState, EventNode, EvidenceClock, EvidenceEnvelope, EvidenceScope, EvidenceSourceFamily,
-    EvidenceUtility, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode, GraphNodeId,
-    GraphProducerRole, GraphResourceLimits, Hypothesis, HypothesisDelta, HypothesisGraph,
-    HypothesisId, KillChainClaim as CoreKillChainClaim, KillChainStage, LogicalTaskDescriptor,
-    MemoryOutcome, MemoryProvenance, OrderingClaim, SchedulerBudget, SourceLineage, StrategyMemory,
+    ActorNode, CausalEdge, CausalRelation, DecisionKind, DecisionRecord, EdgeState, EventNode,
+    EvidenceClock, EvidenceEnvelope, EvidenceScope, EvidenceSourceFamily, EvidenceUtility,
+    GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode, GraphNodeId, GraphProducerRole,
+    GraphResourceLimits, HypothesisDelta, HypothesisGraph, HypothesisId,
+    KillChainClaim as CoreKillChainClaim, KillChainStage, LogicalTaskDescriptor, MemoryOutcome,
+    MemoryProvenance, OrderingClaim, SchedulerBudget, SourceLineage, StrategyMemory,
     StrategyMemoryExpiryEnvelope, TaskCapabilityProof, TaskClaimRequest, TaskCompletion,
     TaskCompletionKind, TaskDecisionLink, TaskId, TaskKind, TaskTarget, TaskTerminalEnvelope,
-    TypedEvidencePayload, UncertaintyReason,
+    TypedEvidencePayload,
 };
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 use swarm_core::{
@@ -36,18 +36,17 @@ use swarm_runtime::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use swarm_runtime::hypothesis_graph::{
     CollectiveHypothesisService, DeterministicScheduler, DurableHypothesisCoordinator,
     EvidenceAdmissionError, EvidenceAdmissionOutcome, EvidenceRegistry, FixedGraphClock,
-    GraphRecordSigner, HypothesisGraphRuntime, HypothesisTaskLedger, KeypairGraphRecordSigner,
-    MAX_RAW_PROJECTION_BYTES, MAX_RAW_PROJECTION_DEPTH, MAX_RAW_PROJECTION_NODES,
-    MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, WitnessAdmission, normalize_source_timestamp,
-    normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
-    project_memory_priority, run_collective_benchmark,
+    GraphRecordSigner, HypothesisGraphRuntime, HypothesisSeedInput, HypothesisTaskLedger,
+    KeypairGraphRecordSigner, MAX_RAW_PROJECTION_BYTES, MAX_RAW_PROJECTION_DEPTH,
+    MAX_RAW_PROJECTION_NODES, MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, WitnessAdmission,
+    normalize_source_timestamp, normalize_telemetry_event, normalize_telemetry_event_with_unit,
+    normalize_threat_intel_entry, project_memory_priority, run_collective_benchmark,
 };
 use swarm_spine::hypothesis_graph_store::GraphStoreError;
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, FileHypothesisGraphStore, GraphStoreRevision,
-    GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore, MemoryHypothesisGraphStore,
-    MemoryStrategyMemoryStore, PolicyRecord, ReasoningStateUpdate, ReplayBundle,
-    StrategyMemoryStore,
+    GraphStoreSnapshot, HypothesisGraphStore, MemoryHypothesisGraphStore,
+    MemoryStrategyMemoryStore, PolicyRecord, ReplayBundle, StrategyMemoryStore,
 };
 
 fn key(seed: u8) -> Keypair {
@@ -2346,7 +2345,7 @@ fn containment_fixture() -> ContainmentFixture {
         8_000,
         [evidence_id.clone()],
         GraphProducerRole::Hunter,
-        producer,
+        producer.clone(),
         GraphLogicalTime::new(1),
         EdgeState::Proposed,
     )
@@ -2367,29 +2366,38 @@ fn containment_fixture() -> ContainmentFixture {
     )
     .unwrap();
     let hypothesis_id = HypothesisId::new("hypothesis:containment");
-    let hypothesis = Hypothesis::new(
-        hypothesis_id.clone(),
-        ConfidenceDistribution::uniform_two(),
-        [UncertaintyReason::InsufficientEvidence],
-        [],
-    )
-    .unwrap()
-    .with_claims([edge_id.clone()]);
     let store = MemoryHypothesisGraphStore::new_with_config(graph, signer, &config).unwrap();
     let initial = store.snapshot().unwrap();
-    let state = GraphStoreState::with_reasoning_state(
-        initial.state().clone(),
-        ReasoningStateUpdate::migration_to_hypotheses(
-            config.resource_limits(),
-            GraphLogicalTime::new(1),
-        )
-        .with_hypotheses(BTreeMap::from([(hypothesis_id.clone(), hypothesis)]))
-        .with_scheduler_budget(
-            SchedulerBudget::new_with_config(&config, GraphLogicalTime::new(1)).unwrap(),
-        ),
+    let mut ledger = HypothesisTaskLedger::from_config(&config, GraphLogicalTime::new(1)).unwrap();
+    let seed = HypothesisSeedInput::from_normalized_evidence(
+        initial.state().graph_id.clone(),
+        vec![
+            hypothesis_id.clone(),
+            HypothesisId::new("hypothesis:containment-control"),
+        ],
+        vec![evidence_id.clone()],
+        GraphLogicalTime::new(1),
     )
     .unwrap();
-    let snapshot = store.compare_and_swap(initial.revision(), state).unwrap();
+    let seeded = ledger
+        .coordinate_seed(
+            &store,
+            initial.revision(),
+            &seed,
+            producer,
+            EvidenceScope::new([], [evidence_id.clone()], []).unwrap(),
+        )
+        .unwrap();
+    let mut with_claim = seeded.snapshot.state().clone();
+    with_claim
+        .hypotheses
+        .get_mut(&hypothesis_id)
+        .unwrap()
+        .claims
+        .insert(edge_id.clone());
+    let snapshot = store
+        .compare_and_swap(seeded.snapshot.revision(), with_claim)
+        .unwrap();
     ContainmentFixture {
         snapshot,
         hypothesis_id,
@@ -2713,14 +2721,28 @@ struct TerminalTaskFixture {
 
 fn terminal_task_fixture() -> TerminalTaskFixture {
     let claimant_key = key(91);
-    let evidence = normalize_telemetry_event(
-        &process_event("terminal:evidence", "curl https://terminal.example"),
-        &clock(),
-        &claimant_key,
-        GraphProducerRole::Normalizer,
-        "normalizer:terminal",
+    let evidence = EvidenceEnvelope::new(
+        EvidenceSourceFamily::Process,
+        "terminal:evidence",
+        SourceLineage::new("fixture", "terminal:evidence").unwrap(),
+        EvidenceClock::observed(GraphLogicalTime::new(150)),
+        OrderingClaim::Unknown,
+        TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest: "process:terminal".to_string(),
+            parent_process_digest: None,
+            entity_ids: Vec::new(),
+            content_digest: "digest:terminal".to_string(),
+        },
     )
     .unwrap();
+    let evidence = evidence
+        .sign_with(
+            &claimant_key,
+            GraphProducerRole::Normalizer,
+            "normalizer:terminal",
+        )
+        .unwrap();
     let graph_id = GraphId::new("graph:terminal-cas");
     let config = HypothesisGraphConfig {
         enabled: true,
@@ -2955,7 +2977,7 @@ fn production_complete_task_enforces_signed_lineage() {
 fn coordinator_uses_config_bound_budget_per_logical_tick() {
     let config = HypothesisGraphConfig {
         enabled: false,
-        max_work_units_per_tick: 3,
+        max_work_units_per_tick: 9,
         max_claims_per_tick: 1,
         ..HypothesisGraphConfig::default()
     };
@@ -3009,7 +3031,7 @@ fn coordinator_uses_config_bound_budget_per_logical_tick() {
         DurableHypothesisCoordinator::new_with_store(&config, tick, &store, signer).unwrap();
 
     let initial = store.snapshot().unwrap();
-    assert_eq!(coordinator.ledger().scheduler_budget().max_work_units, 3);
+    assert_eq!(coordinator.ledger().scheduler_budget().max_work_units, 9);
     assert_eq!(coordinator.ledger().scheduler_budget().max_claims, 1);
     let first = coordinator
         .coordinate_seed(
@@ -3020,11 +3042,11 @@ fn coordinator_uses_config_bound_budget_per_logical_tick() {
             scope.clone(),
         )
         .unwrap();
-    assert_eq!(first.task_ids.len(), 1);
-    assert_eq!(first.snapshot.state().tasks.len(), 1);
+    assert_eq!(first.task_ids.len(), 3);
+    assert_eq!(first.snapshot.state().tasks.len(), 3);
     let persisted_budget = first.snapshot.scheduler_budget().unwrap().clone();
     assert_eq!(persisted_budget.current_tick(), tick);
-    assert_eq!(persisted_budget.work_units_used(), 1);
+    assert_eq!(persisted_budget.work_units_used(), 3);
     assert_eq!(persisted_budget.claims_used(), 0);
     assert_eq!(coordinator.ledger().scheduler_budget(), &persisted_budget);
 
@@ -3059,7 +3081,7 @@ fn coordinator_uses_config_bound_budget_per_logical_tick() {
     let claimed_snapshot = store.snapshot().unwrap();
     let claimed_budget = claimed_snapshot.scheduler_budget().unwrap().clone();
     assert_eq!(claimed.task_id, claim_request.task_id);
-    assert_eq!(claimed_budget.work_units_used(), 1);
+    assert_eq!(claimed_budget.work_units_used(), 3);
     assert_eq!(claimed_budget.claims_used(), 1);
     assert_eq!(coordinator.ledger().scheduler_budget(), &claimed_budget);
 
@@ -3129,7 +3151,7 @@ fn coordinator_uses_config_bound_budget_per_logical_tick() {
             .scheduler_budget()
             .unwrap()
             .work_units_used(),
-        2
+        6
     );
 
     let final_admitted_seed =
@@ -3167,7 +3189,7 @@ fn coordinator_uses_config_bound_budget_per_logical_tick() {
             .scheduler_budget()
             .unwrap()
             .work_units_used(),
-        3
+        9
     );
 
     let exhausted_seed =
@@ -3244,7 +3266,7 @@ fn coordinator_uses_config_bound_budget_per_logical_tick() {
         .unwrap();
     let reset_budget = next_tick.snapshot.scheduler_budget().unwrap();
     assert_eq!(reset_budget.current_tick(), GraphLogicalTime::new(501));
-    assert_eq!(reset_budget.work_units_used(), 1);
+    assert_eq!(reset_budget.work_units_used(), 3);
 }
 
 #[test]
@@ -3599,12 +3621,47 @@ struct DecisionTaskFixture {
 fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTaskFixture {
     let claimant_key = key(95);
     let claimant = AgentId::from_public_key_hex(&claimant_key.public_key().to_hex());
-    let evidence = normalize_telemetry_event(
-        &process_event("decision:evidence", "curl https://decision.example"),
-        &clock(),
+    let evidence = EvidenceEnvelope::new(
+        EvidenceSourceFamily::Process,
+        "decision:evidence",
+        SourceLineage::new("fixture", "decision:evidence").unwrap(),
+        EvidenceClock::observed(GraphLogicalTime::new(150)),
+        OrderingClaim::Unknown,
+        TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest: "process:decision".to_string(),
+            parent_process_digest: None,
+            entity_ids: Vec::new(),
+            content_digest: "digest:decision".to_string(),
+        },
+    )
+    .unwrap();
+    let evidence = evidence
+        .sign_with(
+            &claimant_key,
+            GraphProducerRole::Normalizer,
+            "normalizer:decision",
+        )
+        .unwrap();
+    let control_evidence = EvidenceEnvelope::new(
+        EvidenceSourceFamily::Process,
+        "decision:control-evidence",
+        SourceLineage::new("fixture", "decision:control-evidence").unwrap(),
+        EvidenceClock::observed(GraphLogicalTime::new(150)),
+        OrderingClaim::Unknown,
+        TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest: "process:decision-control".to_string(),
+            parent_process_digest: None,
+            entity_ids: Vec::new(),
+            content_digest: "digest:decision-control".to_string(),
+        },
+    )
+    .unwrap()
+    .sign_with(
         &claimant_key,
         GraphProducerRole::Normalizer,
-        "normalizer:decision",
+        "normalizer:decision-control",
     )
     .unwrap();
     let graph_id = GraphId::new("graph:decision-cas");
@@ -3624,6 +3681,7 @@ fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTas
     graph.admit_node(actor).unwrap();
     graph.admit_node(event).unwrap();
     graph.admit_evidence(evidence.clone()).unwrap();
+    graph.admit_evidence(control_evidence.clone()).unwrap();
     let edge = CausalEdge::new(
         &actor_id,
         &event_id,
@@ -3658,7 +3716,7 @@ fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTas
         kind,
         target.clone(),
         role,
-        claimant,
+        claimant.clone(),
         EvidenceScope::new(
             [EvidenceSourceFamily::Process],
             [evidence.evidence_id.clone()],
@@ -3671,41 +3729,57 @@ fn decision_task_fixture(kind: TaskKind, role: GraphProducerRole) -> DecisionTas
     let store = MemoryHypothesisGraphStore::new_with_config(graph, key(96), &config).unwrap();
     let mut ledger =
         HypothesisTaskLedger::from_config(&config, GraphLogicalTime::new(100)).unwrap();
-    let hypothesis = Hypothesis::new(
-        hypothesis_id.clone(),
-        ConfidenceDistribution::uniform_two(),
-        [],
-        [],
-    )
-    .unwrap()
-    .with_claims([edge_id.clone()]);
-    let unrelated_hypothesis_id = HypothesisId::new("hypothesis:unrelated-decision");
-    let unrelated_hypothesis = Hypothesis::new(
-        unrelated_hypothesis_id.clone(),
-        ConfidenceDistribution::uniform_two(),
-        [],
-        [],
-    )
-    .unwrap();
     let initial = store.snapshot().unwrap();
-    let reasoning_state = GraphStoreState::with_reasoning_state(
-        initial.state().clone(),
-        ReasoningStateUpdate::migration_to_hypotheses(
-            config.resource_limits(),
-            GraphLogicalTime::new(100),
-        )
-        .with_hypotheses(BTreeMap::from([
-            (hypothesis_id.clone(), hypothesis),
-            (unrelated_hypothesis_id, unrelated_hypothesis),
-        ]))
-        .with_scheduler_budget(
-            SchedulerBudget::new_with_config(&config, GraphLogicalTime::new(100)).unwrap(),
-        ),
+    let seed = HypothesisSeedInput::from_normalized_evidence(
+        initial.state().graph_id.clone(),
+        vec![
+            hypothesis_id.clone(),
+            HypothesisId::new("hypothesis:decision-peer"),
+        ],
+        vec![evidence.evidence_id.clone()],
+        GraphLogicalTime::new(100),
     )
     .unwrap();
-    let reasoning_snapshot = store
-        .compare_and_swap(initial.revision(), reasoning_state)
+    let seeded = ledger
+        .coordinate_seed(
+            &store,
+            initial.revision(),
+            &seed,
+            claimant.clone(),
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [evidence.evidence_id.clone()],
+                [],
+            )
+            .unwrap(),
+        )
         .unwrap();
+    let control_seed = HypothesisSeedInput::from_normalized_evidence(
+        seeded.snapshot.state().graph_id.clone(),
+        vec![
+            HypothesisId::new("hypothesis:decision-control"),
+            HypothesisId::new("hypothesis:decision-control-peer"),
+        ],
+        vec![control_evidence.evidence_id.clone()],
+        GraphLogicalTime::new(100),
+    )
+    .unwrap();
+    let reasoning_snapshot = store.snapshot().unwrap();
+    let reasoning_snapshot = ledger
+        .coordinate_seed(
+            &store,
+            reasoning_snapshot.revision(),
+            &control_seed,
+            claimant,
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [control_evidence.evidence_id],
+                [],
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .snapshot;
     ledger
         .create_task(
             &store,
@@ -4056,7 +4130,7 @@ fn challenge_completion_retains_edge_lineage() {
 #[test]
 fn challenge_completion_rejects_unrelated_hypothesis_without_mutation() {
     let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
-    fixture.hypothesis_id = HypothesisId::new("hypothesis:unrelated-decision");
+    fixture.hypothesis_id = HypothesisId::new("hypothesis:decision-control");
     let claim = claim_decision_task(&mut fixture);
     let before = fixture.store.snapshot().unwrap();
     let before_bytes = before.canonical_bytes().unwrap();
@@ -4328,10 +4402,10 @@ fn memory_replay_changes_priority_deterministically() {
 fn failed_coordination_does_not_publish_partial_graph() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        // One parented process replay creates five distinct reasoning
+        // One parented process replay creates six distinct reasoning
         // tasks. Admit exactly one replay, then prove the service fails closed
         // when the next replay requires rotation while work is outstanding.
-        max_tasks: 5,
+        max_tasks: 6,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
     };
@@ -4354,7 +4428,7 @@ fn failed_coordination_does_not_publish_partial_graph() {
             &rejection,
             Err(
                 swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
-                    outstanding_tasks: 5,
+                    outstanding_tasks: 6,
                     ..
                 }
             )
@@ -4443,7 +4517,7 @@ fn seed_signal_converges_through_real_runtime() {
         .unwrap();
     assert_eq!(completion.acquisitions, 1);
     assert_eq!(completion.falsifications, 1);
-    assert_eq!(completion.falsification_no_findings, 0);
+    assert_eq!(completion.falsification_no_findings, 1);
     assert_eq!(completion.memory_records_projected, 1);
 
     let projection = service.operator_projection().unwrap();
@@ -4473,14 +4547,14 @@ fn seed_signal_converges_through_real_runtime() {
         projection.graph.nodes.contains_key(&edge.from)
             && projection.graph.nodes.contains_key(&edge.to)
     }));
-    assert_eq!(projection.tasks.len(), 5);
+    assert_eq!(projection.tasks.len(), 6);
     assert!(
         projection
             .tasks
             .iter()
             .all(|task| task.state == swarm_core::hypothesis_graph::TaskState::Completed)
     );
-    assert_eq!(projection.terminal_publications, 5);
+    assert_eq!(projection.terminal_publications, 6);
     assert_eq!(projection.memory.len(), 1);
     assert_eq!(projection.hypotheses.len(), 2);
     assert!(projection.hypotheses.values().all(|hypothesis| {
@@ -4493,11 +4567,19 @@ fn seed_signal_converges_through_real_runtime() {
     let benign_hypothesis_id = projection
         .tasks
         .iter()
-        .find_map(|task| match (&task.request.kind, &task.request.target) {
-            (TaskKind::FalsifyHypothesis, TaskTarget::Hypothesis { hypothesis_id }) => {
-                Some(hypothesis_id)
+        .find_map(|task| {
+            match (
+                &task.request.kind,
+                &task.request.target,
+                task.completion.as_ref().map(|completion| &completion.kind),
+            ) {
+                (
+                    TaskKind::FalsifyHypothesis,
+                    TaskTarget::Hypothesis { hypothesis_id },
+                    Some(TaskCompletionKind::HypothesisFalsified),
+                ) => Some(hypothesis_id),
+                _ => None,
             }
-            _ => None,
         })
         .unwrap();
     assert_eq!(
@@ -4506,8 +4588,8 @@ fn seed_signal_converges_through_real_runtime() {
     );
     assert_eq!(projection.metrics.completed_acquisitions, 1);
     assert_eq!(projection.metrics.completed_challenges, 3);
-    assert_eq!(projection.metrics.completed_falsifications, 1);
-    assert_eq!(projection.metrics.falsification_no_findings, 0);
+    assert_eq!(projection.metrics.completed_falsifications, 2);
+    assert_eq!(projection.metrics.falsification_no_findings, 1);
     for task in &projection.tasks {
         let expected = if task.request.kind == TaskKind::ChallengeEdge {
             &weaver_id
@@ -4550,8 +4632,8 @@ fn seed_signal_converges_through_real_runtime() {
     let after_retry = service.operator_projection().unwrap();
     assert_eq!(after_retry.graph.evidence.len(), 1);
     assert_eq!(after_retry.graph.edges.len(), 3);
-    assert_eq!(after_retry.tasks.len(), 5);
-    assert_eq!(after_retry.terminal_publications, 5);
+    assert_eq!(after_retry.tasks.len(), 6);
+    assert_eq!(after_retry.terminal_publications, 6);
     assert_eq!(after_retry.memory.len(), 1);
 }
 
@@ -4806,7 +4888,7 @@ fn persisted_threat_intel_match_is_admitted_atomically_with_network_evidence() {
         .find(|edge| edge.relation == CausalRelation::MatchesIndicator)
         .unwrap();
     assert_eq!(contacts.to, indicator_match.to);
-    assert_eq!(projection.tasks.len(), 5);
+    assert_eq!(projection.tasks.len(), 6);
     assert!(
         projection
             .tasks
@@ -4987,16 +5069,16 @@ fn enriched_worker_decisions_remain_bound_to_primary_replay_evidence() {
             .map(|(evidence_id, evidence)| (evidence_id.as_str(), evidence.source_family))
             .collect::<Vec<_>>()
     );
-    let benign = before
-        .tasks
+    let benign = submission
+        .hypothesis_ids
         .iter()
-        .find_map(|task| match (&task.request.kind, &task.request.target) {
-            (TaskKind::FalsifyHypothesis, TaskTarget::Hypothesis { hypothesis_id }) => {
-                Some(hypothesis_id.clone())
-            }
-            _ => None,
+        .find(|hypothesis_id| {
+            before.hypotheses[*hypothesis_id]
+                .uncertainty
+                .contains(&swarm_core::hypothesis_graph::UncertaintyReason::ConflictingEvidence)
         })
-        .unwrap();
+        .unwrap()
+        .clone();
     let malicious = submission
         .hypothesis_ids
         .iter()
@@ -5067,7 +5149,7 @@ fn shipped_defaults_admit_the_maximum_bounded_replay_task_seed() {
     replay.audit.detection = replay.findings[0].clone();
 
     let submission = service.submit_replay(&replay).unwrap();
-    assert_eq!(submission.task_ids.len(), 133);
+    assert_eq!(submission.task_ids.len(), 134);
     assert!(submission.task_ids.len() <= config.max_tasks);
 }
 
@@ -5115,7 +5197,7 @@ fn replay_rotation_uses_generated_task_target_count() {
     let config = HypothesisGraphConfig {
         enabled: true,
         max_tasks: 7,
-        max_work_units_per_tick: 5,
+        max_work_units_per_tick: 6,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
     };
@@ -5155,12 +5237,12 @@ fn replay_rotation_uses_generated_task_target_count() {
         service.submit_replay(&second),
         Err(
             swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
-                outstanding_tasks: 3,
+                outstanding_tasks: 4,
                 ..
             }
         )
     ));
-    assert_eq!(service.operator_projection().unwrap().tasks.len(), 3);
+    assert_eq!(service.operator_projection().unwrap().tasks.len(), 4);
 }
 
 #[test]
@@ -5243,7 +5325,7 @@ fn benign_or_ambiguous_investigation_closes_falsification_without_false_memory()
         .unwrap();
     assert_eq!(completion.acquisitions, 1);
     assert_eq!(completion.falsifications, 0);
-    assert_eq!(completion.falsification_no_findings, 1);
+    assert_eq!(completion.falsification_no_findings, 2);
     assert_eq!(completion.memory_records_projected, 0);
 
     let projection = service.operator_projection().unwrap();
@@ -5267,8 +5349,8 @@ fn benign_or_ambiguous_investigation_closes_falsification_without_false_memory()
         falsification_task.completion.as_ref().unwrap().kind,
         TaskCompletionKind::NoFinding
     );
-    assert_eq!(projection.metrics.completed_falsifications, 1);
-    assert_eq!(projection.metrics.falsification_no_findings, 1);
+    assert_eq!(projection.metrics.completed_falsifications, 2);
+    assert_eq!(projection.metrics.falsification_no_findings, 2);
     assert_eq!(
         stalker.outstanding_stalker_hunts().unwrap(),
         vec![replay.audit.hunt_id.clone()]
@@ -5278,14 +5360,14 @@ fn benign_or_ambiguous_investigation_closes_falsification_without_false_memory()
         .unwrap()
         .unwrap();
     assert_eq!(committed.completion.acquisitions, 1);
-    assert_eq!(committed.completion.falsification_no_findings, 1);
+    assert_eq!(committed.completion.falsification_no_findings, 2);
 }
 
 #[test]
 fn stalker_recovery_is_bounded_and_acknowledgement_advances_the_durable_page() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 5,
+        max_work_units_per_tick: 6,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
     };
@@ -5319,21 +5401,21 @@ fn stalker_recovery_is_bounded_and_acknowledgement_advances_the_durable_page() {
     let first_page = stalker
         .outstanding_stalker_hunts_at(GraphLogicalTime::new(1_700_000_111_000))
         .unwrap();
-    assert_eq!(first_page, hunt_ids[..5]);
+    assert_eq!(first_page, hunt_ids[..6]);
     for hunt_id in &first_page {
         stalker.acknowledge_stalker_publication(hunt_id).unwrap();
     }
     let second_page = stalker
         .outstanding_stalker_hunts_at(GraphLogicalTime::new(1_700_000_111_000))
         .unwrap();
-    assert_eq!(second_page, hunt_ids[5..]);
+    assert_eq!(second_page, hunt_ids[6..]);
 }
 
 #[test]
 fn stalker_recovery_respects_capability_scope_without_republishing_acknowledged_work() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 5,
+        max_work_units_per_tick: 6,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
     };
@@ -5385,7 +5467,7 @@ fn stalker_recovery_respects_capability_scope_without_republishing_acknowledged_
         .unwrap()
         .unwrap();
     assert_eq!(falsification.completion.acquisitions, 0);
-    assert_eq!(falsification.completion.falsification_no_findings, 1);
+    assert_eq!(falsification.completion.falsification_no_findings, 2);
     stalker.acknowledge_stalker_publication(hunt_id).unwrap();
     assert!(stalker.outstanding_stalker_hunts().unwrap().is_empty());
 }
@@ -5452,7 +5534,7 @@ fn older_hunt_completion_is_ordered_after_newer_replay_high_water() {
                 .map(|completion| completion.completed_at)
         })
         .collect::<Vec<_>>();
-    assert_eq!(older_terminal_times.len(), 2);
+    assert_eq!(older_terminal_times.len(), 3);
     assert!(
         older_terminal_times
             .iter()
@@ -5518,7 +5600,7 @@ fn enabled_service_restores_graph_tasks_and_memory_after_restart() {
         .unwrap();
     assert_eq!(completion.memory_records_projected, 1);
     let before = service.operator_projection().unwrap();
-    assert_eq!(before.tasks.len(), 5);
+    assert_eq!(before.tasks.len(), 6);
     assert_eq!(before.memory.len(), 1);
     drop(stalker);
     drop(weaver);
@@ -5672,13 +5754,13 @@ fn expired_worker_lease_is_fenced_and_reclaimed() {
     service.worker([TaskKind::ChallengeEdge], key(128)).unwrap();
     let replay = production_replay_bundle("hunt:phase286:lease-recovery", 1_700_000_040_000);
     service.submit_replay(&replay).unwrap();
-    assert!(encode_metrics(&metrics).contains("swarm_hypothesis_graph_pending_tasks 5"));
+    assert!(encode_metrics(&metrics).contains("swarm_hypothesis_graph_pending_tasks 6"));
 
     let first = stalker
         .claim_next(GraphLogicalTime::new(1_700_000_040_001))
         .unwrap()
         .unwrap();
-    assert!(encode_metrics(&metrics).contains("swarm_hypothesis_graph_pending_tasks 4"));
+    assert!(encode_metrics(&metrics).contains("swarm_hypothesis_graph_pending_tasks 5"));
     let reclaimed = stalker
         .claim_next(GraphLogicalTime::new(1_700_000_040_011))
         .unwrap()
@@ -5861,9 +5943,9 @@ fn retry_exhausted_weaver_terminal_replays_until_durably_acknowledged() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].task_id, first.claim.task_id);
     assert_eq!(pending[0].hunt_id, hunt_id);
-    assert!(pending[0].no_finding);
+    assert!(!pending[0].no_finding);
     assert_eq!(
-        pending[0].retry_exhaustion_failure_summary.as_deref(),
+        pending[0].failure_summary.as_deref(),
         Some(swarm_core::hypothesis_graph::TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY)
     );
     assert_eq!(
@@ -5889,6 +5971,106 @@ fn retry_exhausted_weaver_terminal_replays_until_durably_acknowledged() {
     assert_eq!(replayed, pending);
     weaver
         .acknowledge_weaver_publication(&first.claim.task_id)
+        .unwrap();
+    drop(weaver);
+    drop(restarted);
+
+    let acknowledged =
+        Arc::new(CollectiveHypothesisService::new(&config, service_key, None).unwrap());
+    acknowledged
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key,
+        )
+        .unwrap();
+    let weaver = acknowledged
+        .worker([TaskKind::ChallengeEdge], weaver_key)
+        .unwrap();
+    assert!(weaver.outstanding_weaver_publications().unwrap().is_empty());
+    drop(weaver);
+    drop(acknowledged);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn worker_failure_replays_after_restart_until_durably_acknowledged() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "swarm-phase286-worker-failure-replay-{}-{unique}",
+        std::process::id()
+    ));
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        state_store: BundleStoreConfig::LocalFiles {
+            directory: root.display().to_string(),
+        },
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service_key = key(168);
+    let stalker_key = key(169);
+    let weaver_key = key(170);
+    let hunt_id = "hunt:phase286:worker-failure-replay";
+    let service =
+        Arc::new(CollectiveHypothesisService::new(&config, service_key.clone(), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key.clone(),
+        )
+        .unwrap();
+    let weaver = service
+        .worker([TaskKind::ChallengeEdge], weaver_key.clone())
+        .unwrap();
+    service
+        .submit_replay(&production_replay_bundle(hunt_id, 1_700_000_125_000))
+        .unwrap();
+    let context = weaver
+        .next_challenge_context(GraphLogicalTime::new(1_700_000_125_001))
+        .unwrap()
+        .unwrap();
+    assert!(
+        weaver
+            .fail_challenge(
+                &context.task_id,
+                GraphLogicalTime::new(1_700_000_125_002),
+                "e4b28d4f7b966234bd7402ef2974befa3f2f5961f27b3e2bf89fd06c863782a9",
+            )
+            .unwrap()
+    );
+    let pending = weaver.outstanding_weaver_publications().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].task_id, context.task_id);
+    assert!(!pending[0].no_finding);
+    assert!(pending[0].failure_summary.is_some());
+    let summary = service.summary().unwrap();
+    assert_eq!(summary.failed_task_count, 1);
+    assert_eq!(summary.metrics.failed_challenges, 1);
+    assert_eq!(
+        service.operator_projection().unwrap().terminal_publications,
+        1
+    );
+    drop(weaver);
+    drop(service);
+
+    let restarted =
+        Arc::new(CollectiveHypothesisService::new(&config, service_key.clone(), None).unwrap());
+    restarted
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key.clone(),
+        )
+        .unwrap();
+    let weaver = restarted
+        .worker([TaskKind::ChallengeEdge], weaver_key.clone())
+        .unwrap();
+    assert_eq!(weaver.outstanding_weaver_publications().unwrap(), pending);
+    weaver
+        .acknowledge_weaver_publication(&context.task_id)
         .unwrap();
     drop(weaver);
     drop(restarted);
@@ -6056,7 +6238,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
     assert!(matches!(
         blocked,
         swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
-            outstanding_tasks: 5,
+            outstanding_tasks: 6,
             ..
         }
     ));
@@ -6100,7 +6282,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
     assert_eq!(summaries[1].evidence_count, 1);
     let archived = service.operator_projection_for(&first.graph_id).unwrap();
     assert_eq!(archived.graph.evidence.len(), 1);
-    assert_eq!(archived.tasks.len(), 5);
+    assert_eq!(archived.tasks.len(), 6);
     assert!(archived.tasks.iter().all(|task| matches!(
         task.state,
         swarm_core::hypothesis_graph::TaskState::Completed
@@ -6133,7 +6315,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
             2,
         )
         .unwrap();
-    assert_eq!(third_task_page.len(), 1);
+    assert_eq!(third_task_page.len(), 2);
     assert!(
         first_task_page
             .iter()
@@ -6142,7 +6324,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
             .map(|task| task.request.task_id.clone())
             .collect::<BTreeSet<_>>()
             .len()
-            == 5
+            == 6
     );
     assert_eq!(
         service
@@ -6255,7 +6437,7 @@ fn campaign_admission_reserves_memory_for_each_outstanding_falsification() {
     assert!(matches!(
         blocked,
         swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
-            outstanding_tasks: 5,
+            outstanding_tasks: 6,
             ..
         }
     ));
@@ -6292,7 +6474,7 @@ fn no_finding_falsification_releases_its_memory_reservation() {
             false,
         )
         .unwrap();
-    assert_eq!(completion.falsification_no_findings, 1);
+    assert_eq!(completion.falsification_no_findings, 2);
     assert_eq!(completion.memory_records_projected, 0);
     let original_graph_id = service.graph_id();
 
@@ -6380,7 +6562,7 @@ fn committed_completion_survives_a_persistently_unavailable_memory_projection() 
             .tasks()
             .filter(|task| task.task.state == swarm_core::hypothesis_graph::TaskState::Completed)
             .count(),
-        2
+        3
     );
     assert!(service.summary().is_err());
 
