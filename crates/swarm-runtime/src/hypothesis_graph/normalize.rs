@@ -124,7 +124,13 @@ fn normalize_telemetry_graph_with_unit<C: GraphClock + ?Sized>(
         TelemetryPayload::ProcessStart(process) => (
             EvidenceSourceFamily::Process,
             "process_start",
-            process_payload(process, &source_id, &source_record_id, observed_at)?,
+            process_payload(
+                process,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::ProcessMemoryAccess(access) => (
             EvidenceSourceFamily::Process,
@@ -306,6 +312,49 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
     role: GraphProducerRole,
     scoped_agent_id: impl Into<String>,
 ) -> Result<EvidenceEnvelope, GraphAdmissionError> {
+    normalize_threat_intel_graph_at(
+        entry,
+        source_record_id,
+        observed_at,
+        clock,
+        signer,
+        role,
+        scoped_agent_id,
+    )
+    .map(|normalized| normalized.evidence)
+}
+
+/// Normalize an already-persisted threat-intelligence match for the durable
+/// graph transaction, retaining the exact nodes referenced by its payload.
+pub(crate) fn normalize_threat_intel_entry_for_graph<C: GraphClock + ?Sized>(
+    entry: &ThreatIntelEntry,
+    source_record_id: impl Into<String>,
+    observed_at: GraphLogicalTime,
+    clock: &C,
+    signer: &Keypair,
+    role: GraphProducerRole,
+    scoped_agent_id: impl Into<String>,
+) -> Result<NormalizedGraphEvidence, GraphAdmissionError> {
+    normalize_threat_intel_graph_at(
+        entry,
+        source_record_id,
+        observed_at,
+        clock,
+        signer,
+        role,
+        scoped_agent_id,
+    )
+}
+
+fn normalize_threat_intel_graph_at<C: GraphClock + ?Sized>(
+    entry: &ThreatIntelEntry,
+    source_record_id: impl Into<String>,
+    observed_at: GraphLogicalTime,
+    clock: &C,
+    signer: &Keypair,
+    role: GraphProducerRole,
+    scoped_agent_id: impl Into<String>,
+) -> Result<NormalizedGraphEvidence, GraphAdmissionError> {
     let source_record_id = source_record_id.into();
     let source_record_id = bounded_text("threat_intel.source_record_id", &source_record_id, 256)?;
     observed_at.validate()?;
@@ -361,7 +410,7 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
         indicator_kind: indicator_kind.to_string(),
         confidence_basis_points: confidence_basis_points(entry.confidence),
         expires_at,
-        entity_ids: vec![event_node.node_id, indicator_node.node_id],
+        entity_ids: vec![event_node.node_id.clone(), indicator_node.node_id.clone()],
         content_digest,
     };
     let evidence_clock = clock_for(observed_at, ClockPrecision::Millisecond, 0, clock)?;
@@ -371,7 +420,7 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
     } else {
         lineage
     };
-    EvidenceEnvelope::new(
+    let evidence = EvidenceEnvelope::new(
         EvidenceSourceFamily::ThreatIntelligence,
         source_id,
         lineage,
@@ -379,7 +428,14 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
         OrderingClaim::Unknown,
         payload,
     )?
-    .sign_with(signer, role, scoped_agent_id)
+    .sign_with(signer, role, scoped_agent_id)?;
+    Ok(NormalizedGraphEvidence {
+        evidence,
+        nodes: vec![
+            GraphNode::Event(event_node),
+            GraphNode::Asset(indicator_node),
+        ],
+    })
 }
 
 /// Compatibility alias for callers that use the source record's type name.
@@ -460,6 +516,7 @@ fn legacy_timestamp_unit(timestamp: i64) -> SourceTimestampUnit {
 
 fn process_payload(
     process: &ProcessStartEvent,
+    host_id: Option<&str>,
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
@@ -469,6 +526,7 @@ fn process_payload(
         value => Some(bounded_text("process.parent_process", value, 4 * 1024)?),
     };
     let process_name = bounded_text("process.process_name", &process.process_name, 4 * 1024)?;
+    let host_id = optional_text("process.host_id", host_id, 4 * 1024)?;
     let command_line = bounded_text(
         "process.command_line",
         &process.command_line,
@@ -481,45 +539,52 @@ fn process_payload(
         4 * 1024,
     )?;
     let signer = optional_text("process.signer", process.signer.as_deref(), 4 * 1024)?;
-    let process_digest = digest_projection(&(
-        "process",
-        &process_name,
-        &command_line,
-        &user,
-        &signer,
-        process.signature_valid,
-    ))?;
-    let executable_digest = digest_projection(&("executable", &executable_path))?;
+    // Network telemetry has no PID or command-line instance discriminator.
+    // Use the strongest identity common to both sources (sensor, host, and
+    // process name) for the correlation node; instance-specific fields remain
+    // authenticated in content_digest below.
+    let origin_scope_digest =
+        digest_projection(&("process_origin", source_id, host_id.as_deref()))?;
+    let process_digest = digest_projection(&("process", &origin_scope_digest, &process_name))?;
     let parent_digest = parent_process
         .as_deref()
-        .map(|parent_process| digest_projection(&("parent_process", parent_process)))
+        .map(|parent_process| digest_projection(&("process", &origin_scope_digest, parent_process)))
         .transpose()?;
     let parent_node = parent_digest
         .as_deref()
         .map(|digest| {
-            let parent_executable_digest = digest_projection(&("parent_executable", digest))?;
-            ProcessNode::new(digest, parent_executable_digest)
+            let executable_digest = digest_projection(&("parent_executable", digest))?;
+            ProcessNode::new(digest, executable_digest)
         })
         .transpose()?;
+    let correlation_node = ProcessNode::new(process_digest.clone(), process_digest.clone())?;
     let process_node = match parent_node.as_ref() {
         Some(parent) => ProcessNode::new_with_parent(
             process_digest.clone(),
-            executable_digest,
+            process_digest.clone(),
             parent.node_id.clone(),
         )?,
-        None => ProcessNode::new(process_digest.clone(), executable_digest)?,
+        None => correlation_node.clone(),
     };
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event_node = EventNode::new("process_start", event_node_source_record_id, observed_at)?;
     let mut entity_ids = vec![process_node.node_id.clone(), event_node.node_id.clone()];
     if let Some(parent) = parent_node.as_ref() {
         entity_ids.push(parent.node_id.clone());
+        // A parent-bound ProcessNode preserves exact spawn lineage, while the
+        // unparented correlation node is the stable identity emitted by the
+        // less expressive network adapter for the same host/process tuple.
+        entity_ids.push(correlation_node.node_id.clone());
     }
+    let has_parent = parent_node.is_some();
     let mut nodes = parent_node
         .into_iter()
         .map(GraphNode::Process)
         .collect::<Vec<_>>();
     nodes.push(GraphNode::Process(process_node));
+    if has_parent {
+        nodes.push(GraphNode::Process(correlation_node));
+    }
     nodes.push(GraphNode::Event(event_node));
     if let Some(user) = user.as_deref() {
         let actor = ActorNode::new(digest_projection(&("user", user))?, "process_user")?;
@@ -1162,12 +1227,14 @@ fn network_payload(
     let destination_ip = bounded_text("network.destination_ip", &network.destination_ip, 256)?;
     let protocol = bounded_text("network.protocol", &network.protocol, 256)?;
     let origin_scope_digest =
-        digest_projection(&("network_origin", source_id, host_id.as_deref()))?;
+        digest_projection(&("process_origin", source_id, host_id.as_deref()))?;
     let source_digest = digest_projection(&("process", &origin_scope_digest, &process))?;
-    let destination_digest =
-        digest_projection(&("destination", &destination_ip, network.destination_port))?;
+    // IP identity is stable across ports so persisted threat-intelligence
+    // matches and network observations converge on the same asset node. Port
+    // and protocol remain authenticated event content below.
+    let destination_digest = digest_projection(&("indicator", "ip_address", &destination_ip))?;
     let process_node = ProcessNode::new(source_digest.clone(), source_digest.clone())?;
-    let asset_node = AssetNode::new(destination_digest.clone(), "network_destination")?;
+    let asset_node = AssetNode::new(destination_digest.clone(), "ip_address")?;
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event_node = EventNode::new("network_connect", event_node_source_record_id, observed_at)?;
     let content_digest = digest_projection(&(
@@ -1520,6 +1587,36 @@ mod tests {
         let source_fallback_a = normalize(&event("network:4", None, "sensor-a"));
         let source_fallback_b = normalize(&event("network:5", None, "sensor-b"));
         let other_source = normalize(&event("network:6", Some("host-secret-a"), "sensor-b"));
+        let process_start = normalize(&TelemetryEvent {
+            source: "sensor-a".to_string(),
+            event_id: "process:1".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-secret-a".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "<none>".to_string(),
+                process_name: "curl".to_string(),
+                command_line: "curl https://203.0.113.10".to_string(),
+                user: None,
+                executable_path: Some("/usr/bin/curl".to_string()),
+                signer: None,
+                signature_valid: None,
+            }),
+        });
+        let parented_process_start = normalize(&TelemetryEvent {
+            source: "sensor-a".to_string(),
+            event_id: "process:2".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-secret-a".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "bash".to_string(),
+                process_name: "curl".to_string(),
+                command_line: "curl https://203.0.113.10".to_string(),
+                user: None,
+                executable_path: Some("/usr/bin/curl".to_string()),
+                signer: None,
+                signature_valid: None,
+            }),
+        });
         let source_digest = |evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope| {
             let TypedEvidencePayload::Network { source_digest, .. } = &evidence.payload else {
                 panic!("network telemetry must produce network evidence");
@@ -1533,6 +1630,13 @@ mod tests {
         assert_ne!(
             source_digest(&source_fallback_a),
             source_digest(&source_fallback_b)
+        );
+        assert_eq!(first.entity_ids()[0], process_start.entity_ids()[0]);
+        assert!(
+            parented_process_start
+                .entity_ids()
+                .contains(&first.entity_ids()[0]),
+            "parented process evidence must retain the network-compatible correlation node"
         );
         let encoded = serde_json::to_string(&first).unwrap();
         assert!(!encoded.contains("host-secret-a"));

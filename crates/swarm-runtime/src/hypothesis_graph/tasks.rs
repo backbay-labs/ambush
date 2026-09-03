@@ -699,19 +699,19 @@ pub struct HypothesisCoordinationResult {
 /// validation failure from publishing orphan evidence without its work.
 #[derive(Debug, Clone)]
 pub(crate) struct GraphSeedRecords {
-    evidence: EvidenceEnvelope,
+    evidence: Vec<EvidenceEnvelope>,
     nodes: Vec<GraphNode>,
     edges: Vec<CausalEdge>,
 }
 
 impl GraphSeedRecords {
     pub(crate) fn new(
-        evidence: EvidenceEnvelope,
+        evidence: impl IntoIterator<Item = EvidenceEnvelope>,
         nodes: Vec<GraphNode>,
         edges: Vec<CausalEdge>,
     ) -> Self {
         Self {
-            evidence,
+            evidence: evidence.into_iter().collect(),
             nodes,
             edges,
         }
@@ -719,10 +719,12 @@ impl GraphSeedRecords {
 
     fn admit_into(self, state: &mut GraphStoreState) -> Result<bool, GraphStoreError> {
         let prior_version = state.graph.version;
-        state
-            .graph
-            .admit_evidence(self.evidence)
-            .map_err(GraphStoreError::Admission)?;
+        for evidence in self.evidence {
+            state
+                .graph
+                .admit_evidence(evidence)
+                .map_err(GraphStoreError::Admission)?;
+        }
         for node in self.nodes {
             state
                 .graph

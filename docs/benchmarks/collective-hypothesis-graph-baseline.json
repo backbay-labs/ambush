@@ -3,9 +3,9 @@
   "corpus_id": "collective-hypothesis-graph-v1",
   "corpus_version": 1,
   "oracle_digests": {
-    "manifest_sha256": "8a16c2f3ef595385534af7be4fa0367193e1b49e275b4da95920b5afbd7bd9c2",
-    "ambiguous_fixture_sha256": "353ef1086e2e7632cce9a0c3c202ec240f621004e050ed14d712dc6674b221f8",
-    "withheld_fixture_sha256": "78f7da301ee67aab91626c174b9ab1bd6b01177f46dee8e6f9ffb0a18172c85d"
+    "manifest_sha256": "7f90e9dc52acc0ec6a3df81229e5d218cd5387fca61aca1e959729cde1dd91ca",
+    "ambiguous_fixture_sha256": "f6586beed885ae5c1bc9e4db8739144ae7536941f46506634e752f11c228d2ab",
+    "withheld_fixture_sha256": "9e2cc129b765a431fc5cd15f34ccdf996a3097d1715290e77990285e7e63a7c8"
   },
   "denominators": {
     "adjudicated_cases": 2,
@@ -24,9 +24,9 @@
   },
   "single_agent_baseline": {
     "median_hypothesis_time_ms": 5000,
-    "attack_chain_recall_bps": 8000,
+    "attack_chain_recall_bps": 6000,
     "causal_edge_recall_bps": 6666,
-    "false_causal_edge_rate_bps": 2857,
+    "false_causal_edge_rate_bps": 2500,
     "duplicate_work_rate_bps": 0,
     "evidence_coverage_bps": 7500,
     "logical_work_units": 100

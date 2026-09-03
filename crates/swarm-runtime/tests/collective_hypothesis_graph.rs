@@ -770,7 +770,7 @@ fn source_time_conflicts_remain_visible_and_legacy_host_id_is_ignored() {
 }
 
 #[test]
-fn conflict_detection_is_insertion_order_invariant() {
+fn conflict_detection_preserves_canonical_adjacencies_and_append_only_history() {
     let signer = key(51);
     let events = [
         process_event("process:order", "curl https://one.example/a"),
@@ -786,9 +786,24 @@ fn conflict_detection_is_insertion_order_invariant() {
         admit_telemetry(&mut second, event, &signer, "alias-b");
     }
     assert_eq!(
-        first.conflicts().keys().collect::<Vec<_>>(),
-        second.conflicts().keys().collect::<Vec<_>>()
+        first.evidence().keys().collect::<Vec<_>>(),
+        second.evidence().keys().collect::<Vec<_>>()
     );
+    first.validate().unwrap();
+    second.validate().unwrap();
+
+    // The durable graph is append-only, so a conflict observed before a
+    // canonical middle record arrives remains historical evidence. Every
+    // insertion order must nevertheless contain the same final adjacent
+    // conflicts required by the source-record index.
+    let evidence_ids = first.evidence().keys().collect::<Vec<_>>();
+    for pair in evidence_ids.windows(2) {
+        for registry in [&first, &second] {
+            assert!(registry.conflicts().values().any(|conflict| {
+                &conflict.left_evidence_id == pair[0] && &conflict.right_evidence_id == pair[1]
+            }));
+        }
+    }
 }
 
 #[test]
@@ -4109,7 +4124,7 @@ fn failed_coordination_does_not_publish_partial_graph() {
 fn seed_signal_converges_through_real_runtime() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_nodes: 4,
+        max_nodes: 5,
         max_work_units_per_tick: 32,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
@@ -4170,7 +4185,7 @@ fn seed_signal_converges_through_real_runtime() {
 
     let projection = service.operator_projection().unwrap();
     assert_eq!(projection.graph.evidence.len(), 1);
-    assert_eq!(projection.graph.nodes.len(), 4);
+    assert_eq!(projection.graph.nodes.len(), 5);
     for entity_id in projection.graph.evidence[&first.evidence_id].entity_ids() {
         assert!(
             projection.graph.nodes.contains_key(&entity_id),
@@ -4299,9 +4314,9 @@ fn enabled_minimum_node_limit_admits_parented_process_without_user() {
 
     let submission = service.submit_replay(&replay).unwrap();
     let projection = service.operator_projection().unwrap();
-    assert_eq!(projection.graph.nodes.len(), 3);
+    assert_eq!(projection.graph.nodes.len(), 4);
     let evidence = &projection.graph.evidence[&submission.evidence_id];
-    assert_eq!(evidence.entity_ids().len(), 3);
+    assert_eq!(evidence.entity_ids().len(), 4);
     assert!(
         evidence
             .entity_ids()
@@ -4358,6 +4373,90 @@ fn enabled_minimum_evidence_budget_admits_one_signed_production_envelope() {
             .unwrap()
             .len()
             <= MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES
+    );
+}
+
+#[test]
+fn persisted_threat_intel_match_is_admitted_atomically_with_network_evidence() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(191), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(192),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(193)).unwrap();
+    let mut replay =
+        production_replay_bundle("hunt:phase286:network-threat-intel", 1_700_000_090_200);
+    replay.event = network_event("network-threat-intel", "203.0.113.77");
+    let matched = ThreatIntelEntry {
+        indicator_type: ThreatIntelIndicatorType::IpAddress,
+        value: "203.0.113.77".to_string(),
+        source: "taxii-production".to_string(),
+        indicator_id: Some("indicator:203.0.113.77".to_string()),
+        confidence: 0.98,
+        expires_at: 1_800_000_000_000,
+    };
+    replay.findings[0].event_id = replay.event.event_id.clone();
+    replay.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": [matched],
+    });
+    replay.audit.detection = replay.findings[0].clone();
+
+    service.submit_replay(&replay).unwrap();
+    let projection = service.operator_projection().unwrap();
+    assert_eq!(projection.graph.evidence.len(), 2);
+    assert!(
+        projection
+            .graph
+            .evidence
+            .values()
+            .any(|evidence| { evidence.source_family == EvidenceSourceFamily::ThreatIntelligence })
+    );
+    let contacts = projection
+        .graph
+        .edges
+        .values()
+        .find(|edge| edge.relation == CausalRelation::Contacts)
+        .unwrap();
+    let indicator_match = projection
+        .graph
+        .edges
+        .values()
+        .find(|edge| edge.relation == CausalRelation::MatchesIndicator)
+        .unwrap();
+    assert_eq!(contacts.to, indicator_match.to);
+    assert!(
+        projection
+            .tasks
+            .iter()
+            .all(|task| { task.request.evidence_scope.evidence_ids.len() == 2 })
+    );
+
+    let invalid_service =
+        Arc::new(CollectiveHypothesisService::new(&config, key(194), None).unwrap());
+    invalid_service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(195),
+        )
+        .unwrap();
+    invalid_service
+        .worker([TaskKind::ChallengeEdge], key(196))
+        .unwrap();
+    let mut invalid = replay;
+    invalid.bundle_id.push_str(":expired");
+    invalid.audit.hunt_id.push_str(":expired");
+    invalid.findings[0].evidence["threat_intel_matches"][0]["expires_at"] = serde_json::json!(1);
+    assert!(invalid_service.submit_replay(&invalid).is_err());
+    assert_eq!(
+        invalid_service.summary().unwrap().evidence_count,
+        0,
+        "telemetry must not commit when its matched enrichment is invalid"
     );
 }
 

@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
+use swarm_core::ThreatIntelEntry;
 use swarm_core::config::{BundleStoreConfig, HypothesisGraphConfig};
 use swarm_core::hypothesis_graph::{
     AssetNode, CausalEdge, CausalRelation, DecisionKind, DecisionRecord, EdgeState, EvidenceId,
@@ -44,7 +45,9 @@ use super::clock::FixedGraphClock;
 use super::hypotheses::{HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput};
 use super::inference::{InferredCausalRelation, infer_causal_relations};
 use super::memory::{MemoryPriorityProjection, MemoryProjectionReport, StrategyMemoryProjector};
-use super::normalize::normalize_telemetry_event_for_graph;
+use super::normalize::{
+    normalize_telemetry_event_for_graph, normalize_threat_intel_entry_for_graph,
+};
 use super::tasks::GraphSeedRecords;
 use super::{DurableHypothesisCoordinator, KeypairGraphRecordSigner, TaskClaim, WitnessAdmission};
 use crate::detection::metrics::CriticalPathMetrics;
@@ -54,6 +57,7 @@ const CAMPAIGN_HEAD_SCHEMA_VERSION: u32 = 1;
 const CAMPAIGN_HEAD_STATE_KIND: &str = "collective-hypothesis-campaign-head";
 const CAMPAIGN_HEAD_FILE: &str = "campaign-head.json";
 const MAX_CAMPAIGN_HEAD_BYTES: u64 = 64 * 1024;
+const MAX_REPLAY_THREAT_INTEL_MATCHES: usize = 64;
 static NEXT_CAMPAIGN_HEAD_TEMP: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "linux")]
 const CAMPAIGN_HEAD_O_NOFOLLOW: i32 = 0x20000;
@@ -1246,7 +1250,7 @@ impl CollectiveHypothesisService {
             .max()
             .unwrap_or(5_000);
         let inferred = infer_causal_relations(&evidence.payload)?;
-        let (nodes, edges) = if inferred.is_empty() {
+        let (mut nodes, mut edges) = if inferred.is_empty() {
             fallback_observation_records(
                 normalized.nodes,
                 replay,
@@ -1263,6 +1267,55 @@ impl CollectiveHypothesisService {
                 confidence_basis_points,
             )?
         };
+        let mut evidence_records = vec![evidence.clone()];
+        for (match_digest, entry) in persisted_threat_intel_matches(replay)? {
+            let source_record_id = format!(
+                "runtime-threat-intel:{}",
+                sha256_hex(format!("{evidence_id}:{match_digest}").as_bytes())
+            );
+            let normalized_match = normalize_threat_intel_entry_for_graph(
+                &entry,
+                source_record_id,
+                evidence.clock.observed_at,
+                &clock,
+                &self.signer,
+                GraphProducerRole::Normalizer,
+                "runtime-replay-threat-intel-normalizer",
+            )?;
+            let match_evidence = normalized_match.evidence;
+            let match_confidence_basis_points = match &match_evidence.payload {
+                swarm_core::hypothesis_graph::TypedEvidencePayload::ThreatIntelligence {
+                    confidence_basis_points,
+                    ..
+                } => *confidence_basis_points,
+                _ => {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "threat-intelligence normalizer returned an incompatible payload"
+                            .to_string(),
+                    }
+                    .into());
+                }
+            };
+            let match_inferred = infer_causal_relations(&match_evidence.payload)?;
+            let (match_nodes, match_edges) = inferred_causal_records(
+                normalized_match.nodes,
+                match_inferred,
+                &match_evidence,
+                &self.signer,
+                match_confidence_basis_points,
+            )?;
+            nodes.extend(match_nodes);
+            edges.extend(match_edges);
+            evidence_records.push(match_evidence);
+        }
+        let evidence_ids = evidence_records
+            .iter()
+            .map(|evidence| evidence.evidence_id.clone())
+            .collect::<BTreeSet<_>>();
+        let source_families = evidence_records
+            .iter()
+            .map(|evidence| evidence.source_family)
+            .collect::<BTreeSet<_>>();
         let scope_node_ids = nodes
             .iter()
             .map(|node| node.id().clone())
@@ -1278,7 +1331,7 @@ impl CollectiveHypothesisService {
         let worker_claimants = state.worker_claimants.clone();
         let mut campaign = self.active_campaign()?;
         let mut initial = campaign.store.snapshot()?;
-        if campaign_requires_rotation(&initial, &evidence, &scope_node_ids, &edges)? {
+        if campaign_requires_rotation(&initial, &evidence_records, &scope_node_ids, &edges)? {
             let outstanding_tasks = initial
                 .tasks()
                 .filter(|task| !task_is_terminal(task.task.state))
@@ -1292,12 +1345,8 @@ impl CollectiveHypothesisService {
             campaign = self.rotate_campaign(&mut state, &campaign)?;
             initial = campaign.store.snapshot()?;
         }
-        let graph_records = GraphSeedRecords::new(evidence.clone(), nodes, edges);
-        let scope = EvidenceScope::new(
-            [evidence.source_family],
-            [evidence_id.clone()],
-            scope_node_ids,
-        )?;
+        let graph_records = GraphSeedRecords::new(evidence_records.clone(), nodes, edges);
+        let scope = EvidenceScope::new(source_families, evidence_ids.clone(), scope_node_ids)?;
         let mut retried_persisted_capacity = false;
         let result = loop {
             let logical_time = GraphLogicalTime::new(
@@ -1311,13 +1360,13 @@ impl CollectiveHypothesisService {
             let assessments = vec![
                 HypothesisSeedAssessment {
                     hypothesis_id: malicious.clone(),
-                    evidence_ids: vec![evidence_id.clone()],
+                    evidence_ids: evidence_ids.iter().cloned().collect(),
                     disposition: HypothesisDisposition::Unresolved,
                     provenance: evidence_id.clone(),
                 },
                 HypothesisSeedAssessment {
                     hypothesis_id: benign.clone(),
-                    evidence_ids: vec![evidence_id.clone()],
+                    evidence_ids: evidence_ids.iter().cloned().collect(),
                     disposition: HypothesisDisposition::Contradicts,
                     provenance: evidence_id.clone(),
                 },
@@ -1369,13 +1418,15 @@ impl CollectiveHypothesisService {
                 Err(error) => return Err(error.into()),
             }
         };
-        let replaced_campaign = state
-            .evidence_campaigns
-            .insert(evidence_id.clone(), campaign.index);
-        debug_assert!(
-            replaced_campaign.is_none(),
-            "serialized replay admission replaced an existing evidence campaign"
-        );
+        for admitted_evidence_id in evidence_ids {
+            let replaced_campaign = state
+                .evidence_campaigns
+                .insert(admitted_evidence_id, campaign.index);
+            debug_assert!(
+                replaced_campaign.is_none(),
+                "serialized replay admission replaced an existing evidence campaign"
+            );
+        }
         self.observe_state(result.snapshot.state());
         Ok(GraphSubmission {
             graph_id: campaign.graph_id,
@@ -3334,9 +3385,51 @@ fn fallback_observation_records(
     Ok((normalized_nodes, vec![edge]))
 }
 
+fn persisted_threat_intel_matches(
+    replay: &ReplayBundle,
+) -> Result<Vec<(String, ThreatIntelEntry)>, GraphAdmissionError> {
+    let mut matches = BTreeMap::<String, ThreatIntelEntry>::new();
+    let mut examined_matches = 0_usize;
+    for finding in &replay.findings {
+        let Some(value) = finding.evidence.get("threat_intel_matches") else {
+            continue;
+        };
+        let values = value
+            .as_array()
+            .ok_or_else(|| GraphAdmissionError::InvalidField {
+                field: "replay.findings.evidence.threat_intel_matches".to_string(),
+                reason: "must be an array of persisted threat-intelligence entries".to_string(),
+            })?;
+        for value in values {
+            examined_matches = examined_matches.saturating_add(1);
+            if examined_matches > MAX_REPLAY_THREAT_INTEL_MATCHES {
+                return Err(GraphAdmissionError::ResourceLimitExceeded {
+                    resource: "replay.threat_intel_matches".to_string(),
+                    limit: MAX_REPLAY_THREAT_INTEL_MATCHES,
+                });
+            }
+            let entry: ThreatIntelEntry =
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    GraphAdmissionError::InvalidField {
+                        field: "replay.findings.evidence.threat_intel_matches".to_string(),
+                        reason: format!("contains an invalid persisted entry: {error}"),
+                    }
+                })?;
+            let bytes = canonical_json_bytes(&entry).map_err(|error| {
+                GraphAdmissionError::InvalidField {
+                    field: "replay.findings.evidence.threat_intel_matches".to_string(),
+                    reason: format!("cannot canonicalize a persisted entry: {error}"),
+                }
+            })?;
+            matches.entry(sha256_hex(&bytes)).or_insert(entry);
+        }
+    }
+    Ok(matches.into_iter().collect())
+}
+
 fn campaign_requires_rotation(
     snapshot: &GraphStoreSnapshot,
-    evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope,
+    evidence: &[swarm_core::hypothesis_graph::EvidenceEnvelope],
     candidate_node_ids: &BTreeSet<GraphNodeId>,
     candidate_edges: &[CausalEdge],
 ) -> Result<bool, GraphServiceError> {
@@ -3357,7 +3450,12 @@ fn campaign_requires_rotation(
         .try_fold(0_usize, |total, size| {
             size.map(|size| total.saturating_add(size))
         })?;
-    let added_evidence_bytes = evidence.canonical_bytes()?.len();
+    let added_evidence_bytes = evidence
+        .iter()
+        .map(|item| item.canonical_bytes().map(|bytes| bytes.len()))
+        .try_fold(0_usize, |total, size| {
+            size.map(|size| total.saturating_add(size))
+        })?;
     let added_node_count = candidate_node_ids
         .iter()
         .filter(|node_id| !state.graph.nodes.contains_key(*node_id))
@@ -3387,7 +3485,7 @@ fn campaign_requires_rotation(
         })
         .count();
     Ok(
-        state.graph.evidence.len().saturating_add(1) > limits.max_nodes
+        state.graph.evidence.len().saturating_add(evidence.len()) > limits.max_nodes
             || state.graph.nodes.len().saturating_add(added_node_count) > limits.max_nodes
             || state.graph.edges.len().saturating_add(added_edge_count) > limits.max_edges
             || retained_evidence_bytes.saturating_add(added_evidence_bytes)

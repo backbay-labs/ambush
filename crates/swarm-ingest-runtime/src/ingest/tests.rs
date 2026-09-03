@@ -2618,17 +2618,33 @@ async fn permanent_replay_failures_do_not_hide_later_valid_evidence() {
         1_700_000_034_000,
     );
 
-    let report = state.reconcile_hypothesis_graph_replays().unwrap();
+    let first_page = state.reconcile_hypothesis_graph_replays().unwrap();
     assert_eq!(
-        report.examined,
-        super::HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES + 1
+        first_page.examined,
+        super::HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE
     );
     assert_eq!(
-        report.quarantined,
+        first_page.quarantined,
         super::HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES
     );
-    assert_eq!(report.admitted, 1);
-    assert_eq!(report.failures, super::HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES);
+    assert_eq!(first_page.admitted, 0);
+    assert_eq!(
+        first_page.failures,
+        super::HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES
+    );
+    assert!(first_page.continuation_pending);
+    let first_checkpoint = state
+        .current_replay_store()
+        .hypothesis_graph_checkpoint()
+        .unwrap();
+    assert_eq!(first_checkpoint.cursor_sequence, 256);
+
+    let final_page = state.reconcile_hypothesis_graph_replays().unwrap();
+    assert_eq!(final_page.examined, 1);
+    assert_eq!(final_page.quarantined, 0);
+    assert_eq!(final_page.admitted, 1);
+    assert_eq!(final_page.failures, 0);
+    assert!(!final_page.continuation_pending);
     let checkpoint = state
         .current_replay_store()
         .hypothesis_graph_checkpoint()

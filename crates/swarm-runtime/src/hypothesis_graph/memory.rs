@@ -5,6 +5,7 @@
 //! match into a bounded scheduling hint. It cannot change confidence,
 //! hypothesis status, task capability, or response authority.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -102,7 +103,18 @@ impl StrategyMemoryProjector {
         snapshot: &GraphStoreSnapshot,
     ) -> Result<MemoryProjectionReport, StrategyMemoryStoreError> {
         let mut report = MemoryProjectionReport::default();
-        for entry in snapshot.terminal_outbox().values() {
+        let mut entries = snapshot.terminal_outbox().values().collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            compare_projection_coordinates(
+                left.memory_expiry.as_ref().map(|expiry| expiry.created_at),
+                left.memory_expiry.as_ref().map(|expiry| expiry.expires_at),
+                left.memory.as_ref().map(|memory| &memory.memory_id),
+                right.memory_expiry.as_ref().map(|expiry| expiry.created_at),
+                right.memory_expiry.as_ref().map(|expiry| expiry.expires_at),
+                right.memory.as_ref().map(|memory| &memory.memory_id),
+            )
+        });
+        for entry in entries {
             report.merge(self.project_entry(entry)?);
         }
         Ok(report)
@@ -167,6 +179,20 @@ impl StrategyMemoryProjector {
     }
 }
 
+fn compare_projection_coordinates(
+    left_created_at: Option<GraphLogicalTime>,
+    left_expires_at: Option<GraphLogicalTime>,
+    left_memory_id: Option<&MemoryId>,
+    right_created_at: Option<GraphLogicalTime>,
+    right_expires_at: Option<GraphLogicalTime>,
+    right_memory_id: Option<&MemoryId>,
+) -> Ordering {
+    left_created_at
+        .cmp(&right_created_at)
+        .then_with(|| left_expires_at.cmp(&right_expires_at))
+        .then_with(|| left_memory_id.cmp(&right_memory_id))
+}
+
 impl MemoryProjectionReport {
     fn merge(&mut self, other: Self) {
         self.examined = self.examined.saturating_add(other.examined);
@@ -186,6 +212,51 @@ mod tests {
     use swarm_core::types::AgentId;
     use swarm_crypto::Keypair;
     use swarm_spine::{MemoryStrategyMemoryStore, StrategyMemoryStore};
+
+    #[test]
+    fn recovered_projection_orders_oldest_expiry_records_first() {
+        let older = MemoryId::new("memory:older");
+        let newer = MemoryId::new("memory:newer");
+        let mut recovery_order = [
+            (
+                GraphLogicalTime::new(30),
+                GraphLogicalTime::new(40),
+                newer.clone(),
+            ),
+            (
+                GraphLogicalTime::new(10),
+                GraphLogicalTime::new(20),
+                older.clone(),
+            ),
+        ];
+        recovery_order.sort_by(|left, right| {
+            compare_projection_coordinates(
+                Some(left.0),
+                Some(left.1),
+                Some(&left.2),
+                Some(right.0),
+                Some(right.1),
+                Some(&right.2),
+            )
+        });
+        assert_eq!(
+            recovery_order
+                .iter()
+                .map(|coordinate| &coordinate.2)
+                .collect::<Vec<_>>(),
+            vec![&older, &newer]
+        );
+
+        let actual_tie_break = compare_projection_coordinates(
+            Some(GraphLogicalTime::new(10)),
+            Some(GraphLogicalTime::new(20)),
+            Some(&newer),
+            Some(GraphLogicalTime::new(10)),
+            Some(GraphLogicalTime::new(20)),
+            Some(&older),
+        );
+        assert_eq!(actual_tie_break, newer.cmp(&older));
+    }
 
     #[test]
     fn priority_uses_one_best_memory_and_caps_the_boost() {

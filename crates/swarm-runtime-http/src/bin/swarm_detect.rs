@@ -5132,6 +5132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             admitted_identities.push(weaver_id);
         }
         let mut hypothesis_graph_admission_retry_pending = false;
+        let mut hypothesis_graph_admission_continuation_pending = false;
         if config.hypothesis_graph.enabled {
             state
                 .current_hypothesis_graph()
@@ -5150,16 +5151,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 quarantined = reconciliation.quarantined,
                 retryable_failures = reconciliation.retryable_failures,
                 failures = reconciliation.failures,
+                continuation_pending = reconciliation.continuation_pending,
                 "reconciled durable replays into the collective hypothesis graph"
             );
             hypothesis_graph_admission_retry_pending =
                 hypothesis_graph_admission_requires_retry(reconciliation.retryable_failures);
+            hypothesis_graph_admission_continuation_pending = reconciliation.continuation_pending;
         }
         let mut hypothesis_graph_admission_handle = hypothesis_graph_admission_notify.map(|notify| {
             let state = state.clone();
             let mut shutdown = shutdown_rx.clone();
             tokio::spawn(async move {
                 let mut retry_pending = hypothesis_graph_admission_retry_pending;
+                let mut continuation_pending =
+                    hypothesis_graph_admission_continuation_pending;
                 let mut retry_interval = tokio::time::interval(Duration::from_secs(
                     HYPOTHESIS_GRAPH_ADMISSION_RETRY_INTERVAL_SECS,
                 ));
@@ -5169,16 +5174,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // retry delay instead of spinning a second full-store scan.
                 retry_interval.tick().await;
                 loop {
-                    tokio::select! {
-                        changed = shutdown.changed() => {
-                            if changed.is_err() || *shutdown.borrow() {
-                                break;
-                            }
-                            continue;
-                        }
-                        () = notify.notified() => {}
-                        _ = retry_interval.tick(), if retry_pending => {}
+                    if *shutdown.borrow() {
+                        break;
                     }
+                    if !continuation_pending {
+                        tokio::select! {
+                            changed = shutdown.changed() => {
+                                if changed.is_err() || *shutdown.borrow() {
+                                    break;
+                                }
+                                continue;
+                            }
+                            () = notify.notified() => {}
+                            _ = retry_interval.tick(), if retry_pending => {}
+                        }
+                    }
+                    continuation_pending = false;
                     let reconciliation_state = state.clone();
                     match tokio::task::spawn_blocking(move || {
                         reconciliation_state.reconcile_hypothesis_graph_replays()
@@ -5187,22 +5198,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         Ok(Ok(report)) if report.failures == 0 => {
                             retry_pending = false;
+                            continuation_pending = report.continuation_pending;
                             tracing::debug!(
                                 examined = report.examined,
                                 admitted = report.admitted,
                                 idempotent = report.idempotent,
                                 failures = report.failures,
+                                continuation_pending,
                                 "reconciled durable replay queue into the collective hypothesis graph"
                             );
                         }
                         Ok(Ok(report)) => {
                             retry_pending =
-                                hypothesis_graph_admission_requires_retry(report.failures);
+                                hypothesis_graph_admission_requires_retry(report.retryable_failures);
+                            continuation_pending = report.continuation_pending;
                             tracing::warn!(
                                 examined = report.examined,
                                 admitted = report.admitted,
                                 idempotent = report.idempotent,
+                                quarantined = report.quarantined,
+                                retryable_failures = report.retryable_failures,
                                 failures = report.failures,
+                                continuation_pending,
                                 module = module_path!(),
                                 "durable replay queue reconciliation left collective hypothesis admissions degraded"
                             );

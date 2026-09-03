@@ -32,36 +32,39 @@ truth:
     - hypothesis:authorized-automation
   selected_hypothesis_id: hypothesis:credential-compromise
   node_ids:
-    - node:actor:principal-a
-    - node:asset:workload-a
-    - node:asset:destination-a
-    - node:asset:indicator-a
-    - node:credential:role-a
+    - node:actor:process-user-a
     - node:process:runner-a
-    - node:event:seed-a
+    - node:actor:identity-principal-a
+    - node:credential:identity-role-a
+    - node:actor:kubernetes-principal-a
+    - node:asset:workload-a
+    - node:actor:cloudtrail-principal-a
+    - node:asset:aws-account-a
+    - node:asset:destination-a
+    - node:event:threat-intelligence:support
   causal_edges:
-    - edge_id: edge:credential-used-by-process
-      from: node:credential:role-a
+    - edge_id: edge:process-user-launched-process
+      from: node:actor:process-user-a
       to: node:process:runner-a
       relation: uses
-    - edge_id: edge:process-spawned-network-client
-      from: node:process:runner-a
-      to: node:asset:workload-a
-      relation: spawns
-    - edge_id: edge:principal-assumed-role
-      from: node:actor:principal-a
-      to: node:credential:role-a
+    - edge_id: edge:identity-principal-authenticated
+      from: node:actor:identity-principal-a
+      to: node:credential:identity-role-a
       relation: assumes
-    - edge_id: edge:role-created-workload
-      from: node:credential:role-a
+    - edge_id: edge:kubernetes-principal-created-workload
+      from: node:actor:kubernetes-principal-a
       to: node:asset:workload-a
       relation: creates
-    - edge_id: edge:workload-contacted-destination
-      from: node:asset:workload-a
+    - edge_id: edge:cloudtrail-principal-assumed-account
+      from: node:actor:cloudtrail-principal-a
+      to: node:asset:aws-account-a
+      relation: assumes
+    - edge_id: edge:process-contacted-destination
+      from: node:process:runner-a
       to: node:asset:destination-a
       relation: contacts
-    - edge_id: edge:indicator-matched-destination
-      from: node:asset:indicator-a
+    - edge_id: edge:threat-event-matched-destination
+      from: node:event:threat-intelligence:support
       to: node:asset:destination-a
       relation: matches_indicator
   kill_chain_stage_ids:

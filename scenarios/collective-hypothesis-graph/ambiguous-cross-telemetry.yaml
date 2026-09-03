@@ -13,8 +13,8 @@ events:
     signal_kind: unsigned_parent_child_execution
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:credential:role-a, node:process:runner-a, node:event:seed-a]
-    relation_ids: [edge:credential-used-by-process]
+    entity_ids: [node:process:runner-a, node:event:process:support, node:actor:process-user-a]
+    relation_ids: [edge:process-user-launched-process]
   - event_id: event:process:refute
     evidence_id: evidence:process:refute
     source_family: process
@@ -22,7 +22,7 @@ events:
     signal_kind: approved_automation_signature
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:process:runner-a]
+    entity_ids: [node:process:runner-a, node:event:process:refute, node:actor:process-user-a]
     relation_ids: []
   - event_id: event:identity:support
     evidence_id: evidence:identity:support
@@ -31,8 +31,8 @@ events:
     signal_kind: anomalous_role_assumption
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:actor:principal-a, node:credential:role-a]
-    relation_ids: [edge:principal-assumed-role]
+    entity_ids: [node:actor:identity-principal-a, node:credential:identity-role-a, node:event:identity:support]
+    relation_ids: [edge:identity-principal-authenticated]
   - event_id: event:identity:refute
     evidence_id: evidence:identity:refute
     source_family: identity
@@ -40,7 +40,7 @@ events:
     signal_kind: approved_change_window
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:actor:principal-a]
+    entity_ids: [node:actor:identity-principal-a, node:credential:identity-role-a, node:event:identity:refute]
     relation_ids: []
   - event_id: event:kubernetes:support
     evidence_id: evidence:kubernetes:support
@@ -49,8 +49,8 @@ events:
     signal_kind: privileged_workload_creation
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:credential:role-a, node:asset:workload-a]
-    relation_ids: [edge:role-created-workload]
+    entity_ids: [node:actor:kubernetes-principal-a, node:asset:workload-a, node:event:kubernetes:support]
+    relation_ids: [edge:kubernetes-principal-created-workload]
   - event_id: event:kubernetes:refute
     evidence_id: evidence:kubernetes:refute
     source_family: kubernetes
@@ -58,7 +58,7 @@ events:
     signal_kind: deployment_controller_annotation
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:asset:workload-a]
+    entity_ids: [node:actor:kubernetes-principal-a, node:asset:workload-a, node:event:kubernetes:refute]
     relation_ids: []
   - event_id: event:cloudtrail:support
     evidence_id: evidence:cloudtrail:support
@@ -67,8 +67,8 @@ events:
     signal_kind: role_used_from_new_source
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:actor:principal-a, node:credential:role-a]
-    relation_ids: [edge:principal-assumed-role]
+    entity_ids: [node:actor:cloudtrail-principal-a, node:asset:aws-account-a, node:event:cloudtrail:support]
+    relation_ids: [edge:cloudtrail-principal-assumed-account]
   - event_id: event:cloudtrail:refute
     evidence_id: evidence:cloudtrail:refute
     source_family: cloudtrail
@@ -76,7 +76,7 @@ events:
     signal_kind: change_ticket_tag_present
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:credential:role-a]
+    entity_ids: [node:actor:cloudtrail-principal-a, node:asset:aws-account-a, node:event:cloudtrail:refute]
     relation_ids: []
   - event_id: event:network:support
     evidence_id: evidence:network:support
@@ -85,8 +85,8 @@ events:
     signal_kind: rare_egress_destination
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:process:runner-a, node:asset:workload-a, node:asset:destination-a]
-    relation_ids: [edge:process-spawned-network-client, edge:workload-contacted-destination]
+    entity_ids: [node:process:runner-a, node:asset:destination-a, node:event:network:support]
+    relation_ids: [edge:process-contacted-destination]
   - event_id: event:network:refute
     evidence_id: evidence:network:refute
     source_family: network
@@ -94,7 +94,7 @@ events:
     signal_kind: documented_vendor_endpoint
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:asset:workload-a]
+    entity_ids: [node:process:runner-a, node:asset:destination-a, node:event:network:refute]
     relation_ids: []
   - event_id: event:threat-intelligence:support
     evidence_id: evidence:threat-intelligence:support
@@ -103,8 +103,8 @@ events:
     signal_kind: active_campaign_indicator_match
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:asset:indicator-a, node:asset:destination-a]
-    relation_ids: [edge:indicator-matched-destination]
+    entity_ids: [node:event:threat-intelligence:support, node:asset:destination-a]
+    relation_ids: [edge:threat-event-matched-destination]
   - event_id: event:threat-intelligence:refute
     evidence_id: evidence:threat-intelligence:refute
     source_family: threat_intelligence
@@ -112,7 +112,7 @@ events:
     signal_kind: indicator_revoked_as_false_positive
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:actor:principal-a]
+    entity_ids: [node:event:threat-intelligence:refute, node:asset:destination-a]
     relation_ids: []
 expected_kill_chain:
   - stage_id: stage:initial-access

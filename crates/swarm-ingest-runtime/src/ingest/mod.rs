@@ -1476,6 +1476,11 @@ pub struct HypothesisGraphReplayReconciliation {
     pub quarantined: usize,
     pub retryable_failures: usize,
     pub failures: usize,
+    /// A complete scan page was consumed and another bounded background pass
+    /// is required. This is deliberately distinct from retryable failure: a
+    /// healthy backlog must continue immediately rather than wait for the
+    /// failure retry interval.
+    pub continuation_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2513,14 +2518,12 @@ impl IngestState {
             }
         }
 
-        let mut scan_sequence = checkpoint.cursor_sequence;
+        let scan_sequence = checkpoint.cursor_sequence;
         let mut checkpoint_blocked = false;
-        loop {
-            let records = replay_store
-                .scan_after_sequence(scan_sequence, HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE)?;
-            if records.is_empty() {
-                break;
-            }
+        let records = replay_store
+            .scan_after_sequence(scan_sequence, HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE)?;
+        if !records.is_empty() {
+            let page_len = records.len();
             let mut previous_sequence = scan_sequence;
             for record in records {
                 if record.store_sequence <= previous_sequence {
@@ -2560,9 +2563,14 @@ impl IngestState {
                     checkpoint.cursor_sequence = record.store_sequence;
                 }
                 previous_sequence = record.store_sequence;
-                scan_sequence = record.store_sequence;
             }
-            replay_store.persist_hypothesis_graph_checkpoint(&checkpoint)?;
+            // A full page may have a successor. The background daemon consumes
+            // the next page in a separate spawn_blocking pass, which bounds
+            // startup and every later wake independently of retained history.
+            // If the retry set prevented cursor progress, use the delayed
+            // retry path instead of hot-looping the same blocked page.
+            report.continuation_pending =
+                !checkpoint_blocked && page_len == HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE;
         }
         replay_store.persist_hypothesis_graph_checkpoint(&checkpoint)?;
         Ok(report)
