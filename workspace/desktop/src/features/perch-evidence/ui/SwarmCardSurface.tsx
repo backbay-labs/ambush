@@ -2,6 +2,7 @@ import * as React from "react";
 import { useLocation } from "@tanstack/react-router";
 
 import { derivePerchShellRoute } from "@/app/perchViews";
+import { usePerchSubscriptionsMount } from "@/shared/api/perchLaneMovement";
 import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
 
 /**
@@ -53,6 +54,9 @@ export function SwarmCardSurfaceProvider({
  */
 export function useSwarmCardSurface(): SwarmCardSurface {
   const enabled = useFeatureEnabled("perch");
+  // Any rendered swarm card surface keeps the perch REQ set open; the mount
+  // is refcounted, so a timeline of rows is one REQ set.
+  usePerchSubscriptionsMount(enabled);
   const provided = React.useContext(Ctx);
   const pathname = useLocation({ select: (l) => l.pathname });
   return React.useMemo<SwarmCardSurface>(() => {

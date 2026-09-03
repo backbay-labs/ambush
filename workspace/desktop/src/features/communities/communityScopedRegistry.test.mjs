@@ -43,6 +43,18 @@ test("every named singleton has a resetter and nothing else does", () => {
   );
 });
 
+test("the perch singletons are registered", () => {
+  assert.ok(
+    [
+      "perchSubscriptions",
+      "perchSeqTracking",
+      "perchAdmittedIssuers",
+      "perchWriteStates",
+      "perchCaseIndex",
+    ].every((k) => COMMUNITY_SCOPED_SINGLETONS.includes(k)),
+  );
+});
+
 test("the singleton list has no duplicate names", () => {
   assert.equal(
     new Set(COMMUNITY_SCOPED_SINGLETONS).size,
