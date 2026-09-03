@@ -86,17 +86,24 @@ Nothing on the engine side changed after 2026-08-14: no hold store, no bridge cr
   Workspace gates run from `workspace/justfile` (`just ci`, `just check`, the file-size
   ratchet, the px-text guard). New perch gates are root `tools/check-perch-*.sh`, wired into the
   engine CI per `tools/check-gates-wired.sh`, and may read `workspace/` paths.
-- CI. Engine `.github/workflows/ci.yml` gains `paths-ignore: ["workspace/**", "docs/plans/**"]`.
-  The chat `ci.yml` becomes root `.github/workflows/workspace-ci.yml` with
-  `defaults.run.working-directory: workspace`, `paths: ["workspace/**"]`, and every
-  path-filter glob, cache path and `hashFiles` pattern prefixed. The other nineteen chat
-  workflows stay **inert** under `workspace/.github/workflows/` (GitHub reads only the root
-  directory) until each is re-rooted on demand.
-- Hooks. lefthook 2.1.3 honours `LEFTHOOK_CONFIG`; `workspace/justfile`'s `hooks` recipe installs
-  against `workspace/lefthook.yml`, and `workspace/bin/.lefthookrc` anchors on
-  `$root/workspace/bin`. The migration plan verifies this on a real commit and push; if the
-  mechanism does not hold, a root `lefthook.yml` with per-command `root: workspace/` is the
-  fallback.
+- CI. The chat `ci.yml` becomes root `.github/workflows/workspace-ci.yml` with a
+  workflow-level `defaults.run.working-directory: workspace`, every path-filter glob, cache
+  path, `hashFiles` pattern and Rust-cache `workspaces` input prefixed, and the Hermit action
+  pointed at `workspace/`. **Neither workflow uses a top-level `paths:` filter**: a workflow
+  skipped by path filtering leaves its required checks pending forever, whereas a job skipped by
+  the existing `changes` job's `if:` reports as skipped and satisfies branch protection. So the
+  engine `ci.yml` keeps its triggers unchanged for now, and giving it a `changes` job of its own
+  is a Ground task once branch protection on the merged repository is decided. The other
+  nineteen chat workflows stay **inert** under `workspace/.github/workflows/` (GitHub reads only
+  the root directory) until each is re-rooted on demand.
+- Hooks. lefthook 2.1.3 honours `LEFTHOOK_CONFIG`. `workspace/justfile`'s `hooks` recipe exports
+  it and installs into the repository's `.git/hooks`; the generated dispatchers source
+  `workspace/bin/.lefthookrc` by its repo-root-relative path, which prepends `workspace/bin` to
+  `PATH` and exports `LEFTHOOK_CONFIG`; every lane in `workspace/lefthook.yml` declares
+  `root: workspace/`, so lefthook runs it from that directory and filters `{files}` to the
+  subtree with the prefix stripped, leaving the globs unchanged. Verified on 2026-09-02 by
+  `lefthook validate`, `just hooks`, a dry run, an `--all-files` run of the five fixer lanes
+  with no tree change, and a real commit.
 - Commit policy, **proposed default pending confirmation**: `git commit -s` repository-wide
   (the workspace's DCO habit) with Conventional Commits subject lines (the engine's habit).
 - Attribution: `workspace/LICENSE` (Apache-2.0, block/buzz) stays in place; root `NOTICE` gains
