@@ -4,6 +4,7 @@ set -euo pipefail
 workspace_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 workflow="$workspace_root/../.github/workflows/workspace-ci.yml"
 lefthook="$workspace_root/lefthook.yml"
+dev_setup="$workspace_root/scripts/dev-setup.sh"
 
 require_literal() {
     local needle="$1"
@@ -39,6 +40,67 @@ web_filter_block=$(awk '
 ' "$workflow")
 grep -Fq "              - '.github/workflows/workspace-ci.yml'" <<<"$web_filter_block" || {
     echo "workspace workflow changes must activate the web lane" >&2
+    exit 1
+}
+
+filter_block() {
+    local filter="$1"
+    awk -v filter="$filter" '
+        $0 == "            " filter ":" { found = 1 }
+        found && $0 ~ /^            [a-z0-9-]+:$/ && $0 != "            " filter ":" { exit }
+        found { print }
+    ' "$workflow"
+}
+
+rust_filter_block=$(filter_block rust)
+grep -Fq "              - 'workspace/examples/countdown-bot/**'" <<<"$rust_filter_block" || {
+    echo "rust filter must include the countdown workspace member" >&2
+    exit 1
+}
+
+for filter in desktop web admin; do
+    block=$(filter_block "$filter")
+    for input in \
+        "workspace/package.json" \
+        "workspace/pnpm-workspace.yaml" \
+        "workspace/Justfile"; do
+        grep -Fq "              - '$input'" <<<"$block" || {
+            echo "$filter filter must include shared client input $input" >&2
+            exit 1
+        }
+    done
+done
+
+hook_command_block() {
+    local command="$1"
+    awk -v command="$command" '
+        $0 == "    " command ":" { found = 1 }
+        found && $0 ~ /^    [a-z0-9-]+:$/ && $0 != "    " command ":" { exit }
+        found { print }
+    ' "$lefthook"
+}
+
+rust_hook_block=$(hook_command_block rust-tests)
+grep -Fq '"workspace/examples/countdown-bot/**"' <<<"$rust_hook_block" || {
+    echo "Rust pre-push tests must include the countdown workspace member" >&2
+    exit 1
+}
+
+for command in desktop-check desktop-typecheck desktop-test; do
+    block=$(hook_command_block "$command")
+    for input in \
+        "workspace/package.json" \
+        "workspace/pnpm-workspace.yaml" \
+        "workspace/Justfile"; do
+        grep -Fq "\"$input\"" <<<"$block" || {
+            echo "$command must include shared client input $input" >&2
+            exit 1
+        }
+    done
+done
+
+grep -Fq 'export LEFTHOOK_CONFIG="${REPO_ROOT}/lefthook.yml"' "$dev_setup" || {
+    echo "dev setup must point Lefthook at the nested workspace config" >&2
     exit 1
 }
 

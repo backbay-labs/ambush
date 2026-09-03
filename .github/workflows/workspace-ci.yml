@@ -48,6 +48,7 @@ jobs:
           filters: |
             rust:
               - 'workspace/crates/**'
+              - 'workspace/examples/countdown-bot/**'
               - 'workspace/migrations/**'
               - 'workspace/schema/**'
               - 'workspace/Cargo.toml'
@@ -66,18 +67,27 @@ jobs:
               - 'workspace/scripts/normative-corpus.json'
               - 'workspace/desktop/**'
               - '!workspace/desktop/src-tauri/**'
+              - 'workspace/package.json'
               - 'workspace/pnpm-lock.yaml'
+              - 'workspace/pnpm-workspace.yaml'
+              - 'workspace/Justfile'
             desktop-rust:
               - 'workspace/desktop/src-tauri/**'
               - 'workspace/.cargo/config.toml'
               - 'workspace/scripts/check-desktop-vulnerabilities.sh'
             web:
               - 'workspace/web/**'
+              - 'workspace/package.json'
               - 'workspace/pnpm-lock.yaml'
+              - 'workspace/pnpm-workspace.yaml'
+              - 'workspace/Justfile'
               - '.github/workflows/workspace-ci.yml'
             admin:
               - 'workspace/admin-web/**'
+              - 'workspace/package.json'
               - 'workspace/pnpm-lock.yaml'
+              - 'workspace/pnpm-workspace.yaml'
+              - 'workspace/Justfile'
               - '.github/workflows/workspace-ci.yml'
             mobile:
               - 'workspace/mobile/**'

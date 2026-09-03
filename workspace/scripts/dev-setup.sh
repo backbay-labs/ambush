@@ -175,6 +175,9 @@ log "Installing git hooks..."
 # linked-worktree dispatch (same failure mode as the old worktree-relative .hooks).
 HOOKS_DIR="$(git -C "${REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir)/hooks"
 git -C "${REPO_ROOT}" config --local core.hooksPath "$HOOKS_DIR"
+# Lefthook discovers configuration from the outer combined-repository root;
+# pin the imported workspace config explicitly.
+export LEFTHOOK_CONFIG="${REPO_ROOT}/lefthook.yml"
 lefthook install --force
 success "Git hooks installed"
 

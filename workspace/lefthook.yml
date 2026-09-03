@@ -110,24 +110,24 @@ pre-push:
     rust-tests:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["workspace/crates/**", "workspace/migrations/**", "workspace/schema/**", "workspace/Cargo.toml", "workspace/Cargo.lock", "workspace/.cargo/config.toml", "workspace/rust-toolchain.toml", "workspace/deny.toml", "workspace/scripts/run-tests.sh", "workspace/Justfile"]
+      glob: ["workspace/crates/**", "workspace/examples/countdown-bot/**", "workspace/migrations/**", "workspace/schema/**", "workspace/Cargo.toml", "workspace/Cargo.lock", "workspace/.cargo/config.toml", "workspace/rust-toolchain.toml", "workspace/deny.toml", "workspace/scripts/run-tests.sh", "workspace/Justfile"]
       run: just test-unit
     desktop-check:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["workspace/desktop/**", "workspace/pnpm-lock.yaml"]
+      glob: ["workspace/desktop/**", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
       exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-check
     desktop-typecheck:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["workspace/desktop/**", "workspace/pnpm-lock.yaml"]
+      glob: ["workspace/desktop/**", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
       exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-typecheck
     desktop-test:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["workspace/desktop/**", "workspace/pnpm-lock.yaml"]
+      glob: ["workspace/desktop/**", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
       exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-test
     desktop-tauri-checks:
