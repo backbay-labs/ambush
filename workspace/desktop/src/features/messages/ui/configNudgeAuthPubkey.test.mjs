@@ -1,13 +1,13 @@
 /**
  * Integration-seam tests for getConfigNudgeAuthorPubkey.
  *
- * These tests exercise the exact field-selection seam used by MessageRow.
+ * These tests exercise the exact field-selection seam used by MessageBody.
  * Ordinary user events cannot delegate authorship through tags, while a
  * relay-signed event may still have a display author distinct from its signer.
  * Config-nudge authentication must always use the signer.
  *
  * By constructing a real TimelineMessage via formatTimelineMessages and
- * passing it to getConfigNudgeAuthorPubkey — the same helper MessageRow
+ * passing it to getConfigNudgeAuthorPubkey — the same helper MessageBody
  * calls — we lock the actual seam.
  */
 import assert from "node:assert/strict";
@@ -28,7 +28,7 @@ const AGENT_PUBKEY =
 const RELAY_SECRET = new Uint8Array(32).fill(4);
 const RELAY_SIGNER = getPublicKey(RELAY_SECRET);
 
-// MessageRow passes a predicate combining the community known-agent set with
+// MessageBody receives a predicate combining the community known-agent set with
 // per-pubkey profile `isAgent` checks; the set-membership form is the minimal
 // equivalent for exercising the signer-selection seam.
 const AGENT_PUBKEYS = new Set([AGENT_PUBKEY]);
