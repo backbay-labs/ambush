@@ -16,6 +16,7 @@ import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useCommunityNavigationTransitions } from "@/app/useCommunityNavigationTransitions";
 import { useCommunityDestinationRestore } from "@/app/useCommunityDestinationRestore";
+import { useChannelCreationHandlers } from "@/app/useChannelCreationHandlers";
 import { useLiveHomeFeedActions } from "@/app/useLiveHomeFeedActions";
 import { useChannelBrowserDialog } from "@/app/useChannelBrowserDialog";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
@@ -32,7 +33,6 @@ import { shouldShowSidebarChannel } from "@/app/huddleChannelVisibility";
 import {
   channelsQueryKey,
   useChannelsQuery,
-  useCreateChannelMutation,
   useHideDmMutation,
   useOpenDmMutation,
 } from "@/features/channels/hooks";
@@ -69,12 +69,11 @@ import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
 import { useChannelStars } from "@/features/sidebar/lib/useChannelStars";
 import { useCommunities } from "@/features/communities/useCommunities";
 import { useAddCommunityDialogState } from "@/features/communities/addCommunityPrefill";
-import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useWebviewScrollBoundaryLock } from "@/shared/hooks/useWebviewScrollBoundaryLock";
 import { joinChannel } from "@/shared/api/tauri";
-import type { Channel, ChannelVisibility, SearchHit } from "@/shared/api/types";
+import type { Channel, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { useAppDeepLinks } from "@/shared/useAppDeepLinks";
 import { SidebarProvider } from "@/shared/ui/sidebar";
@@ -408,9 +407,6 @@ export function AppShell() {
     [unfollowThread, muteThread],
   );
 
-  const createChannelMutation = useCreateChannelMutation(),
-    createForumMutation = useCreateChannelMutation();
-  const { applyCanvas, applyAgents } = useApplyTemplate();
   const openDmMutation = useOpenDmMutation();
   const hideDmMutation = useHideDmMutation();
   useDmResurfaceFromMessages({
@@ -441,90 +437,17 @@ export function AppShell() {
     [queryClient],
   );
 
-  const handleCreateChannel = React.useCallback(
-    async (
-      {
-        description,
-        name,
-        visibility,
-        ttlSeconds,
-        templateId,
-      }: {
-        name: string;
-        description?: string;
-        visibility: ChannelVisibility;
-        ttlSeconds?: number;
-        templateId?: string;
-      },
-      onCreated?: (channelId: string) => void,
-    ) => {
-      const createdChannel = await createChannelMutation.mutateAsync({
-        name,
-        description,
-        channelType: "stream",
-        visibility,
-        ttlSeconds,
-      });
-
-      await applyCanvas(templateId, createdChannel.id, name);
-      await goChannel(createdChannel.id);
-      onCreated?.(createdChannel.id);
-      void applyAgents(templateId, createdChannel.id);
-    },
-    [applyAgents, applyCanvas, createChannelMutation, goChannel],
-  );
-  const handleCreateForum = React.useCallback(
-    async ({
-      description,
-      name,
-      visibility,
-      ttlSeconds,
-      templateId,
-    }: {
-      name: string;
-      description?: string;
-      visibility: ChannelVisibility;
-      ttlSeconds?: number;
-      templateId?: string;
-    }) => {
-      const createdForum = await createForumMutation.mutateAsync({
-        name,
-        description,
-        channelType: "forum",
-        visibility,
-        ttlSeconds,
-      });
-
-      await applyCanvas(templateId, createdForum.id, name);
-      await goChannel(createdForum.id);
-      void applyAgents(templateId, createdForum.id);
-    },
-    [applyAgents, applyCanvas, createForumMutation, goChannel],
-  );
-
-  // The channel browser can create either a stream or a forum depending on
-  // which section opened it. Route to the matching handler.
-  const handleBrowseChannelCreate = React.useCallback(
-    async (input: {
-      name: string;
-      description?: string;
-      visibility: ChannelVisibility;
-      ttlSeconds?: number;
-      templateId?: string;
-    }) => {
-      if (browseDialogType === "forum") {
-        await handleCreateForum(input);
-      } else {
-        await handleCreateChannel(input, getCreateSuccess() ?? undefined);
-      }
-    },
-    [
-      browseDialogType,
-      handleCreateChannel,
-      handleCreateForum,
-      getCreateSuccess,
-    ],
-  );
+  const {
+    handleBrowseChannelCreate,
+    handleCreateChannel,
+    handleCreateForum,
+    isCreatingChannel,
+    isCreatingForum,
+  } = useChannelCreationHandlers({
+    browseDialogType,
+    getCreateSuccess,
+    goChannel,
+  });
 
   const handleHideDm = React.useCallback(
     async (channelId: string) => {
@@ -741,8 +664,8 @@ export function AppShell() {
                           addCommunityPrefill={addCommunityDialog.prefill}
                           isAddCommunityOpen={addCommunityDialog.open}
                           relayConnectionCard={relayConnectionCard}
-                          isCreatingChannel={createChannelMutation.isPending}
-                          isCreatingForum={createForumMutation.isPending}
+                          isCreatingChannel={isCreatingChannel}
+                          isCreatingForum={isCreatingForum}
                           isLoading={channelsQuery.isLoading}
                           isCreateChannelOpen={isCreateChannelOpen}
                           isHuddleCompanionOpen={isHuddleCompanionOpen}
@@ -867,8 +790,7 @@ export function AppShell() {
                     currentPubkey={identityQuery.data?.pubkey}
                     isChannelManagementOpen={isChannelManagementOpen}
                     isCreatingBrowseChannel={
-                      createChannelMutation.isPending ||
-                      createForumMutation.isPending
+                      isCreatingChannel || isCreatingForum
                     }
                     onBrowseChannelJoin={handleBrowseChannelJoin}
                     onBrowseChannelCreate={handleBrowseChannelCreate}
