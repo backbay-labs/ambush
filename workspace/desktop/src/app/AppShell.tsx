@@ -15,6 +15,7 @@ import {
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useCommunityNavigationTransitions } from "@/app/useCommunityNavigationTransitions";
+import { useCommunityDestinationRestore } from "@/app/useCommunityDestinationRestore";
 import { useLiveHomeFeedActions } from "@/app/useLiveHomeFeedActions";
 import { useChannelBrowserDialog } from "@/app/useChannelBrowserDialog";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
@@ -67,11 +68,6 @@ import { CommunityRail } from "@/features/sidebar/ui/CommunityRail";
 import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
 import { useChannelStars } from "@/features/sidebar/lib/useChannelStars";
 import { useCommunities } from "@/features/communities/useCommunities";
-import {
-  consumePendingCommunityRestore,
-  loadCommunityDestination,
-  saveCommunityDestination,
-} from "@/features/communities/communityNavigationStorage";
 import { useAddCommunityDialogState } from "@/features/communities/addCommunityPrefill";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
@@ -225,54 +221,14 @@ export function AppShell() {
       ),
     [huddleBackingChannelIds, memberChannels, revealedHuddleChannelIds],
   );
-  const hasRestoredCommunityDestinationRef = React.useRef(false);
-  React.useEffect(() => {
-    const activeCommunityId = communitiesHook.activeCommunity?.id;
-    if (
-      hasRestoredCommunityDestinationRef.current ||
-      !channelsQuery.isSuccess ||
-      channelsQuery.dataUpdatedAt === 0 ||
-      !activeCommunityId
-    ) {
-      return;
-    }
-    hasRestoredCommunityDestinationRef.current = true;
-
-    // Restoration belongs to an explicit community transition. Cold boot and
-    // reconnect remounts must preserve the route the user explicitly opened.
-    if (!consumePendingCommunityRestore(activeCommunityId)) {
-      return;
-    }
-
-    const destination = loadCommunityDestination(activeCommunityId);
-    if (!destination || destination.kind === "home") {
-      return;
-    }
-
-    const channelIsAvailable = sidebarChannels.some(
-      (channel) => channel.id === destination.channelId,
-    );
-    if (!channelIsAvailable) {
-      saveCommunityDestination(activeCommunityId, { kind: "home" });
-      void goHome({ replace: true });
-      return;
-    }
-
-    // The normal switch path writes the remembered channel into the hash before
-    // the target community mounts, so no intermediate Inbox frame is painted.
-    // Older transition callers may still arrive at neutral Home; repair those.
-    if (selectedView === "home") {
-      void goChannel(destination.channelId, { replace: true });
-    }
-  }, [
-    channelsQuery.dataUpdatedAt,
-    channelsQuery.isSuccess,
-    communitiesHook.activeCommunity?.id,
+  useCommunityDestinationRestore({
+    activeCommunityId: communitiesHook.activeCommunity?.id,
+    channelsQuery,
     goChannel,
     goHome,
     selectedView,
     sidebarChannels,
-  ]);
+  });
   const [terminalContextOverride, setTerminalContextOverride] =
     React.useState<TerminalContextOverride | null>(null);
   const { activeChannel, terminalContext } = useTerminalContext({
