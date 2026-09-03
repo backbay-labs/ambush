@@ -5,6 +5,8 @@ mod archive;
 mod builderlab;
 mod channel_head_cache;
 mod commands;
+#[cfg(test)]
+mod csp_pin_tests;
 mod deep_link;
 mod egress_guard;
 mod event_sync;

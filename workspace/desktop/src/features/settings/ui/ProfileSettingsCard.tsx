@@ -37,10 +37,6 @@ type ProfileSettingsCardProps = {
 };
 
 const AVATAR_EDITOR_TRANSITION_MS = 240;
-const AVATAR_PREVIEW_CAPTION_TRANSITION = {
-  duration: 0.18,
-  ease: [0.23, 1, 0.32, 1],
-} as const;
 const AVATAR_MODE_TABS_TRANSITION = {
   duration: 0.2,
   ease: [0.23, 1, 0.32, 1],
@@ -154,17 +150,8 @@ export function ProfileSettingsCard({
   const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
   const [isAvatarEditorFinishing, setIsAvatarEditorFinishing] =
     React.useState(false);
-  // The animated avatar tab portals its camera feed / composed preview into
-  // the main avatar preview above, replacing the regular preview while live.
-  const [animatedPreviewEl, setAnimatedPreviewEl] =
-    React.useState<HTMLDivElement | null>(null);
   const [avatarModeTabsEl, setAvatarModeTabsEl] =
     React.useState<HTMLDivElement | null>(null);
-  const [isAnimatedPreviewActive, setIsAnimatedPreviewActive] =
-    React.useState(false);
-  const [animatedPreviewCaption, setAnimatedPreviewCaption] = React.useState<
-    string | null
-  >(null);
   const [isEditingProfileMetadata, setIsEditingProfileMetadata] =
     React.useState(false);
   const [shouldRenderAvatarEditor, setShouldRenderAvatarEditor] =
@@ -309,11 +296,6 @@ export function ProfileSettingsCard({
     () => parseEmojiAvatarDataUrl(avatarUrlDraft),
     [avatarUrlDraft],
   );
-  const shouldShowAnimatedPreview =
-    isAvatarEditorOpen && isAnimatedPreviewActive;
-  const visibleAnimatedPreviewCaption = isAvatarEditorOpen
-    ? animatedPreviewCaption
-    : null;
   const avatarEditorLayoutTransition = shouldReduceMotion
     ? { duration: 0 }
     : AVATAR_EDITOR_LAYOUT_TRANSITION;
@@ -600,12 +582,7 @@ export function ProfileSettingsCard({
                         size={192}
                       >
                         <div className="relative h-full w-full">
-                          <div
-                            className="pointer-events-none absolute inset-0 z-10"
-                            data-testid="profile-avatar-animated-preview-slot"
-                            ref={setAnimatedPreviewEl}
-                          />
-                          {shouldShowAnimatedPreview ? null : emojiAvatarPreview ? (
+                          {emojiAvatarPreview ? (
                             <div
                               aria-label={`${resolvedName} avatar`}
                               className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-full"
@@ -638,29 +615,6 @@ export function ProfileSettingsCard({
                         </div>
                       </MaskedAvatarBadgeFrame>
                     </div>
-
-                    <AnimatePresence initial={false} mode="wait">
-                      {visibleAnimatedPreviewCaption ? (
-                        <motion.p
-                          animate={{ opacity: 1, y: 0 }}
-                          className="w-48 text-center text-sm text-muted-foreground"
-                          exit={
-                            shouldReduceMotion
-                              ? { opacity: 0, y: 0 }
-                              : { opacity: 0, y: -4 }
-                          }
-                          initial={
-                            shouldReduceMotion
-                              ? { opacity: 0, y: 0 }
-                              : { opacity: 0, y: 6 }
-                          }
-                          key={visibleAnimatedPreviewCaption}
-                          transition={AVATAR_PREVIEW_CAPTION_TRANSITION}
-                        >
-                          {visibleAnimatedPreviewCaption}
-                        </motion.p>
-                      ) : null}
-                    </AnimatePresence>
                   </motion.div>
 
                   <motion.div
@@ -821,17 +775,10 @@ export function ProfileSettingsCard({
                         inert={isAvatarEditorOpen ? undefined : true}
                       >
                         <ProfileAvatarEditor
-                          animatedPreviewContainer={animatedPreviewEl}
                           avatarUrl={avatarUrlDraft}
                           disabled={isAvatarEditorSaving}
                           donePending={isAvatarEditorSaving}
                           modeTabsContainer={avatarModeTabsEl}
-                          onAnimatedPreviewActiveChange={
-                            setIsAnimatedPreviewActive
-                          }
-                          onAnimatedPreviewCaptionChange={
-                            setAnimatedPreviewCaption
-                          }
                           onDone={handleAvatarEditorDone}
                           onEmojiAvatarChange={animateEmojiAvatarChange}
                           onUploadedAvatarChange={setUploadedAvatarUrlDraft}

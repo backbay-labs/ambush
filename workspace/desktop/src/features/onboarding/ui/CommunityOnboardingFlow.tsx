@@ -164,13 +164,6 @@ export function CommunityOnboardingFlow({
   const avatarPresentation = useAvatarPresentation(avatarUrl);
   const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
   const [isAvatarEditorOpen, setIsAvatarEditorOpen] = React.useState(false);
-  const [animatedPreviewEl, setAnimatedPreviewEl] =
-    React.useState<HTMLDivElement | null>(null);
-  const [isAnimatedPreviewActive, setIsAnimatedPreviewActive] =
-    React.useState(false);
-  const [animatedPreviewCaption, setAnimatedPreviewCaption] = React.useState<
-    string | null
-  >(null);
   const [starterPersonas, setStarterPersonas] = React.useState<AgentPersona[]>(
     [],
   );
@@ -665,81 +658,60 @@ export function CommunityOnboardingFlow({
                         data-testid="community-avatar-live-preview-panel"
                       >
                         <div className="relative h-48 w-48">
-                          <div
-                            className="pointer-events-none absolute inset-0 z-10"
-                            data-testid="community-avatar-animated-preview-slot"
-                            ref={setAnimatedPreviewEl}
-                          />
-                          {isAnimatedPreviewActive
-                            ? null
-                            : (() => {
-                                if (localAvatarPreviewUrl) {
-                                  return (
-                                    <ProfileAvatar
-                                      avatarUrl={localAvatarPreviewUrl}
-                                      className="h-full w-full rounded-full text-5xl"
-                                      label={
-                                        displayName.trim() || "Your profile"
-                                      }
-                                      testId="community-avatar-live-preview"
-                                    />
-                                  );
+                          {(() => {
+                            if (localAvatarPreviewUrl) {
+                              return (
+                                <ProfileAvatar
+                                  avatarUrl={localAvatarPreviewUrl}
+                                  className="h-full w-full rounded-full text-5xl"
+                                  label={displayName.trim() || "Your profile"}
+                                  testId="community-avatar-live-preview"
+                                />
+                              );
+                            }
+                            const emojiAvatar =
+                              parseEmojiAvatarDataUrl(avatarUrl);
+                            return emojiAvatar ? (
+                              <div
+                                aria-label={`${displayName.trim() || "Your profile"} avatar`}
+                                className="flex h-full w-full items-center justify-center overflow-hidden rounded-full text-6xl"
+                                data-testid="community-avatar-live-preview"
+                                role="img"
+                                style={{
+                                  backgroundColor: emojiAvatar.color,
+                                }}
+                              >
+                                <span
+                                  className={cn(
+                                    avatarSquishKey > 0 &&
+                                      "ambush-avatar-squish",
+                                  )}
+                                  data-testid="community-avatar-live-preview-emoji"
+                                  key={avatarSquishKey}
+                                >
+                                  {emojiAvatar.emoji}
+                                </span>
+                              </div>
+                            ) : (
+                              <ProfileAvatar
+                                avatarUrl={
+                                  localAvatarPreviewUrl || avatarUrl || null
                                 }
-                                const emojiAvatar =
-                                  parseEmojiAvatarDataUrl(avatarUrl);
-                                return emojiAvatar ? (
-                                  <div
-                                    aria-label={`${displayName.trim() || "Your profile"} avatar`}
-                                    className="flex h-full w-full items-center justify-center overflow-hidden rounded-full text-6xl"
-                                    data-testid="community-avatar-live-preview"
-                                    role="img"
-                                    style={{
-                                      backgroundColor: emojiAvatar.color,
-                                    }}
-                                  >
-                                    <span
-                                      className={cn(
-                                        avatarSquishKey > 0 &&
-                                          "ambush-avatar-squish",
-                                      )}
-                                      data-testid="community-avatar-live-preview-emoji"
-                                      key={avatarSquishKey}
-                                    >
-                                      {emojiAvatar.emoji}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <ProfileAvatar
-                                    avatarUrl={
-                                      localAvatarPreviewUrl || avatarUrl || null
-                                    }
-                                    className="h-full w-full rounded-full text-5xl"
-                                    label={displayName.trim() || "Your profile"}
-                                    testId="community-avatar-live-preview"
-                                  />
-                                );
-                              })()}
+                                className="h-full w-full rounded-full text-5xl"
+                                label={displayName.trim() || "Your profile"}
+                                testId="community-avatar-live-preview"
+                              />
+                            );
+                          })()}
                         </div>
-                        {animatedPreviewCaption ? (
-                          <p className="text-center text-sm text-muted-foreground">
-                            {animatedPreviewCaption}
-                          </p>
-                        ) : null}
                       </div>
                       <ProfileAvatarEditor
-                        animatedPreviewContainer={animatedPreviewEl}
                         avatarUrl={avatarUrl}
                         disabled={isPending}
                         donePending={isUploadingAvatar}
                         emojiPickerTheme="auto"
                         emojiPickerThemeVars={NEUTRAL_EMOJI_PICKER_THEME_VARS}
                         onDone={() => setIsAvatarEditorOpen(false)}
-                        onAnimatedPreviewActiveChange={
-                          setIsAnimatedPreviewActive
-                        }
-                        onAnimatedPreviewCaptionChange={
-                          setAnimatedPreviewCaption
-                        }
                         onEmojiAvatarChange={animateEmojiAvatarChange}
                         onLocalPreviewChange={setLocalAvatarPreviewUrl}
                         onUploadingChange={setIsUploadingAvatar}
