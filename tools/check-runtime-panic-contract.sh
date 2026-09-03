@@ -3,10 +3,15 @@
 # Runtime panic contract scanner.
 #
 # WHAT IS COVERED
-#   Production (non-cfg(test)) code in every workspace crate: `crates/*/src`,
-#   both `.rs` and `.inc` files. String literals, char literals, raw strings and
-#   comments are stripped before matching, so `"...unwrap(..."` in a message does
-#   not count.
+#   Production (non-cfg(test)) code in every engine crate (`crates/*/src`) and in
+#   every ENROLLED chat-workspace crate (the `ENROLLED_WORKSPACE_CRATE_SRCS`
+#   list below; today `workspace/crates/ambush-ws-client/src`, the NIP-42 client
+#   the swarm bridge links in -- 00-DECISIONS W3-6, ADR 0015 C6), both `.rs` and
+#   `.inc` files. A crate the daemon links runs under its `panic = "abort"`, so
+#   its production code is held to the same contract. An enrolled root that does
+#   not exist is a failure, not an empty scan. String literals, char literals,
+#   raw strings and comments are stripped before matching, so `"...unwrap(..."`
+#   in a message does not count.
 #
 # WHAT IS NOT COVERED (deliberately)
 #   - `crates/*/tests/` integration test crates, `benches/`, `examples/`,
@@ -464,17 +469,45 @@ def test_only_files(files: list[pathlib.Path]) -> set[pathlib.Path]:
 SKIPPED_DIR_NAMES = {"tests", "benches", "examples"}
 Record = tuple[str, int, str]
 
+# Chat-workspace crate `src` roots enrolled in this contract one by one
+# (00-DECISIONS W3-6). The engine's own crates are found by glob; a workspace
+# crate joins by being named here, on the commit that removes its last panic
+# site. Each root must exist -- a missing one is a failed gate, never a silent
+# no-op scan (see REFUSING TO PASS SILENTLY in check-gates-wired.sh).
+ENROLLED_WORKSPACE_CRATE_SRCS: list[pathlib.Path] = [
+    pathlib.Path("workspace/crates/ambush-ws-client/src"),
+]
 
-def production_files(crates_root: pathlib.Path) -> list[pathlib.Path]:
-    """Every `.rs`/`.inc` under `<crates_root>/*/src`, minus the skipped dirs."""
+
+def crate_src_files(crate_src: pathlib.Path) -> list[pathlib.Path]:
+    """Every `.rs`/`.inc` under one crate `src` root, minus the skipped dirs."""
+    found: list[pathlib.Path] = []
+    for path in crate_src.rglob("*"):
+        if not path.is_file() or path.suffix not in {".rs", ".inc"}:
+            continue
+        if SKIPPED_DIR_NAMES & set(path.relative_to(crate_src).parts):
+            continue
+        found.append(path)
+    return found
+
+
+def production_files(
+    crates_root: pathlib.Path,
+    enrolled_srcs: list[pathlib.Path] = (),
+) -> list[pathlib.Path]:
+    """Every `.rs`/`.inc` under `<crates_root>/*/src` plus each enrolled root."""
     found: list[pathlib.Path] = []
     for crate_src in sorted(crates_root.glob("*/src")):
-        for path in crate_src.rglob("*"):
-            if not path.is_file() or path.suffix not in {".rs", ".inc"}:
-                continue
-            if SKIPPED_DIR_NAMES & set(path.relative_to(crate_src).parts):
-                continue
-            found.append(path)
+        found.extend(crate_src_files(crate_src))
+    for crate_src in enrolled_srcs:
+        if not crate_src.is_dir():
+            print(
+                f"runtime panic contract: enrolled crate root {crate_src} does not "
+                "exist; refusing to pass silently",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        found.extend(crate_src_files(crate_src))
     return sorted(found)
 
 
@@ -497,9 +530,9 @@ def collect(files: list[pathlib.Path]) -> tuple[list[Record], list[Record]]:
     return violations, allowed
 
 
-def scan_tree(crates_root: pathlib.Path):
+def scan_tree(crates_root: pathlib.Path, enrolled_srcs: list[pathlib.Path] = ()):
     """Classify, exclude, then scan. Returns (scanned, excluded, viol, allowed)."""
-    files = production_files(crates_root)
+    files = production_files(crates_root, enrolled_srcs)
     excluded = test_only_files(files)
     scanned = [path for path in files if path.resolve() not in excluded]
     violations, allowed = collect(scanned)
@@ -623,7 +656,9 @@ def run_self_test() -> None:
 
 run_self_test()
 
-files, excluded, violations, allowed = scan_tree(pathlib.Path("crates"))
+files, excluded, violations, allowed = scan_tree(
+    pathlib.Path("crates"), ENROLLED_WORKSPACE_CRATE_SRCS
+)
 
 if violations:
     print("runtime panic contract violation(s) detected:", file=sys.stderr)
@@ -637,7 +672,8 @@ if violations:
 
 print(f"runtime panic contract self-test: {len(SELF_TEST_CASES)} case(s) passed")
 
-scanned = f"{len(files)} production file(s) across crates/*/src"
+enrolled = ", ".join(root.as_posix() for root in ENROLLED_WORKSPACE_CRATE_SRCS)
+scanned = f"{len(files)} production file(s) across crates/*/src + {enrolled}"
 if allowed:
     print(
         f"runtime panic contract OK: 0 live violations, "

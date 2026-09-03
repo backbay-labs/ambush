@@ -55,6 +55,11 @@ pub enum TestClientError {
     /// No NIP-42 AUTH challenge was received from the relay.
     #[error("No AUTH challenge received from relay")]
     NoAuthChallenge,
+
+    /// The underlying client's receive buffer violated an invariant it relies
+    /// on; mirrors [`WsClientError::Protocol`].
+    #[error("protocol: {0}")]
+    Protocol(String),
 }
 
 impl From<WsClientError> for TestClientError {
@@ -70,6 +75,7 @@ impl From<WsClientError> for TestClientError {
             WsClientError::AuthFailed(s) => TestClientError::AuthFailed(s),
             WsClientError::EventRejected(s) => TestClientError::EventRejected(s),
             WsClientError::NoAuthChallenge => TestClientError::NoAuthChallenge,
+            WsClientError::Protocol(s) => TestClientError::Protocol(s),
         }
     }
 }

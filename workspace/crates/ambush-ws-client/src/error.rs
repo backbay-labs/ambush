@@ -42,6 +42,14 @@ pub enum WsClientError {
     /// No NIP-42 AUTH challenge was received from the relay.
     #[error("No AUTH challenge received from relay")]
     NoAuthChallenge,
+
+    /// The client's own receive buffer violated an invariant it relies on
+    /// (a buffered relay message changed variant or vanished between being
+    /// located and being taken). Reported instead of panicking: the daemon
+    /// that hosts this client runs with `panic = "abort"` (ADR 0015 C6 as
+    /// amended by 00-DECISIONS W3-6).
+    #[error("protocol: {0}")]
+    Protocol(String),
 }
 
 impl From<nostr::event::builder::Error> for WsClientError {
