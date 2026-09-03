@@ -100,10 +100,12 @@ Nothing on the engine side changed after 2026-08-14: no hold store, no bridge cr
   it and installs into the repository's `.git/hooks`; the generated dispatchers source
   `workspace/bin/.lefthookrc` by its repo-root-relative path, which prepends `workspace/bin` to
   `PATH` and exports `LEFTHOOK_CONFIG`; every lane in `workspace/lefthook.yml` declares
-  `root: workspace/`, so lefthook runs it from that directory and filters `{files}` to the
-  subtree with the prefix stripped, leaving the globs unchanged. Verified on 2026-09-02 by
-  `lefthook validate`, `just hooks`, a dry run, an `--all-files` run of the five fixer lanes
-  with no tree change, and a real commit.
+  `root: workspace/`, which makes lefthook run it from that directory, **and every glob and
+  exclude pattern carries the `workspace/` prefix**, because patterns are matched against
+  repository-relative paths regardless of `root` (measured on 2026-09-02: `crates/**` matched
+  nothing, `workspace/crates/**` matched and the lane reformatted a deliberately mangled file
+  from `workspace/`). Verified by `lefthook validate`, `just hooks`, a real commit with the
+  sign-off lane, and the staged-file experiment above.
 - Commit policy, **proposed default pending confirmation**: `git commit -s` repository-wide
   (the workspace's DCO habit) with Conventional Commits subject lines (the engine's habit).
 - Attribution: `workspace/LICENSE` (Apache-2.0, block/buzz) stays in place; root `NOTICE` gains
@@ -173,6 +175,9 @@ Cite the row; do not restate it.
 | **W3-20** · INTEGRATOR RULING | `RECEIPT REQUIRED`: ADR 0014 C3 (enforced once B2g lands) vs `12` C15 (never on this roadmap) | conflict | **`12` C15**: never rendered as an enforced fact on this roadmap; PA-2 applied |
 | **W3-21** · INTEGRATOR RULING | card body order: ADR 0013 (marker, JSON, prose) vs `13` §1.2 (marker, human line, fenced JSON) | conflict | **`13`'s order**; the schemas and goldens already follow it, and a human line on line 1 degrades better in a search snippet |
 | **W3-22** · INTEGRATOR RULING | copy gate `approve`: `11` C-A4 (identifier exemption) vs `12` §5.7 (none) | conflict | **No identifier exemption**, because RF-A5 already scopes the gate to rendered literals in perch roots and an identifier is not a rendered literal |
+
+| **W3-23** | `08` INV-30; `20` P0-23; `01-DESIGN.md` §9 H1 | the pinned CSP carries no bare `https:` / `http:` / `wss:` / `ws:` in `connect-src` and no remote `script-src` host | **narrowed under D3.** The CSP becomes a pinned literal asserted by a test, and the remote `script-src` host (`https://cdn.jsdelivr.net/npm/@mediapipe/`, animated avatars) is removed; `connect-src` keeps `https: http: wss: ws:` because the whole workspace stays and its webview fetches invites, join policy and moderation over HTTPS from `shared/api/invites.ts` and `shared/api/moderation.ts`. Narrowing `connect-src` to named relay origins is a follow-up that needs a Tauri-side proxy for those calls; until then the pin makes any widening a deliberate, reviewed edit |
+| **W3-24** | `01-DESIGN.md` §9 H8; `20` P0-25 | the copy gate lands in Ground | **lands in First card**, with its first subject: the gate refuses to pass over a tree with no perch source (`../build/README.md`, "three of the four Perch gates exit 1 on a tree with no Perch source"), and the twelve `docs/assets` SVG rewrites are engine README art, deferred to Operator-complete |
 
 **Rows deliberately not filed.** R-1 (26006 global, `P_GATED_KINDS` is the whole fence), R-2
 (`distinct_sources` counts strategy-scoped ids), R-3, R-4 (`--perch-*`), R-5, R-6, R-7 (⌘J) all
