@@ -94,10 +94,10 @@ pub(crate) struct ResetOutcome {
 /// Wipe parameters assembled by `lib.rs` and passed into `run_boot_reset_with_keychain`.
 pub(crate) struct ResetContext<'a> {
     pub app_data_dir: &'a Path,
-    /// Legacy App Support dir for this build (Sprout import source). When
-    /// present and non-empty, wiped alongside `app_data_dir` to prevent
+    /// Legacy App Support dirs for this build (Buzz and Sprout import sources).
+    /// Existing sources are wiped alongside `app_data_dir` to prevent
     /// `migrate_legacy_app_data_dir` from restoring the old identity.
-    pub legacy_app_data_dir: Option<PathBuf>,
+    pub legacy_app_data_dirs: Vec<PathBuf>,
     /// Nest dir (`~/.ambush` or `~/.ambush-dev`) scoped to this build's variant,
     /// injected so unit tests can override without touching the global OnceLock.
     pub nest_dir: Option<PathBuf>,
@@ -123,12 +123,12 @@ pub(crate) fn run_boot_reset(app_data_dir: &Path) -> ResetOutcome {
 
     let store = crate::secret_store::SecretStore::keyring(crate::app_state::keyring_service());
     let home_dir = dirs::home_dir();
-    let legacy_dir = crate::migration::legacy_app_data_dir(app_data_dir);
+    let legacy_dirs = crate::migration::app_data_migration_sources(app_data_dir);
     let nest_dir = crate::managed_agents::nest_dir();
 
     let ctx = ResetContext {
         app_data_dir,
-        legacy_app_data_dir: legacy_dir,
+        legacy_app_data_dirs: legacy_dirs,
         nest_dir,
         keychain: &store,
         home_dir,
@@ -181,13 +181,28 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
         }
     }
 
-    // ── Step 1b: rename legacy App Support dir (sprout import source) ────────
-    let trash_legacy: Option<PathBuf> = ctx.legacy_app_data_dir.as_ref().map(|l| trash_path(l));
-    if let Some(ref legacy) = ctx.legacy_app_data_dir {
+    // ── Step 1b: rename legacy App Support dirs (rename import sources) ──────
+    let trash_legacy = ctx
+        .legacy_app_data_dirs
+        .iter()
+        .map(|legacy| (legacy.clone(), trash_path(legacy)))
+        .collect::<Vec<_>>();
+    for (legacy, _) in &trash_legacy {
         if legacy.exists() {
             if let Err(e) = rename_to_trash(legacy) {
                 eprintln!("ambush-desktop reset: {e}");
-                // Non-fatal for legacy dir — continue
+                if trash_app.exists() {
+                    let _ = std::fs::rename(&trash_app, app_data_dir);
+                }
+                for (restore_legacy, trash) in &trash_legacy {
+                    if !restore_legacy.exists() && trash.exists() {
+                        let _ = std::fs::rename(trash, restore_legacy);
+                    }
+                }
+                return ResetOutcome {
+                    completed: false,
+                    failed: true,
+                };
             }
         }
     }
@@ -230,11 +245,9 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
         if trash_app.exists() {
             let _ = std::fs::rename(&trash_app, app_data_dir);
         }
-        if let Some(ref legacy) = ctx.legacy_app_data_dir {
-            if let Some(ref tl) = trash_legacy {
-                if tl.exists() {
-                    let _ = std::fs::rename(tl, legacy);
-                }
+        for (legacy, trash) in &trash_legacy {
+            if !legacy.exists() && trash.exists() {
+                let _ = std::fs::rename(trash, legacy);
             }
         }
         if let Some(ref home) = ctx.home_dir {
@@ -257,8 +270,8 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
 
     // ── Step 5: sweep ALL reset trash (including from prior crashed boots) ───
     let _ = std::fs::remove_dir_all(&trash_app);
-    if let Some(ref tl) = trash_legacy {
-        let _ = std::fs::remove_dir_all(tl);
+    for (_, trash) in &trash_legacy {
+        let _ = std::fs::remove_dir_all(trash);
     }
     if let Some(ref tw) = trash_webkit {
         let _ = std::fs::remove_dir_all(tw);
@@ -267,14 +280,10 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
     // ── Step 6: verify ────────────────────────────────────────────────────────
     let keychain_ok = ctx.keychain.verify_fully_wiped();
     let app_data_gone = !app_data_dir.exists();
-    let legacy_gone = ctx
-        .legacy_app_data_dir
-        .as_ref()
-        .map(|p| !p.exists())
-        .unwrap_or(true);
+    let legacy_gone = ctx.legacy_app_data_dirs.iter().all(|path| !path.exists());
     let nest_gone = ctx.nest_dir.as_ref().map(|n| !n.exists()).unwrap_or(true);
     let trash_app_gone = !trash_app.exists();
-    let trash_legacy_gone = trash_legacy.as_ref().map(|p| !p.exists()).unwrap_or(true);
+    let trash_legacy_gone = trash_legacy.iter().all(|(_, path)| !path.exists());
     let trash_webkit_gone = trash_webkit.as_ref().map(|p| !p.exists()).unwrap_or(true);
 
     if !keychain_ok
@@ -403,7 +412,7 @@ mod tests {
     ) -> ResetContext<'a> {
         ResetContext {
             app_data_dir,
-            legacy_app_data_dir: None,
+            legacy_app_data_dirs: vec![],
             nest_dir: None,
             keychain,
             home_dir: None, // skip nest/sprout/CLI ops in unit tests
@@ -433,20 +442,26 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let app_data = make_app_data(&tmp);
 
-        // Also create a legacy App Support dir (sprout import source).
-        let legacy_dir = tmp
+        // Also create both legacy App Support dirs (Buzz and Sprout sources).
+        let buzz_dir = tmp
+            .path()
+            .join("Application Support")
+            .join("xyz.block.buzz.app");
+        let sprout_dir = tmp
             .path()
             .join("Application Support")
             .join("xyz.block.sprout.app");
-        std::fs::create_dir_all(&legacy_dir).unwrap();
-        std::fs::write(legacy_dir.join("identity.key"), b"old-identity").unwrap();
+        std::fs::create_dir_all(&buzz_dir).unwrap();
+        std::fs::create_dir_all(&sprout_dir).unwrap();
+        std::fs::write(buzz_dir.join("identity.key"), b"buzz-identity").unwrap();
+        std::fs::write(sprout_dir.join("identity.key"), b"sprout-identity").unwrap();
 
         write_sentinel(&app_data).unwrap();
         let kc = FakeKeychain::ok();
 
         let ctx = ResetContext {
             app_data_dir: &app_data,
-            legacy_app_data_dir: Some(legacy_dir.clone()),
+            legacy_app_data_dirs: vec![buzz_dir.clone(), sprout_dir.clone()],
             nest_dir: None,
             keychain: &kc,
             home_dir: None,
@@ -458,7 +473,8 @@ mod tests {
         assert!(outcome.completed, "should complete");
         assert!(!outcome.failed, "should not fail");
         assert!(!app_data.exists(), "app-data must be gone");
-        assert!(!legacy_dir.exists(), "legacy app-data must be gone");
+        assert!(!buzz_dir.exists(), "Buzz app-data must be gone");
+        assert!(!sprout_dir.exists(), "Sprout app-data must be gone");
         assert!(!sentinel_path(&app_data).exists(), "sentinel must be gone");
         assert_eq!(kc.delete_calls.get(), 1, "keychain deleted once");
     }
@@ -579,7 +595,7 @@ mod tests {
         let kc = FakeKeychain::ok();
         let ctx = ResetContext {
             app_data_dir: &app_data,
-            legacy_app_data_dir: None,
+            legacy_app_data_dirs: vec![],
             nest_dir: Some(dev_nest.clone()),
             keychain: &kc,
             home_dir: None,
@@ -615,7 +631,7 @@ mod tests {
         let kc = FakeKeychain::ok();
         let ctx = ResetContext {
             app_data_dir: &app_data,
-            legacy_app_data_dir: None,
+            legacy_app_data_dirs: vec![],
             nest_dir: Some(prod_nest.clone()),
             keychain: &kc,
             home_dir: None,
@@ -648,7 +664,7 @@ mod tests {
         let kc = FakeKeychain::ok();
         let ctx = ResetContext {
             app_data_dir: &app_data,
-            legacy_app_data_dir: Some(legacy_dir.clone()),
+            legacy_app_data_dirs: vec![legacy_dir.clone()],
             nest_dir: None,
             keychain: &kc,
             home_dir: None,
@@ -731,7 +747,7 @@ mod tests {
         let kc = FakeKeychain::ok();
         let ctx = ResetContext {
             app_data_dir: &app_data,
-            legacy_app_data_dir: None,
+            legacy_app_data_dirs: vec![],
             nest_dir: Some(dev_nest.clone()),
             keychain: &kc,
             home_dir: None,
@@ -805,6 +821,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_legacy_rename_failure_restores_prior_moves_before_keychain_delete() {
+        let tmp = TempDir::new().unwrap();
+        let app_support = tmp.path().join("Application Support");
+        let app_data = app_support.join("com.backbay.ambush.app");
+        let buzz = app_support.join("xyz.block.buzz.app");
+        let sprout = app_support.join("xyz.block.sprout.app");
+        for path in [&app_data, &buzz, &sprout] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        write_sentinel(&app_data).unwrap();
+
+        // A non-directory collision makes the second legacy rename fail after
+        // app-data and Buzz have already moved to their deterministic trash.
+        std::fs::write(trash_path(&sprout), b"collision").unwrap();
+        let kc = FakeKeychain::ok();
+        let outcome = run_boot_reset_with_keychain(ResetContext {
+            app_data_dir: &app_data,
+            legacy_app_data_dirs: vec![buzz.clone(), sprout.clone()],
+            nest_dir: None,
+            keychain: &kc,
+            home_dir: None,
+            is_dev: false,
+        });
+
+        assert!(outcome.failed);
+        assert!(app_data.exists(), "app-data must be restored");
+        assert!(buzz.exists(), "an earlier legacy move must be restored");
+        assert!(sprout.exists(), "the failed legacy source stays in place");
+        assert!(
+            sentinel_path(&app_data).exists(),
+            "the reset remains retryable"
+        );
+        assert_eq!(kc.delete_calls.get(), 0, "keychain must remain untouched");
+    }
+
     // ── Test 13: keychain-fail restores all dirs, retry cleans trash ──────
 
     #[test]
@@ -825,7 +877,7 @@ mod tests {
         let kc1 = FakeKeychain::fail("keychain locked");
         let ctx1 = ResetContext {
             app_data_dir: &app_data,
-            legacy_app_data_dir: Some(legacy.clone()),
+            legacy_app_data_dirs: vec![legacy.clone()],
             nest_dir: None,
             keychain: &kc1,
             home_dir: Some(tmp.path().to_path_buf()),
@@ -848,7 +900,7 @@ mod tests {
         let kc2 = FakeKeychain::ok();
         let ctx2 = ResetContext {
             app_data_dir: &app_data,
-            legacy_app_data_dir: Some(legacy.clone()),
+            legacy_app_data_dirs: vec![legacy.clone()],
             nest_dir: None,
             keychain: &kc2,
             home_dir: Some(tmp.path().to_path_buf()),

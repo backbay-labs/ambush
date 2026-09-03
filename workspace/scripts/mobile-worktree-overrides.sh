@@ -2,8 +2,8 @@
 # Writes worktree-aware identity overrides for mobile debug builds, mirroring
 # the desktop dev experience in scripts/instance-env.sh: debug builds produced
 # from a git worktree get a unique app identifier keyed to the WORKTREE
-# DIRECTORY NAME (stable across branch switches, so installs and login state
-# are bounded by worktree count) plus a display-only branch label (short SHA
+# DIRECTORY NAME plus a canonical-path hash (stable across branch switches and
+# unique across same-named paths) and a display-only branch label (short SHA
 # when detached).
 #
 # In a worktree this writes two gitignored override files consumed by the
@@ -27,6 +27,7 @@ unset GIT_DIR GIT_WORK_TREE
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 worktree_root="$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$repo_root")"
+worktree_root="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$worktree_root")"
 ios_overrides="$repo_root/mobile/ios/Flutter/WorktreeOverrides.xcconfig"
 android_props="$repo_root/mobile/android/worktree.properties"
 
@@ -68,6 +69,8 @@ label=$(printf '%s' "$label_raw" | sed -e 's/[^A-Za-z0-9._-]/-/g' -e 's/--*/-/g'
 # hyphens (hyphens are valid in bundle identifiers).
 ios_slug=$(printf '%s' "$worktree_name" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
 [[ -n "$ios_slug" ]] || ios_slug="worktree"
+worktree_hash=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:8])' "$worktree_root")
+ios_slug="${ios_slug}-${worktree_hash}"
 
 # Android applicationId segments must match [a-z][a-z0-9_]*: swap hyphens for
 # underscores and prefix a letter when the slug starts with a digit.

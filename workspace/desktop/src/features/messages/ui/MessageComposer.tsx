@@ -817,6 +817,9 @@ function MessageComposerImpl({
             className={cn(
               "relative z-10 isolate rounded-2xl border border-border/50 bg-background px-3 pb-2 pt-3 shadow-none sm:px-4",
             )}
+            data-mention-members-state={
+              mentions.hasResolvedMembers ? "resolved" : "pending"
+            }
             data-submit-locked={isSubmitLocked ? "true" : "false"}
             data-testid="message-composer"
             onDragEnter={ownsDropZone ? media.handleDragEnter : undefined}

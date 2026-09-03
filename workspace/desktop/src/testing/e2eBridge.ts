@@ -394,6 +394,8 @@ type E2eConfig = {
     profileReadError?: string;
     /** Override whether get_profile reports a real kind:0 event. */
     profileHasEvent?: boolean;
+    /** Avatar returned by the first synthesized active-profile read. */
+    profileAvatarUrl?: string | null;
     profileUpdateError?: string;
     profileUpdateErrors?: string[];
     linkPreviewMetadata?: {
@@ -4294,7 +4296,7 @@ function ensureMockProfile(config: E2eConfig | undefined): RawProfile {
   const profile = {
     pubkey,
     display_name: displayName,
-    avatar_url: null,
+    avatar_url: config?.mock?.profileAvatarUrl ?? null,
     about: null,
     nip05_handle: null,
     owner_pubkey: null,

@@ -872,8 +872,13 @@ test("defers agent mentions until DM members finish loading", async ({
       () => window.__AMBUSH_E2E_RELEASE_CHANNEL_MEMBERS_READS__?.() ?? 0,
     ),
   ).toBeGreaterThan(0);
-  await page.waitForTimeout(50);
-  await threadPanel.getByTestId("send-message").click();
+  await expect(threadPanel.getByTestId("message-composer")).toHaveAttribute(
+    "data-mention-members-state",
+    "resolved",
+  );
+  // Submit from the editor so the intentionally-visible first-attempt toast
+  // cannot intercept a pointer click while we exercise the resolved state.
+  await input.press("Enter");
 
   await expect(page.getByText(DM_THREAD_AGENT_MENTION_ERROR_TEXT)).toHaveCount(
     0,

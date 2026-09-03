@@ -105,6 +105,8 @@ id_ed25519
 # workspace/ (the Ambush workspace, merged 2026-09-02) carries tracked files that
 # the engine's generic patterns above would shadow for future adds. Re-include
 # them explicitly; the workspace has its own .gitignore for everything else.
+!workspace/**/build/
+!workspace/**/build/**
 !workspace/.claude/
 !workspace/.vscode/
 !workspace/crates/ambush-push-gateway/tests/fixtures/*.pem

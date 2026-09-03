@@ -9,6 +9,7 @@
 
 WORKSPACE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 WORKTREE_ROOT=$(git -C "$WORKSPACE_ROOT" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$WORKSPACE_ROOT")
+WORKTREE_ROOT=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$WORKTREE_ROOT")
 
 # Derive a stable base port from the worktree root so the same worktree always
 # gets the same ports. This keeps the Tauri dev config stable between runs and
@@ -27,7 +28,7 @@ if [[ "${AMBUSH_RESET_WEBVIEW_STATE:-0}" == "1" ]]; then
 fi
 
 AMBUSH_TAURI_CONFIG="{\"build\":{\"devUrl\":\"${DEV_URL}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${AMBUSH_VITE_PORT} --strictPort\"},\"identifier\":\"com.backbay.ambush.app.dev\",\"productName\":\"Ambush Dev\"}"
-unset VITE_DEV_BRANCH
+unset VITE_DEV_BRANCH AMBUSH_WORKTREE_PATH_SLUG AMBUSH_LEGACY_BRANCH_SLUG
 
 # In worktrees, derive the app identity from the worktree directory and use the
 # branch only as a display label. The identity therefore survives branch
@@ -47,10 +48,20 @@ if git -C "$WORKSPACE_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
         else
             LABEL_RAW="${BRANCH_NAME##*/}"
         fi
-        export AMBUSH_WORKTREE_LABEL=$(printf '%s' "$LABEL_RAW" | sed -e 's/[^A-Za-z0-9._-]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
+        AMBUSH_WORKTREE_LABEL=$(printf '%s' "$LABEL_RAW" | sed -e 's/[^A-Za-z0-9._-]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
         [[ -n "$AMBUSH_WORKTREE_LABEL" ]] || export AMBUSH_WORKTREE_LABEL="worktree"
-        export AMBUSH_INSTANCE_SLUG=$(printf '%s' "$WORKTREE_NAME" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
-        [[ -n "$AMBUSH_INSTANCE_SLUG" ]] || export AMBUSH_INSTANCE_SLUG="worktree"
+        export AMBUSH_WORKTREE_LABEL
+        INSTANCE_PREFIX=$(printf '%s' "$WORKTREE_NAME" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
+        [[ -n "$INSTANCE_PREFIX" ]] || INSTANCE_PREFIX="worktree"
+        export AMBUSH_WORKTREE_PATH_SLUG="$INSTANCE_PREFIX"
+        AMBUSH_LEGACY_BRANCH_SLUG=$(printf '%s' "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
+        [[ -n "$AMBUSH_LEGACY_BRANCH_SLUG" ]] || export AMBUSH_LEGACY_BRANCH_SLUG="worktree"
+        export AMBUSH_LEGACY_BRANCH_SLUG
+        # The readable basename is not unique: distinct paths can share it and
+        # different names can collapse to the same sanitized value. Bind every
+        # desktop/keyring identity to the canonical full path as well.
+        INSTANCE_PATH_HASH=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:8])' "$WORKTREE_ROOT")
+        export AMBUSH_INSTANCE_SLUG="${INSTANCE_PREFIX}-${INSTANCE_PATH_HASH}"
 
         # AMBUSH_SHARE_IDENTITY=1: reuse the main dev checkout's Nostr key so
         # worktrees skip onboarding and share the same identity. The per-worktree

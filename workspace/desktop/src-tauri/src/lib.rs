@@ -273,10 +273,20 @@ pub fn run() {
             }
 
             // Run all pre-identity data migrations before state loads from disk.
-            if reset_outcome.completed {
-                migration::run_boot_migrations_after_reset(&app_handle);
+            let migration_result = if reset_outcome.completed {
+                migration::run_boot_migrations_after_reset(&app_handle)
             } else {
-                migration::run_boot_migrations(&app_handle);
+                migration::run_boot_migrations(&app_handle)
+            };
+            if let Err(error) = migration_result {
+                eprintln!(
+                    "ambush-desktop: startup migration failed; refusing identity resolution: {error}"
+                );
+                let state = app_handle.state::<AppState>();
+                state
+                    .keyring_locked
+                    .store(true, std::sync::atomic::Ordering::Release);
+                return Ok(());
             }
 
             // Resolve persisted identity key (env var → file → generate+save).

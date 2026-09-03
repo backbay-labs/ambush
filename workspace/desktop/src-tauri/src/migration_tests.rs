@@ -19,27 +19,6 @@ fn canonical_dev_data_dir_returns_none_for_root() {
 }
 
 #[test]
-fn legacy_app_data_dir_maps_release_identifier() {
-    let current = PathBuf::from("/Users/me/Library/Application Support/com.backbay.ambush.app");
-    let legacy = legacy_app_data_dir(&current).unwrap();
-    assert_eq!(
-        legacy,
-        PathBuf::from("/Users/me/Library/Application Support/xyz.block.sprout.app")
-    );
-}
-
-#[test]
-fn legacy_app_data_dir_maps_dev_worktree_identifier() {
-    let current =
-        PathBuf::from("/Users/me/Library/Application Support/com.backbay.ambush.app.dev.my-branch");
-    let legacy = legacy_app_data_dir(&current).unwrap();
-    assert_eq!(
-        legacy,
-        PathBuf::from("/Users/me/Library/Application Support/xyz.block.sprout.app.dev.my-branch",)
-    );
-}
-
-#[test]
 fn copy_dir_all_preserves_nested_files_without_overwriting() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("old");

@@ -321,6 +321,8 @@ type MockBridgeOptions = {
   profileReadError?: string;
   /** Override whether get_profile reports a real kind:0 event. */
   profileHasEvent?: boolean;
+  /** Avatar returned by the first synthesized active-profile read. */
+  profileAvatarUrl?: string | null;
   profileUpdateError?: string;
   profileUpdateErrors?: string[];
   linkPreviewMetadata?: {

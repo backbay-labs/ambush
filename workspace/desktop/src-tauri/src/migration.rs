@@ -20,10 +20,11 @@ use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 use crate::util::replace_with_symlink;
+mod product_rename;
+pub(crate) use product_rename::app_data_migration_sources;
+use product_rename::{copy_dir_all, migrate_legacy_app_data_dir, migrate_legacy_keyring_data};
 
 const CANONICAL_DEV_IDENTIFIER: &str = "com.backbay.ambush.app.dev";
-const LEGACY_CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.sprout.app.dev";
-const LEGACY_RELEASE_IDENTIFIER: &str = "xyz.block.sprout.app";
 
 /// JSON files symlinked from worktree data directories to the canonical
 /// dev data directory. Only data files — never `agent-pids/` or `logs/`.
@@ -56,52 +57,6 @@ fn canonical_dev_data_dir(current: &Path) -> Option<PathBuf> {
     current.parent().map(|p| p.join(CANONICAL_DEV_IDENTIFIER))
 }
 
-pub(crate) fn legacy_app_data_dir(current: &Path) -> Option<PathBuf> {
-    let name = current.file_name()?.to_str()?;
-    let legacy_name = if name.starts_with(CANONICAL_DEV_IDENTIFIER) {
-        name.replacen(CANONICAL_DEV_IDENTIFIER, LEGACY_CANONICAL_DEV_IDENTIFIER, 1)
-    } else if name.starts_with("com.backbay.ambush.app") {
-        name.replacen("com.backbay.ambush.app", LEGACY_RELEASE_IDENTIFIER, 1)
-    } else {
-        return None;
-    };
-    current.parent().map(|parent| parent.join(legacy_name))
-}
-
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        let metadata = std::fs::symlink_metadata(&src_path)?;
-        if metadata.file_type().is_symlink() {
-            #[cfg(unix)]
-            {
-                let target = std::fs::read_link(&src_path)?;
-                if dst_path.exists() || dst_path.is_symlink() {
-                    let _ = std::fs::remove_file(&dst_path);
-                }
-                crate::util::create_symlink(&target, &dst_path)?;
-            }
-            #[cfg(not(unix))]
-            {
-                continue;
-            }
-        } else if metadata.is_dir() {
-            copy_dir_all(&src_path, &dst_path)?;
-        } else if metadata.is_file() {
-            if let Some(parent) = dst_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            if !dst_path.exists() {
-                std::fs::copy(&src_path, &dst_path)?;
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Run every data migration that must complete before identity resolution and
 /// agent restore. Ordering is load-bearing: `migrate_legacy_app_data_dir` must
 /// precede any disk read, and `sync_shared_agent_data` must precede
@@ -119,16 +74,16 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// keys, no `retention.db`), so it runs pre-identity here ahead of all
 /// readers — reader-first loses a launch (stale harness/`mcp_command` until
 /// the next boot).
-pub fn run_boot_migrations(app: &tauri::AppHandle) {
-    run_boot_migrations_inner(app, false);
+pub fn run_boot_migrations(app: &tauri::AppHandle) -> Result<(), String> {
+    run_boot_migrations_inner(app, false)
 }
 
 /// Entry point when a completed reset must suppress dev-nest re-import.
-pub fn run_boot_migrations_after_reset(app: &tauri::AppHandle) {
-    run_boot_migrations_inner(app, true);
+pub fn run_boot_migrations_after_reset(app: &tauri::AppHandle) -> Result<(), String> {
+    run_boot_migrations_inner(app, true)
 }
 
-fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
+fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) -> Result<(), String> {
     // Initialize the process-lifetime nest directory before any filesystem
     // operation that calls nest_dir(). The discriminator matches the existing
     // pattern used by reconcile_target_dir: dev instances have an app-data-dir
@@ -154,7 +109,12 @@ fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
         maybe_migrate_dev_repos_dir(is_dev, reset_completed, &home, &dev_nest);
     }
 
-    migrate_legacy_app_data_dir(app);
+    migrate_legacy_app_data_dir(app)?;
+    let current_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("cannot resolve app data dir for keyring migration: {error}"))?;
+    migrate_legacy_keyring_data(&current_dir)?;
     sync_shared_agent_data(app);
     // Dev-build-only: copy any agent keys that exist in the production
     // keyring ("ambush-desktop") into the dev service ("ambush-desktop-dev")
@@ -189,38 +149,7 @@ fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
     reconcile_provider_mcp_commands(app);
     reconcile_databricks_v1_to_v2(app);
     materialize_agent_runtimes(app);
-}
-
-/// Copy one-time app state from the legacy app identifier directory to
-/// the current Ambush identifier directory. The Tauri identifier controls the app
-/// data path, so without this copy a product rename would look like a fresh
-/// install and users would lose their persisted identity and agent settings.
-pub fn migrate_legacy_app_data_dir(app: &tauri::AppHandle) {
-    let current_dir = match app.path().app_data_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("ambush-desktop: app-data-migration: cannot resolve app data dir: {e}");
-            return;
-        }
-    };
-    let Some(legacy_dir) = legacy_app_data_dir(&current_dir) else {
-        return;
-    };
-    if !legacy_dir.exists() {
-        return;
-    }
-    match copy_dir_all(&legacy_dir, &current_dir) {
-        Ok(()) => eprintln!(
-            "ambush-desktop: app-data-migration: copied legacy data from {} to {}",
-            legacy_dir.display(),
-            current_dir.display()
-        ),
-        Err(error) => eprintln!(
-            "ambush-desktop: app-data-migration: failed to copy {} to {}: {error}",
-            legacy_dir.display(),
-            current_dir.display()
-        ),
-    }
+    Ok(())
 }
 
 /// Knowledge directories and files carried from the legacy nest into the live

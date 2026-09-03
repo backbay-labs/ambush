@@ -32,6 +32,29 @@ require_literal "        run: scripts/check-desktop-vulnerabilities.sh"
 require_literal "          scripts/test-reset-desktop-dev-state.sh"
 require_literal "          scripts/test-reset-desktop-standalone-state.sh"
 
+web_filter_block=$(awk '
+    $0 == "            web:" { found = 1 }
+    found && $0 == "            admin:" { exit }
+    found { print }
+' "$workflow")
+grep -Fq "              - '.github/workflows/workspace-ci.yml'" <<<"$web_filter_block" || {
+    echo "workspace workflow changes must activate the web lane" >&2
+    exit 1
+}
+
+git_root="$workspace_root/.."
+if git -C "$git_root" check-ignore -q --no-index \
+    workspace/docs/plans/ambush-ui/build/README.md; then
+    echo "root ignore rules must expose the workspace Ambush build plan" >&2
+    exit 1
+fi
+
+grep -Fq 'pnpm build:e2e' \
+    "$workspace_root/desktop/src-tauri/src/managed_agents/screenshot_skill.md" || {
+    echo "managed-agent screenshot guidance must preserve the E2E mock bridge" >&2
+    exit 1
+}
+
 if [[ $(grep -oF '"workspace/.cargo/config.toml"' "$lefthook" | wc -l | tr -d ' ') -ne 2 ]]; then
     echo "Rust and desktop-Tauri pre-push lanes must both include workspace/.cargo/config.toml" >&2
     exit 1

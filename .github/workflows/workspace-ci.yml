@@ -74,6 +74,7 @@ jobs:
             web:
               - 'workspace/web/**'
               - 'workspace/pnpm-lock.yaml'
+              - '.github/workflows/workspace-ci.yml'
             admin:
               - 'workspace/admin-web/**'
               - 'workspace/pnpm-lock.yaml'

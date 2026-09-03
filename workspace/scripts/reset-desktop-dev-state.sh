@@ -17,7 +17,12 @@ slugify() {
 # SecretStore uses the base development service for normal debug launches and
 # a directory-scoped service for standalone worktrees. Older worktree builds
 # used a branch-derived suffix, so a full reset clears both inventories.
-DEV_KEYRING_SERVICES=(ambush-desktop-dev sprout-desktop-dev ambush-desktop-dev.main)
+DEV_KEYRING_SERVICES=(
+  ambush-desktop-dev
+  buzz-desktop-dev
+  sprout-desktop-dev
+  ambush-desktop-dev.main
+)
 add_dev_keyring_service() {
   local service="$1" existing
   [[ -n "$service" ]] || return 0
@@ -31,15 +36,33 @@ if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   while IFS= read -r -d '' field; do
     case "$field" in
       "worktree "*)
-        worktree_slug=$(slugify "$(basename "${field#worktree }")")
+        worktree_path="${field#worktree }"
+        worktree_slug=$(slugify "$(basename "$worktree_path")")
+        worktree_path=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$worktree_path")
+        worktree_hash=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:8])' "$worktree_path")
+        # Current path-bound service plus the basename-only service briefly
+        # emitted before path hashing was introduced.
+        add_dev_keyring_service "ambush-desktop-dev.${worktree_slug}-${worktree_hash}"
         add_dev_keyring_service "ambush-desktop-dev.${worktree_slug}"
         ;;
       "branch refs/heads/"*)
         legacy_branch_slug=$(slugify "${field#branch refs/heads/}")
         add_dev_keyring_service "ambush-desktop-dev.${legacy_branch_slug}"
+        add_dev_keyring_service "buzz-desktop-dev.${legacy_branch_slug}"
+        add_dev_keyring_service "sprout-desktop-dev.${legacy_branch_slug}"
         ;;
     esac
   done < <(git -C "$REPO_ROOT" worktree list --porcelain -z)
+
+  # `git worktree list` drops an inactive worktree after it is removed, but
+  # its local branch normally survives. Old standalone builds keyed Secret
+  # Store services to the branch, so enumerate all local branches separately.
+  while IFS= read -r branch; do
+    legacy_branch_slug=$(slugify "$branch")
+    add_dev_keyring_service "ambush-desktop-dev.${legacy_branch_slug}"
+    add_dev_keyring_service "buzz-desktop-dev.${legacy_branch_slug}"
+    add_dev_keyring_service "sprout-desktop-dev.${legacy_branch_slug}"
+  done < <(git -C "$REPO_ROOT" for-each-ref --format='%(refname:short)' refs/heads)
 fi
 
 remove_path() {
@@ -57,7 +80,7 @@ remove_bundle_state() {
 
   [[ -d "$base" ]] || return 0
   shopt -s nullglob
-  for prefix in com.backbay.ambush.app.dev xyz.block.sprout.app.dev; do
+  for prefix in com.backbay.ambush.app.dev xyz.block.buzz.app.dev xyz.block.sprout.app.dev; do
     # Match the canonical dev identifier and dot-delimited worktree variants.
     # Do not use `${prefix}*`: that could match a non-dev prefix collision.
     remove_path "$base/${prefix}${suffix}"

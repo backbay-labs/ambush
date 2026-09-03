@@ -64,11 +64,13 @@ git -C "$nested_repo" init -q -b main
 git -C "$nested_repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 nested_wt="$tmp/Nested_Worktree"
 git -C "$nested_repo" worktree add -q -b nested-branch "$nested_wt"
+nested_hash=$(python3 -c 'import hashlib, os, sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:8])' "$nested_wt")
+nested_slug="nested-worktree-${nested_hash}"
 mkdir -p "$nested_wt/workspace/scripts" "$nested_wt/workspace/mobile/ios/Flutter" "$nested_wt/workspace/mobile/android"
 cp "$script" "$nested_wt/workspace/scripts/mobile-worktree-overrides.sh"
 nested_out="$("$nested_wt/workspace/scripts/mobile-worktree-overrides.sh")"
 nested_ios="$nested_wt/workspace/mobile/ios/Flutter/WorktreeOverrides.xcconfig"
-if grep -q '^BUNDLE_IDENTIFIER = com\.backbay\.ambush\.dogfood\.mobile\.nested-worktree$' "$nested_ios"; then
+if grep -q "^BUNDLE_IDENTIFIER = com\\.backbay\\.ambush\\.dogfood\\.mobile\\.${nested_slug}$" "$nested_ios"; then
   pass "nested product identity keys to the outer worktree directory"
 else
   fail "nested product identity must not key to the literal workspace directory, got: $(cat "$nested_ios")"
@@ -82,11 +84,14 @@ fi
 # ── Worktree: identity from DIRECTORY name, label from branch ────────────────
 wt="$tmp/Feature_Work-1"
 make_worktree "$repo" "$wt" "tho/Fix_Thing-2"
+wt_hash=$(python3 -c 'import hashlib, os, sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:8])' "$wt")
+wt_ios_slug="feature-work-1-${wt_hash}"
+wt_android_slug="feature_work_1_${wt_hash}"
 out="$("$wt/scripts/mobile-worktree-overrides.sh")"
 ios="$wt/mobile/ios/Flutter/WorktreeOverrides.xcconfig"
 android="$wt/mobile/android/worktree.properties"
 [[ -f "$ios" && -f "$android" ]] || fail "worktree must write both override files"
-grep -q '^BUNDLE_IDENTIFIER = com\.backbay\.ambush\.dogfood\.mobile\.feature-work-1$' "$ios" \
+grep -q "^BUNDLE_IDENTIFIER = com\\.backbay\\.ambush\\.dogfood\\.mobile\\.${wt_ios_slug}$" "$ios" \
   && pass "iOS bundle identifier keys to the sanitized worktree directory name" \
   || fail "iOS bundle identifier must key to the worktree dir, got: $(cat "$ios")"
 grep -q '^APP_DISPLAY_NAME = Ambush (Fix_Thing-2)$' "$ios" \
@@ -98,7 +103,7 @@ grep -q '^label=Fix_Thing-2$' "$android" \
 grep -q '^appName=Ambush (Fix_Thing-2)$' "$android" \
   && pass "Android app name defaults to the branch-labelled name" \
   || fail "Android app name wrong: $(cat "$android")"
-grep -q '^applicationIdSuffix=\.feature_work_1$' "$android" \
+grep -q "^applicationIdSuffix=\\.${wt_android_slug}$" "$android" \
   && pass "Android applicationIdSuffix keys to the worktree directory name" \
   || fail "Android applicationIdSuffix wrong: $(cat "$android")"
 printf '%s' "$out" | grep -q 'Worktree Feature_Work-1' \
@@ -108,8 +113,8 @@ printf '%s' "$out" | grep -q 'Worktree Feature_Work-1' \
 # ── Branch switch in the same worktree: identity stable, label follows ───────
 git -C "$wt" checkout -q -b "another/branch-name"
 "$wt/scripts/mobile-worktree-overrides.sh" > /dev/null
-grep -q '^BUNDLE_IDENTIFIER = com\.backbay\.ambush\.dogfood\.mobile\.feature-work-1$' "$ios" \
-  && grep -q '^applicationIdSuffix=\.feature_work_1$' "$android" \
+grep -q "^BUNDLE_IDENTIFIER = com\\.backbay\\.ambush\\.dogfood\\.mobile\\.${wt_ios_slug}$" "$ios" \
+  && grep -q "^applicationIdSuffix=\\.${wt_android_slug}$" "$android" \
   && pass "branch switch keeps the install identity stable (per worktree)" \
   || fail "install identity must not change on branch switch"
 grep -q '^label=branch-name$' "$android" \
@@ -133,17 +138,32 @@ git -C "$wt" checkout -q --detach
 grep -q "^label=${sha}$" "$android" \
   && pass "detached HEAD labels with the short SHA instead of literal HEAD" \
   || fail "detached HEAD must use short SHA, got: $(cat "$android")"
-grep -q '^applicationIdSuffix=\.feature_work_1$' "$android" \
+grep -q "^applicationIdSuffix=\\.${wt_android_slug}$" "$android" \
   && pass "detached HEAD keeps the per-worktree install identity" \
   || fail "detached HEAD must not change the install identity"
 
 # ── Digit-leading worktree dir gets a letter-prefixed Android segment ────────
 wt2="$tmp/2fast"
 make_worktree "$repo" "$wt2" "some-branch"
+wt2_hash=$(python3 -c 'import hashlib, os, sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:8])' "$wt2")
 "$wt2/scripts/mobile-worktree-overrides.sh" > /dev/null
-grep -q '^applicationIdSuffix=\.w_2fast$' "$wt2/mobile/android/worktree.properties" \
+grep -q "^applicationIdSuffix=\\.w_2fast_${wt2_hash}$" "$wt2/mobile/android/worktree.properties" \
   && pass "digit-leading worktree dir yields a valid Android package segment" \
   || fail "digit-leading dir segment wrong: $(cat "$wt2/mobile/android/worktree.properties")"
+
+# Same basename under a different canonical path must not collide.
+wt3="$tmp/elsewhere/Feature_Work-1"
+mkdir -p "$(dirname "$wt3")"
+make_worktree "$repo" "$wt3" "same-name-other-path"
+"$wt3/scripts/mobile-worktree-overrides.sh" > /dev/null
+other_ios="$wt3/mobile/ios/Flutter/WorktreeOverrides.xcconfig"
+first_bundle_id=$(sed -n 's/^BUNDLE_IDENTIFIER = //p' "$ios")
+other_bundle_id=$(sed -n 's/^BUNDLE_IDENTIFIER = //p' "$other_ios")
+if [[ "$first_bundle_id" == "$other_bundle_id" ]]; then
+  fail "same-basename worktrees must receive different mobile install identities"
+else
+  pass "canonical path hash separates same-basename worktrees"
+fi
 
 # ── Explicit Android debug identity: readable and isolated ───────────────────
 AMBUSH_ANDROID_DEBUG_APP_NAME="Ambush Huddles" \

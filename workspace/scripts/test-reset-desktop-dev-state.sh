@@ -12,6 +12,8 @@ git -C "$main" -c user.name=fixture -c user.email=fixture@invalid commit -q --al
 
 worktree="$tmp/Scoped_Worktree"
 git -C "$main" worktree add -q -b feature/reset "$worktree"
+git -C "$main" branch legacy/inactive
+worktree_hash=$(python3 -c 'import hashlib, os, sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:8])' "$worktree")
 workspace="$worktree/workspace"
 mkdir -p "$workspace/scripts"
 cp "$source_script" "$workspace/scripts/reset-desktop-dev-state.sh"
@@ -22,6 +24,7 @@ export XDG_CONFIG_HOME="$tmp/xdg-config"
 export XDG_CACHE_HOME="$tmp/xdg-cache"
 mkdir -p \
     "$XDG_DATA_HOME/com.backbay.ambush.app.dev.scoped-worktree" \
+    "$XDG_DATA_HOME/xyz.block.buzz.app.dev.feature-reset" \
     "$XDG_DATA_HOME/com.backbay.ambush.app" \
     "$XDG_CONFIG_HOME/com.backbay.ambush.app.dev.scoped-worktree" \
     "$XDG_CACHE_HOME/com.backbay.ambush.app.dev.scoped-worktree" \
@@ -39,6 +42,7 @@ export PATH="$tmp/bin:$PATH"
 AMBUSH_TEST_PLATFORM=Linux "$workspace/scripts/reset-desktop-dev-state.sh"
 
 [[ ! -e "$XDG_DATA_HOME/com.backbay.ambush.app.dev.scoped-worktree" ]]
+[[ ! -e "$XDG_DATA_HOME/xyz.block.buzz.app.dev.feature-reset" ]]
 [[ ! -e "$XDG_CONFIG_HOME/com.backbay.ambush.app.dev.scoped-worktree" ]]
 [[ ! -e "$XDG_CACHE_HOME/com.backbay.ambush.app.dev.scoped-worktree" ]]
 [[ -d "$XDG_DATA_HOME/com.backbay.ambush.app" ]]
@@ -47,10 +51,15 @@ AMBUSH_TEST_PLATFORM=Linux "$workspace/scripts/reset-desktop-dev-state.sh"
 
 for service in \
     ambush-desktop-dev \
+    buzz-desktop-dev \
     sprout-desktop-dev \
     ambush-desktop-dev.main \
     ambush-desktop-dev.scoped-worktree \
-    ambush-desktop-dev.feature-reset; do
+    ambush-desktop-dev.scoped-worktree-${worktree_hash} \
+    ambush-desktop-dev.feature-reset \
+    ambush-desktop-dev.legacy-inactive \
+    buzz-desktop-dev.feature-reset \
+    buzz-desktop-dev.legacy-inactive; do
     grep -Fx -- "clear service $service username secrets target default" \
         "$HOME/secret-tool-calls" >/dev/null
 done
