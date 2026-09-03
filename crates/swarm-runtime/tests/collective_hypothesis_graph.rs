@@ -38,8 +38,8 @@ use swarm_runtime::hypothesis_graph::{
     normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_threat_intel_entry,
 };
 use swarm_spine::{
-    FileHypothesisGraphStore, GraphStoreRevision, GraphStoreSnapshot, GraphStoreState,
-    HypothesisGraphStore, MemoryHypothesisGraphStore, ReasoningStateUpdate,
+    FileHypothesisGraphStore, GraphStoreError, GraphStoreRevision, GraphStoreSnapshot,
+    GraphStoreState, HypothesisGraphStore, MemoryHypothesisGraphStore, ReasoningStateUpdate,
 };
 
 fn key(seed: u8) -> Keypair {
@@ -3146,6 +3146,56 @@ fn terminal_memory_is_not_visible_before_outbox_cas() {
 }
 
 #[test]
+fn dangling_terminal_memory_is_rejected_before_cas() {
+    let mut fixture = terminal_task_fixture();
+    let proof = TaskCapabilityProof::signed_with(
+        fixture.request.task_id.clone(),
+        fixture.request.claimant.clone(),
+        fixture.request.role,
+        fixture.request.kind,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "hunter:terminal",
+    )
+    .unwrap();
+    let claim = fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(100),
+            1_000,
+            proof,
+        )
+        .unwrap();
+    let before = fixture.store.snapshot().unwrap();
+    let before_bytes = before.canonical_bytes().unwrap();
+    let (memory, expiry) = terminal_memory(&fixture);
+    let error = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            before.revision(),
+            &claim,
+            terminal_envelope(&fixture, &claim),
+            vec![fixture.evidence.clone()],
+            None,
+            Some(memory),
+            Some(expiry),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason })
+            if reason.contains("unknown hypothesis")
+    ));
+    assert_eq!(
+        fixture.store.snapshot().unwrap().canonical_bytes().unwrap(),
+        before_bytes
+    );
+}
+
+#[test]
 fn stale_terminal_publishes_nothing() {
     let mut fixture = terminal_task_fixture();
     let proof = TaskCapabilityProof::signed_with(
@@ -3591,6 +3641,215 @@ fn decision_terminal(
     .signed_with(&fixture.claimant_key, "decision:terminal")
     .unwrap();
     (envelope, decision)
+}
+
+fn decision_terminal_with(
+    fixture: &DecisionTaskFixture,
+    claim: &swarm_runtime::hypothesis_graph::TaskClaim,
+    decision_kind: DecisionKind,
+    decision_role: GraphProducerRole,
+    decided_at: GraphLogicalTime,
+) -> (TaskTerminalEnvelope, DecisionRecord) {
+    let completion_kind = match fixture.request.kind {
+        TaskKind::ChallengeEdge => TaskCompletionKind::EdgeChallenged,
+        TaskKind::FalsifyHypothesis => TaskCompletionKind::HypothesisFalsified,
+        TaskKind::AcquireEvidence => panic!("decision fixture requires a decision task"),
+    };
+    let decision = DecisionRecord::new(
+        decision_kind,
+        fixture.hypothesis_id.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        decision_role,
+        fixture.request.claimant.clone(),
+        decided_at,
+        "explicit decision evidence retains lineage",
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:producer")
+    .unwrap();
+    let link = TaskDecisionLink::new(
+        claim.task_id.clone(),
+        fixture.target.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        Some(decision.decision_id.clone()),
+    )
+    .unwrap();
+    let envelope = TaskTerminalEnvelope::new(
+        claim.task_id.clone(),
+        claim.idempotency_key.clone(),
+        claim.lease_id.clone(),
+        claim.fencing_token,
+        TaskCompletion::new(
+            completion_kind,
+            claim.claimant.clone(),
+            GraphLogicalTime::new(200),
+            [fixture.evidence.evidence_id.clone()],
+            "00".repeat(32),
+        )
+        .unwrap(),
+        Some(link),
+        claim.claimant.clone(),
+        claim.capability_proof.clone(),
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:terminal")
+    .unwrap();
+    (envelope, decision)
+}
+
+#[test]
+fn terminal_decision_kind_and_time_fail_closed_before_cas() {
+    let mut wrong_kind_fixture =
+        decision_task_fixture(TaskKind::FalsifyHypothesis, GraphProducerRole::Falsifier);
+    let wrong_kind_claim = claim_decision_task(&mut wrong_kind_fixture);
+    let before_wrong_kind = wrong_kind_fixture.store.snapshot().unwrap();
+    let before_wrong_kind_bytes = before_wrong_kind.canonical_bytes().unwrap();
+    let (wrong_kind_envelope, wrong_kind_decision) = decision_terminal_with(
+        &wrong_kind_fixture,
+        &wrong_kind_claim,
+        DecisionKind::Support,
+        GraphProducerRole::Hunter,
+        GraphLogicalTime::new(150),
+    );
+    assert!(matches!(
+        wrong_kind_fixture.ledger.complete_task(
+            &wrong_kind_fixture.store,
+            before_wrong_kind.revision(),
+            &wrong_kind_claim,
+            wrong_kind_envelope,
+            vec![wrong_kind_fixture.evidence.clone()],
+            Some(wrong_kind_decision),
+            None,
+            None,
+        ),
+        Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+            if reason.contains("decision kind and target")
+    ));
+    assert_eq!(
+        wrong_kind_fixture
+            .store
+            .snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap(),
+        before_wrong_kind_bytes
+    );
+
+    let mut wrong_challenge_fixture =
+        decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
+    let wrong_challenge_claim = claim_decision_task(&mut wrong_challenge_fixture);
+    let before_wrong_challenge = wrong_challenge_fixture.store.snapshot().unwrap();
+    let before_wrong_challenge_bytes = before_wrong_challenge.canonical_bytes().unwrap();
+    let (wrong_challenge_envelope, wrong_challenge_decision) = decision_terminal_with(
+        &wrong_challenge_fixture,
+        &wrong_challenge_claim,
+        DecisionKind::Falsify,
+        GraphProducerRole::Falsifier,
+        GraphLogicalTime::new(150),
+    );
+    assert!(matches!(
+        wrong_challenge_fixture.ledger.complete_task(
+            &wrong_challenge_fixture.store,
+            before_wrong_challenge.revision(),
+            &wrong_challenge_claim,
+            wrong_challenge_envelope,
+            vec![wrong_challenge_fixture.evidence.clone()],
+            Some(wrong_challenge_decision),
+            None,
+            None,
+        ),
+        Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+            if reason.contains("decision kind and target")
+    ));
+    assert_eq!(
+        wrong_challenge_fixture
+            .store
+            .snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap(),
+        before_wrong_challenge_bytes
+    );
+
+    let mut backdated_fixture =
+        decision_task_fixture(TaskKind::FalsifyHypothesis, GraphProducerRole::Falsifier);
+    let backdated_claim = claim_decision_task(&mut backdated_fixture);
+    let before_backdated = backdated_fixture.store.snapshot().unwrap();
+    let before_backdated_bytes = before_backdated.canonical_bytes().unwrap();
+    let (backdated_envelope, backdated_decision) = decision_terminal_with(
+        &backdated_fixture,
+        &backdated_claim,
+        DecisionKind::Falsify,
+        GraphProducerRole::Falsifier,
+        GraphLogicalTime::new(99),
+    );
+    assert!(matches!(
+        backdated_fixture.ledger.complete_task(
+            &backdated_fixture.store,
+            before_backdated.revision(),
+            &backdated_claim,
+            backdated_envelope,
+            vec![backdated_fixture.evidence.clone()],
+            Some(backdated_decision),
+            None,
+            None,
+        ),
+        Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+            if reason.contains("back-dated")
+    ));
+    assert_eq!(
+        backdated_fixture
+            .store
+            .snapshot()
+            .unwrap()
+            .canonical_bytes()
+            .unwrap(),
+        before_backdated_bytes
+    );
+}
+
+#[test]
+fn terminal_claim_retry_is_rejected_without_budget_or_store_mutation() {
+    let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
+    let claim = claim_decision_task(&mut fixture);
+    let before_terminal = fixture.store.snapshot().unwrap();
+    let (envelope, decision) = decision_terminal(&fixture, &claim);
+    fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            before_terminal.revision(),
+            &claim,
+            envelope,
+            vec![fixture.evidence.clone()],
+            Some(decision),
+            None,
+            None,
+        )
+        .unwrap();
+    let before_retry = fixture.store.snapshot().unwrap();
+    let before_retry_bytes = before_retry.canonical_bytes().unwrap();
+    let budget_before = fixture.ledger.scheduler_budget().clone();
+    let error = fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(200),
+            1_000,
+            claim.capability_proof,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        GraphStoreError::InvalidTransition { reason }
+            if reason.contains("terminal tasks cannot be claimed")
+    ));
+    assert_eq!(fixture.ledger.scheduler_budget(), &budget_before);
+    assert_eq!(
+        fixture.store.snapshot().unwrap().canonical_bytes().unwrap(),
+        before_retry_bytes
+    );
 }
 
 #[test]
