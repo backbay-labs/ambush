@@ -230,7 +230,8 @@ export function RepoBlobPage() {
     error: ctxError,
   } = useRepoContext(repoId, { preview: showMockBlob });
 
-  const browseOwner = showMockBlob ? "" : owner;
+  // A repository or refs failure renders below; do not clone a guessed ref.
+  const browseOwner = showMockBlob || ctxError ? "" : owner;
 
   const {
     data: fetchedView,
@@ -247,7 +248,6 @@ export function RepoBlobPage() {
     repoName,
     defaultRef,
     filepath,
-    isHtml ? view.content : "",
     running && isHtml,
   );
 

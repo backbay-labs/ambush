@@ -26,15 +26,20 @@ export function useRepoContext(
     isLoading: repoLoading,
     error: repoError,
   } = useRepo(repoId, { preview });
-  const { data: refs, isLoading: refsLoading } = useRepoRefs(repoId, {
-    preview,
-  });
+  const {
+    data: refs,
+    isLoading: refsLoading,
+    error: refsError,
+  } = useRepoRefs(repoId, { preview });
 
+  // A failed refs lookup (NIP-11 unreachable, no stable relay signing key,
+  // relay query failure) is an error, not a repository on `main`: report it
+  // so pages stop before browsing a guessed ref.
   return {
     owner: repo?.owner ?? "",
     repoName: repo?.id ?? "",
     defaultRef: refs?.head?.ref ?? "main",
     isLoading: repoLoading || refsLoading,
-    error: (repoError as Error | null) ?? null,
+    error: (repoError as Error | null) ?? (refsError as Error | null) ?? null,
   };
 }

@@ -6,11 +6,23 @@ import type { RepoRefs } from "../use-repo-refs";
 export function RepoRefsSection({
   refs,
   isLoading,
+  error = null,
 }: {
   refs: RepoRefs | undefined;
   isLoading: boolean;
+  error?: Error | null;
 }) {
   if (isLoading) return null;
+
+  if (error) {
+    return (
+      <div className="mt-6">
+        <p className="text-sm text-destructive">
+          Failed to load branches and tags: {error.message}
+        </p>
+      </div>
+    );
+  }
 
   const hasRefs = refs && (refs.branches.length > 0 || refs.tags.length > 0);
 

@@ -189,14 +189,20 @@ export function RepoDetailPage() {
   } = useRepo(repoId, {
     preview: showMockRepo,
   });
-  const { data: refs, isLoading: refsLoading } = useRepoRefs(repoId, {
+  const {
+    data: refs,
+    isLoading: refsLoading,
+    error: refsError,
+  } = useRepoRefs(repoId, {
     preview: showMockRepo,
   });
 
   const defaultRef = refs?.head?.ref ?? "main";
   const owner = repo?.owner ?? "";
   const repoName = repo?.id ?? "";
-  const browseOwner = showMockRepo ? "" : owner;
+  // Without trusted refs there is no ref to browse; an empty owner disables
+  // the clone-backed queries instead of guessing `main`.
+  const browseOwner = showMockRepo || refsError ? "" : owner;
 
   const {
     data: fetchedTreeEntries,
@@ -293,7 +299,11 @@ export function RepoDetailPage() {
         </div>
 
         {/* Refs & HEAD */}
-        <RepoRefsSection refs={refs} isLoading={refsLoading} />
+        <RepoRefsSection
+          refs={refs}
+          isLoading={refsLoading}
+          error={refsError}
+        />
 
         {/* Clone/browse error banner */}
         {browseError && (
