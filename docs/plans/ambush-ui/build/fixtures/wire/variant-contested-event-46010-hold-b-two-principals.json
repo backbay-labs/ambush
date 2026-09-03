@@ -1,0 +1,26 @@
+{
+  "kind": 46010,
+  "content": "hold h_1c28ae79 · block_egress · CRITICAL · host-ops-1 · expires 2026-03-17T10:14:42Z",
+  "tags": [
+    [
+      "h",
+      "27799e23-ab25-4659-b381-3de47ea7ca4d"
+    ],
+    [
+      "p",
+      "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5"
+    ],
+    [
+      "p",
+      "b54ad02b00abebd0812e652632c43b8e2f4d4500b1d02443156ece83fd0ec35f"
+    ],
+    [
+      "hold",
+      "h_1c28ae79"
+    ],
+    [
+      "card",
+      "b78a98c41feba52b15e5ec02a5074f51449b2e20e4a4e7fea2676e77ac8f546f"
+    ]
+  ]
+}

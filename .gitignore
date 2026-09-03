@@ -97,3 +97,7 @@ id_ed25519
 # The skill assumes this is git-ignored; it was not, so an SDD run left an empty
 # directory that the CI drift gate counts as residue.
 .superpowers/
+
+# The Perch plan set (docs/plans/ambush-ui/build/) was silently excluded by the
+# Python `build/` pattern above; re-include it explicitly.
+!docs/plans/ambush-ui/build/

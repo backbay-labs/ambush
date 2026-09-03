@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/frame-26003-mode-transition.schema.json",
+  "title": "kind:26003 \u2014 swarm mode transition",
+  "description": "RuntimeEvent::ModeTransition (crates/swarm-runtime/src/runtime_events.rs:300-306), every direction. Both an alarm-stream and a telemetry-stream frame.\n\nMUST RENDER DE-ESCALATION. SwarmModeState::transition_to refuses a non-upward move (crates/swarm-core/src/agent.rs:137-146) but transition_down exists on the same type with the mirror guard and mutates `current` (:148-155). A header band that can only ever appear is one an operator learns to ignore.\n\nWAKE CLASS 1 RECONCILES BEFORE PAGING. The frame opens the fetch; the daemon's current_mode decides whether a phone rings.\n\nAGGREGATES-ONLY. This frame is community-global and reaches every member of the colony's Buzz community, including members on no case: handle_ephemeral_event's channel-less branch publishes to Redis EventTopic::Global under a Uuid::nil() routing sentinel and fans out with channel_id=None (crates/buzz-relay/src/handlers/event.rs:875-903), and filter_fanout_by_access returns every match at :177-179 for a channel-less event after applying only the receiver tenant label, AUTHOR_ONLY_KINDS and SHARED_GATED_KINDS. No host id, no indicator, no finding id, no library path and no non-opaque join key may appear here.\n\nADMITTED-ISSUER RULE. A frame renders only if the NOSTR EVENT's pubkey resolves to an admitted bridge identity; others are counted and dropped, and the count is visible. Without it, any chat-capable member of the community can publish one: the ephemeral ingest gate is a single scope test with no per-kind allowlist (`if !scopes.is_empty() && !scopes.contains(&Scope::MessagesWrite)`, crates/buzz-relay/src/handlers/event.rs:699-707). The shipped precedent for the predicate is getConfigNudgeAuthorPubkey (desktop/src/features/messages/ui/configNudgeAuthPubkey.ts:22-34), which authenticates against message.signerPubkey \u2014 the RAW EVENT SIGNER \u2014 and not message.pubkey, which may be a relay-delegated display author.",
+  "type": "object",
+  "required": [
+    "schema",
+    "kind",
+    "issuer",
+    "emitted_at_ms",
+    "seq",
+    "from",
+    "to",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "ambush.perch.frame.mode_transition.v1"
+    },
+    "kind": {
+      "const": 26003
+    },
+    "issuer": {
+      "$ref": "common.schema.json#/$defs/SpineIssuer",
+      "description": "The bridge's spine identity, for display only. THE ADMITTED-ISSUER RULE MATCHES THE NOSTR EVENT'S `pubkey`, NOT THIS FIELD \u2014 this one is inside the content an adversary controls."
+    },
+    "emitted_at_ms": {
+      "$ref": "common.schema.json#/$defs/UnixMillis"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-kind monotonic counter assigned by the bridge. A gap between two frames the console actually received proves loss on a live connection; it says nothing about frames emitted while the console was disconnected, because ephemerals are never stored (crates/buzz-relay/src/handlers/event.rs:794-906 writes nothing to Postgres in either branch)."
+    },
+    "from": {
+      "$ref": "common.schema.json#/$defs/SwarmMode"
+    },
+    "to": {
+      "$ref": "common.schema.json#/$defs/SwarmMode"
+    },
+    "triggering_threat_class": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/ThreatClass"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Always null on a de-escalation; transition_down clears it."
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "examples": [
+    {
+      "schema": "ambush.perch.frame.mode_transition.v1",
+      "kind": 26003,
+      "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+      "emitted_at_ms": 1787754973200,
+      "seq": 12,
+      "from": "normal",
+      "to": "alert",
+      "triggering_threat_class": "data_exfiltration",
+      "reason": "concentration crossed alert_threshold"
+    }
+  ],
+  "x-transport": {
+    "kind": 26003,
+    "ephemeral": true,
+    "why_no_relay_change": "handle_event short-circuits every 20000-29999 kind into handle_ephemeral_event and RETURNS at crates/buzz-relay/src/handlers/event.rs:751, before ingest_event is reached at :761, so required_scope_for_kind never sees a 26xxx. Proved in-tree by the test ephemeral_kinds_not_in_scope_allowlist at crates/buzz-relay/src/handlers/ingest.rs:3851-3854.",
+    "websocket_only": "POST /events goes straight into ingest_event (crates/buzz-relay/src/api/bridge.rs:925) with no ephemeral branch, so an HTTP-posted 26xxx is rejected 'restricted: unknown event kind'. The bridge must hold a live WebSocket.",
+    "h_tag": "none (global)",
+    "p_tags": "none"
+  }
+}

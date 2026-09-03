@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "observed_at_ms": 1773739200000,
+  "open_leases": [
+    {
+      "lease": {
+        "schema_version": 1,
+        "lease_id": "cl_9b3645fc",
+        "action": {
+          "type": "isolate_host",
+          "host_id": "host-ops-1"
+        },
+        "origin_receipt_id": "resp:hunt-evt-1:lease:hunt-evt-1:isolate_host:1773738979300",
+        "blast_radius": {
+          "scope_kind": "host",
+          "scope_value": "host-ops-1",
+          "impact": "host_connectivity_isolated",
+          "max_affected_scopes": 1,
+          "affected_capabilities": [
+            "network.egress",
+            "network.ingress"
+          ],
+          "summary": "one host loses network connectivity"
+        },
+        "rollback": {
+          "required": true,
+          "summary": "restore host connectivity",
+          "steps": [
+            {
+              "kind": "restore_host_connectivity",
+              "summary": "re-enable host-ops-1 network interfaces"
+            }
+          ]
+        },
+        "issued_at_ms": 1773738979900,
+        "expires_at_ms": 1773739879900
+      },
+      "remaining_ms": 679900,
+      "expired": false
+    }
+  ]
+}

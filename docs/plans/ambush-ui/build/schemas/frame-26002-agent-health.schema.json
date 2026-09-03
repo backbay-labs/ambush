@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/frame-26002-agent-health.schema.json",
+  "title": "kind:26002 \u2014 agent health and action tallies",
+  "description": "Agent liveness, folded from RuntimeEvent::AgentHealth (crates/swarm-runtime/src/runtime_events.rs:282-288) plus per-agent COUNTS of RuntimeEvent::AgentAction (:241-248). AgentAction.details is a serde_json::Value and NEVER CROSSES THE WIRE; only the {action_kind: count} tally does.\n\nThis is why liveness reads 26002 and not Nostr presence: PRESENCE_TTL_SECS is 180 on a 60 s heartbeat (crates/buzz-pubsub/src/presence.rs:15-16), so presence cannot tell a degraded agent from a healthy one and takes three minutes to notice a dead one.\n\nLast-wins per agent_id.\n\nAGGREGATES-ONLY. This frame is community-global and reaches every member of the colony's Buzz community, including members on no case: handle_ephemeral_event's channel-less branch publishes to Redis EventTopic::Global under a Uuid::nil() routing sentinel and fans out with channel_id=None (crates/buzz-relay/src/handlers/event.rs:875-903), and filter_fanout_by_access returns every match at :177-179 for a channel-less event after applying only the receiver tenant label, AUTHOR_ONLY_KINDS and SHARED_GATED_KINDS. No host id, no indicator, no finding id, no library path and no non-opaque join key may appear here.\n\nADMITTED-ISSUER RULE. A frame renders only if the NOSTR EVENT's pubkey resolves to an admitted bridge identity; others are counted and dropped, and the count is visible. Without it, any chat-capable member of the community can publish one: the ephemeral ingest gate is a single scope test with no per-kind allowlist (`if !scopes.is_empty() && !scopes.contains(&Scope::MessagesWrite)`, crates/buzz-relay/src/handlers/event.rs:699-707). The shipped precedent for the predicate is getConfigNudgeAuthorPubkey (desktop/src/features/messages/ui/configNudgeAuthPubkey.ts:22-34), which authenticates against message.signerPubkey \u2014 the RAW EVENT SIGNER \u2014 and not message.pubkey, which may be a relay-delegated display author.",
+  "type": "object",
+  "required": [
+    "schema",
+    "kind",
+    "issuer",
+    "emitted_at_ms",
+    "seq",
+    "agents"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "ambush.perch.frame.agent_health.v1"
+    },
+    "kind": {
+      "const": 26002
+    },
+    "issuer": {
+      "$ref": "common.schema.json#/$defs/SpineIssuer",
+      "description": "The bridge's spine identity, for display only. THE ADMITTED-ISSUER RULE MATCHES THE NOSTR EVENT'S `pubkey`, NOT THIS FIELD \u2014 this one is inside the content an adversary controls."
+    },
+    "emitted_at_ms": {
+      "$ref": "common.schema.json#/$defs/UnixMillis"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-kind monotonic counter assigned by the bridge. A gap between two frames the console actually received proves loss on a live connection; it says nothing about frames emitted while the console was disconnected, because ephemerals are never stored (crates/buzz-relay/src/handlers/event.rs:794-906 writes nothing to Postgres in either branch)."
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "agent_id",
+          "role",
+          "to",
+          "actions"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "common.schema.json#/$defs/AgentRole"
+          },
+          "from": {
+            "oneOf": [
+              {
+                "$ref": "common.schema.json#/$defs/AgentHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "$ref": "common.schema.json#/$defs/AgentHealth"
+          },
+          "changed_at_ms": {
+            "$ref": "common.schema.json#/$defs/UnixMillis"
+          },
+          "actions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "action_kind -> count since the previous 26002 for this agent. action_kind is RuntimeEvent::AgentAction.action_kind, a stable label the agent supplies."
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema": "ambush.perch.frame.agent_health.v1",
+      "kind": 26002,
+      "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+      "emitted_at_ms": 1787754973100,
+      "seq": 91,
+      "agents": [
+        {
+          "agent_id": "whisker-7a3f",
+          "role": "whisker",
+          "from": "healthy",
+          "to": "degraded",
+          "changed_at_ms": 1787754973090,
+          "actions": {
+            "deposit": 41,
+            "detect": 41
+          }
+        }
+      ]
+    }
+  ],
+  "x-transport": {
+    "kind": 26002,
+    "ephemeral": true,
+    "why_no_relay_change": "handle_event short-circuits every 20000-29999 kind into handle_ephemeral_event and RETURNS at crates/buzz-relay/src/handlers/event.rs:751, before ingest_event is reached at :761, so required_scope_for_kind never sees a 26xxx. Proved in-tree by the test ephemeral_kinds_not_in_scope_allowlist at crates/buzz-relay/src/handlers/ingest.rs:3851-3854.",
+    "websocket_only": "POST /events goes straight into ingest_event (crates/buzz-relay/src/api/bridge.rs:925) with no ephemeral branch, so an HTTP-posted 26xxx is rejected 'restricted: unknown event kind'. The bridge must hold a live WebSocket.",
+    "h_tag": "none (global)",
+    "p_tags": "none"
+  }
+}

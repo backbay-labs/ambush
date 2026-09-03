@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "hold_id": "h_a07aeacf",
+  "state": "executed",
+  "decision": {
+    "decision": "grant",
+    "operator_id": "perch-operator-1",
+    "decided_at_ms": 1773738979300,
+    "nostr_intent_event_id": "243aad87527a33433a60e2f990d83de1e84618a69e583fbd8172de4e8fe7d9d8",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "perch-operator-1",
+      "public_key_hex": "bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+      "signature_hex": "cf66da852831018f3171f4d2da1e1a0a9868db7080d577ccbb2567cd71946953d53595d0364b3b60478ae7f9392daf71183ef06366b37a01253aaf1742825135"
+    },
+    "rationale": "Two detectors on one workstation, encoded PowerShell under WINWORD and a fetch under OUTLOOK. Isolating host-ops-1 while we read the disk.",
+    "outcome": "granted_executed",
+    "dispatched": true,
+    "receipt_id": "resp:hunt-evt-1:lease:hunt-evt-1:isolate_host:1773738979300",
+    "refusal": null
+  },
+  "replayed": false,
+  "receipt": {
+    "receipt_id": "resp:hunt-evt-1:lease:hunt-evt-1:isolate_host:1773738979300",
+    "action": "isolate_host",
+    "mode": "enforced",
+    "status": "executed",
+    "summary": "sandbox Enforced for isolate_host",
+    "details": {
+      "mode": "enforced",
+      "capability_id": "lease:hunt-evt-1:isolate_host:1773738979300",
+      "scope": "host-ops-1",
+      "requested_by": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470"
+    },
+    "audit": {
+      "policy": {
+        "verdict": "require_human",
+        "rule_name": "static.human_gate",
+        "reason": "authorized but held for human approval"
+      },
+      "approved_by": {
+        "operator_id": "perch-operator-1",
+        "voter_id": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+        "hold_id": "h_a07aeacf",
+        "decided_at_ms": 1773738979300,
+        "signature": {
+          "algorithm": "ed25519",
+          "key_id": "perch-operator-1",
+          "public_key_hex": "bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+          "signature_hex": "cf66da852831018f3171f4d2da1e1a0a9868db7080d577ccbb2567cd71946953d53595d0364b3b60478ae7f9392daf71183ef06366b37a01253aaf1742825135"
+        },
+        "nostr_intent_event_id": "243aad87527a33433a60e2f990d83de1e84618a69e583fbd8172de4e8fe7d9d8"
+      }
+    }
+  },
+  "audit_trail_id": "trail-3f541a",
+  "containment_lease_id": "cl_9b3645fc",
+  "capability_lease": {
+    "capability_id": "lease:hunt-evt-1:isolate_host:1773738979300",
+    "expires_at_ms": 1773739039300,
+    "action": "isolate_host",
+    "scope": "host-ops-1"
+  }
+}

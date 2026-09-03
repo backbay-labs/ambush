@@ -1,0 +1,17 @@
+export const CORPUS_VIOLATIONS = {
+  grantLabel: "Approve this action",
+  refuseLabel: "Deny",
+  attestationHint: "verified by the governor",
+  quorumLine: "quorum 2 / 3 governors",
+  sourceLine: "2 sources",
+  emptyQueue: "All clear",
+  navHunt: "Open the hunt",
+  colonyWord: "the clowder is healthy",
+  codename: "Swarm Team Six console",
+  bareLease: "the lease expires in 12 minutes",
+  bareLane: "open the async lane",
+  shouty: "Recorded!",
+  shoutyComment: "<!-- Great news! -->",
+  proofWord: "cryptographic proof of the decision",
+  glyph: "🛡 attestation matches",
+};

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-envelope.schema.json",
+  "title": "Perch card envelope (swarm.spine.envelope.v1)",
+  "description": "The JSON object inside every ambush:*:v1 card's fenced block. It is a swarm-spine envelope, not a Perch invention: the field set, the ordering of the signing preimage and the hash algorithm are crates/swarm-spine/src/envelope.rs:82-101 (build_signed_envelope), which the daemon already calls once at crates/swarm-runtime/src/approval.rs:1810.\n\nSHIPS UNSIGNED. `envelope_hash` is present from day one because compute_envelope_hash_hex (envelope.rs:47-51) takes no keypair; `signature` is ABSENT until B6 provisions a real key. Adopting the envelope shape now makes B6 a two-field addition instead of a v1->v2 marker bump, and it makes verify_chain_link (chain.rs:75, zero consumers today) runnable immediately, because that function reads only issuer, seq, prev_envelope_hash and envelope_hash and needs no key either.\n\nTHE PRESENCE OF envelope_hash DOES NOT RAISE THE TIER. 08 section 6.2 defines tier 1 as a detached Ed25519 signature over the body; a hash with no key is not one. A card with envelope_hash and no signature renders tier 0, and the sequence-continuity result renders as its own separate, non-cryptographic row.",
+  "type": "object",
+  "required": [
+    "schema",
+    "issuer",
+    "seq",
+    "prev_envelope_hash",
+    "issued_at",
+    "capability_token",
+    "fact",
+    "envelope_hash"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "swarm.spine.envelope.v1",
+      "description": "crates/swarm-spine/src/envelope.rs:11 (ENVELOPE_SCHEMA_V1)."
+    },
+    "issuer": {
+      "$ref": "common.schema.json#/$defs/SpineIssuer",
+      "description": "WHO PUBLISHED THIS CARD \u2014 the bridge's spine keypair, one per colony. Not the agent that produced the fact; that is `fact.issuer`. verify_chain_link compares issuers after parse_issuer_pubkey_hex + lowercase (chain.rs:36-39), so the hex case is not load-bearing but the prefix is."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-issuer, per-stream monotonic counter assigned BY THE BRIDGE at publish time. This is the answer to the missing sequence number on GET /v1/events/stream, which sets `.id(emitted_at_ms)` (crates/swarm-ingest-runtime/src/ingest/demo.rs:1703) -- a millisecond timestamp that collides at the concentration monitor's 10 Hz cadence. A gap in `seq` proves the console lost a card. It does NOT prove the bridge received everything the daemon sent: tokio broadcast lag is dropped silently on the receive side (demo.rs:1689, platform_api.rs:1388; zero `Lagged` handling exists anywhere in crates/), so the bridge counts those separately as perch_bridge_broadcast_lagged_total and publishes the count."
+    },
+    "prev_envelope_hash": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/HexPrefixed"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Null only on seq 1 for a given issuer and stream."
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 with SECOND precision and a `Z` suffix \u2014 chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true), envelope.rs:13-16. build_signed_envelope parses and rejects anything else (envelope.rs:78-83). This is the PUBLISH instant. The domain instant is fact.emitted_at_ms and every Perch surface sorts on that."
+    },
+    "capability_token": {
+      "type": "null",
+      "description": "Always null. envelope.rs:89 hardcodes Value::Null."
+    },
+    "fact": {
+      "type": "object",
+      "description": "The Perch card payload. One of the seven card schemas."
+    },
+    "envelope_hash": {
+      "$ref": "common.schema.json#/$defs/HexPrefixed",
+      "description": "sha256 over the RFC 8785 canonical form of this object with `envelope_hash` and `signature` absent \u2014 envelope.rs:42-51, using swarm_crypto::canonicalize_json (lib.rs:37). Keyless."
+    },
+    "signature": {
+      "$ref": "common.schema.json#/$defs/HexPrefixed",
+      "description": "ABSENT until B6. Ed25519 over the same canonical bytes as envelope_hash. When present, and only then, may a card render above tier 0 on the strength of this envelope."
+    }
+  }
+}

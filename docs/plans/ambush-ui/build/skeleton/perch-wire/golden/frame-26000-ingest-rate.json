@@ -1,0 +1,14 @@
+{
+  "accepted": 3641,
+  "by_source": {
+    "dns": 745,
+    "edr": 2900
+  },
+  "emitted_at_ms": 1787754972000,
+  "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+  "kind": 26000,
+  "rejected": 4,
+  "schema": "ambush.perch.frame.ingest_rate.v1",
+  "seq": 4411,
+  "window_ms": 1000
+}

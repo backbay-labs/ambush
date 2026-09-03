@@ -1,0 +1,13 @@
+{
+  "kind": 26000,
+  "schema": "ambush.perch.frame.ingest_rate.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 1,
+  "emitted_at_ms": 1773738873000,
+  "window_ms": 1000,
+  "accepted": 2,
+  "rejected": 0,
+  "by_source": {
+    "synthetic": 2
+  }
+}

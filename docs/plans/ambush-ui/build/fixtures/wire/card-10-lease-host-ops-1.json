@@ -1,0 +1,57 @@
+{
+  "schema": "swarm.spine.envelope.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 9,
+  "prev_envelope_hash": "0x7461b5e805d49e798064e27975abb1a701ee4f6aa98f99e9f171b769db77d92d",
+  "issued_at": "2026-03-17T09:16:19Z",
+  "capability_token": null,
+  "fact": {
+    "schema": "ambush.perch.lease.v1",
+    "issuer": {
+      "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+      "role": null,
+      "nostr_pubkey": null
+    },
+    "emitted_at_ms": 1773738979900,
+    "locator": {
+      "lease_id": "cl_9b3645fc",
+      "origin_receipt_id": "resp:hunt-evt-1:lease:hunt-evt-1:isolate_host:1773738979300",
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "receipt_card_id": "db8416d557869aa5f33e11a7cb1cb395ba27b3bc40e1deae9ccb376e1486975a"
+    },
+    "ttl_source": "runtime.containment.lease_ttl_ms",
+    "lease": {
+      "schema_version": 1,
+      "lease_id": "cl_9b3645fc",
+      "action": {
+        "type": "isolate_host",
+        "host_id": "host-ops-1"
+      },
+      "origin_receipt_id": "resp:hunt-evt-1:lease:hunt-evt-1:isolate_host:1773738979300",
+      "blast_radius": {
+        "scope_kind": "host",
+        "scope_value": "host-ops-1",
+        "impact": "host_connectivity_isolated",
+        "max_affected_scopes": 1,
+        "affected_capabilities": [
+          "network.egress",
+          "network.ingress"
+        ],
+        "summary": "one host loses network connectivity"
+      },
+      "rollback": {
+        "required": true,
+        "summary": "restore host connectivity",
+        "steps": [
+          {
+            "kind": "restore_host_connectivity",
+            "summary": "re-enable host-ops-1 network interfaces"
+          }
+        ]
+      },
+      "issued_at_ms": 1773738979900,
+      "expires_at_ms": 1773739879900
+    }
+  },
+  "envelope_hash": "0xd751d499e0dbdf4c072b8bca8cdb8e1e5bedb213cae295836382208f3b8c55c8"
+}

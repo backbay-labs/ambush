@@ -1,0 +1,115 @@
+{
+  "schema": "swarm.spine.envelope.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 5,
+  "prev_envelope_hash": "0x2f6442eb37ffe7cc53b375ea1ea39ec30495fc2199a711dcaa8aee202a7ceff7",
+  "issued_at": "2026-03-17T09:14:42Z",
+  "capability_token": null,
+  "fact": {
+    "schema": "ambush.perch.hold.v1",
+    "issuer": {
+      "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+      "role": null,
+      "nostr_pubkey": null
+    },
+    "emitted_at_ms": 1773738882600,
+    "locator": {
+      "hold_id": "h_a07aeacf",
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "hunt_id": "hunt-evt-1",
+      "finding_card_id": "ad87733a20dc8c74e001bd9f60db48f01ad01513b3ea0df29c471b3872e9874a"
+    },
+    "hold": {
+      "hold_id": "h_a07aeacf",
+      "state": "notified",
+      "action_kind": "isolate_host",
+      "severity": "CRITICAL",
+      "held_at_ms": 1773738882600,
+      "expires_at_ms": 1773742482600,
+      "action_request": {
+        "hunt_id": "hunt-evt-1",
+        "requested_by": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+        "action": {
+          "type": "isolate_host",
+          "host_id": "host-ops-1"
+        },
+        "severity": "CRITICAL",
+        "evidence": {
+          "source": "synthetic",
+          "parent_process": "WINWORD",
+          "process_name": "powershell",
+          "command_line": "powershell.exe -enc AAA=",
+          "normalized_command_line": "powershell.exe -enc AAA=",
+          "decoded_command_segments": [],
+          "command_line_transforms": [],
+          "user": "alice",
+          "host_id": "host-ops-1",
+          "heuristics": {
+            "encoded_flag": true,
+            "download_hint": false
+          }
+        }
+      },
+      "policy_decision": {
+        "verdict": "require_human",
+        "rule_name": "static.human_gate",
+        "reason": "authorized but held for human approval"
+      },
+      "rationale": {
+        "rule_name": "static.human_gate",
+        "reason": "authorized but held for human approval",
+        "threat_class": "execution",
+        "severity": "CRITICAL",
+        "request_carried_fields": [
+          "severity",
+          "threat_class"
+        ],
+        "concentration_at_hold": {
+          "threat_class": "execution",
+          "total_strength": 2.696884,
+          "distinct_sources": 2,
+          "peak_confidence": 0.9
+        },
+        "escalation_level": "alert",
+        "governance_receipt_present": false
+      },
+      "leases_a_containment": true,
+      "rehearsal": {
+        "rehearsal_id": "rehearsal:hunt-evt-1:isolate_host:1773738882600",
+        "source_bundle_id": "replay:hellcat_office_demo:hunt-evt-1",
+        "prepared_at_ms": 1773738882600,
+        "simulated_only": true,
+        "blast_radius": {
+          "scope_kind": "host",
+          "scope_value": "host-ops-1",
+          "impact": "host_connectivity_isolated",
+          "max_affected_scopes": 1,
+          "affected_capabilities": [
+            "network.egress",
+            "network.ingress"
+          ],
+          "summary": "one host loses network connectivity"
+        },
+        "rollback": {
+          "required": true,
+          "summary": "restore host connectivity",
+          "steps": [
+            {
+              "kind": "restore_host_connectivity",
+              "summary": "re-enable host-ops-1 network interfaces"
+            }
+          ]
+        }
+      },
+      "inverse_resolution": [
+        {
+          "step_kind": "restore_host_connectivity",
+          "verdict": "executable",
+          "reason": null
+        }
+      ],
+      "decision": null
+    }
+  },
+  "envelope_hash": "0x74dd74f7e62dee123e0244b6cccf8e1d81909dfe513ebbaa48a3394096941e02"
+}

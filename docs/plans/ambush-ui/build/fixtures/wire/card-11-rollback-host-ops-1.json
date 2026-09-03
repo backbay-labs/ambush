@@ -1,0 +1,43 @@
+{
+  "schema": "swarm.spine.envelope.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 10,
+  "prev_envelope_hash": "0xd751d499e0dbdf4c072b8bca8cdb8e1e5bedb213cae295836382208f3b8c55c8",
+  "issued_at": "2026-03-17T09:31:19Z",
+  "capability_token": null,
+  "fact": {
+    "schema": "ambush.perch.rollback.v1",
+    "issuer": {
+      "swarm_agent_id": "containment-sweep",
+      "role": null,
+      "nostr_pubkey": null
+    },
+    "emitted_at_ms": 1773739879900,
+    "locator": {
+      "rollback_id": "rb_81c4a588",
+      "lease_id": "cl_9b3645fc",
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "lease_card_id": "c747d4d4edd72ff763635a82e8ab0828799949b875a5edf0567cd8cf79826e34"
+    },
+    "partition_state_at_execution": "healthy",
+    "rollback_receipt": {
+      "rollback_id": "rb_81c4a588",
+      "lease_id": "cl_9b3645fc",
+      "origin_receipt_id": "resp:hunt-evt-1:lease:hunt-evt-1:isolate_host:1773738979300",
+      "trigger": "expiry",
+      "mode": "enforced",
+      "status": "executed",
+      "steps": [
+        {
+          "kind": "restore_host_connectivity",
+          "status": "reversed",
+          "detail": "host-ops-1 network interfaces re-enabled"
+        }
+      ],
+      "summary": "1 of 1 steps reversed",
+      "completed_at_ms": 1773739879900,
+      "governance_receipt_id": null
+    }
+  },
+  "envelope_hash": "0x729f3b63a31578067ac49fc227a67b7e6e84a72d5f48c177eaa1fbbcb1a6b130"
+}

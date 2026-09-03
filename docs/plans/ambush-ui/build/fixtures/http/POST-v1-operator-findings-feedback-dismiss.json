@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "feedback_id": "perch-feedback:suspicious_scripting:hunt-evt-1:58d921fd6fe2d6f6d9d8cd3a22295bcbd5ffd9ed13eef3ace9398d6472f5a0fd",
+  "action": "dismiss",
+  "incident_id": "incident:hunt-evt-1:1773738882400",
+  "finding_id": "suspicious_scripting:hunt-evt-1",
+  "analyst_id": "perch-operator-1",
+  "false_positive": true,
+  "replayed": false,
+  "outcome": {
+    "substrate": {
+      "status": "suppressed",
+      "event_id": "hunt-evt-1",
+      "threat_class": "execution"
+    },
+    "memory": {
+      "disposition": "recorded",
+      "feedback_id": "perch-feedback:suspicious_scripting:hunt-evt-1:58d921fd6fe2d6f6d9d8cd3a22295bcbd5ffd9ed13eef3ace9398d6472f5a0fd"
+    }
+  }
+}

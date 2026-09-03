@@ -1,0 +1,27 @@
+# tools/copy-ban-allowlist.tsv -- recorded, dated debt against the copy gate.
+#
+# Read by tools/check-copy-banned-terms.sh. A row drops exactly one violation:
+# it must match the ban row id, a substring of the file path, AND a substring of
+# the offending string. All three, so a row cannot silently widen when the file
+# is edited.
+#
+# THIS FILE IS DELIBERATELY EMPTY.
+#
+# The first real run of the gate over this repository found 41 violations across
+# 12 of the 20 files in docs/assets/ -- 4 x "Swarm Team Six", 2 x "clowders",
+# 4 x "hunt" as a noun, 14 x bare "lane", 7 x "trusted"/"proof", 2 x "approval",
+# 2 x bare "lease", 4 x a bare source count. Every one is in an `aria-label` or a
+# `<text>` node, i.e. in the exact strings that reach a screen reader or a
+# rendered chart label.
+#
+# Those are not debt to allowlist. They are the reason 05 section 2.1 cannot say
+# "the assets ship as they are": an asset carrying "Swarm Team Six" in its
+# accessible name cannot appear in a console whose product name is Ambush. The
+# PR that wires this gate rewrites those strings. See 16-INVARIANT-TESTS.md
+# section 6.3 for the file-by-file list.
+#
+# If you are about to add a row here for PRODUCT copy, you are in the wrong
+# file: change the string, or change tools/copy-ban-list.tsv and record it as a
+# brief amendment under 00-BRIEF.md section 12.
+#
+id	path	needle	reason

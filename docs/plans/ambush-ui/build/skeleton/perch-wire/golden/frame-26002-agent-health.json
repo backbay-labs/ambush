@@ -1,0 +1,20 @@
+{
+  "agents": [
+    {
+      "actions": {
+        "deposit": 41,
+        "detect": 41
+      },
+      "agent_id": "whisker-7a3f",
+      "changed_at_ms": 1787754973090,
+      "from": "healthy",
+      "role": "whisker",
+      "to": "degraded"
+    }
+  ],
+  "emitted_at_ms": 1787754973100,
+  "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+  "kind": 26002,
+  "schema": "ambush.perch.frame.agent_health.v1",
+  "seq": 91
+}

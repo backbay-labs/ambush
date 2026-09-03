@@ -1,0 +1,64 @@
+# tools/perch-source-roots.tsv -- WHERE PERCH SOURCE LIVES, AND WHETHER IT EXISTS YET.
+#
+# WHY THIS FILE EXISTS
+#   The four Perch gates all scan a checkout of block/buzz supplied through
+#   PERCH_DESKTOP_ROOT. Three of them exited 1 with "no Perch source files
+#   found; refusing to pass silently" on a tree where the Perch feature
+#   directories do not exist yet -- which is EVERY tree until the first Perch
+#   feature PR lands. tools/check-gates-wired.sh forbids an `if:` on the
+#   workflow step (PERMISSIVE_CONDITIONS at check-gates-wired.sh:106 admits only
+#   always() / !cancelled() / success() || failure()), and it counts a script on
+#   the commit that ADDS it, so the gate and its unconditional `run:` step must
+#   land together. The two rules collide: landing the gates in Phase 0 turns CI
+#   red on the commit that adds them.
+#
+#   The wrong fix is a blanket "tree absent, pass" arm, because then the refusal
+#   never arrives -- the gate stays green forever if a root is renamed, if the
+#   checkout path is wrong, or if `desktop/` and the repo root get mixed up.
+#   That is exactly the silent-green shape these gates exist to prevent.
+#
+#   So the state is DATA, and it is wrong in BOTH directions:
+#
+#     status=absent   + directory MISSING  -> WARNING, nothing asserted, exit 0.
+#                                             This is Phase 0. The gate is wired,
+#                                             the fixture still runs, the scan has
+#                                             nothing to scan and says so.
+#     status=absent   + directory PRESENT  -> HARD FAIL. The tree landed and this
+#                                             row was not flipped. This is the
+#                                             mechanism that makes the refusal
+#                                             arrive on its own; it does not
+#                                             depend on anybody remembering.
+#     status=required + directory MISSING  -> HARD FAIL. A renamed root, a wrong
+#                                             checkout, or a `desktop/` vs
+#                                             repo-root mix-up.
+#     status=required + directory PRESENT  -> scan.
+#     status=probe    + directory MISSING  -> HARD FAIL, naming the likely cause:
+#                                             PERCH_DESKTOP_ROOT points somewhere
+#                                             that is not block/buzz's desktop/.
+#     status=probe    + directory PRESENT  -> not scanned, not counted as Perch
+#                                             source; the checkout is proved.
+#
+#   THE COMMIT THAT FLIPS IT is therefore not a promise in a document: it is the
+#   commit that creates the directory, because that commit fails CI until it also
+#   flips the row. 20-TASK-BREAKDOWN.md's P1 card for the first Perch feature
+#   directory carries the one-word diff.
+#
+# COLUMNS, tab-separated:
+#   root     path relative to $PERCH_DESKTOP_ROOT (which is block/buzz's desktop/).
+#   status   absent | probe | required. See tools/lib/perch-roots.sh's header;
+#            `probe` means the directory must exist, is not Perch source, and
+#            exists only to prove PERCH_DESKTOP_ROOT resolves.
+#   gates    comma-separated gate ids that scan this root: copy, grant, adversary,
+#            writes. A root no gate scans is a row nobody reads; there are none.
+#   reason   why the row is in its current state. Mandatory. Reviewed, not appended.
+#
+root	status	gates	reason
+src/features/perch	absent	copy,grant,adversary	Perch shell. 17-COMPONENT-SPECS.md section 1.1 decides the six feature directories; 14-CLIENT-ARCHITECTURE.md section 2.1 makes this list the canonical scan scope. Not created yet.
+src/features/perch-watch	absent	copy,grant,adversary	The Watch (S1) + the Verdict Row (S2). Not created yet.
+src/features/perch-evidence	absent	copy,grant,adversary	Marker registry + the seven card presenters. Not created yet.
+src/features/perch-containment	absent	copy,grant,adversary	Containments (S6). The grant gate's R5 extend rule scans this root specifically. Not created yet.
+src/features/perch-policy	absent	copy,grant,adversary	Policy / Tuning / Gaps (S7, S10, S12). Not created yet.
+src/features/perch-shift	absent	copy,grant,adversary	Handoff / Ledger (S11, S9). Not created yet.
+src/shared/ui/perch	absent	copy,grant,adversary	Cross-surface primitives. A features/<f> may not import another features/<f>, which is why these are not inside one of the six. Not created yet.
+src-tauri/src/perch	absent	writes	The Rust daemon-client module. INV-01's PERCH_DAEMON_WRITES table lives here. Not created yet.
+src-tauri/src/commands	probe	writes	ALREADY EXISTS in block/buzz at eed74bde2, and is NOT Perch source -- the writes gate scans only `perch_*.rs` inside it. Its status is `probe` for one reason: it proves PERCH_DESKTOP_ROOT resolves to a real Buzz desktop/ tree, so a wrong checkout path can never be mistaken for Phase 0. A probe row is never scanned and never makes the tree count as present.

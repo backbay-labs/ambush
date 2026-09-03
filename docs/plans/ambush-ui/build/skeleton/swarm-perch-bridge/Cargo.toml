@@ -1,0 +1,73 @@
+[package]
+name = "swarm-perch-bridge"
+description = "In-process RuntimeEvent subscriber that spools to disk and publishes to the Buzz relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# WHY EVERY EDGE BELOW EXISTS
+#
+# This crate is strictly downstream: `swarm-runtime-http` mounts it, and nothing
+# in the TCB (`swarm-crypto`, `swarm-policy`, `swarm-spine` --
+# tools/check-workspace-layering.sh:181) names it. That direction is what makes
+# RULE 3 (`tcb-resolved-transport-*`, :494-519) unable to fire: reachability is
+# measured OUT OF each TCB crate, and none of them reaches here.
+#
+# It IS in TRUST_SENSITIVE (ADR 0015), which is a different tuple (:184-191) and
+# gates only RULE 5, the two `//! ## Owns` / `//! ## Does not own` headings in
+# src/lib.rs. Adding it there is a three-part edit; see README.md step 2. These
+# three edges are also the row the gate's own fixture needs in FIXTURE_CRATES.
+#
+# Deliberately ABSENT and load-bearing by their absence:
+#   swarm-ingest-runtime  -- the bridge takes a broadcast::Receiver as an input,
+#                            not an IngestState, so a unit test can drive it from
+#                            a plain broadcast::channel(16).
+#   swarm-runtime-http    -- naming it would be a cycle. This is why the
+#                            containment-lease card is built from
+#                            swarm_response::ContainmentLease
+#                            and NOT from http::containment::ContainmentLeaseView.
+#   swarm-spine           -- nothing received here is an AuditTrail.
+#   reqwest / axum-as-a-client -- the bridge has no HTTP client.
+[dependencies]
+# Workspace crates.
+swarm-core.workspace = true         # AgentId, Severity, ResponseAction, ThreatClass, SecretString
+swarm-response.workspace = true     # ContainmentLease (containment.rs:130-138)
+swarm-runtime.workspace = true      # RuntimeEvent, ContainmentSweep::open_leases
+
+# Workspace third-party.
+futures-util.workspace = true
+hex.workspace = true
+prometheus-client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+# `axum` appears here ONLY because `metrics_router()` returns an `axum::Router`
+# for `swarm_detect` to merge. It is in TRANSPORTS
+# (tools/check-workspace-layering.sh:194), which constrains the three TCB crates
+# and not this one; see 11-BRIDGE-CRATE.md section 1.4 rule 1.
+axum.workspace = true
+
+# NEW TO THE WORKSPACE. See 11-BRIDGE-CRATE.md section 1.5.
+#
+# `default-features = false` is deliberate and UNMEASURED: BUZZ enables
+# nip44/nip98 explicitly (BUZZ Cargo.toml:72), which means they are opt-in, and
+# NIP-44 is where `chacha20` enters. If this holds, it deletes
+# 02-ARCHITECTURE-INTEGRATION.md decision 6's `[[bans.skip]]` entry. Verify
+# before the first commit:
+#     cargo tree -p swarm-perch-bridge -i chacha20 -e normal   # expect nothing
+#     cargo tree -p swarm-perch-bridge -i hyper     -e normal   # expect nothing
+#     cargo deny check bans
+nostr = { version = "0.44", default-features = false, features = ["std"] }
+tokio-tungstenite = "0.27"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

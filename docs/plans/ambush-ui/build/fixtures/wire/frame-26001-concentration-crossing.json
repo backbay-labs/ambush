@@ -1,0 +1,84 @@
+{
+  "kind": 26001,
+  "schema": "ambush.perch.frame.concentration.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 10,
+  "emitted_at_ms": 1773738882000,
+  "observed_at_seconds": 1773738881,
+  "coalesced_from": 10,
+  "current_mode": "alert",
+  "concentrations": [
+    {
+      "threat_class": "lateral_movement",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "data_exfiltration",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "privilege_escalation",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "command_and_control",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "initial_access",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "persistence",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "supply_chain",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "defense_evasion",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "credential_access",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "discovery",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    },
+    {
+      "threat_class": "execution",
+      "total_strength": 2.696884,
+      "distinct_sources": 2,
+      "peak_confidence": 0.9
+    },
+    {
+      "threat_class": "impact",
+      "total_strength": 0,
+      "distinct_sources": 0,
+      "peak_confidence": 0
+    }
+  ]
+}

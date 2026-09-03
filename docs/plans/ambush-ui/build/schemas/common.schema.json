@@ -1,0 +1,657 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/common.schema.json",
+  "title": "Perch wire \u2014 shared vocabulary",
+  "description": "Domain enums and structural types shared by every Perch card body and every 26xxx frame. Each definition names the Rust type it mirrors and the serde attribute that fixes its wire form. A value here that disagrees with the Rust type is a bug in this file, never in the Rust: Ambush is the producer and Perch is a reader on every one of these.",
+  "$defs": {
+    "UnixMillis": {
+      "type": "integer",
+      "description": "Milliseconds since the unix epoch. Ambush's default clock domain. Never mix with UnixSeconds: the pheromone substrate is seconds and a shared helper produces a 1000x wrong decay curve silently.",
+      "x-source": "crates/swarm-runtime/src/runtime_events.rs:341-346 (now_ms) \u2014 every RuntimeEvent variant's emitted_at_ms is produced here, in the daemon process, as SystemTime::now().duration_since(UNIX_EPOCH).as_millis() as i64."
+    },
+    "UnixSeconds": {
+      "type": "integer",
+      "description": "Seconds since the unix epoch. The pheromone clock domain only: PheromoneDeposit.timestamp, decay_half_life, and the `now` argument to strength_at / is_evaporated / query_concentration.",
+      "x-source": "crates/swarm-runtime/src/escalation.rs:407-410 (unix_timestamp_secs) \u2014 called by ConcentrationMonitor::evaluate_all on every 10 Hz tick in swarm_detect --serve; the value it produces is the `now` the substrate decays against, so all ten ticks inside one second are byte-identical."
+    },
+    "Hex64Lower": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "x-source": "crates/buzz-db/src/runtime/mod.rs:65-81 (insert_mentions) \u2014 runs in the relay process AFTER the event transaction commits; it drops any p-tag value that is not exactly 64 ASCII-hex characters with a tracing::debug!, then lowercases the survivors before insert. An uppercase or truncated pubkey therefore produces a stored event, an OK true, and no queue row.",
+      "x-note": "The bridge asserts this pattern BEFORE signing. A failed assert is a bridge error, never a published event."
+    },
+    "HexPrefixed": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]+$",
+      "x-source": "crates/swarm-crypto/src/hashing.rs:107-109 (sha256_hex) \u2014 returns Hash::to_hex_prefixed(), i.e. a `0x`-prefixed lowercase hex string. Used for envelope_hash and signature by swarm-spine's envelope module."
+    },
+    "Uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "x-source": "crates/buzz-relay/src/handlers/ingest.rs:549-561 (extract_channel_id) \u2014 called by ingest_event in the relay process; it reads the first `h` tag and parses it with `val.parse::<Uuid>()`, returning None on any parse failure. A non-UUID `h` value silently makes the event channel-less, which after the 46010 fork means rejection at ingest.rs:2460-2464."
+    },
+    "SpineIssuer": {
+      "type": "string",
+      "pattern": "^swarm:ed25519:[0-9a-fA-F]{64}$",
+      "x-source": "crates/swarm-spine/src/envelope.rs:19-35 (issuer_from_keypair / parse_issuer_pubkey_hex) \u2014 parse_issuer_pubkey_hex is called by chain.rs:36-39's normalize_issuer_for_compare inside verify_chain_link; it requires the literal prefix and exactly 64 hex characters or returns SpineError::InvalidIssuer."
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+      ],
+      "x-source": "crates/swarm-core/src/types.rs:406-414 \u2014 `#[serde(rename_all = \"SCREAMING_SNAKE_CASE\")]`, the ONLY enum in the workspace that does. Roughly forty sibling enums are snake_case, so any codegen that lowercases uniformly breaks exactly this field. This is also the value of the `l` tag."
+    },
+    "ThreatClass": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "lateral_movement",
+            "data_exfiltration",
+            "privilege_escalation",
+            "command_and_control",
+            "initial_access",
+            "persistence",
+            "supply_chain",
+            "defense_evasion",
+            "credential_access",
+            "discovery",
+            "execution",
+            "impact"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "custom"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "custom": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "x-source": "crates/swarm-core/src/pheromone.rs:13-30 \u2014 `#[serde(rename_all = \"snake_case\")]` over twelve unit variants plus `Custom(String)`. Serde's default external tagging makes the unit variants bare strings and the newtype variant the single-key object `{\"custom\": \"...\"}`. Any parser that assumes ThreatClass is always a string throws on a Custom class, and Sphinx and Calico both mint Custom classes in production (sphinx_agent.rs:610, calico_agent.rs:440)."
+    },
+    "ThreatClassSlug": {
+      "type": "string",
+      "enum": [
+        "lateral_movement",
+        "data_exfiltration",
+        "privilege_escalation",
+        "command_and_control",
+        "initial_access",
+        "persistence",
+        "supply_chain",
+        "defense_evasion",
+        "credential_access",
+        "discovery",
+        "execution",
+        "impact",
+        "custom"
+      ],
+      "x-source": "APPENDIX-NORMATIVE.md section 3 (tag budget) fixes `t=custom` for a Custom class, with the class name carried in the body instead. In-tree there are two other Custom slug conventions and neither is the tag: crates/swarm-runtime/src/escalation.rs:403 returns the raw operator-supplied string, and crates/swarm-pheromone/src/jetstream.rs:1190 returns `custom_{sanitized}` for a NATS subject. crates/swarm-runtime/src/sphinx_agent.rs:1799 returns the literal \"custom\", which is the one the appendix matches.",
+      "x-note": "This is the `t` tag value, not a body value. Bodies carry the full ThreatClass, so a Custom class keeps its name."
+    },
+    "AgentRole": {
+      "type": "string",
+      "enum": [
+        "whisker",
+        "stalker",
+        "weaver",
+        "pouncer",
+        "tom",
+        "kitten",
+        "sphinx",
+        "calico"
+      ],
+      "x-source": "crates/swarm-core/src/agent.rs:14-34 \u2014 a closed eight-variant enum, snake_case. Read on the wire by RuntimeEvent::AgentAction and RuntimeEvent::AgentHealth (runtime_events.rs:241-243, :283-285)."
+    },
+    "AgentHealth": {
+      "type": "string",
+      "enum": [
+        "healthy",
+        "degraded",
+        "failed"
+      ],
+      "x-source": "crates/swarm-core/src/agent.rs:36-45 \u2014 snake_case. Note the name collision: `AgentHealth` is both this enum and a RuntimeEvent variant (runtime_events.rs:282-288) whose `from`/`to` fields hold it."
+    },
+    "SwarmMode": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "alert",
+        "incident"
+      ],
+      "x-source": "crates/swarm-core/src/agent.rs:109-119 \u2014 snake_case, and `PartialOrd`. SwarmModeState::transition_to (:137-146) refuses a non-upward move but transition_down (:148-155) exists on the same type and mutates `current`, so the mode is NOT monotonic and every surface must render de-escalation."
+    },
+    "PolicyVerdict": {
+      "type": "string",
+      "enum": [
+        "deny",
+        "allow",
+        "require_human"
+      ],
+      "x-source": "crates/swarm-policy/src/lib.rs:84-90 \u2014 snake_case. `require_human` is the only verdict a hold can carry; StaticApprovalGate::evaluate (static_gate.rs:294-299) is its sole production producer."
+    },
+    "ExecutionMode": {
+      "type": "string",
+      "enum": [
+        "dry_run",
+        "enforced"
+      ],
+      "x-source": "crates/swarm-response/src/lib.rs:88-96 \u2014 snake_case."
+    },
+    "ResponseStatus": {
+      "type": "string",
+      "enum": [
+        "simulated",
+        "executed",
+        "timeout",
+        "failed"
+      ],
+      "x-source": "crates/swarm-response/src/lib.rs:143-152 \u2014 snake_case."
+    },
+    "ResponseActionKind": {
+      "type": "string",
+      "enum": [
+        "block_egress",
+        "isolate_host",
+        "revoke_credential",
+        "sinkhole_dns",
+        "terminate_user_session",
+        "trigger_edr_scan",
+        "inject_firewall_rule",
+        "quarantine_file",
+        "kill_process",
+        "suspend_process",
+        "disable_user_account",
+        "force_password_reset",
+        "remove_scheduled_task",
+        "deploy_decoy",
+        "escalate"
+      ],
+      "x-source": "crates/swarm-core/src/types.rs:558-576 (ResponseAction::kind) \u2014 fifteen values. Twelve are destructive and human-gated (swarm-policy/src/static_gate.rs:37-53, which the runtime calls from StaticApprovalGate::evaluate to decide RequireHuman); the three that are not are trigger_edr_scan, deploy_decoy and escalate.",
+      "x-note": "The ladder is 12 destructive -> 4 leased -> 3 reversible. Only quarantine_file, suspend_process, isolate_host and terminate_user_session are containment actions (swarm-runtime/src/containment.rs:54-63) and therefore ever mint a ContainmentLease; of those four only three have an executable inverse. A hold card for one of the eight unleased destructive actions must not render a pending containment-lease slot."
+    },
+    "ContainmentActionKind": {
+      "type": "string",
+      "enum": [
+        "quarantine_file",
+        "suspend_process",
+        "isolate_host",
+        "terminate_user_session"
+      ],
+      "x-source": "crates/swarm-runtime/src/containment.rs:54-63 (is_containment_action) \u2014 called by prepare_containment (lib.rs:829) in swarm_detect --serve; a false result makes prepare_containment return Ok(None) and no ContainmentLease is ever minted for that action."
+    },
+    "ResponseRehearsalScopeKind": {
+      "type": "string",
+      "enum": [
+        "network_target",
+        "host",
+        "credential",
+        "user_session",
+        "file",
+        "process",
+        "user_account",
+        "scheduled_task",
+        "zone",
+        "operator_queue"
+      ],
+      "x-source": "crates/swarm-core/src/types.rs:469-483 \u2014 ten variants, snake_case."
+    },
+    "ResponseBlastRadiusImpact": {
+      "type": "string",
+      "enum": [
+        "network_egress_blocked",
+        "host_connectivity_isolated",
+        "credential_access_revoked",
+        "dns_resolution_sinkholed",
+        "user_session_terminated",
+        "host_scan_triggered",
+        "host_firewall_policy_changed",
+        "file_quarantined",
+        "process_terminated",
+        "process_suspended",
+        "user_account_disabled",
+        "password_reset_enforced",
+        "scheduled_task_removed",
+        "deception_coverage_changed",
+        "operator_escalation_only"
+      ],
+      "x-source": "crates/swarm-core/src/types.rs:485-503 \u2014 fifteen variants, one per ResponseAction, snake_case."
+    },
+    "ResponseRollbackStepKind": {
+      "type": "string",
+      "enum": [
+        "remove_network_block",
+        "restore_host_connectivity",
+        "restore_credential",
+        "remove_dns_sinkhole",
+        "reauthenticate_user_session",
+        "cancel_host_scan",
+        "remove_firewall_rule",
+        "release_quarantined_file",
+        "restart_process",
+        "resume_process",
+        "reenable_user_account",
+        "clear_password_reset_requirement",
+        "restore_scheduled_task",
+        "withdraw_decoy",
+        "close_escalation"
+      ],
+      "x-source": "crates/swarm-core/src/types.rs:515-532 \u2014 fifteen variants, snake_case."
+    },
+    "RollbackStepStatus": {
+      "type": "string",
+      "enum": [
+        "reversed",
+        "simulated",
+        "irreversible",
+        "unsupported",
+        "failed"
+      ],
+      "x-source": "crates/swarm-response/src/rollback.rs:208-223 \u2014 exactly five variants. RollbackStepStatus::restored() (:225-230) is true only for `reversed`, and RollbackReceipt::fully_reversed() (:288-298) is the conjunction over every step, so it is deliberately stricter than 'nothing errored'."
+    },
+    "RollbackTrigger": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "expiry"
+      ],
+      "x-source": "crates/swarm-response/src/rollback.rs:40-48 \u2014 `manual` is an operator releasing early through POST /v1/operator/containment/leases/{id}/release; `expiry` is the TTL sweep releasing it with no HTTP request and therefore no ContainmentReleaseResponse."
+    },
+    "EscalationLevel": {
+      "type": "string",
+      "enum": [
+        "alert",
+        "incident"
+      ],
+      "x-source": "crates/swarm-runtime/src/runtime_events.rs:184-189 \u2014 snake_case."
+    },
+    "PartitionState": {
+      "type": "string",
+      "enum": [
+        "healthy",
+        "degraded",
+        "partitioned",
+        "healing"
+      ],
+      "x-source": "crates/swarm-policy/src/governance.rs:46-54 \u2014 exactly four values, snake_case."
+    },
+    "CardKind": {
+      "type": "string",
+      "enum": [
+        "finding",
+        "escalation",
+        "hold",
+        "verdict",
+        "receipt",
+        "lease",
+        "rollback"
+      ],
+      "x-source": "APPENDIX-NORMATIVE.md section 3 (marker registry, seven rows). This is the value of the `k` tag and the second segment of every marker."
+    },
+    "FactIssuer": {
+      "type": "object",
+      "required": [
+        "swarm_agent_id",
+        "role"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "swarm_agent_id": {
+          "type": "string",
+          "description": "The AgentId that produced the fact, verbatim. Ambush agent ids are `{role}-{short}` or `{derived_identity}:{agent_id}`, not Nostr pubkeys and not swarm:ed25519: identities."
+        },
+        "role": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AgentRole"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "NULLABLE AND REQUIRED. Two production paths fill this field and they disagree, so a decoder must be able to represent both. (a) WhiskerAgent::tick passes Some(AgentRole::Whisker) explicitly into detect_and_deposit_with_role (crates/swarm-agents/src/whisker_agent.rs:150-156, inside swarm_detect --serve), so a finding card produced on that path carries a role. (b) infer_agent_role (crates/swarm-runtime/src/detection/pipeline.rs:583-604, the deposit path's role resolver) is a prefix match over `whisker-`/`stalker-`/`weaver-`/`pounce(r)-`/`tom-`/`kitten-`/`sphinx-`/`calico-` and returns None for anything else \u2014 including every `swarm:ed25519:<hex>` identity the HTTP ingest lane uses. Null therefore means 'the producing path could not name a role', NOT 'no agent'. A console must render the absence, never substitute a role. Required-but-nullable rather than optional so a missing key is a decode error and a genuine absence is an explicit null."
+        },
+        "nostr_pubkey": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Hex64Lower"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null in every deployment today. No Ambush agent has a Nostr keypair and no config field carries one."
+        }
+      },
+      "x-source": "crates/swarm-core/src/types.rs:9-13 (AgentId::new -> `{role}-{short_id}`). The scoped-id shape a Whisker publishes under is derived at crates/swarm-agents/src/whisker_agent.rs:148-149 as AgentId(format!(\"{}:{}\", derived_identity.0, self.id.0)) \u2014 that is the BASE id, and resolve_deposits appends a third `:{strategy_id}` segment to it before the deposit is written (pipeline.rs:573). See $defs/SourceCountMechanism: this field names the agent, not the counting unit, and the two are not the same string.",
+      "x-note": "WHO PRODUCED THE FACT. Distinct from the envelope's `issuer`, which is WHO PUBLISHED IT (the bridge). Conflating them is how a card ends up claiming a Whisker signed something the bridge signed. For a card whose fact was produced by a HUMAN, use $defs/OperatorFactIssuer instead \u2014 AgentRole has no human member and stamping one on an operator's own decision conflates the operator with the governance agent, which APPENDIX-NORMATIVE.md section 7 rules must never happen."
+    },
+    "DetachedSignature": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "key_id",
+        "public_key_hex",
+        "signature_hex"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "type": "string"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "public_key_hex": {
+          "type": "string"
+        },
+        "signature_hex": {
+          "type": "string"
+        }
+      },
+      "x-source": "crates/swarm-crypto/src/lib.rs:48-55 \u2014 the Ed25519 chain. This is NOT the secp256k1 Schnorr signature the relay verified over the transport event; a surface that renders either must name which chain it checked (00-BRIEF.md render law 3)."
+    },
+    "CapabilityLease": {
+      "type": "object",
+      "required": [
+        "capability_id",
+        "expires_at_ms",
+        "action"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "capability_id": {
+          "type": "string"
+        },
+        "expires_at_ms": {
+          "$ref": "#/$defs/UnixMillis"
+        },
+        "action": {
+          "type": "string"
+        },
+        "scope": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "x-source": "crates/swarm-policy/src/lib.rs:134-146. Minted by StaticApprovalGate::issue_lease (static_gate.rs:307-324) as context.now_ms + lease_ttl_ms, called by the runtime immediately before response.execute (lib.rs:1002, :1198) in swarm_detect --serve; ensure_active_lease (lib.rs:1369-1379) then denies a stale one with 'capability lease expired'.",
+      "x-note": "policy.lease_ttl_ms is 60,000 (rulesets/default.yaml:94). That is NOT the countdown an operator watches on /leases -- a ContainmentLease's TTL is runtime.containment.lease_ttl_ms, default 900,000 (swarm-core/src/config/defaults.rs:23-27). Rendering 60s beside a containment lease is wrong by 15x."
+    },
+    "PolicyDecision": {
+      "type": "object",
+      "required": [
+        "verdict",
+        "rule_name",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "$ref": "#/$defs/PolicyVerdict"
+        },
+        "rule_name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "x-source": "crates/swarm-policy/src/lib.rs:73-83. Every hold produced today reads rule_name 'static.human_gate' and reason 'authorized but held for human approval', because StaticApprovalGate::evaluate (static_gate.rs:294-299) is the only production RequireHuman producer and ConfigurableApprovalGate can only emit allow/deny before delegating (configurable_gate.rs:172-183)."
+    },
+    "ResponseAction": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/ResponseActionKind"
+        }
+      },
+      "x-source": "crates/swarm-core/src/types.rs:416-467 \u2014 `#[serde(tag = \"type\", rename_all = \"snake_case\")]`, i.e. INTERNALLY tagged: `{\"type\":\"isolate_host\",\"host_id\":\"web-04\"}`, not `{\"isolate_host\":{...}}`. The variant payload fields sit beside the tag, which is why this schema is open rather than enumerating fifteen shapes Perch must never construct.",
+      "x-note": "Perch is a reader of this type and never an author."
+    },
+    "ResponseBlastRadiusPreview": {
+      "type": "object",
+      "required": [
+        "scope_kind",
+        "scope_value",
+        "impact",
+        "max_affected_scopes",
+        "affected_capabilities",
+        "summary"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scope_kind": {
+          "$ref": "#/$defs/ResponseRehearsalScopeKind"
+        },
+        "scope_value": {
+          "type": "string"
+        },
+        "impact": {
+          "$ref": "#/$defs/ResponseBlastRadiusImpact"
+        },
+        "max_affected_scopes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "affected_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "x-source": "crates/swarm-core/src/types.rs:505-513."
+    },
+    "ResponseRollbackStep": {
+      "type": "object",
+      "required": [
+        "kind",
+        "summary"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ResponseRollbackStepKind"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "x-source": "crates/swarm-core/src/types.rs:534-539."
+    },
+    "ResponseRollbackPreview": {
+      "type": "object",
+      "required": [
+        "required",
+        "summary",
+        "steps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResponseRollbackStep"
+          }
+        }
+      },
+      "x-source": "crates/swarm-core/src/types.rs:541-546."
+    },
+    "ResponseRehearsalPreview": {
+      "type": "object",
+      "required": [
+        "rehearsal_id",
+        "source_bundle_id",
+        "prepared_at_ms",
+        "simulated_only",
+        "blast_radius",
+        "rollback"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rehearsal_id": {
+          "type": "string"
+        },
+        "source_bundle_id": {
+          "type": "string"
+        },
+        "prepared_at_ms": {
+          "$ref": "#/$defs/UnixMillis"
+        },
+        "simulated_only": {
+          "const": true
+        },
+        "blast_radius": {
+          "$ref": "#/$defs/ResponseBlastRadiusPreview"
+        },
+        "rollback": {
+          "$ref": "#/$defs/ResponseRollbackPreview"
+        }
+      },
+      "x-source": "crates/swarm-core/src/types.rs:548-556. Derived from outside swarm-runtime through the public wrapper SwarmService::rehearsal_preview (service/runtime_service.rs:861-868), which forwards to the pub(crate) build_rehearsal_preview (service/preview.rs:87). simulated_only is hardcoded true on every preview (preview.rs:111), hence the `const`."
+    },
+    "InverseResolution": {
+      "type": "object",
+      "required": [
+        "step_kind",
+        "verdict"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "step_kind": {
+          "$ref": "#/$defs/ResponseRollbackStepKind"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "executable",
+            "irreversible",
+            "unmapped"
+          ]
+        },
+        "reason": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "x-source": "crates/swarm-response/src/rollback.rs:151-192 (resolve_inverse) \u2014 three arms yield a ContainmentInverse, the arm at :183-189 yields InverseGap::Irreversible with the quotable reason 'a terminated session cannot be resumed; the principal can only establish a fresh session', and the fallthrough at :190 yields InverseGap::Unmapped.",
+      "x-note": "DERIVED, NOT SERVED. The console computes this and must name the function beside the row (render law 4). Same shape as the InverseResolution component in build/openapi/perch-operator-v1.yaml."
+    },
+    "PheromoneConcentration": {
+      "type": "object",
+      "required": [
+        "threat_class",
+        "total_strength",
+        "distinct_sources",
+        "peak_confidence"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "threat_class": {
+          "$ref": "#/$defs/ThreatClass"
+        },
+        "total_strength": {
+          "type": "number"
+        },
+        "distinct_sources": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The number of distinct STRATEGY-SCOPED agent ids, not agent instances. See $defs/SourceCountMechanism for the four-hop proof and for the wrong upstream doc comment that must not be trusted."
+        },
+        "peak_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "x-source": "crates/swarm-runtime/src/runtime_events.rs:191-196 (RuntimeThreatConcentration), built From<&PheromoneConcentration> at :198-207.",
+      "x-note": "distinct_sources counts STRATEGY-SCOPED ids: concentration_for does sources.insert(deposit.agent_id.0.clone()) (crates/swarm-pheromone/src/substrate.rs:1295) over deposits whose agent_id resolve_deposits set to strategy_scoped_agent_id(agent_id, &finding.strategy_id) (crates/swarm-runtime/src/detection/pipeline.rs:573), and that id already carried an instance scope (crates/swarm-agents/src/whisker_agent.rs:148-149). So one Whisker running two detectors yields distinct_sources == 2 and SATISFIES min_sources_for_escalation: 2 by itself. See $defs/SourceCountMechanism. Never render this number bare: APPENDIX-NORMATIVE.md section 8 render law 2 stands exactly as written and its 'N sources / M agents' expansion is two genuinely different numbers. 13-WIRE-SCHEMAS.md amendment W-6 previously claimed the opposite and is WITHDRAWN; W-10 records the withdrawal."
+    },
+    "OperatorFactIssuer": {
+      "type": "object",
+      "required": [
+        "swarm_agent_id",
+        "role"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "swarm_agent_id": {
+          "type": "string",
+          "description": "The configured Ambush operator principal id (crates/swarm-core/src/config/operator.rs:116-129). Not an AgentId and not a swarm:ed25519: identity."
+        },
+        "role": {
+          "type": "null",
+          "description": "STRUCTURALLY NULL, and this is the whole point of the separate definition. AgentRole is a closed eight-variant enum of SWARM agents (crates/swarm-core/src/agent.rs:14-34) with no human member, and AgentRole::Tom is 'Governance \u2014 enforces policy, manages lifecycle' (agent.rs:26-27): the veto actor. Stamping `tom` on an operator's own decision conflates the human's refuse with governance's veto, which APPENDIX-NORMATIVE.md section 7 forbids and adr/0016 spends an entire document keeping apart. The daemon cannot produce a role here either \u2014 infer_agent_role (pipeline.rs:583-604) prefix-matches and returns None for any operator id. A `const: null` makes the conflation unrepresentable rather than merely discouraged."
+        },
+        "nostr_pubkey": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Hex64Lower"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The operator's own Nostr pubkey \u2014 the signer of the leg-1 event. Unlike an agent's, this one is NOT null in a working deployment: it is the same key the console publishes with. It is still nullable because the operator_id -> Nostr-pubkey mapping is an unbudgeted config addition (OperatorPrincipalConfig is #[serde(deny_unknown_fields)]) and a card built before it lands must say so rather than guess."
+        }
+      },
+      "x-note": "WHO PRODUCED THE FACT, when the producer is a person. Used by ambush.perch.verdict.v1 only \u2014 the one card in the registry a human, not the bridge, publishes."
+    },
+    "HoldId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+      "description": "AN OPAQUE RANDOM TOKEN minted by B1's HeldActionStore. Three constraints, each with a reason. (1) NO COLON. `hold:{hunt_id}:{held_at_ms}` is the derived form this contract exists to forbid: hunt_id is the telemetry event id (crates/swarm-runtime/src/service/runtime_service.rs:391), a join key into detection data, and the hold_id rides a kind:26006 frame. The pattern makes the forbidden shape unrepresentable instead of warning about it in prose. (2) URL-SAFE. It is a path parameter on POST /v1/response/holds/{hold_id}/decide (build/openapi/perch-operator-v1.yaml), so the character class is the unreserved URL set minus `.` and `~`. (3) BOUNDED. It is also a Nostr tag value and an FTS lexeme in the kind:46010 content line. 12-BACKEND-BILL-API.md commits B1 to a UUID; the canonical demo fixture derives `h_a07aeacf`. Both satisfy this pattern, which is the wire's floor \u2014 not a licence to mint a seventh format.",
+      "x-source": "12-BACKEND-BILL-API.md commitment on RuntimeEvent::ResponseHeld ('hold_id is opaque (uuid), never hunt-id-derived') and 11-BRIDGE-CRATE.md's 26006 payload commitment. This $def is the machine-checkable form of both; before it, three schemas declared hold_id as bare `type: string` and six incompatible formats were in circulation across the wave-2 artifact set."
+    },
+    "SourceCountMechanism": {
+      "const": "strategy_scoped_agent_id",
+      "description": "WHAT `distinct_sources` COUNTS, carried on the wire so no surface has to assume it. The unit is the STRATEGY-SCOPED agent id `{derived_identity}:{agent_id}:{strategy_id}` \u2014 three segments \u2014 not the agent instance. Read the production path: detect_and_deposit_with_role (crates/swarm-runtime/src/detection/pipeline.rs:60-91, the fn WhiskerAgent::tick calls at whisker_agent.rs:150 inside `swarm_detect --serve`) calls resolve_deposits at :80; resolve_deposits sets EVERY deposit's `agent_id: strategy_scoped_agent_id(agent_id, &finding.strategy_id)` at pipeline.rs:573; strategy_scoped_agent_id is format!(\"{}:{strategy_id}\", base.0) (crates/swarm-whisker/src/stream.rs:20-22); and concentration_for, run on each monitor tick, does sources.insert(deposit.agent_id.0.clone()) (crates/swarm-pheromone/src/substrate.rs:1295) and reports sources.len() at :1301. The base it appends to is ALREADY instance-scoped (whisker_agent.rs:148-149), so the strategy segment is a THIRD segment and the count is PER DETECTOR. One Whisker running two detectors is two sources and clears min_sources_for_escalation: 2 on its own. The workspace asserts this itself: query_counts_strategy_scoped_agent_ids_as_distinct_sources (crates/swarm-pheromone/src/substrate.rs:2105). WARNING FOR ANYONE RE-DERIVING THIS: PheromoneConcentration's own doc comments at crates/swarm-core/src/pheromone.rs:323 and :325 say 'distinct agents' and 'Number of distinct agents contributing'. Those comments are WRONG about the unit and are how this was misread twice in the wave-2 artifact set. Read pipeline.rs:573, not the doc comment."
+    },
+    "SourceIdsAbsentReason": {
+      "type": "string",
+      "enum": [
+        "not_carried_by_runtime_event"
+      ],
+      "description": "WHY `source_ids` is null, as a named state rather than an implied one. Exactly one reason exists today: RuntimeEvent::Escalation carries `distinct_sources: usize` and no ids at all (crates/swarm-runtime/src/runtime_events.rs:288-296), and its input RuntimeThreatConcentration (:193-197, built From<&PheromoneConcentration> at :199-207) carries four scalars. The bridge takes a broadcast::Receiver and holds no substrate handle (11-BRIDGE-CRATE.md decision 6: the bridge is write-only and depends on swarm-runtime, swarm-response and swarm-core, deliberately not swarm-ingest-runtime), so it cannot resolve the ids either. Only B4 (GET /v1/operator/pheromone/deposits) can serve them, and B4 is Phase 2. A component renders THIS REASON; it never renders a fabricated agent count and never renders a spinner."
+    }
+  },
+  "x-carried-whole": "shared vocabulary \u2014 every $def mirrors a type in swarm-core, swarm-policy, swarm-response, swarm-spine or swarm-crypto",
+  "x-carried-note": "This object is a domain type carried VERBATIM. The Rust wire crate names the type rather than redeclaring its fields, so a field added upstream reaches the wire with no edit and a field removed upstream is a compile error. tools/check-perch-wire-parity.sh skips its property names on the Rust side for exactly that reason, and the golden vectors plus this schema are what hold the shape."
+}

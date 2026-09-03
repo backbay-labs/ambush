@@ -1,0 +1,2914 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Watch — Perch prototype</title>
+<style>
+/* ============================================================================
+   PERCH — THE WATCH  ·  route "/"  ·  prototype, no build step, no network.
+
+   REVISION 2 — what changed and why (each is a red-team finding, verified in
+   source before it was accepted; the evidence is in the Spec notes panel):
+
+   1. TOKEN NAMESPACE. Every colour, geometry and motion token is `--perch-*`
+      and every value is copied from build/tokens/perch-tokens.css. Revision 1
+      declared `--background --card --popover --foreground --muted-foreground
+      --border --ring` on :root. Those seven names are emitted by
+      `createThemeVars` (BUZZ desktop/src/shared/theme/adaptive-theme.ts:238-270)
+      and written INLINE on the root element by `applyTheme`
+      (ThemeProvider.tsx:445-446, `root.style.setProperty(key, value)` over every
+      entry) and again on the cached-boot path at :405-406 — in the renderer
+      process, on every theme load and on every reload. An inline declaration on
+      :root outranks every normal-priority stylesheet rule, so revision 1's
+      palette was dead on arrival inside the desktop app: the seven most-used
+      colours would have silently reverted to whatever Buzz syntax theme was
+      active. `--buzz-type-rem` and `--buzz-type-scale` are kept under their Buzz
+      names deliberately — those two come from a STYLESHEET
+      (globals/typography.css:16-17), not from createThemeVars, and READING them
+      is how the prototype rides the shipped zoom dial rather than shadowing it.
+      The type SIZES are not: this file's first revision declared `--text-xs`,
+      `--text-sm`, `--text-base` and `--text-lg` on `:root`, and those four are
+      Buzz's own (typography.css:18-21) and carry the conversation type contract
+      (13/14/15px, BUZZ CLAUDE.md). Declaring them here would have re-sized every
+      re-skinned Buzz surface Perch inherits. The integrator pass renamed all of
+      them to `--perch-text-*`, matching build/tokens/perch-tokens.css name for
+      name; `perch-tokens.test.mjs` T-M2 now fails on any live reference to a
+      name build/tokens/perch-token-aliases.tsv marks `rename`.
+
+   2. THEME ARRANGEMENT INVERTED to match perch-tokens.css: the complete light
+      palette on bare `:root`; dark under `:root.dark, :root[data-theme="dark"],
+      .dark`; the same dark declarations repeated under a guarded
+      `prefers-color-scheme` block. No `data-theme` is hard-coded on <html>, so
+      the system preference reaches the palette a reviewer is asked to trust.
+
+   3. LIGHT SEVERITY REGENERATED from perch-tokens.css:115-116. Revision 1 shipped
+      #b45309 (4.31:1 on --perch-surface-chrome) and #8a6114 (4.505:1 on raised,
+      which one-decimal HSL rounding pushes under AA). Both fail WCAG AA and both
+      were measured and replaced by the token package after revision 1 was drawn.
+
+   4. --perch-foreground-faint IS REFERENCED BY NO RULE IN THIS FILE. It is the
+      disabled-control token (3.45–4.23:1 light, 4.21:1 dark on the raised row)
+      and revision 1 painted the render-law-2 line, both render-law-1 absence
+      strings and eleven other readable strings with it. Every readable string
+      here is --perch-foreground-muted or better. That is asserted, not promised:
+      grep the file.
+
+   5. TYPE RIDES THE SHIPPED DIAL. --buzz-type-scale / --buzz-type-rem are
+      typography.css:15-17's own names, so the accessibility Font size preference
+      moves this page. Revision 1 declared a flat `--rem: 1rem`, which zoomed but
+      was inert against `data-font-size`.
+
+   6. ADVERSARY-CONTROLLED VALUES are rendered through adv(), lifted verbatim
+      from prototypes/verdict-hold.html: control, zero-width and bidi codepoints
+      escaped and visibly marked, capped at 512 characters, no markdown pipeline,
+      an amber leading rail per value, one ADVERSARY-CONTROLLED label per slot and
+      one legend per surface. 08 §7.7 control 1 names the ACTION and BLAST RADIUS
+      slots explicitly; revision 1 had HTML entity escaping and nothing else.
+
+   7. NO ⚠. Revision 1 rendered it twice, four lines above a provenance block.
+      skeleton/tools/copy-ban-list.tsv row `shield-glyph` is P0 with no exemption
+      (pattern 🛡|🔒|🔐|⚠). The warning register is a 2px leading rail plus words.
+
+   8. THE FIXTURE IS build/fixtures/perch-demo-fixture.json. Ids that scenario
+      mints are used verbatim; everything The Watch needs beyond it is derived by
+      that file's own function, id = sha256("perch-demo-fixture/v1/" + label),
+      and every label is listed in the Spec notes so the demo fixture can absorb
+      them. Revision 1 declared a fifth competing "canonical" fixture.
+
+   Palette: build/tokens/perch-tokens.css (measured). Geometry: design-ground §7
+   (measured from Buzz constants). Type: rem only, no px font sizes anywhere.
+   ========================================================================= */
+
+/* ==========================================================================
+   1. LIGHT — the complete palette, on bare :root.
+      Values are perch-tokens.css §1 verbatim, in its HSL-triplet form, so a
+      component reading `hsl(var(--perch-x))` gets the same colour here and in
+      the shipping stylesheet.
+   ========================================================================== */
+:root{
+  color-scheme: light;
+
+  /* -- type: typography.css:15-27's own names and its own arithmetic ------ */
+  --buzz-type-scale: 1;
+  --buzz-type-rem: calc(1rem * var(--buzz-type-scale));
+  --perch-text-3xs:     calc(var(--buzz-type-rem) * 0.5);      /*  8px — UNUSED here */
+  --perch-text-badge:   calc(var(--buzz-type-rem) * 0.625);    /* 10px */
+  --perch-text-2xs:     calc(var(--buzz-type-rem) * 0.6875);   /* 11px — badges, keys */
+  --perch-text-xs:      calc(var(--buzz-type-rem) * 0.75);     /* 12px — meta */
+  --perch-text-eyebrow: calc(var(--buzz-type-rem) * 0.75);     /* 12px + 0.34em + 600 */
+  --perch-text-sm:      calc(var(--buzz-type-rem) * 0.875);    /* 14px — content */
+  --perch-text-base:    var(--buzz-type-rem);                  /* 16px */
+  --perch-text-lg:      calc(var(--buzz-type-rem) * 1.125);
+  --perch-text-xl:      calc(var(--buzz-type-rem) * 1.25);
+
+  --perch-font-sans: 'Inter Variable', Inter, 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+  --perch-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* -- surfaces · perch-tokens.css §1.1 ---------------------------------- */
+  --perch-surface-chrome: 140 15.8% 92.5%;   /* #e9efeb */
+  --perch-background:     135 18.2% 95.7%;   /* #f2f6f3 */
+  --perch-card:             0 0%   100%;     /* #ffffff */
+  --perch-popover:          0 0%   100%;     /* #ffffff */
+  --perch-surface-raised: 142.5 16%  90.2%;  /* #e2eae5 */
+  --perch-border:         145 15.8% 85.1%;   /* #d3dfd8 */
+  --perch-border-strong:  144.7 13.2% 74.7%; /* #b6c7bd */
+  --perch-ring:           152.7 14.7% 29.4%; /* #40564c  6.79 chrome / 7.91 card */
+
+  /* -- ink · perch-tokens.css §1.2 --------------------------------------- */
+  --perch-foreground:           161.5 30.2% 8.4%;  /* #0f1c18  15.01–17.51 */
+  --perch-foreground-secondary: 152.7 14.7% 29.4%; /* #40564c   6.79–7.91  */
+  --perch-foreground-muted:     150 10.5% 37.3%;   /* #55695f   5.04–5.88  */
+  --perch-foreground-faint:     148.6 8.9% 46.1%;  /* #6b8075   3.45–4.23  */
+  /* --perch-foreground-faint is the DISABLED-CONTROL token and is below AA on
+     every light surface by design. This file references it in ZERO rules. */
+
+  /* -- pillar hues · perch-tokens.css §1.3 (light needs the ink/mark split) */
+  --perch-pillar-substrate-ink:  142.8 64.2% 24.1%; /* #166534  6.12–7.13 */
+  --perch-pillar-substrate-mark: 142.4 71.8% 29.2%; /* #15803d  4.30–5.02 */
+  --perch-pillar-substrate-dim:  162.9 93.5% 24.3%; /* #047857 */
+  --perch-pillar-authority-ink:   22.7 82.5% 31.4%; /* #92400e  6.08–7.09 */
+  --perch-pillar-authority-mark:  26   90.5% 37.1%; /* #b45309  4.31–5.02 mark only */
+  --perch-pillar-evidence-ink:   194.4 69.6% 27.1%; /* #155e75  6.23–7.27 */
+  --perch-pillar-evidence-mark:  192.9 82.3% 31%;   /* #0e7490  4.60–5.36 */
+
+  /* -- pillar borders · DECORATION, never classification (amendment T5) --- */
+  --perch-border-pillar-substrate: 141.4 26.4% 79.2%; /* #bcd8c6  1.31–1.52 */
+  --perch-border-pillar-authority:  41.8 47.5% 76.9%; /* #e0cfa8  1.32–1.54 */
+  --perch-border-pillar-evidence:  194.3 38.2% 78.4%; /* #b3d3dd  1.36–1.58 */
+
+  /* -- severity · perch-tokens.css §1.5, amendments T2 and T2b ------------ */
+  --perch-sev-low:      152.1 15.1% 36.5%; /* #4f6b5e  4.76–5.84 */
+  --perch-sev-medium:    39.1 75.7% 29%;   /* #825b12  4.96–6.08  (NOT #8a6114) */
+  --perch-sev-high:      26.1 91%   34.7%; /* #a94e08  4.53–5.56  (NOT #b45309) */
+  --perch-sev-critical:   3.2 71.3% 41%;   /* #b3261e  5.33–6.54 */
+  --perch-danger-mark:    3.2 71.3% 41%;   /* #b3261e  5.33–6.54 */
+
+  /* -- alphas, read out of the assets · perch-tokens.css §1.9 ------------- */
+  --perch-alpha-region-fill:   0.045;  /* security-v2.svg:8  */
+  --perch-alpha-region-stroke: 0.45;   /* security-v2.svg:8  */
+  --perch-alpha-rail-fill:     0.07;   /* colony.svg:8       */
+  --perch-alpha-chip-fill:     0.09;   /* colony.svg:11      */
+
+  /* -- elevation: light only · perch-tokens.css §1.8 ---------------------- */
+  --perch-elevation-popover: 0 8px 24px -8px hsl(161.5 30.2% 8.4% / 0.18);
+
+  /* -- geometry · perch-tokens.css §1.10 plus three prototype-local widths - */
+  --perch-rail-pillar-thickness: 2.5px;  /* pillars.svg:28 — top edge, classification */
+  --perch-rail-severity-width:   4px;    /* leading edge, severity */
+  --perch-radius-rail:           1.2px;  /* pillars.svg:28 */
+  --perch-radius-row:            1rem;   /* InboxMessageRow.tsx:142 rounded-2xl */
+  --perch-radius-region:         0.5625rem; /* security-v2.svg:8 rx="9" */
+  --perch-radius-card:           0.625rem;
+  --perch-radius-md:             0.5rem;
+  --perch-radius-sm:             0.375rem;
+  --perch-governance-strip-height: 28px; /* 04 §1.2 over 05 §12's 18px */
+  /* PROTOTYPE-LOCAL, not in perch-tokens.css: three measured Buzz widths. */
+  --perch-w-rail:    56px;   /* CommunityRail.tsx:377      w-14              */
+  --perch-w-sidebar: 300px;  /* sidebar.tsx:31             SIDEBAR_WIDTH_DEFAULT */
+  --perch-w-inbox:   365px;  /* useResizableInboxListWidth.ts:3              */
+  --perch-h-terminal: 26px;
+
+  /* -- motion · motion.css:10-21 (measured), Perch adds none here --------- */
+  --perch-dur-instant: 120ms; --perch-dur-fast: 180ms; --perch-dur-standard: 240ms;
+  --perch-ease-standard: cubic-bezier(0.25,1,0.5,1);
+}
+
+/* ==========================================================================
+   2. DARK — an explicit choice. perch-tokens.css §2 verbatim.
+   ========================================================================== */
+:root.dark,
+:root[data-theme="dark"],
+.dark{
+  color-scheme: dark;
+  --perch-surface-chrome: 160 17.6% 3.3%;   /* #070a09  hero-v2.svg:3, 33 uses */
+  --perch-background:     165 28.6% 5.5%;   /* #0a1210 */
+  --perch-card:           162 29.4% 6.7%;   /* #0c1613  pillars.svg:27 */
+  --perch-popover:        161.3 33.3% 9.4%; /* #10201b */
+  --perch-surface-raised: 159.2 37.1% 13.7%;/* #163027 */
+  --perch-border:         154.3 31.8% 17.3%;/* #1e3a2e  pillars.svg:27 */
+  --perch-border-strong:  157.5 29.6% 21.2%;/* #26463a */
+  --perch-ring:           151.2 20.2% 46.7%;/* #5f8f78  4.99 card / 5.38 chrome */
+  --perch-foreground:           146.7 27.3% 93.5%; /* #eaf3ee 16.28 */
+  --perch-foreground-secondary: 150 12.6% 65.9%;   /* #9db3a8  8.29 */
+  --perch-foreground-muted:     149 12.8% 55.5%;   /* #7f9c8d  6.18 */
+  --perch-foreground-faint:     151.4 8.7% 52.7%;  /* #7c9187  5.49 — unused here */
+  --perch-pillar-substrate-ink:  141.9 69.2% 58%;  /* #4ade80 10.57 */
+  --perch-pillar-substrate-mark: 141.9 69.2% 58%;
+  --perch-pillar-substrate-dim:  158.1 64.4% 51.6%;/* #34d399 */
+  --perch-pillar-authority-ink:   37.7 92.1% 50.2%;/* #f59e0b  8.58 */
+  --perch-pillar-authority-mark:  37.7 92.1% 50.2%;
+  --perch-pillar-evidence-ink:   187.9 85.7% 53.3%;/* #22d3ee 10.20 */
+  --perch-pillar-evidence-mark:  187.9 85.7% 53.3%;
+  --perch-border-pillar-substrate: 154.3 31.8% 17.3%;
+  --perch-border-pillar-authority:  36.9 28.9% 17.6%;
+  --perch-border-pillar-evidence:  195.4 37.6% 18.2%;
+  --perch-sev-low:      155.2 13.2% 57.1%; /* #83a094  6.51 */
+  --perch-sev-medium:    38.6 63.5% 59.2%; /* #d9aa55  8.63 */
+  --perch-sev-high:      37.7 92.1% 50.2%; /* #f59e0b  8.58 — deliberately the authority hue */
+  --perch-sev-critical:   0 80.9% 69.2%;   /* #f07171  6.41 */
+  --perch-danger-mark:    0 69.6% 60%;     /* #e05252  4.82 card / 3.70 raised — MARK ONLY */
+  --perch-elevation-popover: none;
+}
+
+/* ==========================================================================
+   3. DARK by system preference, only when no explicit choice has been made.
+      ThemeProvider.tsx:449-450 and :408-409 stamp an explicit `.light` class,
+      so `:not(.light)` is a real guard. The declaration set is identical to §2.
+   ========================================================================== */
+@media (prefers-color-scheme: dark){
+  :root:not(.light):not([data-theme="light"]){
+    color-scheme: dark;
+    --perch-surface-chrome: 160 17.6% 3.3%;
+    --perch-background:     165 28.6% 5.5%;
+    --perch-card:           162 29.4% 6.7%;
+    --perch-popover:        161.3 33.3% 9.4%;
+    --perch-surface-raised: 159.2 37.1% 13.7%;
+    --perch-border:         154.3 31.8% 17.3%;
+    --perch-border-strong:  157.5 29.6% 21.2%;
+    --perch-ring:           151.2 20.2% 46.7%;
+    --perch-foreground:           146.7 27.3% 93.5%;
+    --perch-foreground-secondary: 150 12.6% 65.9%;
+    --perch-foreground-muted:     149 12.8% 55.5%;
+    --perch-foreground-faint:     151.4 8.7% 52.7%;
+    --perch-pillar-substrate-ink:  141.9 69.2% 58%;
+    --perch-pillar-substrate-mark: 141.9 69.2% 58%;
+    --perch-pillar-substrate-dim:  158.1 64.4% 51.6%;
+    --perch-pillar-authority-ink:   37.7 92.1% 50.2%;
+    --perch-pillar-authority-mark:  37.7 92.1% 50.2%;
+    --perch-pillar-evidence-ink:   187.9 85.7% 53.3%;
+    --perch-pillar-evidence-mark:  187.9 85.7% 53.3%;
+    --perch-border-pillar-substrate: 154.3 31.8% 17.3%;
+    --perch-border-pillar-authority:  36.9 28.9% 17.6%;
+    --perch-border-pillar-evidence:  195.4 37.6% 18.2%;
+    --perch-sev-low:      155.2 13.2% 57.1%;
+    --perch-sev-medium:    38.6 63.5% 59.2%;
+    --perch-sev-high:      37.7 92.1% 50.2%;
+    --perch-sev-critical:   0 80.9% 69.2%;
+    --perch-danger-mark:    0 69.6% 60%;
+    --perch-elevation-popover: none;
+  }
+}
+
+/* ==========================================================================
+   4. BASE
+   ========================================================================== */
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:hsl(var(--perch-background));
+  color:hsl(var(--perch-foreground));
+  font-family:var(--perch-font-sans);
+  font-size:var(--perch-text-sm);
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:left}
+:focus-visible{outline:2px solid hsl(var(--perch-ring));outline-offset:1px;border-radius:3px}
+.mono{font-family:var(--perch-font-mono);font-variant-numeric:tabular-nums}
+.num{font-variant-numeric:tabular-nums}
+
+.eyebrow{
+  font-size:var(--perch-text-eyebrow);
+  letter-spacing:0.34em;
+  font-weight:600;
+  line-height:1;
+  text-transform:uppercase;
+}
+.label-tight{ /* security-v2.svg layer label · badge.tsx:7 base geometry */
+  font-size:var(--perch-text-2xs);
+  font-weight:700;
+  letter-spacing:0.13em;
+  text-transform:uppercase;
+  line-height:1;
+}
+/* Every separator is ink, not a border colour. Revision 1 painted these with
+   --perch-border-strong (1.77:1) — punctuation is still a rendered string. */
+.sep{color:hsl(var(--perch-foreground-muted))}
+
+/* ==========================================================================
+   5. ADVERSARY-CONTROLLED VALUES  ·  08 §7.7 control 1
+      Copied from prototypes/verdict-hold.html so the two drawings agree:
+      a 2px leading rail in the caution register, one ADVERSARY-CONTROLLED
+      label per slot, one legend per surface. The rail is the marking; the
+      label is the legend; neither is a per-value tag (that made the ACTION
+      sentence unreadable).
+   ========================================================================== */
+.adv-val{
+  display:inline; font-family:var(--perch-font-mono);
+  background:hsl(var(--perch-surface-raised));
+  border-left:2px solid hsl(var(--perch-sev-medium));
+  padding:1px 5px; border-radius:0 4px 4px 0;
+  color:hsl(var(--perch-foreground));
+  white-space:pre-wrap; overflow-wrap:anywhere;
+}
+.advnote{
+  display:inline-block; margin-left:.5rem;
+  color:hsl(var(--perch-sev-medium));
+  font-size:var(--perch-text-2xs); letter-spacing:0.16em; font-weight:600;
+  text-transform:uppercase; line-height:1.3; vertical-align:middle;
+}
+.advlegend{
+  margin:.5rem .5rem .625rem; padding:.25rem 0 .25rem .6875rem;
+  border-left:2px solid hsl(var(--perch-sev-medium));
+  color:hsl(var(--perch-foreground-muted));
+  font-size:var(--perch-text-xs); line-height:1.6;
+}
+.detail .advlegend{margin:0 0 1rem;max-width:46rem}
+
+/* ==========================================================================
+   6. CONSOLE SHELL
+   ========================================================================== */
+.console{
+  height:calc(100vh - 108px); min-height:520px;
+  display:flex; flex-direction:column;
+  overflow:hidden;
+  background:hsl(var(--perch-background));
+  border-bottom:1px solid hsl(var(--perch-border));
+}
+
+/* governance strip — chrome on every route; 04 §1.2 */
+.strip{
+  position:relative;
+  flex:0 0 auto; min-height:var(--perch-governance-strip-height);
+  display:flex; align-items:center; gap:.5rem;
+  padding:0 .75rem;
+  background:hsl(var(--perch-card));
+  border-bottom:1px solid hsl(var(--perch-border));
+  overflow:hidden; white-space:nowrap;
+}
+.strip-rail{ /* 2.5px pillar rail · pillars.svg:28 — Alert + Incident only */
+  position:absolute; top:0; left:0; right:0;
+  height:var(--perch-rail-pillar-thickness); border-radius:var(--perch-radius-rail);
+  background:hsl(var(--perch-pillar-authority-mark));
+}
+.strip .k{color:hsl(var(--perch-pillar-authority-ink))}
+.strip .k.deg{color:hsl(var(--perch-sev-high))}
+.strip .k.part{color:hsl(var(--perch-sev-critical))}
+.strip .k.cold{color:hsl(var(--perch-foreground-muted))}
+.strip .v{color:hsl(var(--perch-foreground-muted));letter-spacing:.02em;text-transform:none;font-weight:500}
+.strip .v.shed{color:hsl(var(--perch-sev-medium))}
+.strip .v.down{color:hsl(var(--perch-sev-critical))}
+
+/* Incident mode band · design-ground §4.3 */
+.modeband{
+  flex:0 0 auto; min-height:24px;
+  display:flex; align-items:center; gap:.5rem; padding:.25rem .75rem;
+  background:hsl(var(--perch-pillar-authority-mark) / var(--perch-alpha-chip-fill));
+  border-bottom:1px solid hsl(var(--perch-border-pillar-authority));
+  color:hsl(var(--perch-pillar-authority-ink));
+}
+.modeband .m{color:hsl(var(--perch-foreground-muted));text-transform:none;letter-spacing:.02em;font-weight:500;font-size:var(--perch-text-xs)}
+
+.shellbody{flex:1 1 auto;display:flex;min-height:0}
+
+/* colony rail — CommunityRail.tsx:377 verbatim geometry */
+.rail{
+  flex:0 0 var(--perch-w-rail); width:var(--perch-w-rail);
+  background:hsl(var(--perch-surface-chrome));
+  border-right:1px solid hsl(var(--perch-border));
+  padding:.5rem .625rem 1.25rem;
+  display:flex; flex-direction:column; gap:.625rem; align-items:center;
+}
+.rail-chip{
+  position:relative; width:36px;height:36px;border-radius:12px;
+  display:grid;place-items:center;
+  background:hsl(var(--perch-surface-raised));
+  color:hsl(var(--perch-foreground-secondary));
+  font-size:var(--perch-text-2xs); font-weight:700; letter-spacing:.08em;
+}
+.rail-chip[data-active="1"]{color:hsl(var(--perch-foreground))}
+.rail-chip[data-active="1"]::before{
+  content:"";position:absolute;left:-10px;top:8px;width:4px;height:20px;
+  border-radius:0 9999px 9999px 0;background:hsl(var(--perch-pillar-substrate-mark));
+}
+
+/* sidebar */
+.sidebar{
+  flex:0 0 var(--perch-w-sidebar); width:var(--perch-w-sidebar);
+  background:hsl(var(--perch-surface-chrome));
+  border-right:1px solid hsl(var(--perch-border));
+  overflow-y:auto; padding:.75rem .5rem 1rem;
+}
+.sb-group{margin-bottom:1.125rem}
+.sb-head{
+  display:flex;align-items:baseline;justify-content:space-between;
+  padding:0 .5rem .375rem; color:hsl(var(--perch-foreground-muted));
+}
+.sb-head .c{font-size:var(--perch-text-xs);letter-spacing:.06em;font-weight:600}
+.sb-row{
+  display:flex;align-items:center;gap:.5rem;
+  min-height:28px;padding:.25rem .5rem;border-radius:var(--perch-radius-md);
+  color:hsl(var(--perch-foreground-secondary));font-size:var(--perch-text-sm);
+}
+.sb-row:hover{background:hsl(var(--perch-surface-raised))}
+.sb-row[data-active="1"]{background:hsl(var(--perch-surface-raised));color:hsl(var(--perch-foreground))}
+.sb-row .r{margin-left:auto;font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted))}
+.sb-row .r.target{color:hsl(var(--perch-pillar-substrate-ink))}
+.sb-sub{
+  padding:0 .5rem .375rem 1.5rem;font-size:var(--perch-text-sm);
+  color:hsl(var(--perch-foreground-muted));line-height:1.55;
+}
+.lane-dot{
+  width:8px;height:8px;border-radius:9999px;flex:0 0 8px;
+  border:1px solid hsl(var(--perch-border-strong));
+}
+.lane-dot[data-over="1"]{background:hsl(var(--perch-pillar-substrate-mark));border-color:hsl(var(--perch-pillar-substrate-mark))}
+.lane-dot[data-stale="1"]{background:transparent;border-style:dashed;border-color:hsl(var(--perch-sev-medium))}
+.sb-links{display:grid;grid-template-columns:1fr 1fr;gap:.125rem;padding-top:.25rem}
+.sb-divider{height:1px;background:hsl(var(--perch-border));margin:.5rem}
+
+/* ==========================================================================
+   7. INBOX
+   ========================================================================== */
+.inbox{
+  flex:0 0 var(--perch-w-inbox); width:var(--perch-w-inbox);
+  background:hsl(var(--perch-background));
+  border-right:1px solid hsl(var(--perch-border));
+  overflow-y:auto; padding-bottom:1.5rem;
+  position:relative;
+}
+.q-head{
+  position:sticky;top:0;z-index:2;
+  display:flex;align-items:center;gap:.5rem;
+  min-height:24px;padding:.5rem .75rem .375rem;
+  background:hsl(var(--perch-background));
+  color:hsl(var(--perch-foreground-muted));
+}
+.q-head .rule{flex:1 1 auto;height:1px;background:hsl(var(--perch-border))}
+.q-head .c{font-size:var(--perch-text-xs);font-weight:600;color:hsl(var(--perch-foreground-secondary))}
+.q-head .c.absent{color:hsl(var(--perch-foreground-muted));font-weight:400}
+
+/* C9 instrumentation — APPENDIX §6 puts its home in the queue-1 header.
+   One line there, with the rest behind a disclosure, so it never separates the
+   header from the first row of a queue whose top entry can be an expiring
+   destructive action. Every number is read off the same per-state fixture as
+   the queue, so an empty shift cannot report a busy week. */
+.c9{
+  margin:0 .5rem .375rem; padding:.375rem .625rem;
+  border-left:2px solid hsl(var(--perch-border-strong));
+  font-size:var(--perch-text-sm); color:hsl(var(--perch-foreground-muted)); line-height:1.6;
+}
+.c9 b{color:hsl(var(--perch-foreground));font-weight:600}
+.c9 summary{cursor:pointer;color:hsl(var(--perch-foreground-secondary));margin-top:.25rem;list-style:none}
+.c9 summary::-webkit-details-marker{display:none}
+.c9 summary::before{content:"+ ";color:hsl(var(--perch-foreground-muted))}
+.c9 details[open] summary::before{content:"– "}
+.c9 .more{display:block;margin-top:.25rem;line-height:1.65}
+
+.reconcile{
+  margin:0 .5rem .5rem;padding:.25rem .625rem;
+  font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-muted));
+  display:flex;flex-wrap:wrap;gap:.25rem .375rem;align-items:baseline;
+  line-height:1.55;
+}
+/* Revision 1 declared `white-space:nowrap` on every child, which overflowed the
+   daemon-unreachable sentence past the pane edge by 19px and the detail pane
+   painted over the tail: it rendered "…and it is unreachab". Only the short
+   tokens are nowrap now; the sentence wraps. */
+.reconcile > .tok{white-space:nowrap}
+/* A metric name is meta text and it is the one token here that can exceed a
+   365px pane. It drops a tier and is allowed to wrap, so it can never clip. */
+.reconcile > .tok.mono{font-size:var(--perch-text-xs);white-space:normal;overflow-wrap:anywhere}
+.reconcile > .warn{color:hsl(var(--perch-sev-high));white-space:normal;flex:1 1 100%}
+
+/* ---- rows ---------------------------------------------------------------
+   Four lines, one anatomy for every row type:
+     l1  verb or detector (trusted)                      + severity
+     l2  the subject — host, principal, path (ADVERSARY) + never truncated
+     l3  agent · time                                    + expiry
+     l4  N sources / M agents · threat-class slug
+   Revision 1 put the subject on l2 beside three other fields with
+   `text-overflow: ellipsis`, and `svc-deploy@corp.example` rendered as
+   `svc-deploy@corp.e…` (clientWidth 119 / scrollWidth 152). The target of a
+   destructive action is exactly the field a look-alike principal attacks, so
+   it now owns a line and wraps rather than truncating.
+   ------------------------------------------------------------------------ */
+.row{
+  position:relative; display:block; width:calc(100% - .5rem);
+  margin:0 .25rem .1875rem; padding:.4375rem .5rem .4375rem .875rem;
+  border-radius:var(--perch-radius-row);
+  color:hsl(var(--perch-foreground-secondary));
+}
+.row:hover{background:hsl(var(--perch-surface-raised) / 0.55)}
+.row[data-sel="1"]{background:hsl(var(--perch-surface-raised));color:hsl(var(--perch-foreground))}
+.row[data-sel="1"]::after{
+  content:"";position:absolute;inset:0;border-radius:var(--perch-radius-row);
+  border:1px solid hsl(var(--perch-border-strong));pointer-events:none;
+}
+.row[data-dead="1"]{opacity:.66}
+.row .rail4{
+  position:absolute;left:0;top:.3125rem;bottom:.3125rem;
+  width:var(--perch-rail-severity-width);border-radius:1px;
+}
+.row-l1{
+  display:flex;flex-wrap:nowrap;align-items:center;gap:.5rem;
+  font-size:var(--perch-text-sm);line-height:1.4;white-space:nowrap;
+}
+.row-l1 .verb{font-family:var(--perch-font-mono);font-weight:600;color:hsl(var(--perch-foreground))}
+.row-l1 .kind{font-family:var(--perch-font-mono);color:hsl(var(--perch-foreground));overflow:hidden;text-overflow:ellipsis;min-width:0}
+.row-l1 .spacer{flex:1 1 auto}
+.row-l2{
+  display:block;margin-top:.1875rem;
+  font-size:var(--perch-text-sm);line-height:1.45;
+}
+.row-l3{
+  display:flex;align-items:baseline;gap:.375rem;margin-top:.1875rem;
+  font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted));
+  line-height:1.5;white-space:nowrap;
+}
+.row-l3 .grow{flex:1 1 auto}
+.row-l4{
+  display:block;margin-top:.125rem;
+  font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-muted));
+  line-height:1.5;overflow-wrap:anywhere;
+}
+.row .ttl{font-family:var(--perch-font-mono);font-variant-numeric:tabular-nums;color:hsl(var(--perch-sev-high))}
+.row .local{
+  font-family:var(--perch-font-mono);font-size:var(--perch-text-2xs);
+  color:hsl(var(--perch-pillar-evidence-ink));
+  border:1px solid hsl(var(--perch-border-pillar-evidence));border-radius:var(--perch-radius-sm);
+  padding:1px .25rem;
+}
+.row .divnote{
+  display:block;margin-top:.25rem;font-size:var(--perch-text-xs);line-height:1.5;
+  color:hsl(var(--perch-sev-medium));
+}
+.row .divnote.dead{color:hsl(var(--perch-foreground-muted))}
+.row .divnote.hard{color:hsl(var(--perch-sev-critical))}
+.row-keys{display:flex;gap:.25rem;margin-top:.375rem}
+/* Review state is a WORD on line 3 plus a non-text tick; revision 1 carried it
+   as a ✓ / ⊘ / ○ glyph column painted in the disabled-control ink. */
+.rmark{
+  width:9px;height:9px;flex:0 0 9px;border-radius:2px;
+  border:1px solid hsl(var(--perch-foreground-muted));
+}
+.rmark[data-r="reviewed"]{background:hsl(var(--perch-pillar-substrate-mark));border-color:hsl(var(--perch-pillar-substrate-mark))}
+.rmark[data-r="not-yet-correlated"]{border-style:dashed;border-color:hsl(var(--perch-sev-medium))}
+
+kbd{
+  font-family:var(--perch-font-mono);font-size:var(--perch-text-2xs);line-height:1;
+  padding:.1875rem .3125rem;border-radius:4px;
+  background:hsl(var(--perch-surface-raised));border:1px solid hsl(var(--perch-border-strong));
+  color:hsl(var(--perch-foreground-secondary));
+}
+kbd[data-off="1"]{opacity:.45}
+
+/* severity chip: badge.tsx:7 base string, verbatim geometry */
+.sev{
+  display:inline-flex;align-items:center;gap:.375rem;
+  border-radius:9999px;padding:5px 8px 3px;
+  font-size:var(--perch-text-2xs);font-weight:600;text-transform:uppercase;
+  letter-spacing:0.18em;line-height:1;
+}
+.sev-bar{display:inline-flex;gap:1px;align-items:flex-end}
+.sev-bar i{width:3px;height:8px;background:hsl(var(--perch-border-strong));display:block;border-radius:.5px}
+
+.shed-row{
+  margin:.25rem .5rem;padding:.5rem .625rem;
+  border:1px dashed hsl(var(--perch-border-strong));border-radius:var(--perch-radius-md);
+  font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted));
+  font-family:var(--perch-font-mono);text-align:center;line-height:1.55;
+}
+.shed-row details summary{cursor:pointer;color:hsl(var(--perch-foreground-secondary));margin-top:.375rem}
+.shed-row table{margin:.5rem auto 0;border-collapse:collapse;font-size:var(--perch-text-xs)}
+.shed-row td{padding:.0625rem .5rem;color:hsl(var(--perch-foreground-secondary));text-align:left}
+
+.banner{
+  margin:.5rem;padding:.625rem .75rem;border-radius:var(--perch-radius-md);
+  border:1px solid hsl(var(--perch-border-pillar-authority));
+  background:hsl(var(--perch-pillar-authority-mark) / var(--perch-alpha-rail-fill));
+  font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-secondary));line-height:1.55;
+}
+.banner .h{display:block;color:hsl(var(--perch-pillar-authority-ink));margin-bottom:.3125rem}
+.banner a{color:hsl(var(--perch-foreground));text-decoration:underline;text-underline-offset:2px}
+.banner .meta{font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted))}
+.banner.down{
+  border-color:hsl(var(--perch-sev-critical));
+  background:hsl(var(--perch-danger-mark) / var(--perch-alpha-rail-fill));
+}
+.banner.down .h{color:hsl(var(--perch-sev-critical))}
+
+/* Empty states — three domain marks, never the same disc four times.
+   When all four queues are zero the inbox renders ONE state, not three. */
+.emptystate{padding:1.125rem 1rem;max-width:24rem}
+.emptystate .mark{margin-bottom:.75rem;display:block;color:hsl(var(--perch-foreground-muted))}
+.emptystate h4{margin:0 0 .3125rem;font-size:var(--perch-text-base);font-weight:600;color:hsl(var(--perch-foreground))}
+.emptystate p{margin:0 0 .5rem;font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-muted));line-height:1.6}
+.emptystate a{font-size:var(--perch-text-sm);color:hsl(var(--perch-pillar-evidence-ink));text-decoration:underline;text-underline-offset:2px}
+
+.skel{margin:0 .25rem .25rem;padding:.5rem .75rem;border-radius:var(--perch-radius-row)}
+.skel i{display:block;height:.5rem;border-radius:3px;background:hsl(var(--perch-surface-raised));margin-bottom:.375rem}
+.skel i:nth-child(1){width:62%}
+.skel i:nth-child(2){width:44%;background:hsl(var(--perch-surface-raised) / 0.6)}
+
+.coldstart{padding:1.5rem 1rem;color:hsl(var(--perch-foreground-muted));font-size:var(--perch-text-sm)}
+.coldstart h4{margin:0 0 .5rem;font-size:var(--perch-text-base);color:hsl(var(--perch-foreground));font-weight:600}
+.coldstart ol{margin:.625rem 0 0;padding-left:1.25rem;font-family:var(--perch-font-mono);font-size:var(--perch-text-xs);line-height:1.9}
+.coldstart p{margin:.75rem 0 0;line-height:1.6}
+.coldstart p.small{font-size:var(--perch-text-xs)}
+</style>
+<style>
+/* ==========================================================================
+   8. DETAIL PANE — the Verdict Row
+   ========================================================================== */
+.detail{
+  flex:1 1 auto;min-width:0;
+  background:hsl(var(--perch-card));
+  position:relative;overflow-y:auto;
+}
+.detail-rail{
+  position:sticky;top:0;height:var(--perch-rail-pillar-thickness);
+  border-radius:var(--perch-radius-rail);z-index:3;
+}
+.detail-inner{position:relative;padding:1.25rem 1.5rem 3rem;max-width:52rem}
+.crosshair{
+  position:absolute;width:26px;height:26px;pointer-events:none;
+  color:hsl(var(--perch-pillar-substrate-mark));opacity:.28;
+}
+
+.d-title{display:flex;align-items:flex-start;gap:.75rem;margin-bottom:1rem}
+.d-title h2{margin:0;font-size:var(--perch-text-lg);font-family:var(--perch-font-mono);font-weight:600;letter-spacing:-0.01em}
+.d-title .sub{
+  font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted));
+  font-family:var(--perch-font-mono);margin-top:.3125rem;display:block;line-height:1.6;
+}
+
+.fields{display:grid;grid-template-columns:158px minmax(0,1fr);gap:.875rem 1rem;align-items:start}
+.fields dt{color:hsl(var(--perch-foreground-muted));padding-top:.125rem}
+.fields dd{margin:0;font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-secondary));line-height:1.6}
+.fields dd .head{display:block;color:hsl(var(--perch-foreground));margin-bottom:.25rem}
+.fields dd .absent{color:hsl(var(--perch-foreground-muted));font-style:normal}
+.fields dd .mono{
+  font-family:var(--perch-font-mono);font-size:var(--perch-text-xs);
+  color:hsl(var(--perch-foreground-muted));display:block;margin-top:.375rem;
+  line-height:1.75;white-space:pre-wrap;overflow-x:auto;
+}
+.fields dd a{color:hsl(var(--perch-pillar-evidence-ink));text-decoration:underline;text-underline-offset:2px;font-size:var(--perch-text-sm)}
+.fields dd .neg{color:hsl(var(--perch-sev-high))}
+
+/* punched label notch · security-v2.svg:8-32 */
+.notch{
+  position:relative;margin-top:.375rem;padding:.875rem .875rem .75rem;
+  border-radius:var(--perch-radius-region);
+  border:1px solid hsl(var(--nh) / var(--perch-alpha-region-stroke));
+  background:hsl(var(--nh) / var(--perch-alpha-region-fill));
+}
+.notch > .nlabel{
+  position:absolute;top:-.4375rem;left:.875rem;padding:0 .375rem;
+  background:hsl(var(--perch-card));color:hsl(var(--nh));
+}
+.notch > .nannot{
+  position:absolute;top:-.375rem;right:.875rem;padding:0 .375rem;
+  background:hsl(var(--perch-card));color:hsl(var(--perch-foreground-muted));
+  font-family:var(--perch-font-mono);font-size:var(--perch-text-xs);line-height:1;
+}
+.notch .core{color:hsl(var(--perch-foreground))}
+
+.hr{height:1px;background:hsl(var(--perch-border));margin:1.25rem 0}
+
+.ev-head{display:flex;align-items:center;gap:.625rem;margin-bottom:.5rem;flex-wrap:wrap}
+.ev-head .t{color:hsl(var(--perch-foreground-muted))}
+.ev-head .n{font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground));font-family:var(--perch-font-mono)}
+.ev-table{width:100%;border-collapse:collapse;font-family:var(--perch-font-mono);font-size:var(--perch-text-xs)}
+.ev-table td{padding:.3125rem 0;color:hsl(var(--perch-foreground-secondary));vertical-align:middle}
+.ev-table td.r{text-align:right;color:hsl(var(--perch-foreground-muted));white-space:nowrap}
+.ev-group{color:hsl(var(--perch-foreground-muted));padding-top:.5rem !important}
+/* The caution register: a 2px leading rail and words. No glyph — copy-ban-list
+   row `shield-glyph` is P0 and its pattern includes ⚠ with no exemption. */
+.ev-note{
+  margin-top:.75rem;padding:.375rem 0 .375rem .6875rem;
+  border-left:2px solid hsl(var(--perch-sev-medium));
+  color:hsl(var(--perch-foreground-secondary));font-size:var(--perch-text-sm);line-height:1.6;
+}
+.ev-note .h{
+  display:block;color:hsl(var(--perch-sev-medium));font-size:var(--perch-text-eyebrow);
+  letter-spacing:.16em;text-transform:uppercase;font-weight:600;margin-bottom:.25rem;
+}
+.dots{display:inline-flex;gap:3px;align-items:center;vertical-align:middle}
+.dots i{width:5px;height:5px;border-radius:9999px;background:hsl(var(--perch-border-strong));display:block}
+
+.prov{display:grid;grid-template-columns:158px minmax(0,1fr);gap:.75rem 1rem;font-size:var(--perch-text-sm)}
+.prov dt{color:hsl(var(--perch-foreground-muted))}
+.prov dd{margin:0;color:hsl(var(--perch-foreground-secondary));font-family:var(--perch-font-mono);line-height:1.6;font-size:var(--perch-text-sm)}
+.prov dd .state{color:hsl(var(--perch-foreground-muted))}
+.prov dd .state.unatt{color:hsl(var(--perch-sev-high))}
+.prov dd .note{
+  display:block;color:hsl(var(--perch-foreground-muted));font-family:var(--perch-font-sans);
+  font-size:var(--perch-text-sm);margin-top:.3125rem;line-height:1.6;
+}
+.prov dd .npub{word-break:break-all;color:hsl(var(--perch-foreground-secondary))}
+
+.controls{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.25rem}
+.chip{
+  display:inline-flex;align-items:center;gap:.5rem;
+  padding:.4375rem .6875rem;border-radius:var(--perch-radius-md);
+  background:hsl(var(--perch-surface-raised));border:1px solid transparent;
+  font-size:var(--perch-text-sm);font-weight:500;
+  color:hsl(var(--perch-foreground-secondary));
+}
+.chip:hover{border-color:hsl(var(--perch-border-strong))}
+.chip[disabled]{opacity:.5;cursor:not-allowed}
+.chip .g{font-family:var(--perch-font-mono);font-size:var(--perch-text-xs)}
+.chip.confirm{color:hsl(var(--perch-pillar-substrate-ink))}
+.chip.dismiss{color:hsl(var(--perch-sev-medium))}
+.chip.investigate{color:hsl(var(--perch-pillar-evidence-ink))}
+.chip.refuse{color:hsl(var(--perch-sev-high))}
+/* render law 6 / design-ground §4.5: the grant control has no filled path. */
+.grant{
+  display:block;width:100%;padding:.6875rem .875rem;border-radius:var(--perch-radius-card);
+  background:transparent;border:1px solid hsl(var(--perch-border-strong));
+  color:hsl(var(--perch-foreground));font-size:var(--perch-text-sm);font-weight:500;
+}
+.grant:hover{border-color:hsl(var(--perch-ring))}
+.grant[data-armed="1"]{border-color:hsl(var(--perch-sev-high));color:hsl(var(--perch-sev-high))}
+.grant[disabled]{opacity:.5;cursor:not-allowed}
+.ctl-hint{margin-top:.625rem;font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-muted));line-height:1.6}
+.ctl-hint .dis{display:block;margin-top:.25rem}
+.ctl-hint.expiry{color:hsl(var(--perch-sev-high))}
+.armed{
+  margin-top:.625rem;padding:.6875rem .75rem;border-radius:var(--perch-radius-md);
+  border:1px solid hsl(var(--perch-border-pillar-authority));
+  background:hsl(var(--perch-sev-medium) / var(--perch-alpha-rail-fill));
+  font-size:var(--perch-text-sm);line-height:1.6;color:hsl(var(--perch-foreground-secondary));
+}
+.armed .h{display:block;color:hsl(var(--perch-sev-medium));margin-bottom:.375rem}
+.armed table{border-collapse:collapse;font-family:var(--perch-font-mono);margin:.375rem 0;font-size:var(--perch-text-xs)}
+.armed td{padding:.125rem .75rem .125rem 0;color:hsl(var(--perch-foreground-muted))}
+.armed td.v{color:hsl(var(--perch-foreground))}
+
+.snoozemenu{
+  margin-top:.5rem;padding:.375rem;border-radius:var(--perch-radius-md);
+  border:1px solid hsl(var(--perch-border-strong));background:hsl(var(--perch-popover));
+  box-shadow:var(--perch-elevation-popover);
+  display:inline-flex;flex-direction:column;gap:.125rem;min-width:15rem;
+}
+.snoozemenu button{padding:.375rem .5rem;border-radius:var(--perch-radius-sm);font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-secondary))}
+.snoozemenu button:hover{background:hsl(var(--perch-surface-raised));color:hsl(var(--perch-foreground))}
+
+.toast{
+  margin-top:.75rem;padding:.5rem .75rem;border-radius:var(--perch-radius-md);
+  border:1px solid hsl(var(--perch-border-strong));background:hsl(var(--perch-surface-raised));
+  font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-secondary));line-height:1.6;
+}
+.toast.bad{border-color:hsl(var(--perch-sev-critical))}
+
+/* terminal strip */
+.terminal{
+  flex:0 0 auto;min-height:var(--perch-h-terminal);
+  display:flex;align-items:center;gap:.5rem;padding:0 .75rem;
+  background:hsl(var(--perch-surface-chrome));border-top:1px solid hsl(var(--perch-border));
+  color:hsl(var(--perch-foreground-muted));font-family:var(--perch-font-mono);font-size:var(--perch-text-xs);
+}
+.terminal .sp{margin-left:auto}
+
+/* ==========================================================================
+   9. OVERLAYS
+   ========================================================================== */
+.scrim{
+  position:fixed;inset:0;z-index:60;
+  background:hsl(var(--perch-surface-chrome) / 0.72);
+  display:grid;place-items:start center;padding-top:8vh;
+}
+.omni{
+  width:min(720px, 92vw);border-radius:var(--perch-radius-card);
+  background:hsl(var(--perch-popover));border:1px solid hsl(var(--perch-border-strong));
+  box-shadow:var(--perch-elevation-popover);overflow:hidden;
+}
+.omni-input{display:flex;align-items:center;gap:.625rem;padding:.75rem .875rem;border-bottom:1px solid hsl(var(--perch-border))}
+.omni-scope{
+  font-size:var(--perch-text-xs);padding:.1875rem .4375rem;border-radius:var(--perch-radius-sm);
+  background:hsl(var(--perch-surface-raised));color:hsl(var(--perch-foreground-secondary));
+  font-family:var(--perch-font-mono);white-space:nowrap;
+}
+.omni-q{flex:1 1 auto;font-family:var(--perch-font-mono);font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground))}
+.omni-q .caret{
+  display:inline-block;width:1px;height:1.05em;background:hsl(var(--perch-pillar-substrate-mark));
+  vertical-align:-2px;animation:blink 1.1s steps(1,end) infinite;
+}
+@keyframes blink{50%{opacity:0}}
+.omni-sec{padding:.5rem .875rem .25rem;color:hsl(var(--perch-foreground-muted))}
+.omni-item{display:flex;align-items:center;gap:.625rem;padding:.4375rem .875rem;font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-secondary))}
+.omni-item[data-sel="1"]{background:hsl(var(--perch-surface-raised));color:hsl(var(--perch-foreground))}
+.omni-item .m{font-family:var(--perch-font-mono);font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted));margin-left:auto;white-space:nowrap}
+.omni-foot{padding:.625rem .875rem;border-top:1px solid hsl(var(--perch-border));font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-muted));line-height:1.6}
+
+.modal{
+  width:min(560px,92vw);border-radius:var(--perch-radius-card);
+  background:hsl(var(--perch-popover));border:1px solid hsl(var(--perch-border-strong));
+  box-shadow:var(--perch-elevation-popover);padding:1.125rem 1.25rem;
+}
+.modal h3{margin:0 0 .625rem;font-size:var(--perch-text-base);font-weight:600;color:hsl(var(--perch-foreground))}
+.modal p{margin:0 0 .625rem;font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground-secondary));line-height:1.6}
+.modal table{border-collapse:collapse;font-family:var(--perch-font-mono);font-size:var(--perch-text-xs);margin:.5rem 0 .75rem}
+.modal td{padding:.1875rem .875rem .1875rem 0;color:hsl(var(--perch-foreground-muted))}
+.modal td.v{color:hsl(var(--perch-foreground))}
+.modal .acts{display:flex;gap:.5rem;margin-top:.875rem}
+
+/* ==========================================================================
+   10. PROTOTYPE CHROME (state panel + spec notes) — not product surface
+   ========================================================================== */
+.states{
+  position:fixed;left:0;right:0;bottom:0;z-index:80;min-height:100px;max-height:34vh;
+  display:flex;align-items:center;flex-wrap:wrap;align-content:center;gap:.375rem .75rem;
+  padding:.5rem .75rem;overflow-y:auto;
+  background:hsl(var(--perch-popover));border-top:1px solid hsl(var(--perch-border-strong));
+  font-size:var(--perch-text-xs);line-height:1.4;color:hsl(var(--perch-foreground-secondary));
+}
+.states h5{margin:0;color:hsl(var(--perch-pillar-substrate-ink));flex:0 0 auto}
+.states .body{display:contents}
+.states .grp{display:flex;align-items:center;gap:.375rem;flex:0 0 auto;padding-left:.75rem;border-left:1px solid hsl(var(--perch-border))}
+.states .grp:first-child{border-left:0;padding-left:0}
+.states .grp > span{color:hsl(var(--perch-foreground-muted));font-size:var(--perch-text-xs);letter-spacing:.12em;text-transform:uppercase;font-weight:600}
+.states .btns{display:flex;gap:.1875rem;flex-wrap:wrap}
+.states button{
+  font-size:var(--perch-text-xs);padding:.25rem .4375rem;border-radius:var(--perch-radius-sm);
+  background:hsl(var(--perch-surface-raised));color:hsl(var(--perch-foreground-secondary));
+  border:1px solid transparent;font-family:var(--perch-font-mono);
+}
+.states button[data-on="1"]{border-color:hsl(var(--perch-pillar-substrate-mark));color:hsl(var(--perch-foreground))}
+.states .note{color:hsl(var(--perch-foreground-muted));flex:0 0 auto;padding-left:.75rem;border-left:1px solid hsl(var(--perch-border))}
+.states .collapse{color:hsl(var(--perch-foreground-muted));margin-left:auto;flex:0 0 auto;padding-left:.75rem}
+.states[data-min="1"] .body,.states[data-min="1"] .note{display:none}
+
+.specnotes{
+  background:hsl(var(--perch-surface-chrome));color:hsl(var(--perch-foreground-secondary));
+  border-top:1px solid hsl(var(--perch-border));
+}
+.specnotes > summary{padding:.875rem 1.25rem;cursor:pointer;color:hsl(var(--perch-pillar-substrate-ink));list-style:none}
+.specnotes > summary::-webkit-details-marker{display:none}
+.specnotes > summary::before{content:"▸ ";color:hsl(var(--perch-foreground-muted))}
+.specnotes[open] > summary::before{content:"▾ "}
+.sn{padding:0 1.25rem 3rem;max-width:74rem;font-size:var(--perch-text-sm);line-height:1.65}
+.sn h3{font-size:var(--perch-text-sm);color:hsl(var(--perch-foreground));margin:1.5rem 0 .5rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.sn table{width:100%;border-collapse:collapse;font-size:var(--perch-text-xs);margin-bottom:.75rem}
+.sn th{text-align:left;color:hsl(var(--perch-foreground-muted));font-weight:600;padding:.375rem .625rem .375rem 0;border-bottom:1px solid hsl(var(--perch-border));vertical-align:bottom}
+.sn td{padding:.3125rem .625rem .3125rem 0;border-bottom:1px solid hsl(var(--perch-border) / 0.55);vertical-align:top;color:hsl(var(--perch-foreground-secondary))}
+.sn td:first-child{color:hsl(var(--perch-foreground))}
+.sn code,.sn .c{font-family:var(--perch-font-mono);font-size:var(--perch-text-xs);color:hsl(var(--perch-pillar-evidence-ink))}
+.sn ul{margin:.25rem 0 .75rem;padding-left:1.125rem}
+.sn li{margin-bottom:.5rem;font-size:var(--perch-text-xs);line-height:1.7}
+.sn p{font-size:var(--perch-text-xs);line-height:1.75;color:hsl(var(--perch-foreground-secondary));max-width:60rem}
+.sn .flag{color:hsl(var(--perch-sev-medium))}
+
+@media (max-width:1180px){ .sidebar{display:none} }
+@media (max-width:820px){ .inbox{flex:1 1 auto;width:auto} .detail{display:none} }
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:1ms !important;animation-iteration-count:1 !important;transition-duration:1ms !important}
+}
+</style>
+</head>
+<body>
+
+<div class="console" id="console">
+  <div class="strip eyebrow" id="strip"></div>
+  <div id="modeband"></div>
+  <div class="shellbody">
+    <nav class="rail" aria-label="Deployments">
+      <div class="rail-chip" data-active="1" title="ambush-lab">AL</div>
+      <div class="rail-chip" title="ambush-prod">AP</div>
+    </nav>
+    <aside class="sidebar" id="sidebar" aria-label="Navigation"></aside>
+    <section class="inbox" id="inbox" aria-label="The Watch"></section>
+    <section class="detail" id="detail" aria-label="Verdict Row"></section>
+  </div>
+  <div class="terminal">
+    <span id="termline">swarmctl</span>
+    <span class="sp">⌘J</span>
+  </div>
+</div>
+
+<div id="overlay"></div>
+
+<div class="states" id="states">
+  <h5 class="eyebrow" style="font-size:var(--perch-text-xs)">Prototype states</h5>
+  <div class="body" id="statesbody"></div>
+  <button class="collapse" onclick="toggleStates()" id="stbtn">hide</button>
+</div>
+
+<details class="specnotes">
+  <summary class="eyebrow" style="font-size:var(--perch-text-eyebrow)">Spec notes — what governs each region, what was drawn without a spec, and what the red team found</summary>
+  <div class="sn" id="specnotes"></div>
+</details>
+
+<script>
+/* ==========================================================================
+   FIXTURE — build/fixtures/perch-demo-fixture.json is CANONICAL.
+
+   Revision 1 declared its own "shared fixture" and so did three peer
+   prototypes and 22-DEMO-FIXTURE, giving one case five channel UUIDs, one
+   object six id grammars and one crossing five arithmetics. Five canonical
+   fixtures is zero canonical fixtures. This revision binds to the one machine-
+   validated set (fixtures/validate.mjs, fixtures/SHA256SUMS) and regenerates
+   everything else with that file's OWN derivation, so nothing here was typed:
+
+       id = sha256("perch-demo-fixture/v1/" + label)
+
+   Values marked CANON are copied out of perch-demo-fixture.json verbatim.
+   Values marked EXT are things The Watch needs that the demo scenario does not
+   contain (a queue with one row is not a queue). Every EXT label is listed in
+   the Spec notes so 22-DEMO-FIXTURE can absorb it by running derive-ids.mjs
+   rather than by hand.
+
+   The clock is the demo fixture's own. "Now" is `clock.timestamps.open_row_ms`
+   = 1773738965000 = 2026-03-17T09:16:05Z — the instant the fixture names as
+   "the operator's queue shows the open hold row", which is exactly what this
+   screen is. The shift began at `clock.shift_start_ms` = 08:00:00Z.
+   ========================================================================== */
+
+const FX = {
+  /* CANON — clock */
+  nowMs:        1773738965000,   /* clock.timestamps.open_row_ms */
+  shiftStartMs: 1773734400000,   /* clock.shift_start_ms         */
+  nowS:         1773738965,
+
+  /* CANON — constants (rulesets/default.yaml:55-59, :93-95; defaults.rs:15-27) */
+  alertThreshold:       2.0,
+  incidentThreshold:    5.0,
+  halfLifeSecs:         3600,
+  evaporationThreshold: 0.01,
+  minSources:           2,
+  humanGateSeverity:    "HIGH",
+  capabilityLeaseTtlMs: 60000,     /* policy.lease_ttl_ms                     */
+  containmentLeaseTtlMs: 900000,   /* runtime.containment.lease_ttl_ms        */
+  holdTtlMs:            3600000,   /* PERCH_HOLD_TTL_MS, appendix §6 proposed  */
+  deescalationCooldownS: 300,
+
+  /* CANON — identities */
+  operatorId:      "perch-operator-1",
+  operatorPubkey:  "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5",
+  bridgePubkey:    "207176338a897b2379564322033e86ed7197600499ba348e6c6c898b8139b586",
+  daemonUrl:       "http://127.0.0.1:9090",
+
+  /* EXT — nothing in the plan set measures these; they are the tuning report's
+     own shape (alert_tuning.rs:6-15) filled with a shift's worth of numbers. */
+  tuning: { rule:[3,2,0.34], threshold:[4,2,0.50], host:[2,2,0.75], cap:6 },
+  gaps:   { techniques:18, detectors:11 },
+  queueDepthAlarm: 12,             /* PERCH_QUEUE_DEPTH_ALARM, appendix §6     */
+};
+
+/* Agent identities. The demo fixture's F-2 finding is load-bearing here:
+   `infer_agent_role` (AMB crates/swarm-runtime/src/detection/pipeline.rs:583-604,
+   called by resolve_deposits inside `swarm_detect --serve`) returns None for
+   every `swarm:ed25519:` id, so NO card the shipped daemon produces carries a
+   role-named agent like `whisker-7a3f`. Revision 1 invented eight of those.
+   What the wire actually carries is a 64-hex key, and that is what renders. */
+const AGENTS = {
+  ingest: { id:"swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+            pillar:"substrate", note:"CANON — cast.daemon.ingest_agent_id" },
+  edr:    { id:"swarm:ed25519:a178b7fd2227d79d5313fe1888a4643469a9935bd063097712dd6cfb303ef852",
+            pillar:"substrate", note:"EXT — ed25519/whisker-edr-1" },
+  net:    { id:"swarm:ed25519:257cd591f7dd6aaaf07e9c0514f4ce375dabe7053d7acc207b64484ba8cd6bff",
+            pillar:"evidence",  note:"EXT — ed25519/whisker-net-1" },
+};
+/* A truncated key is forgeable by vanity grinding — BUZZ's own
+   check-pubkey-truncation.mjs exists for that class of defect and routes every
+   display truncation through `truncatePubkey`/<PubKey>. A 365px queue row
+   cannot hold 64 hex, so the row shows the canonical short form and the pane
+   shows the whole key. That split is the doctrine, not an exception to it. */
+const agentShort = (k) => "ed25519:" + AGENTS[k].id.slice(14, 22) + "…";
+const agentFull  = (k) => AGENTS[k].id;
+
+/* --------------------------------------------------------------------------
+   DEPOSITS. Every lane strength on this page is COMPUTED from a deposit list
+   with the runtime's own closed form, never typed:
+
+       strength_at(t) = confidence * 0.5 ^ ((t - deposit.timestamp) / half_life)
+         AMB crates/swarm-core/src/pheromone.rs:281-287
+
+       concentration_for  sums those, drops anything at or below
+       evaporation_threshold, and counts distinct `deposit.agent_id` strings
+         AMB crates/swarm-pheromone/src/substrate.rs:1268-1304
+
+   `agent_id` on a deposit is the STRATEGY-SCOPED id — resolve_deposits sets
+   `agent_id: strategy_scoped_agent_id(agent_id, &finding.strategy_id)` at
+   pipeline.rs:573 and stream.rs:20-22 formats it `{base}:{strategy_id}` — so
+   `distinct_sources` counts (agent, detector) pairs and "M agents" counts the
+   base ids. That is why the two numbers differ, and it is verified below.
+
+   Row shape: [secondsAgo, confidence, agentKey, strategyId, eventId]
+   -------------------------------------------------------------------------- */
+const LANE_DEPOSITS = {
+  /* CANON — the three deposits in perch-demo-fixture.json `deposits`, expressed
+     as seconds before `now`. Recomputing them here reproduces the fixture's own
+     `concentration.at_open_row.total_strength` = 2.653617 exactly; the page
+     asserts that at boot and says so in the Spec notes. */
+  "execution": [
+    [93, 0.9, "ingest", "suspicious_process_tree", "hunt-evt-1"],
+    [93, 0.9, "ingest", "suspicious_scripting",    "hunt-evt-1"],
+    [84, 0.9, "ingest", "suspicious_process_tree", "hunt-evt-2"],
+  ],
+  /* EXT — deposit sets chosen to give the sidebar a real spread. */
+  "defense-evasion": [
+    [ 610, 0.88, "edr", "preload_shim",     "evt-41bda0d8"],
+    [ 613, 0.74, "edr", "ld_audit_write",   "evt-41bda0d8"],
+    [1904, 0.69, "net", "egress_anomaly",   "evt-9c0d1177"],
+    [2610, 0.55, "edr", "preload_shim",     "evt-2f8b41aa"],
+  ],
+  "data-exfiltration": [
+    [ 402, 0.71, "edr", "dns_txt_volume",      "evt-41bda0d8"],
+    [ 402, 0.63, "edr", "beacon_periodicity",  "evt-41bda0d8"],
+    [1145, 0.58, "net", "dns_exfiltration",    "evt-41bda0d8"],
+    [2050, 0.49, "net", "egress_anomaly",      "evt-77c30ba2"],
+  ],
+  "credential-access": [
+    [2100, 0.61, "edr", "lsass_handle_open",     "evt-454bbd52"],
+    [2104, 0.55, "edr", "credential_dump_lsass", "evt-454bbd52"],
+    [3210, 0.48, "net", "egress_anomaly",        "evt-8a01c4de"],
+  ],
+  "lateral-movement":     [[3400,0.34,"net","smb_admin_share","evt-6b21f0aa"],
+                           [3402,0.28,"edr","remote_service_create","evt-6b21f0aa"]],
+  "persistence":          [[4220,0.44,"edr","scheduled_task_persist","evt-c4d15181"]],
+  "privilege-escalation": [[5600,0.42,"edr","token_manipulation","evt-19aa7c30"]],
+  "discovery":            [[6100,0.31,"net","host_enumeration","evt-3d0b7711"]],
+  "command-and-control":  [[7300,0.22,"net","beacon_jitter","evt-1d5bfd16"]],
+  "initial-access":       [],
+  "supply-chain":         [],
+  "impact":               [],
+};
+
+/* standard_threat_classes() order — AMB swarm-core. Twelve, fixed. */
+const LANE_ORDER = [
+  "initial-access","execution","persistence","privilege-escalation","defense-evasion",
+  "credential-access","discovery","lateral-movement","command-and-control",
+  "data-exfiltration","impact","supply-chain",
+];
+
+/* --- the runtime's closed form, reimplemented ---------------------------- */
+function strengthAt(confidence, secsAgo){
+  return confidence * Math.pow(0.5, secsAgo / FX.halfLifeSecs);
+}
+/* concentration_for's reduction: evaporation floor, sum, distinct source ids,
+   distinct agent instances, peak confidence. Suppressed event ids are dropped
+   first, which is what a Dismiss does to the substrate. */
+function concentration(threatClass, suppressed){
+  const drop = suppressed || [];
+  const src = new Set(), ag = new Set();
+  let total = 0, peak = 0, kept = 0;
+  for (const [ago, conf, agentKey, strategyId, eventId] of (LANE_DEPOSITS[threatClass] || [])){
+    if (drop.includes(eventId)) continue;
+    const s = strengthAt(conf, ago);
+    if (s <= FX.evaporationThreshold) continue;   /* substrate.rs:1284 */
+    total += s; kept += 1;
+    src.add(AGENTS[agentKey].id + ":" + strategyId);   /* pipeline.rs:573 */
+    ag.add(AGENTS[agentKey].id);
+    if (conf > peak) peak = conf;
+  }
+  return { total, sources: src.size, agents: ag.size, peak, deposits: kept };
+}
+
+/* --------------------------------------------------------------------------
+   HOLDS. A and B are the demo fixture's two holds, verbatim, including the
+   ladder it was built to show: 12 destructive actions -> 4 that lease a
+   containment -> 3 that have an executable inverse. C and D are EXT.
+   -------------------------------------------------------------------------- */
+const HOLDS = [
+  { id:"hA", holdId:"h_a07aeacf", canon:true,
+    action:"isolate_host", subject:"host-ops-1", subjectLabel:"host_id",
+    detail:[["process_name","powershell"],["parent_process","WINWORD"],
+            ["command_line","powershell.exe -enc AAA="],["user","alice"]],
+    sev:"CRITICAL", cls:"execution", heldAtMs:1773738882600,
+    caseKey:"caseA", leased:true, inverse:"restore_host_connectivity",
+    inverseSummary:"restore host connectivity",
+    blast:{ kind:"host", value:"host-ops-1", impact:"host_connectivity_isolated",
+            max:1, caps:["network.egress","network.ingress"],
+            summary:"one host loses network connectivity" } },
+  { id:"hB", holdId:"h_1c28ae79", canon:true,
+    action:"block_egress", subject:"198.51.100.20", subjectLabel:"target",
+    detail:[["scope","network"],["observed_port","4444"]],
+    sev:"CRITICAL", cls:"execution", heldAtMs:1773738882700,
+    caseKey:"caseA", leased:false, inverse:"remove_network_block",
+    inverseSummary:"withdraw the egress block for 198.51.100.20",
+    blast:{ kind:"network", value:"198.51.100.20", impact:"egress_blocked",
+            max:1, caps:["network.egress"],
+            summary:"one destination becomes unreachable from this colony" } },
+  { id:"hC", holdId:"h_d5ee16b4", canon:false,
+    action:"quarantine_file", subject:"/var/tmp/.cache/ld.so.preload", subjectLabel:"file_path",
+    detail:[["host_id","build-agent-07"],["sha256","c9f1…redacted in this fixture"]],
+    sev:"HIGH", cls:"defense-evasion", heldAtMs:1773738965000 - 22*60*1000 - 8000,
+    caseKey:"caseB", leased:true, inverse:"release_quarantined_file",
+    inverseSummary:"return the file to its original path",
+    blast:{ kind:"file", value:"/var/tmp/.cache/ld.so.preload", impact:"file_quarantined",
+            max:1, caps:["filesystem.write"],
+            summary:"one file on one host is moved to the quarantine store" } },
+  { id:"hD", holdId:"h_81c8137f", canon:false,
+    action:"revoke_credential", subject:"svc-deploy@corp.example", subjectLabel:"principal",
+    detail:[["credential_id","svc-deploy"],["issuer","corp.example"]],
+    sev:"HIGH", cls:"credential-access", heldAtMs:1773738965000 - 51*60*1000 - 40000,
+    caseKey:"caseC", leased:false, inverse:null,
+    blast:{ kind:"principal", value:"svc-deploy@corp.example", impact:"credential_revoked",
+            max:1, caps:["identity.assume"],
+            summary:"one service principal can no longer authenticate" } },
+];
+
+const CASES = {
+  caseA:{ id:"27799e23-ab25-4659-b381-3de47ea7ca4d", canon:true,  ttlHrs:6,
+          name:"case-2026-03-17-host-ops-1" },
+  caseB:{ id:"477e449c-9c11-4b79-a78f-98cbe3c746e6", canon:false, ttlHrs:6,
+          name:"case-2026-03-17-build-agent-07" },
+  caseC:{ id:"c0b720d0-824b-4278-812b-100bb2f508b1", canon:false, ttlHrs:6,
+          name:"case-2026-03-17-svc-deploy" },
+};
+/* The case id IS the channel UUID (appendix §7). There is no case sequence
+   number anywhere in either tree, so revision 1's `case-0042` named nothing.
+   A row shows the first eight hex of the UUID; the pane shows all of it. */
+const caseShort = (k) => "case ·" + CASES[k].id.slice(0, 8);
+
+const INCIDENT_ID = "incident:hunt-evt-1:1773738882400";   /* CANON */
+const CONTAINMENT = { a:"cl_9b3645fc", c:"cl_330fb0a7" };  /* CANON / EXT */
+const ROLLBACK    = { a:"rb_81c4a588", c:"rb_bad41bda" };  /* CANON / EXT */
+
+const SNOOZE_DUE = {
+  id:"sn_4f432ea6", kind:"snooze", label:"dns_exfiltration",
+  cls:"data-exfiltration", host:"build-agent-07",
+  line:"came due 09:14 · you snoozed it 3h ago",
+};
+
+/* --------------------------------------------------------------------------
+   FINDINGS. f1..f3 are the demo fixture's three, verbatim (same event ids,
+   same detectors, same 0.9 confidences, same single producing agent). f4..f7
+   are EXT and exist to give the review queue three served review states and
+   both Dismiss branches.
+   -------------------------------------------------------------------------- */
+const FINDINGS = [
+  { id:"f1", canon:true, strategy:"suspicious_process_tree", host:"host-ops-1",
+    agentKey:"ingest", conf:0.90, cls:"execution", review:"unreviewed",
+    atMs:1773738872140, eventId:"hunt-evt-1", technique:"T1059.001",
+    findingId:"ad87733a20dc8c74", caseKey:"caseA" },
+  { id:"f2", canon:true, strategy:"suspicious_scripting", host:"host-ops-1",
+    agentKey:"ingest", conf:0.90, cls:"execution", review:"unreviewed",
+    atMs:1773738872141, eventId:"hunt-evt-1", technique:"T1059.001",
+    findingId:"8ed31965a6519634", caseKey:"caseA" },
+  { id:"f3", canon:true, strategy:"suspicious_process_tree", host:"host-ops-1",
+    agentKey:"ingest", conf:0.90, cls:"execution", review:"reviewed",
+    reviewAction:"confirm", atMs:1773738881130, eventId:"hunt-evt-2",
+    technique:"T1059.001", findingId:"2b1c9dceec6de43e", caseKey:"caseA" },
+  { id:"f4", canon:false, strategy:"dns_exfiltration", host:"build-agent-07",
+    agentKey:"net", conf:0.58, cls:"data-exfiltration", review:"unreviewed",
+    atMs:1773738965000 - 1145*1000, eventId:"evt-41bda0d8", technique:"T1071.004",
+    findingId:"0228ce763b887d9c", caseKey:"caseB" },
+  { id:"f5", canon:false, strategy:"credential_dump_lsass", host:"mail-01",
+    agentKey:"edr", conf:0.55, cls:"credential-access", review:"unreviewed",
+    atMs:1773738965000 - 2104*1000, eventId:"evt-454bbd52", technique:"T1003.001",
+    findingId:"73a55cfc103d2757", caseKey:"caseC" },
+  { id:"f6", canon:false, strategy:"beacon_jitter", host:"db-02",
+    agentKey:"net", conf:0.22, cls:"command-and-control", review:"not-yet-correlated",
+    atMs:1773738965000 - 7300*1000, eventId:"evt-1d5bfd16", technique:"T1071.001",
+    findingId:"c01c3725aa665d22", caseKey:null },
+  { id:"f7", canon:false, strategy:"scheduled_task_persist", host:"vpn-gw-02",
+    agentKey:"edr", conf:0.44, cls:"persistence", review:"reviewed",
+    reviewAction:"dismiss", atMs:1773738965000 - 4220*1000, eventId:"evt-c4d15181",
+    technique:"T1053.005", findingId:"06d34a850fa9e6f1", caseKey:null },
+];
+
+const CASEACT = [
+  { id:"c1", caseKey:"caseA", at:1773738882400,
+    line:"a correlated incident now includes 3 members" },
+  { id:"c2", caseKey:"caseB", at:1773738965000 - 21*60*1000,
+    line:"containment " + CONTAINMENT.c + " opened on build-agent-07" },
+  { id:"c3", caseKey:"caseC", at:1773738965000 - 63*60*1000,
+    line:"rollback " + ROLLBACK.c + " · ResumeProcess · Reversed" },
+];
+
+/* Snooze presets — BUZZ desktop/src/shared/lib/timePresets.ts:31-44, verbatim */
+const SNOOZE_PRESETS = ["In 30 minutes","In 1 hour","In 3 hours","Tomorrow at 9am","Next Monday at 9am"];
+
+const SEV_TOKEN = { LOW:"--perch-sev-low", MEDIUM:"--perch-sev-medium",
+                    HIGH:"--perch-sev-high", CRITICAL:"--perch-sev-critical" };
+const SEV_FILL  = { LOW:1, MEDIUM:2, HIGH:3, CRITICAL:4 };
+
+/* The four containment actions — swarm-runtime/src/containment.rs:54-63 out of
+   the twelve destructive ones at tom_agent.rs:1276-1289. */
+const CONTAINMENT_ACTIONS = ["isolate_host","quarantine_file","suspend_process","disable_account"];
+</script>
+
+<script>
+/* ==========================================================================
+   STATE
+   ========================================================================== */
+const STATES = ["coldstart","loading","empty","quiet","busy","highvolume",
+                "divergence","daemondown","stale"];
+const STATE_LABEL = {
+  coldstart:"cold start", loading:"loading", empty:"empty queue", quiet:"quiet",
+  busy:"busy", highvolume:"high volume + shedding", divergence:"divergence",
+  daemondown:"daemon down", stale:"stale",
+};
+
+let S = {
+  state:"busy",
+  /* null on purpose: reselect() applies 04 section 2.1's selection law — the
+     oldest undecided hold, else the oldest unreviewed finding — so the landing
+     row is derived, not chosen. Revision 1 hard-coded a finding. */
+  sel:null,
+  overlay:null,            /* null | omni-query | omni-cmd | dismiss | snooze */
+  dismissArmed:false,
+  grantArmed:false,
+  evidenceOpen:true,
+  toast:null,
+  minStates:false,
+  theme:null,              /* null = follow the system; "dark" | "light" */
+};
+
+/* ==========================================================================
+   HELPERS
+   ========================================================================== */
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+/* <AdversaryString> — 08 section 7.7 control 1, lifted from
+   prototypes/verdict-hold.html:1067-1078 so the two drawings cannot drift.
+   Control, zero-width and bidi codepoints are escaped and visibly marked; the
+   value is capped at 512 rendered characters; it is a plain text node in a
+   labelled rail and it never touches a markdown pipeline. Revision 1 had HTML
+   entity escaping only, which does nothing about U+202E or a homoglyph in a
+   filename that names an irreversible action. The class is built from escapes
+   rather than literals so the source file itself carries no control bytes. */
+const CTRL_CODEPOINTS = new RegExp(
+  "[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f\\u00ad" +
+  "\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]", "g");
+function adv(value){
+  const cleaned = String(value).replace(CTRL_CODEPOINTS,
+    (c) => "\\u" + c.codePointAt(0).toString(16).padStart(4, "0"));
+  const capped = cleaned.length > 512 ? cleaned.slice(0, 512) : cleaned;
+  return '<span class="adv-val">' + esc(capped) + "</span>";
+}
+const ADV_LEGEND =
+  '<p class="advlegend">Amber-railed values are written by the adversary — host ' +
+  'names, file paths, process names, principals, command lines. They render as ' +
+  'plain text, with no markdown, no autolinking and no mentions, and control, ' +
+  'zero-width and bidi codepoints escaped. Nothing here is ever passed to an ' +
+  'agent as instruction.</p>';
+/* The queue gets the short form. The full sentence belongs where a decision is
+   made, and a 365px pane cannot spend six lines on a legend above an expiring
+   destructive action. */
+const ADV_LEGEND_QUEUE =
+  '<p class="advlegend">Amber-railed values are written by the adversary and ' +
+  'render as inert plain text.</p>';
+const ADV_LABEL = '<span class="advnote">Adversary-controlled</span>';
+
+/* Render law 2 / voice law L5: never a bare source count. One function, used
+   at every call site, with the grammatical singular 06 section 5.2's own
+   laneQuiet copy already uses ("1 source / 1 agent"). */
+const sa = (src, ag) =>
+  `${src} source${src === 1 ? "" : "s"} / ${ag} agent${ag === 1 ? "" : "s"}`;
+/* 06 §1 L5: a number carries its unit and the unit is grammatical. */
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+const hhmm   = (ms) => new Date(ms).toISOString().slice(11, 16);
+const hhmmss = (ms) => new Date(ms).toISOString().slice(11, 19);
+function dur(ms){
+  if (ms <= 0) return "00m 00s";
+  const t = Math.floor(ms / 1000);
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const p = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}h ${p(m)}m ${p(s)}s` : `${p(m)}m ${p(s)}s`;
+}
+const holdExpiresMs = (h) => h.heldAtMs + FX.holdTtlMs;
+const holdLeft      = (h) => holdExpiresMs(h) - FX.nowMs;
+
+function sevChip(sev){
+  const tok = SEV_TOKEN[sev], n = SEV_FILL[sev];
+  let bars = "";
+  for (let i = 0; i < 4; i++)
+    bars += `<i${i < n ? ` style="background:hsl(var(${tok}))"` : ""}></i>`;
+  return `<span class="sev" style="color:hsl(var(${tok}))">${sev}` +
+         `<span class="sev-bar" aria-hidden="true">${bars}</span></span>`;
+}
+/* Five-dot confidence meter at pillars.svg:30-34's opacity ladder, ALWAYS
+   beside a two-decimal numeral. The meter is never the only encoding. */
+function confDots(c, pillar){
+  const lit = c < 0.25 ? 1 : c < 0.50 ? 2 : c < 0.75 ? 3 : c < 0.95 ? 4 : 5;
+  const op  = [0.40, 0.55, 0.75, 0.90, 1.00][lit - 1];
+  let d = "";
+  for (let i = 0; i < 5; i++){
+    d += i < lit
+      ? `<i style="background:hsl(var(--perch-pillar-${pillar}-mark));opacity:${op}"></i>`
+      : "<i></i>";
+  }
+  return `<span class="dots" aria-hidden="true">${d}</span>`;
+}
+const REVIEW_WORD = {
+  reviewed: "reviewed",
+  unreviewed: "not reviewed",
+  "not-yet-correlated": "not yet correlated",
+};
+const reviewMark = (r) => `<span class="rmark" data-r="${r}" aria-hidden="true"></span>`;
+function keys(list){
+  return `<span class="row-keys">${list.map(k =>
+    `<kbd${k[1] === false ? ' data-off="1"' : ""}>${k[0]}</kbd>`).join("")}</span>`;
+}
+
+/* pillars.svg:29-35's accumulation trail, drawn to spec as a static figure. */
+function trailSVG(){
+  return `<svg width="62" height="14" viewBox="0 0 62 14" aria-hidden="true" style="vertical-align:middle">
+    <path d="M0 7 H56" stroke="currentColor" stroke-opacity="0.3" stroke-width="1.2" stroke-dasharray="2 5"/>
+    <circle cx="2"  cy="7" r="2.2" fill="currentColor" fill-opacity="0.4"/>
+    <circle cx="20" cy="7" r="3.2" fill="currentColor" fill-opacity="0.65"/>
+    <circle cx="38" cy="7" r="4.2" fill="currentColor" fill-opacity="0.85"/>
+    <circle cx="56" cy="7" r="5.4" fill="currentColor"/>
+  </svg>`;
+}
+function crosshairs(){
+  const arm = `<svg class="crosshair" viewBox="0 0 26 26" style="%POS%" aria-hidden="true"><path d="M1 13 H13" stroke="currentColor" stroke-width="1"/><path d="M13 1 V13" stroke="currentColor" stroke-width="1"/></svg>`;
+  return [
+    arm.replace("%POS%","top:14px;left:14px"),
+    arm.replace("%POS%","top:14px;right:14px;transform:scaleX(-1)"),
+    arm.replace("%POS%","bottom:14px;left:14px;transform:scaleY(-1)"),
+    arm.replace("%POS%","bottom:14px;right:14px;transform:scale(-1,-1)"),
+  ].join("");
+}
+/* Three empty-state marks, one per queue, all drawn out of the domain's own
+   grammar. Revision 1 repeated one grey disc four times down a single column. */
+const MARKS = {
+  threshold: `<svg width="72" height="26" viewBox="0 0 72 26" aria-hidden="true">
+      <path d="M0 7 H72"  stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.9"/>
+      <path d="M0 15 H72" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.5"/>
+      <path d="M0 23 H72" stroke="currentColor" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.22"/></svg>`,
+  trail: `<svg width="72" height="16" viewBox="0 0 72 16" aria-hidden="true">
+      <path d="M0 8 H66" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 5" opacity="0.5"/>
+      <circle cx="4"  cy="8" r="2.2" fill="none" stroke="currentColor" opacity="0.75"/>
+      <circle cx="24" cy="8" r="3.2" fill="none" stroke="currentColor" opacity="0.6"/>
+      <circle cx="44" cy="8" r="4.2" fill="none" stroke="currentColor" opacity="0.45"/>
+      <circle cx="66" cy="8" r="5.4" fill="none" stroke="currentColor" opacity="0.3"/></svg>`,
+  region: `<svg width="72" height="30" viewBox="0 0 72 30" aria-hidden="true">
+      <rect x="0.5" y="6.5" width="71" height="23" rx="6" fill="none" stroke="currentColor" opacity="0.55"/>
+      <rect x="9" y="1" width="28" height="11" fill="hsl(var(--perch-background))"/>
+      <path d="M11 6.5 H35" stroke="currentColor" stroke-width="1.5" opacity="0.75"/></svg>`,
+};
+</script>
+
+<script>
+/* ==========================================================================
+   PER-STATE DATA SELECTION
+   ========================================================================== */
+function holdsFor(st){
+  if (st === "empty" || st === "loading" || st === "coldstart") return [];
+  if (st === "quiet")  return [HOLDS[3]];
+  if (st === "highvolume"){
+    const out = [];
+    for (let i = 0; i < 14; i++){
+      const b = HOLDS[i % 4];
+      out.push(Object.assign({}, b, {
+        id: "hv" + i,
+        holdId: b.holdId.slice(0, 6) + String(10 + i).padStart(2, "0"),
+        heldAtMs: FX.nowMs - (60 + i * 233) * 1000,
+      }));
+    }
+    return out;
+  }
+  if (st === "divergence"){
+    return [
+      Object.assign({}, HOLDS[0], { div:"both" }),
+      Object.assign({}, HOLDS[1], { div:"daemon-only" }),
+      Object.assign({}, HOLDS[2], { div:"relay-only" }),
+      Object.assign({}, HOLDS[3], { div:"superseded" }),
+    ];
+  }
+  if (st === "daemondown")
+    return HOLDS.slice(0, 2).map(h => Object.assign({}, h, { div:"relay-only-nodaemon" }));
+  return HOLDS;
+}
+function findingsFor(st){
+  if (st === "empty" || st === "coldstart" || st === "loading") return [];
+  if (st === "quiet") return FINDINGS.slice(3, 7);
+  return FINDINGS;
+}
+function caseActFor(st){
+  if (st === "empty" || st === "coldstart" || st === "loading") return [];
+  if (st === "quiet") return CASEACT.slice(0, 1);
+  return CASEACT;
+}
+/* The C9 numbers come off the same per-state fixture as the queue. Revision 1
+   hard-coded "87 measurements this week / 12 promoted / 340 did not clear the
+   bar" into every state including `empty`, so a screen that said nothing had
+   happened this shift reported a busy week four lines higher. A counter that
+   never changes across nine states is decoration, not instrumentation. */
+function c9For(st){
+  if (st === "coldstart" || st === "loading") return null;
+  if (st === "empty")
+    return { median:null, measurements:0, fraction:"0 of 0", promoted:0,
+             notPromoted:0, reviewed:0, total:0 };
+  if (st === "quiet")
+    return { median:33, measurements:4, fraction:"0 of 2", promoted:1,
+             notPromoted:11, reviewed:6, total:9 };
+  return { median:41, measurements:9, fraction:"1 of 4", promoted:3,
+           notPromoted:24, reviewed:12, total:19 };
+}
+function governance(st){
+  if (st === "coldstart")
+    return { key:"GOVERNANCE", cls:"cold", detail:"no snapshot received yet", recv:null };
+  if (st === "highvolume")
+    return { key:"GOVERNANCE DEGRADED", cls:"deg",
+             detail:"quorum available, one or more governors unhealthy", recv:"recv 3s ago" };
+  if (st === "daemondown")
+    return { key:"GOVERNANCE", cls:"cold",
+             detail:"last value was healthy · committee of 1 (solo transport)",
+             recv:"recv 6m 12s ago" };
+  if (st === "stale")
+    return { key:"GOVERNANCE HEALTHY", cls:"",
+             detail:"committee of 1 (solo transport)", recv:"recv 94s ago" };
+  return { key:"GOVERNANCE HEALTHY", cls:"",
+           detail:"committee of 1 (solo transport)", recv:"recv 41m ago" };
+}
+function swarmMode(st){
+  if (st === "highvolume") return "INCIDENT";
+  if (st === "busy" || st === "divergence") return "ALERT";
+  if (st === "coldstart") return null;
+  return "NORMAL";
+}
+const isLive = (st) => !["coldstart","loading"].includes(st);
+
+/* Selection law — 04 section 2.1: the oldest undecided hold, else the oldest
+   unreviewed finding. Revision 1 landed on a finding; this one lands where the
+   law says, and J/K walk the same order. */
+function orderedRows(){
+  const st = S.state, out = [];
+  const hs = holdsFor(st).slice().sort((a, b) => a.heldAtMs - b.heldAtMs);
+  hs.forEach(h => out.push({ kind:"hold", id:h.id, data:h }));
+  if (hs.length && ["busy","quiet","divergence","highvolume"].includes(st))
+    out.push({ kind:"snooze", id:"sn1", data:SNOOZE_DUE });
+  findingsFor(st).forEach(f => out.push({ kind:"finding", id:f.id, data:f }));
+  caseActFor(st).forEach(c => out.push({ kind:"case", id:c.id, data:c }));
+  return out;
+}
+const selected = () => orderedRows().find(r => r.id === S.sel) || orderedRows()[0] || null;
+
+/* ==========================================================================
+   GOVERNANCE STRIP  ·  04 section 1.2
+   ========================================================================== */
+function renderStrip(){
+  const g = governance(S.state), mode = swarmMode(S.state), st = S.state;
+  const rail = (mode === "ALERT" || mode === "INCIDENT")
+    ? '<span class="strip-rail"></span>' : "";
+  const bits = [];
+  bits.push(`<span class="k ${g.cls}">${g.key}</span>`);
+  bits.push(`<span class="sep">·</span><span class="v">${esc(g.detail)}</span>`);
+  if (g.recv) bits.push(`<span class="sep">·</span><span class="v mono">${esc(g.recv)}</span>`);
+  if (st === "highvolume")
+    bits.push('<span class="sep">·</span><span class="v shed">bridge: shedding</span>');
+  if (st === "daemondown")
+    bits.push('<span class="sep">·</span><span class="v down">daemon unreachable</span>');
+  if (st === "stale")
+    bits.push('<span class="sep">·</span><span class="v shed">telemetry stale</span>');
+  bits.push(st === "coldstart"
+    ? '<span class="sep">·</span><span class="v">no watch claimed — classes 1–3 page everyone</span>'
+    : `<span class="sep">·</span><span class="v">watch held by ${esc(FX.operatorId)} since ${hhmm(FX.shiftStartMs)}</span>`);
+  document.getElementById("strip").innerHTML = rail + bits.join("");
+
+  const mb = document.getElementById("modeband");
+  if (mode === "INCIDENT"){
+    const c = concentration("execution");
+    mb.className = "modeband eyebrow";
+    mb.innerHTML = "INCIDENT" +
+      `<span class="m">execution · strength 5.42 over ${FX.incidentThreshold.toFixed(1)} · ` +
+      `${sa(c.sources, c.agents)} · de-escalation cooldown ${FX.deescalationCooldownS}s</span>`;
+  } else {
+    mb.className = ""; mb.innerHTML = "";
+  }
+  document.getElementById("termline").textContent =
+    "swarmctl ▸ " + CASES.caseA.name;
+}
+
+/* ==========================================================================
+   SIDEBAR
+   ========================================================================== */
+function renderSidebar(){
+  const st = S.state, live = isLive(st), c9 = c9For(st);
+  const hn = holdsFor(st).length, fn = findingsFor(st).length, cn = caseActFor(st).length;
+  const laneStale = st === "stale";
+  const quietShift = st === "empty";
+  const dash = (v) => live ? v : "";
+
+  /* Every lane number below is computed by concentration(), never typed. */
+  let laneRows = "";
+  /* Lane telemetry is the substrate, not the queue. It does NOT go quiet just
+     because no row is waiting on the operator: an empty queue over three lanes
+     above their alert threshold is the exact picture render law 7 exists for. */
+  const lanes = LANE_ORDER.map(slug => ({ slug, c: concentration(slug) }))
+    .sort((a, b) => b.c.total - a.c.total);
+  lanes.slice(0, 4).forEach(({ slug, c }) => {
+    const over = live && c.total >= FX.alertThreshold;
+    laneRows += `<div class="sb-row">
+      <span class="lane-dot" data-over="${over && !laneStale ? 1 : 0}" data-stale="${laneStale && over ? 1 : 0}"></span>
+      <span>${slug}</span>
+    </div>`;
+    if (live && c.total > 0 && over){
+      laneRows += `<div class="sb-sub mono">strength ${c.total.toFixed(2)} · alert threshold ${FX.alertThreshold.toFixed(1)}<br>${sa(c.sources, c.agents)}</div>`;
+    }
+  });
+
+  document.getElementById("sidebar").innerHTML = `
+  <div class="sb-group">
+    <div class="sb-head"><span class="eyebrow">Watch</span><span class="c">${dash(hn + fn + cn)}</span></div>
+    <div class="sb-row" data-active="1"><span>Holds</span><span class="r">${dash(hn)}</span></div>
+    <div class="sb-row"><span>Findings</span><span class="r target">${live && c9 ? `${c9.reviewed} / ${c9.total}` : ""}</span></div>
+    <div class="sb-row"><span>Case activity</span><span class="r">${dash(cn)}</span></div>
+    <div class="sb-row"><span>Named you</span><span class="r" title="absent, not zero — no operator directory exists in a solo deployment">—</span></div>
+  </div>
+
+  <div class="sb-group">
+    <div class="sb-head"><span class="eyebrow">Threat lanes</span><span class="c">12</span></div>
+    ${laneRows}
+    <div class="sb-row" style="color:hsl(var(--perch-foreground-muted))"><span style="margin-left:16px">… 8 more</span></div>
+  </div>
+
+  <div class="sb-group">
+    <div class="sb-head"><span class="eyebrow">Cases</span><span class="c">${live ? (quietShift ? "0 open" : "3 open") : ""}</span></div>
+    ${live && !quietShift ? Object.keys(CASES).map(k =>
+      `<div class="sb-row"><span class="mono">${caseShort(k)}</span><span class="r mono">${CASES[k].ttlHrs}h left</span></div>`).join("") : ""}
+  </div>
+
+  <div class="sb-divider"></div>
+  <div class="sb-links">
+    <div class="sb-row"><span>Containments</span></div>
+    <div class="sb-row"><span>Policy</span></div>
+    <div class="sb-row"><span>Tuning</span></div>
+    <div class="sb-row"><span>Gaps</span></div>
+    <div class="sb-row"><span>Ledger</span></div>
+    <div class="sb-row"><span>Watchfloor</span></div>
+    <div class="sb-row"><span>Handoff</span></div>
+    <div class="sb-row"><span>Settings</span></div>
+  </div>`;
+}
+</script>
+
+<script>
+/* ==========================================================================
+   INBOX  ·  04 section 2.1
+   ========================================================================== */
+function qHead(label, count){
+  const c = count === null ? '<span class="c absent">count unavailable</span>'
+          : count === undefined ? ""
+          : `<span class="c">${count}</span>`;
+  return `<div class="q-head"><span class="eyebrow">${label}</span><span class="rule"></span>${c}</div>`;
+}
+
+/* C9 instrumentation strip. APPENDIX section 6 gives it a home — the queue-1
+   header on The Watch — and says nothing about height. Revision 1 spent four
+   lines there, between "HOLDS 4" and a CRITICAL kill with twelve minutes left.
+   One line stays; the rest is a disclosure. */
+function c9Strip(){
+  const c9 = c9For(S.state);
+  if (!c9) return "";
+  if (c9.measurements === 0){
+    return `<div class="c9">No verdicts recorded yet this week. These three numbers are how we
+      find out whether the loop is real.
+      <details><summary>what the three are</summary>
+      <span class="more">Median page-to-verdict, measurements written this week, and the share of this
+      week's tuning recommendations that came from this week's verdicts. They live here because
+      <span class="mono">/</span> is the only Phase-1 surface; the tuning bench, Handoff and the
+      Watchfloor restate them read-only and link back.</span></details></div>`;
+  }
+  return `<div class="c9">
+    <b>${c9.median}s</b> median · <b>${c9.measurements}</b> measurements · <b>${c9.fraction}</b> recommendations
+    <details><summary>what these three are, and the promotion bar</summary>
+      <span class="more"><b>${c9.median}s</b> median page-to-verdict. <b>${c9.measurements}</b> measurements
+      written this week. <b>${c9.fraction}</b> of this week's recommendations came from this week's verdicts.
+      <b>${c9.promoted}</b> promoted / <b>${c9.notPromoted}</b> did not clear the bar.
+      <b>${c9.reviewed} / ${c9.total}</b> findings reviewed this shift — Confirm, Dismiss and Investigate all
+      raise the denominator; only Dismiss records a false positive.</span></details>
+  </div>`;
+}
+
+function reconcileLine(){
+  const st = S.state;
+  if (st === "coldstart" || st === "loading") return "";
+  if (st === "daemondown"){
+    /* This sentence wraps. It is the only string on screen that says the queue
+       cannot be trusted, and revision 1 rendered it `white-space: nowrap` in a
+       365px pane: it overflowed by 19px and the detail pane painted over the
+       tail, so it read "…and it is unreachab". */
+    return `<div class="reconcile"><span class="warn">Cannot reconcile — the daemon is the
+      authority for which holds are open, and it is unreachable. Everything below came from
+      the relay.</span></div>`;
+  }
+  if (st === "divergence"){
+    return `<div class="reconcile">
+      <span class="warn">3 divergences between the relay queue and the daemon's open-hold list.</span>
+      <span class="tok mono">perch_queue_reconcile_divergences_total 17</span>
+      <span class="tok">·</span><span class="tok">reconciled 4s ago</span></div>`;
+  }
+  return `<div class="reconcile"><span class="tok">reconciled with the daemon 4s ago</span>
+    <span class="tok">·</span><span class="tok mono">0 divergences</span></div>`;
+}
+
+/* ---- the row -----------------------------------------------------------
+   Four lines, one anatomy. Line 2 is the subject and it is adversary-
+   controlled, so it gets the rail, it owns its line, and it never truncates.
+   ------------------------------------------------------------------------ */
+function holdRow(h, sel){
+  const tok  = SEV_TOKEN[h.sev];
+  const dead = h.div === "relay-only" || h.div === "superseded";
+  const c    = concentration(h.cls);
+  const left = holdLeft(h);
+  let note = "";
+  if (h.div === "daemon-only")
+    note = '<span class="divnote">Not in the relay queue — the notification may not have reached other operators.</span>';
+  else if (h.div === "relay-only")
+    note = '<span class="divnote dead">Decided or expired — the daemon no longer holds this.</span>';
+  else if (h.div === "relay-only-nodaemon")
+    note = '<span class="divnote">From relay backfill · unconfirmed against the daemon.</span>';
+  else if (h.div === "superseded")
+    note = '<span class="divnote hard">Another operator recorded the decision on this hold. Your console did not; nothing you press here will run.</span>';
+
+  return `<button class="row" data-id="${h.id}" data-sel="${sel ? 1 : 0}" data-dead="${dead ? 1 : 0}" onclick="select('${h.id}')">
+    <span class="rail4" style="background:hsl(var(${tok}))"></span>
+    <span class="row-l1">
+      <span class="verb">HELD</span><span class="sep">·</span>
+      <span class="kind">${h.action}</span>
+      <span class="spacer"></span>
+      ${sevChip(h.sev)}
+    </span>
+    <span class="row-l2">${adv(h.subject)}</span>
+    <span class="row-l3">
+      <span class="mono">${agentShort("ingest")}</span><span class="sep">·</span>
+      <span class="mono">${hhmm(h.heldAtMs)}</span>
+      <span class="grow"></span>
+      ${dead ? "" : `<span class="ttl">expires in ${dur(left)}</span>`}
+    </span>
+    <span class="row-l4">${sa(c.sources, c.agents)} · <span class="mono">${h.cls}</span></span>
+    ${note}
+    ${sel ? keys([["G", !dead], ["R", !dead], ["E", true], ["S", false], ["M", true]]) : ""}
+  </button>`;
+}
+
+function snoozeRow(sel){
+  return `<button class="row" data-id="sn1" data-sel="${sel ? 1 : 0}" onclick="select('sn1')">
+    <span class="rail4" style="background:hsl(var(--perch-border-strong))"></span>
+    <span class="row-l1">
+      <span class="verb">SNOOZE DUE</span><span class="sep">·</span>
+      <span class="kind">${SNOOZE_DUE.label}</span>
+      <span class="spacer"></span>
+      <span class="local">local</span>
+    </span>
+    <span class="row-l2">${adv(SNOOZE_DUE.host)}</span>
+    <span class="row-l3"><span class="mono">${SNOOZE_DUE.id}</span><span class="sep">·</span><span>${SNOOZE_DUE.line}</span></span>
+    <span class="row-l4"><span class="mono">kind:30300</span>, client-computed · <span class="mono">${SNOOZE_DUE.cls}</span></span>
+    ${sel ? keys([["Enter", true], ["S", true], ["M", true]]) : ""}
+  </button>`;
+}
+
+function findingRow(f, sel){
+  const pillar = AGENTS[f.agentKey].pillar;
+  const c = concentration(f.cls);
+  return `<button class="row" data-id="${f.id}" data-sel="${sel ? 1 : 0}" onclick="select('${f.id}')">
+    <span class="rail4" style="background:hsl(var(--perch-border-strong))"></span>
+    <span class="row-l1">
+      ${reviewMark(f.review)}
+      <span class="kind">${f.strategy}</span>
+      <span class="spacer"></span>
+      <span class="mono" style="font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted))">${hhmm(f.atMs)}</span>
+    </span>
+    <span class="row-l2">${adv(f.host)}</span>
+    <span class="row-l3">
+      <span class="mono">${agentShort(f.agentKey)}</span><span class="sep">·</span>
+      <span class="mono">${f.conf.toFixed(2)}</span>${confDots(f.conf, pillar)}
+      <span class="grow"></span>
+      <span${f.review === "reviewed" ? ' style="color:hsl(var(--perch-pillar-substrate-ink))"'
+           : f.review === "not-yet-correlated" ? ' style="color:hsl(var(--perch-sev-medium))"' : ""}>${
+        REVIEW_WORD[f.review]}${f.reviewAction ? " · " + f.reviewAction : ""}</span>
+    </span>
+    <span class="row-l4">${sa(c.sources, c.agents)} · <span class="mono">${f.cls}</span></span>
+    ${sel ? keys([["C", f.review !== "not-yet-correlated"], ["D", f.review !== "not-yet-correlated"],
+                  ["I", f.review !== "not-yet-correlated"], ["S", true], ["E", true]]) : ""}
+  </button>`;
+}
+
+function caseRow(c, sel){
+  return `<button class="row" data-id="${c.id}" data-sel="${sel ? 1 : 0}" onclick="select('${c.id}')">
+    <span class="rail4" style="background:hsl(var(--perch-border-pillar-evidence))"></span>
+    <span class="row-l1">
+      <span class="kind">${caseShort(c.caseKey)}</span>
+      <span class="spacer"></span>
+      <span class="mono" style="font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted))">${hhmm(c.at)}</span>
+    </span>
+    <span class="row-l2" style="font-size:var(--perch-text-sm)">${esc(c.line)}</span>
+    <span class="row-l4">a NIP-10 reply in a case channel you joined</span>
+    ${sel ? keys([["Enter", true], ["M", true]]) : ""}
+  </button>`;
+}
+
+function emptyBlock(mark, title, body, label, href){
+  return `<div class="emptystate">
+    <span class="mark">${MARKS[mark]}</span>
+    <h4>${title}</h4>
+    <p>${body}</p>
+    ${label ? `<a href="${href}" onclick="return false">${label} →</a>` : ""}
+  </div>`;
+}
+function skeletons(n){
+  let s = "";
+  for (let i = 0; i < n; i++) s += '<div class="skel"><i></i><i></i></div>';
+  return s;
+}
+
+function renderInbox(){
+  const st = S.state, el = document.getElementById("inbox"), sel = S.sel;
+
+  if (st === "coldstart"){
+    el.innerHTML = `
+    ${qHead("Holds")}
+    ${c9Strip()}
+    <div class="coldstart">
+      <h4>Loading the watch</h4>
+      <p>Nothing has arrived yet. Three things must land before this queue is trustworthy, and
+      they land in this order:</p>
+      <ol>
+        <li>REQ {kinds:[26006]} — the hold alarm subscription</li>
+        <li>query_needs_action — the relay's stored kind:46010 notices</li>
+        <li>GET /v1/response/holds — the daemon, which is the authority</li>
+      </ol>
+      <p class="small">Until step 3 answers, this queue shows what the relay has and says so. The
+      relay carries the notification; the daemon's open-hold list is the record.</p>
+    </div>`;
+    return;
+  }
+
+  if (st === "loading"){
+    el.innerHTML = `
+    ${qHead("Holds", null)}
+    ${c9Strip()}
+    ${skeletons(3)}
+    ${qHead("Findings to review", null)}
+    ${skeletons(4)}
+    ${qHead("Case activity", null)}
+    ${skeletons(1)}
+    <div style="padding:.25rem .75rem 1rem;font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-muted))">
+      Queue headings are real; counts read <span class="mono">count unavailable</span> rather than zero.</div>`;
+    return;
+  }
+
+  const holds = holdsFor(st).slice().sort((a, b) => a.heldAtMs - b.heldAtMs);
+  const finds = findingsFor(st), cases = caseActFor(st), c9 = c9For(st);
+  let html = "";
+
+  /* --- banners above queue 1 ------------------------------------------- */
+  if (st === "stale"){
+    html += `<div class="banner">
+      <span class="h eyebrow">Gap in the evidence stream</span>
+      Sequence 4,472 did not arrive; the next envelope was 4,478. 6 events are missing from this
+      view. This is a gap in what Perch received, not a gap in what the daemon recorded.
+      <div style="margin-top:.375rem"><a href="#" onclick="return false">Reconcile against the daemon →</a></div>
+    </div>
+    <div class="banner">
+      <span class="h eyebrow">Telemetry stale</span>
+      No concentration snapshot for 94s. The threat-class indicators in the sidebar are the last
+      received values, not current ones.
+    </div>`;
+  }
+  if (st === "daemondown"){
+    html += `<div class="banner down">
+      <span class="h eyebrow">Daemon unreachable</span>
+      Perch cannot reach swarm_detect at <span class="mono">${FX.daemonUrl}</span>. You can read
+      history; you cannot record a decision or release a containment. An open containment lease's
+      own 900s TTL is the only backstop while this lasts.
+    </div>`;
+  }
+  if (st === "highvolume"){
+    html += `<div class="banner">
+      <span class="h eyebrow">${holds.length} holds open</span>
+      A queue this deep is a tuning problem, not a staffing one.
+      <div style="margin-top:.375rem"><a href="#" onclick="return false">Open the tuning bench →</a></div>
+      <div class="meta" style="margin-top:.375rem">PERCH_QUEUE_DEPTH_ALARM = ${FX.queueDepthAlarm}.
+      The flat age-ordered list is retained: no grouping, no truncation, no cap.</div>
+    </div>`;
+  }
+
+  const allEmpty = holds.length === 0 && finds.length === 0 && cases.length === 0;
+
+  /* One empty state for the whole inbox when all four queues are zero.
+     Revision 1 stacked three near-identical blocks behind one repeated disc. */
+  if (allEmpty){
+    html += qHead("Holds", 0) + c9Strip() + reconcileLine();
+    html += `<div class="emptystate" style="max-width:26rem">
+      <span class="mark">${MARKS.threshold}</span>
+      <h4>Nothing is waiting on you</h4>
+      <p>No held actions, no due snoozes, no findings, no case activity. 6 destructive actions ran
+      in this window without a hold — below <span class="mono">human_gate_severity</span>, or
+      matched by an allow rule.</p>
+      <p>${FX.gaps.techniques} techniques across ${FX.gaps.detectors} detectors are declared
+      uncovered, so a quiet shift is partly a statement about coverage.</p>
+      <p><a href="/policy" onclick="return false">See which rule decided →</a></p>
+      <p><a href="/gaps" onclick="return false">See declared gaps →</a></p>
+    </div>
+    ${qHead("Findings to review", 0)}
+    ${qHead("Case activity", 0)}`;
+    el.innerHTML = html;
+    return;
+  }
+
+  /* --- queue 1 : HOLDS -------------------------------------------------- */
+  html += qHead("Holds", holds.length);
+  html += c9Strip();
+  html += reconcileLine();
+  if (holds.length) html += ADV_LEGEND_QUEUE;
+  if (holds.length === 0){
+    html += emptyBlock("threshold", "Nothing is waiting on you",
+      "No held actions, no due snoozes. 6 destructive actions ran in this window without a hold — below <span class='mono'>human_gate_severity</span>, or matched by an allow rule.",
+      "See which rule decided", "/policy");
+  } else {
+    holds.forEach(h => { html += holdRow(h, h.id === sel); });
+    if (["busy","quiet","divergence","highvolume"].includes(st)) html += snoozeRow(sel === "sn1");
+  }
+
+  /* --- queue 2 : NAMED YOU ---------------------------------------------
+     Deliberately not rendered. In a solo deployment its header is ABSENT,
+     not zero — nothing in Ambush names an operator. 04 section 2.1.        */
+
+  /* --- queue 3 : FINDINGS TO REVIEW ------------------------------------ */
+  html += qHead("Findings to review", finds.length && c9 ? `${c9.reviewed} / ${c9.total}` : 0);
+  if (st === "highvolume"){
+    html += `<div class="shed-row">
+      — 340 finding cards coalesced into 12 (bridge over budget 09:14:01–09:14:09) —
+      <details><summary>what was suppressed</summary>
+      <table>
+        <tr><td>execution</td><td>host-ops-1</td><td>184</td></tr>
+        <tr><td>data-exfiltration</td><td>build-agent-07</td><td>96</td></tr>
+        <tr><td>credential-access</td><td>mail-01</td><td>41</td></tr>
+        <tr><td>persistence</td><td>vpn-gw-02</td><td>19</td></tr>
+      </table></details>
+    </div>`;
+  }
+  if (finds.length === 0){
+    html += emptyBlock("trail", "No findings this shift",
+      `${FX.gaps.techniques} techniques across ${FX.gaps.detectors} detectors are declared uncovered — a quiet queue is partly a statement about coverage.`,
+      "See declared gaps", "/gaps");
+  } else {
+    finds.forEach(f => { html += findingRow(f, f.id === sel); });
+  }
+
+  /* --- queue 4 : CASE ACTIVITY ----------------------------------------- */
+  html += qHead("Case activity", cases.length);
+  if (cases.length === 0){
+    html += emptyBlock("region", "No open cases",
+      "A case opens when a destructive action is held, when a correlated incident includes 2 or more members, or when you promote a finding by hand. 24 findings did not clear that bar this shift.",
+      "Review the promotion bar", "/settings#case-promotion");
+  } else {
+    cases.forEach(c => { html += caseRow(c, c.id === sel); });
+  }
+
+  el.innerHTML = html;
+}
+</script>
+
+<script>
+/* ==========================================================================
+   DETAIL PANE — the Verdict Row
+   Render law 1: the five slots are a const array, in fixed order, and an
+   unfillable slot renders an explicit absence rather than collapsing.
+   ========================================================================== */
+const SLOTS = ["Action","Blast radius","If you undo","Why we are asking","What granting opens"];
+
+function provenanceBlock(cardKind){
+  return `<dl class="prov">
+    <dt class="eyebrow">Ambush record</dt>
+    <dd>ed25519 · <span class="state unatt">NO SIGNATURE OF ITS OWN</span>
+      <span class="note">This card is a copy. ${cardKind} carries no signature in Ambush today, so
+      nothing here can be checked offline. The daemon holds the record.</span>
+      <span class="note"><button class="chip" style="margin-top:.375rem;font-size:var(--perch-text-xs);padding:.25rem .5rem"
+        onclick="say('Re-reads this artifact from swarm_detect by id and compares it byte for byte with the copy on the relay. It checks no signature, because there is none to check.')">Check against the daemon</button></span>
+    </dd>
+    <dt class="eyebrow">Relay envelope</dt>
+    <dd><span class="state">secp256k1</span> · <span class="npub">${FX.bridgePubkey}</span>
+      <span class="note">Transport only. The envelope shows this card reached the relay from the
+      bridge's key and was not altered in transit. It says nothing about whether the daemon
+      produced it. The key is rendered whole: a truncated key is forgeable by vanity grinding.</span>
+    </dd>
+  </dl>`;
+}
+
+function detailHold(h){
+  const disabled = S.state === "daemondown" || h.div === "relay-only" || h.div === "superseded";
+  const expired    = h.div === "relay-only";
+  const superseded = h.div === "superseded";
+  const c    = concentration(h.cls);
+  const left = holdLeft(h);
+  const leases = CONTAINMENT_ACTIONS.includes(h.action);
+
+  const inverseRow = h.inverse
+    ? `<span class="head">Reversible — <span class="mono" style="display:inline;margin:0">${h.inverse}</span> on ${adv(h.blast.value)}.</span>
+       ${esc(h.inverseSummary)}. Release runs it and the receipt reports whether it worked, in five
+       RollbackStepStatus values — the receipt is the answer, not the 200.`
+    : `<span class="head neg">No executable inverse</span>
+       <span class="mono">resolve_inverse(${h.action}) → None</span>
+       No inverse operation is defined for ${h.action}. Undoing this is a manual operation on your
+       side. ${leases
+         ? "The containment lease stays in effect until its own TTL expires or you release it."
+         : "Nothing was contained, so there is nothing to release — the effect stands until you undo it by hand."}`;
+
+  /* WHAT GRANTING OPENS is TWO objects and they are never merged.
+     issue_lease mints a CAPABILITY lease for any allowed action at decision
+     time (policy.lease_ttl_ms = 60,000). A CONTAINMENT lease is a different
+     object with a different TTL (runtime.containment.lease_ttl_ms = 900,000)
+     and only 4 of the 12 destructive actions mint one. */
+  const leaseRow = `
+    <span class="head">capability lease · ${h.action} · scope ${h.blast.kind}:${esc(h.blast.value)} ·
+      ${FX.capabilityLeaseTtlMs / 1000}s</span>
+    Minted when you decide, not when the hold opened. It expires
+    ${FX.capabilityLeaseTtlMs / 1000}s after your decision whether or not the action has dispatched.
+    <span class="mono">${leases
+      ? `containment lease: yes — ${h.action} is one of the four containment actions.
+A ContainmentLease opens on /leases with its own ${FX.containmentLeaseTtlMs / 1000}s TTL, and a
+rollback receipt follows its release.`
+      : `containment lease: none — ${h.action} is not one of the four containment actions.
+Nothing opens on /leases, nothing counts down there, and no rollback receipt is produced.`}</span>`;
+
+  return `
+  <div class="detail-rail" style="background:hsl(var(--perch-pillar-authority-mark))"></div>
+  <div class="detail-inner">${crosshairs()}
+    <div class="d-title">
+      <div style="min-width:0">
+        <h2>${h.action}</h2>
+        <span class="sub">hold ${h.holdId} · ${caseShort(h.caseKey)} · opened ${hhmmss(h.heldAtMs)}Z<br>
+          channel ${CASES[h.caseKey].id}</span>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:.5rem;align-items:center;flex-shrink:0">
+        ${sevChip(h.sev)}
+        <span class="label-tight" style="color:hsl(var(--perch-sev-high));border:1px solid hsl(var(--perch-border-pillar-authority));border-radius:9999px;padding:5px 8px 4px">Destructive</span>
+      </div>
+    </div>
+
+    ${ADV_LEGEND}
+
+    <dl class="fields">
+      <dt class="eyebrow">${SLOTS[0]}</dt>
+      <dd><span class="head">${{
+          isolate_host:      "Cut all network connectivity for ",
+          block_egress:      "Block all network egress to ",
+          quarantine_file:   "Move to the quarantine store: ",
+          revoke_credential: "Revoke the credential for ",
+        }[h.action]}${adv(h.subject)}.</span>${ADV_LABEL}
+        <span class="mono">${h.subjectLabel} = ${esc(h.subject)}
+${h.detail.map(([k, v]) => `${k.padEnd(18)}${v}`).join("\n")}</span>
+      </dd>
+
+      <dt class="eyebrow">${SLOTS[1]}</dt>
+      <dd>
+        <div class="notch" style="--nh:var(--perch-pillar-evidence-mark)">
+          <span class="nlabel label-tight">Blast radius</span>
+          <span class="nannot">ResponseBlastRadiusPreview · simulated_only: true</span>
+          <span class="core">${esc(h.blast.impact)} · scope ${esc(h.blast.kind)}</span>
+          <span class="mono" style="display:block;margin-top:.375rem;color:hsl(var(--perch-foreground-muted))">scope_value       ${esc(h.blast.value)}
+max_affected      ${h.blast.max}
+capabilities      ${h.blast.caps.join(", ")}</span>
+          <span style="display:block;margin-top:.5rem">${esc(h.blast.summary)}. ${ADV_LABEL}</span>
+        </div>
+      </dd>
+
+      <dt class="eyebrow">${SLOTS[2]}</dt>
+      <dd>${inverseRow}</dd>
+
+      <dt class="eyebrow">${SLOTS[3]}</dt>
+      <dd><span class="head">No policy rule matched → the static gate asked for a human.</span>
+        The static gate asks a human for any destructive action at ${FX.humanGateSeverity} or above.
+        This request is ${h.sev}.
+        <span class="mono">rule_name    static.human_gate
+verdict      require_human
+threat_class ${h.cls}                (request-carried)
+severity     ${h.sev}                (request-carried)
+concentration ${c.total.toFixed(6)} · ${sa(c.sources, c.agents)} · peak ${c.peak.toFixed(2)}</span>
+        <a href="/policy" onclick="return false">See /policy — 3 rules, none matched this triple</a>
+      </dd>
+
+      <dt class="eyebrow">${SLOTS[4]}</dt>
+      <dd>${leaseRow}</dd>
+    </dl>
+
+    <div class="hr"></div>
+    <div class="ev-head">
+      <span class="t eyebrow">Evidence</span>
+      <span class="n">${sa(c.sources, c.agents)}</span>
+      <span style="color:hsl(var(--perch-pillar-evidence-mark))">${trailSVG()}</span>
+    </div>
+    ${evidenceTable(h.cls)}
+    ${sourceNote(c)}
+
+    <div class="hr"></div>
+    ${provenanceBlock("ambush:hold:v1")}
+
+    <div class="hr"></div>
+    ${expired
+      ? `<div class="toast">This hold expired at ${hhmmss(holdExpiresMs(h))}Z and nothing was
+         dispatched. The row stays in this queue for the shift.
+         <a href="/ledger" onclick="return false" style="color:hsl(var(--perch-pillar-evidence-ink))">open in the Ledger</a></div>`
+      : superseded
+      ? `<div class="toast bad"><b>Another operator's decision is the one that executed.</b>
+         The daemon's compare-and-set into <span class="mono">deciding</span> admitted one console
+         and returned <span class="mono">409 hold_already_deciding</span> to this one. Your signed
+         intent card is on the relay and is permanent; it is not the decision.
+         <span style="display:block;margin-top:.375rem;color:hsl(var(--perch-foreground-muted))">
+         This state needs a wire value that does not exist yet — see the Spec notes, open item O-1.
+         </span></div>`
+      : `<button class="grant" data-armed="${S.grantArmed ? 1 : 0}" ${disabled ? "disabled" : ""} onclick="armGrant()">
+           Record my decision and send it to the daemon <kbd style="float:right">G</kbd>
+         </button>
+         ${S.grantArmed ? `<div class="armed"><span class="h eyebrow">Armed</span>
+           A second stroke records. It is gated on the BLAST RADIUS block having been fully visible
+           for 1500 ms on this hold_id, and it is ignored on key-repeat. The two-stroke gate, its
+           dwell timer and its confirmation are drawn in
+           <span class="mono" style="display:inline;margin:0">prototypes/verdict-hold.html</span>,
+           which owns the hold state of this pane.</div>` : ""}
+         <div class="controls" style="margin-top:.5rem">
+           <button class="chip refuse" ${S.state === "daemondown" ? "disabled" : ""} onclick="say('Refused. Recorded as a signed refusal in this case, and posted separately to the daemon. Nothing dispatches.')">Refuse <span class="g">R</span></button>
+           <button class="chip" onclick="say('Promote opens a case channel and the incident record a verdict needs. It does not route this to anyone — no operator directory exists in either tree.')">Promote to a case <span class="g">E</span></button>
+           <button class="chip" disabled>Snooze <span class="g">S</span></button>
+         </div>
+         <div class="ctl-hint">
+           Perch does not authorize. The daemon re-derives policy and governance from scratch before
+           anything dispatches, in a different process.
+           <span class="dis">Snooze is disabled: a held action cannot be snoozed. It expires on its
+           own in ${dur(left)} and nothing runs. Refuse it (R) if you do not want it to run.</span>
+         </div>
+         <div class="ctl-hint expiry">This hold expires in ${dur(left)}. After that the daemon
+           dispatches nothing.</div>
+         ${disabled && S.state === "daemondown"
+           ? `<div class="toast bad">Cannot reach the daemon. Nothing has been published and no
+              decision has been delivered.
+              <button class="chip" style="padding:.125rem .375rem;font-size:var(--perch-text-xs)" onclick="say('Retry queued. It re-sends identical signed bytes; the relay dedupes by event id.')">retry</button></div>`
+           : ""}
+      `}
+    ${S.toast ? `<div class="toast">${esc(S.toast)}</div>` : ""}
+  </div>`;
+}
+
+/* Evidence, grouped by real agent — render law 2's expansion. */
+function evidenceTable(cls){
+  if (!S.evidenceOpen) return "";
+  const byAgent = {};
+  (LANE_DEPOSITS[cls] || []).forEach(([ago, conf, agentKey, strategyId, eventId]) => {
+    (byAgent[agentKey] = byAgent[agentKey] || []).push([strategyId, conf, ago, eventId]);
+  });
+  let rows = "";
+  Object.keys(byAgent).forEach(k => {
+    const strategies = new Set(byAgent[k].map(d => d[0]));
+    rows += `<tr><td class="ev-group" colspan="3">${agentFull(k)} — ${sa(strategies.size, 1)}</td></tr>`;
+    byAgent[k].forEach(([strategyId, conf, ago]) => {
+      rows += `<tr><td>${agentShort(k)}:${strategyId}</td>
+        <td class="r">${conf.toFixed(2)} ${confDots(conf, AGENTS[k].pillar)} → ${strengthAt(conf, ago).toFixed(3)}</td>
+        <td class="r">${hhmmss(FX.nowMs - ago * 1000)}Z</td></tr>`;
+    });
+  });
+  return `<table class="ev-table">${rows}</table>`;
+}
+
+/* Render law 2's explanation. No glyph: copy-ban-list row `shield-glyph` is P0
+   and its pattern carries the warning sign with no exemption. The caution
+   register here is a 2px leading rail plus an eyebrow plus words. */
+function sourceNote(c){
+  return `<div class="ev-note">
+    <span class="h">How this count is made</span>
+    ${sa(c.sources, c.agents)} — that is ${c.sources} strategy-scoped ids resolving to ${c.agents}
+    real agent${c.agents === 1 ? "" : "s"}, against a min_sources_for_escalation of ${FX.minSources}.
+    resolve_deposits writes each deposit's agent_id as
+    <span class="mono" style="display:inline;margin:0">{agent}:{strategy_id}</span>, so one agent
+    running ${c.sources} detectors clears the bar on its own.
+  </div>`;
+}
+</script>
+
+<script>
+/* Dismiss arithmetic. Suppression is keyed on (threat_class, event_id), so it
+   reaches detectors the operator never reviewed. Both branches are reachable in
+   this fixture: f1/f2/f4 cross alert_threshold and open the modal, f5/f7 do not
+   and commit inline. Every number is recomputed, never typed. */
+function dismissPreview(f){
+  const before = concentration(f.cls);
+  const after  = concentration(f.cls, [f.eventId]);
+  return {
+    before: before.total, after: after.total,
+    removed: before.deposits - after.deposits,
+    crosses: before.total >= FX.alertThreshold && after.total < FX.alertThreshold,
+    beforeC: before, afterC: after,
+  };
+}
+
+function detailFinding(f){
+  const pillar = AGENTS[f.agentKey].pillar;
+  const ntc = f.review === "not-yet-correlated";
+  const daemonDown = S.state === "daemondown";
+  const dis = ntc || daemonDown;
+  const c = concentration(f.cls);
+  const d = dismissPreview(f);
+
+  return `
+  <div class="detail-rail" style="background:hsl(var(--perch-pillar-substrate-mark))"></div>
+  <div class="detail-inner">${crosshairs()}
+    <div class="d-title">
+      <div style="min-width:0">
+        <h2>${f.strategy}</h2>
+        <span class="sub">finding ${f.findingId} · ${hhmmss(f.atMs)}Z · ${f.technique}<br>
+          telemetry event ${f.eventId} · ${f.caseKey ? caseShort(f.caseKey) : "no case"}</span>
+      </div>
+      <div style="margin-left:auto;flex-shrink:0">
+        <span class="label-tight" style="color:hsl(var(--perch-foreground-muted));border:1px solid hsl(var(--perch-border-strong));border-radius:9999px;padding:5px 8px 4px">Detection · not an action</span>
+      </div>
+    </div>
+
+    ${ADV_LEGEND}
+
+    <dl class="fields">
+      <dt class="eyebrow">${SLOTS[0]}</dt>
+      <dd><span class="head">${esc(f.strategy)} fired on ${adv(f.host)}.</span>${ADV_LABEL}
+        <span class="mono">host_id      ${esc(f.host)}
+strategy_id  ${f.strategy}
+event_id     ${f.eventId}
+confidence   ${f.conf.toFixed(2)}
+agent_id     ${agentFull(f.agentKey)}</span>
+      </dd>
+
+      <dt class="eyebrow">${SLOTS[1]}</dt>
+      <dd>
+        <div class="notch" style="--nh:var(--perch-foreground-muted)">
+          <span class="nlabel label-tight">Blast radius</span>
+          <span class="nannot">no ActionRequest exists</span>
+          <span class="core absent">None — this is a detection, not an action.</span>
+          <span class="mono" style="display:block;margin-top:.375rem;color:hsl(var(--perch-foreground-muted))">Nothing has run. The slot renders because the order is fixed, not because it has an answer.</span>
+        </div>
+      </dd>
+
+      <dt class="eyebrow">${SLOTS[2]}</dt>
+      <dd><span class="head absent">Nothing ran, so nothing can be reversed.</span>
+        Dismiss is the only verb here that rewrites stored state — it suppresses deposits, and the
+        preview below shows the arithmetic before you commit.
+      </dd>
+
+      <dt class="eyebrow">${SLOTS[3]}</dt>
+      <dd>
+        ${ntc
+          ? `<span class="head neg">No incident record — feedback needs one.</span>
+             SwarmProvidenceFeedbackRequest carries a required incident_id and the handler returns
+             not-found when the incident store cannot resolve it. Promote to a case (E) to create
+             it; the verdict controls enable when it exists.`
+          : `<span class="head">No policy gate is involved. The tuning loop is why you are here.</span>
+             A verdict writes a FalsePositiveMeasurement onto this finding's incident, and
+             build_alert_tuning_report reads measurements only off persisted IncidentRecords.`}
+        <span class="mono">detector-rule review   ${FX.tuning.rule[0]} reviewed · ${FX.tuning.rule[1]} false positive · rate ${FX.tuning.rule[2].toFixed(2)}
+detector-threshold     ${FX.tuning.threshold[0]} reviewed · ${FX.tuning.threshold[1]} false positive · rate ${FX.tuning.threshold[2].toFixed(2)}
+host exclusion         ${FX.tuning.host[0]} reviewed · ${FX.tuning.host[1]} false positive · rate ${FX.tuning.host[2].toFixed(2)}</span>
+        <a href="/tuning" onclick="return false">See /tuning — at most ${FX.tuning.cap} recommendations</a>
+      </dd>
+
+      <dt class="eyebrow">${SLOTS[4]}</dt>
+      <dd><span class="head absent">Nothing — feedback opens no capability lease.</span>
+        Confirm, Dismiss and Investigate all raise the reviewed denominator; only Dismiss sets
+        <span class="mono" style="display:inline;margin:0">false_positive: true</span>.
+      </dd>
+    </dl>
+
+    <div class="hr"></div>
+    <div class="ev-head">
+      <span class="t eyebrow">Evidence</span>
+      <span class="n">${sa(c.sources, c.agents)}</span>
+      <span style="color:hsl(var(--perch-pillar-evidence-mark))">${trailSVG()}</span>
+      <button class="chip" style="margin-left:auto;padding:.1875rem .4375rem;font-size:var(--perch-text-xs)"
+        onclick="S.evidenceOpen=!S.evidenceOpen;render()">${S.evidenceOpen ? "collapse" : "expand"}</button>
+    </div>
+    ${evidenceTable(f.cls)}
+    ${sourceNote(c)}
+
+    ${S.dismissArmed ? `<div class="armed">
+      <span class="h eyebrow">Dismiss armed — press D again to commit</span>
+      Dismissing records <span class="mono" style="display:inline;margin:0">false_positive: true</span>
+      and drops every deposit carrying event id ${f.eventId} in threat class ${f.cls}, from every
+      detector, with a timestamp at or before this marker.
+      <table>
+        <tr><td>deposits removed</td><td class="v">${plural(d.removed, "deposit")}</td></tr>
+        <tr><td>total_strength</td><td class="v">${d.before.toFixed(6)} → ${d.after.toFixed(6)}</td></tr>
+        <tr><td>sources / agents</td><td class="v">${sa(d.beforeC.sources, d.beforeC.agents)} → ${sa(d.afterC.sources, d.afterC.agents)}</td></tr>
+        <tr><td>alert_threshold</td><td class="v">${FX.alertThreshold.toFixed(2)}</td></tr>
+        <tr><td>crosses the line</td><td class="v" style="color:${d.crosses ? "hsl(var(--perch-sev-medium))" : "hsl(var(--perch-foreground-muted))"}">${d.crosses ? "yes — a dialog will confirm" : "no"}</td></tr>
+      </table>
+      Suppression is keyed on (threat class, event id), not on the detector, so detectors you have
+      not reviewed are suppressed too. It appears as an explicit suppression row on the lane
+      timeline.
+    </div>` : ""}
+
+    <div class="hr"></div>
+    ${provenanceBlock("ambush:finding:v1")}
+
+    <div class="hr"></div>
+    <div class="controls">
+      <button class="chip confirm" ${dis ? "disabled" : ""} onclick="verdict('Confirm')">Confirm <span class="g">C</span></button>
+      <button class="chip dismiss" ${dis ? "disabled" : ""} onclick="armDismiss()">Dismiss <span class="g">D</span></button>
+      <button class="chip investigate" ${dis ? "disabled" : ""} onclick="verdict('Investigate')">Investigate <span class="g">I</span></button>
+      <span style="width:.5rem"></span>
+      <button class="chip" onclick="S.overlay='snooze';render()">Snooze <span class="g">S</span></button>
+      <button class="chip" onclick="say('Promote opens a case channel and the incident record a verdict needs. It does not route this to anyone — no operator directory exists in either tree.')">Promote to a case <span class="g">E</span></button>
+    </div>
+    <div class="ctl-hint">
+      ${ntc ? `<span class="dis">Verdict controls are disabled: no incident record, and feedback needs one. Promote to a case (E) to create it.</span>`
+            : daemonDown ? `<span class="dis">Verdict controls are disabled: Perch cannot reach swarm_detect at ${FX.daemonUrl}. You can read history; you cannot record a decision.</span>`
+            : `Confirm records a reviewed finding that was real. Investigate is reviewed, not resolved. Dismiss records a false positive and suppresses deposits — read the dialog.`}
+    </div>
+    ${S.overlay === "snooze" ? `<div class="snoozemenu">${SNOOZE_PRESETS.map(p =>
+      `<button onclick="say('Snoozed — ${p}. Returns to Holds at the time you picked. This is a local kind:30300 reminder, encrypted to yourself; it never enters the relay queue.');S.overlay=null;render()">${p}</button>`).join("")}</div>` : ""}
+    ${S.toast ? `<div class="toast">${esc(S.toast)}</div>` : ""}
+  </div>`;
+}
+
+function detailCase(c){
+  return `
+  <div class="detail-rail" style="background:hsl(var(--perch-pillar-evidence-mark))"></div>
+  <div class="detail-inner">${crosshairs()}
+    <div class="d-title"><div><h2>${caseShort(c.caseKey)}</h2>
+      <span class="sub">${esc(c.line)} · ${hhmmss(c.at)}Z<br>channel ${CASES[c.caseKey].id}</span></div></div>
+    <dl class="fields">
+      <dt class="eyebrow">${SLOTS[0]}</dt>
+      <dd><span class="head absent">No action and no finding is selected.</span>
+        Case activity is movement on a case you joined. The five verdict slots have nothing to fill
+        and render as absences rather than collapsing.</dd>
+      <dt class="eyebrow">${SLOTS[1]}</dt><dd><span class="absent">None — no action was requested here.</span></dd>
+      <dt class="eyebrow">${SLOTS[2]}</dt><dd><span class="absent">Nothing ran.</span></dd>
+      <dt class="eyebrow">${SLOTS[3]}</dt><dd><span class="absent">Nothing is asking.</span> This row is here because you are a member of the case channel.</dd>
+      <dt class="eyebrow">${SLOTS[4]}</dt><dd><span class="absent">Nothing.</span></dd>
+    </dl>
+    <div class="hr"></div>
+    <div class="controls">
+      <button class="chip" onclick="say('Opens the case channel.')">Open the case <span class="g">Enter</span></button>
+      <button class="chip" onclick="say('Marked done. localStorage only, per-pubkey, capped at 500 items. It is not a decision record.')">Mark done <span class="g">M</span></button>
+    </div>
+    <div class="ctl-hint">Read, Done, Reviewed and Decided are four different facts, and this row
+      can only change one of them.</div>
+    ${S.toast ? `<div class="toast">${esc(S.toast)}</div>` : ""}
+  </div>`;
+}
+
+function detailSnooze(){
+  return `
+  <div class="detail-rail" style="background:hsl(var(--perch-border-strong))"></div>
+  <div class="detail-inner">${crosshairs()}
+    <div class="d-title"><div><h2>${SNOOZE_DUE.label}</h2>
+      <span class="sub">a snoozed item is back · ${SNOOZE_DUE.line}</span></div>
+      <span style="margin-left:auto" class="local">local</span></div>
+    ${ADV_LEGEND}
+    <dl class="fields">
+      <dt class="eyebrow">${SLOTS[0]}</dt>
+      <dd><span class="head">A finding you snoozed on ${adv(SNOOZE_DUE.host)} has come due.</span>${ADV_LABEL}
+        <span class="mono">kind:30300 · NIP-44 encrypted to yourself · no p tag</span></dd>
+      <dt class="eyebrow">${SLOTS[1]}</dt><dd><span class="absent">None — this is a reminder, not an action.</span></dd>
+      <dt class="eyebrow">${SLOTS[2]}</dt><dd><span class="absent">Nothing ran.</span></dd>
+      <dt class="eyebrow">${SLOTS[3]}</dt>
+      <dd><span class="head">You asked to be shown this again.</span>
+        Nothing on the relay put it here. A due snooze can never enter the needs-action feed —
+        the reminder carries no p tag — so Perch computes the due time in the console and marks the
+        row <span class="mono" style="display:inline;margin:0">local</span>.</dd>
+      <dt class="eyebrow">${SLOTS[4]}</dt><dd><span class="absent">Nothing.</span></dd>
+    </dl>
+    <div class="hr"></div>
+    <div class="controls">
+      <button class="chip" onclick="select('f4')">Open the finding <span class="g">Enter</span></button>
+      <button class="chip" onclick="S.overlay='snooze';render()">Snooze again <span class="g">S</span></button>
+    </div>
+    <div class="ctl-hint">Marked <span class="mono" style="display:inline;margin:0">local</span>
+      because it is the console's own state, not the daemon's. Render law 4.</div>
+    ${S.overlay === "snooze" ? `<div class="snoozemenu">${SNOOZE_PRESETS.map(p =>
+      `<button onclick="say('Snoozed — ${p}.');S.overlay=null;render()">${p}</button>`).join("")}</div>` : ""}
+    ${S.toast ? `<div class="toast">${esc(S.toast)}</div>` : ""}
+  </div>`;
+}
+
+function renderDetail(){
+  const el = document.getElementById("detail"), st = S.state;
+  if (st === "coldstart" || st === "loading"){
+    el.innerHTML = `<div class="detail-rail" style="background:hsl(var(--perch-border-strong))"></div>
+      <div class="detail-inner"><div class="emptystate">
+      <span class="mark">${MARKS.region}</span>
+      <h4>${st === "loading" ? "Loading the held action" : "Nothing selected yet"}</h4>
+      <p>${st === "loading"
+        ? "The five verdict fields render in a fixed order. They appear together or not at all."
+        : "The verdict pane fills when the queue does. It never renders a partial field set."}</p></div></div>`;
+    return;
+  }
+  const r = selected();
+  if (!r){
+    /* 06 section 5.2's watchAll copy assumes the substrate is quiet too. It is
+       not here, and saying "nothing crossed a threshold" over a lane at 2.65
+       against 2.0 would be false. Both branches render. */
+    const top = LANE_ORDER.map(slug => ({ slug, c: concentration(slug) }))
+      .sort((a, b) => b.c.total - a.c.total)[0];
+    const above = top.c.total >= FX.alertThreshold;
+    el.innerHTML = `<div class="detail-rail" style="background:hsl(var(--perch-border-strong))"></div>
+      <div class="detail-inner"><div class="emptystate" style="max-width:30rem">
+      <span class="mark">${MARKS.threshold}</span>
+      <h4>The watch is clear</h4>
+      <p>Last deposit landed 6m ago. Mode is Normal.</p>
+      <p>${above
+        ? `That is not the same as quiet. The busiest threat class, ${top.slug}, is at
+           ${top.c.total.toFixed(2)} against an alert threshold of ${FX.alertThreshold.toFixed(1)},
+           from ${sa(top.c.sources, top.c.agents)}. An alert is not a hold: nothing there has
+           requested a destructive action, so nothing is waiting on you.`
+        : `Nothing here means nothing crossed a threshold, not that nothing happened — the busiest
+           threat class, ${top.slug}, is at ${top.c.total.toFixed(2)} against an alert threshold of
+           ${FX.alertThreshold.toFixed(1)}.`}</p>
+      <a href="/watch-floor" onclick="return false">Open the Watchfloor →</a></div></div>`;
+    return;
+  }
+  if (r.kind === "hold")         el.innerHTML = detailHold(r.data);
+  else if (r.kind === "finding") el.innerHTML = detailFinding(r.data);
+  else if (r.kind === "case")    el.innerHTML = detailCase(r.data);
+  else                           el.innerHTML = detailSnooze();
+}
+</script>
+
+<script>
+/* ==========================================================================
+   OVERLAYS: the omnibox (query + command) and the Dismiss dialog
+   ========================================================================== */
+function renderOverlay(){
+  const el = document.getElementById("overlay");
+  if (S.overlay === "omni-query"){
+    el.innerHTML = `<div class="scrim" onclick="if(event.target===this){S.overlay=null;render()}">
+      <div class="omni" role="dialog" aria-label="Ledger query">
+        <div class="omni-input">
+          <span class="omni-scope">Ledger · everything</span>
+          <span class="omni-q">in:${CASES.caseA.id.slice(0,8)} after:2026-03-17 block_egress<span class="caret"></span></span>
+        </div>
+        <div class="omni-sec eyebrow">Matches — 12</div>
+        <div class="omni-item" data-sel="1"><span class="mono">ambush:hold:v1</span> block_egress · 198.51.100.20 <span class="m">${caseShort("caseA")} · 09:14</span></div>
+        <div class="omni-item"><span class="mono">ambush:receipt:v1</span> isolate_host · dispatched <span class="m">${caseShort("caseA")} · 09:16</span></div>
+        <div class="omni-item"><span class="mono">ambush:verdict:v1</span> refuse · block_egress <span class="m">${caseShort("caseC")} · 08:41</span></div>
+        <div class="omni-item"><span class="mono">ambush:finding:v1</span> suspicious_scripting · host-ops-1 <span class="m">execution · 09:14</span></div>
+        <div class="omni-foot">
+          <span class="mono">from:</span> <span class="mono">in:</span> <span class="mono">after:</span>
+          <span class="mono">before:</span> are operators.
+          <span class="mono">class:</span> <span class="mono">action:</span> <span class="mono">host:</span>
+          <span class="mono">agent:</span> are text terms, not filters — strategy_id, host_id,
+          receipt_id and lease_id are searchable as text but not selectable as filters, because
+          NIP-01 indexes only single-letter tags and these events are signed.
+          <div style="margin-top:.375rem">Type <span class="mono">&gt;</span> to switch to commands.
+          <kbd>Esc</kbd> closes.</div>
+        </div>
+      </div></div>`;
+    return;
+  }
+  if (S.overlay === "omni-cmd"){
+    el.innerHTML = `<div class="scrim" onclick="if(event.target===this){S.overlay=null;render()}">
+      <div class="omni" role="dialog" aria-label="Commands">
+        <div class="omni-input">
+          <span class="omni-scope">Command</span>
+          <span class="omni-q">&gt; <span class="caret"></span></span>
+        </div>
+        <div class="omni-sec eyebrow">Commands</div>
+        <div class="omni-item" data-sel="1">&gt; take the watch <span class="m">/handoff</span></div>
+        <div class="omni-item">&gt; end watch <span class="m">/handoff</span></div>
+        <div class="omni-item">&gt; release containment ${CONTAINMENT.a} <span class="m">Containments</span></div>
+        <div class="omni-item">&gt; open gaps <span class="m">/gaps</span></div>
+        <div class="omni-item">&gt; export this result set <span class="m">/ledger</span></div>
+        <div class="omni-foot">
+          Commands that write are never executed on <kbd>Enter</kbd> alone — they open the surface
+          with the action staged. The palette is navigation and staging, never a second
+          authorization path.
+        </div>
+      </div></div>`;
+    return;
+  }
+  if (S.overlay === "dismiss"){
+    const r = selected();
+    const f = r && r.kind === "finding" ? r.data : FINDINGS[0];
+    const d = dismissPreview(f);
+    el.innerHTML = `<div class="scrim" onclick="if(event.target===this){S.overlay=null;render()}">
+      <div class="modal" role="dialog" aria-modal="true">
+        <h3>Dismiss this finding and suppress ${plural(d.removed, "deposit")}?</h3>
+        <p>Dismissing records <span class="mono">false_positive: true</span> and drops every deposit
+        that carries this finding's telemetry event id <span class="mono">${f.eventId}</span> in
+        threat class <span class="mono">${f.cls}</span>, from every detector, with a timestamp at or
+        before this marker — ${plural(d.removed, "deposit")},
+        ${sa(d.beforeC.sources, d.beforeC.agents)} before, ${sa(d.afterC.sources, d.afterC.agents)} after.</p>
+        <table>
+          <tr><td>concentration for ${f.cls}</td><td class="v">${d.before.toFixed(6)} → ${d.after.toFixed(6)}</td></tr>
+          <tr><td>alert_threshold</td><td class="v">${FX.alertThreshold.toFixed(2)}</td></tr>
+        </table>
+        <p>This lane will fall below its alert threshold. Suppression is keyed on
+        (threat class, event id), not on the detector, so detectors you have not reviewed are
+        suppressed too. It appears as an explicit suppression row on the lane timeline.</p>
+        <div class="acts">
+          <button class="chip dismiss" onclick="S.overlay=null;S.dismissArmed=false;say('Dismissed and suppressed. Recorded by ${FX.operatorId} in Perch at ${hhmmss(FX.nowMs)}Z.');render()">Dismiss and suppress</button>
+          <button class="chip" onclick="S.overlay=null;S.dismissArmed=false;render()">Cancel</button>
+        </div>
+      </div></div>`;
+    return;
+  }
+  el.innerHTML = "";
+}
+
+/* ==========================================================================
+   PROTOTYPE STATE PANEL
+   ========================================================================== */
+function renderStates(){
+  const b = document.getElementById("statesbody");
+  const on = (g, v) =>
+    (g === "state" && S.state === v) ||
+    (g === "ov" && (S.overlay || "null") === v) ||
+    (g === "sel" && S.sel === v) ||
+    (g === "theme" && (S.theme || "system") === v) ? 1 : 0;
+  const btn = (g, v, label) => `<button data-on="${on(g, v)}" onclick="setG('${g}','${v}')">${label}</button>`;
+  b.innerHTML = `
+  <div class="grp"><span>State</span><div class="btns">
+    ${STATES.map(s => btn("state", s, STATE_LABEL[s])).join("")}
+  </div></div>
+  <div class="grp"><span>Detail</span><div class="btns">
+    ${btn("sel","hA","hold · leased")}
+    ${btn("sel","hD","hold · unleased")}
+    ${btn("sel","f1","finding")}
+    ${btn("sel","f6","not yet correlated")}
+    ${btn("sel","f3","reviewed finding")}
+    ${btn("sel","sn1","due snooze")}
+    ${btn("sel","c1","case activity")}
+  </div></div>
+  <div class="grp"><span>Overlay</span><div class="btns">
+    ${btn("ov","omni-query","⌘K query")}
+    ${btn("ov","omni-cmd","⌘K command")}
+    ${btn("ov","dismiss","dismiss dialog")}
+    ${btn("ov","null","none")}
+  </div></div>
+  <div class="grp"><span>Theme</span><div class="btns">
+    ${btn("theme","system","system")}
+    ${btn("theme","light","light")}
+    ${btn("theme","dark","dark")}
+  </div></div>
+  <div class="note"><kbd>J</kbd><kbd>K</kbd> move · <kbd>C</kbd><kbd>D</kbd><kbd>I</kbd> verdict ·
+  <kbd>S</kbd> snooze · <kbd>E</kbd> promote · <kbd>G</kbd><kbd>R</kbd> hold ·
+  <kbd>M</kbd><kbd>U</kbd> local · <kbd>⌘K</kbd> omnibox ·
+  <kbd>Esc</kbd> closes, never marks read</div>`;
+}
+function applyTheme(){
+  const root = document.documentElement;
+  root.classList.remove("light", "dark");
+  if (S.theme) { root.setAttribute("data-theme", S.theme); root.classList.add(S.theme); }
+  else root.removeAttribute("data-theme");
+}
+function setG(g, v){
+  if (g === "state"){
+    S.state = v; S.dismissArmed = false; S.grantArmed = false; S.toast = null;
+    reselect();
+  }
+  if (g === "ov")    S.overlay = v === "null" ? null : v;
+  if (g === "sel"){  S.sel = v; S.dismissArmed = false; S.grantArmed = false; S.toast = null; }
+  if (g === "theme"){ S.theme = v === "system" ? null : v; applyTheme(); }
+  pushHash(); render();
+}
+function reselect(){
+  const rows = orderedRows();
+  if (rows.find(r => r.id === S.sel)) return;
+  const hold = rows.find(r => r.kind === "hold" && !["relay-only","superseded"].includes(r.data.div));
+  const find = rows.find(r => r.kind === "finding" && r.data.review === "unreviewed");
+  S.sel = ((hold || find || rows[0]) || {}).id;
+}
+function toggleStates(){
+  const p = document.getElementById("states");
+  S.minStates = !S.minStates;
+  p.setAttribute("data-min", S.minStates ? "1" : "0");
+  document.getElementById("stbtn").textContent = S.minStates ? "show" : "hide";
+}
+
+/* ==========================================================================
+   INTERACTION
+   ========================================================================== */
+function select(id){ S.sel = id; S.dismissArmed = false; S.grantArmed = false; S.toast = null; pushHash(); render(); }
+function say(m){ S.toast = m; render(); }
+function verdict(v){
+  const r = selected();
+  if (!r || r.kind !== "finding") return;
+  say(`${v} recorded. Recorded by ${FX.operatorId} in Perch at ${hhmmss(FX.nowMs)}Z. The daemon's own receipt shows that a human was asked, not which one answered.`);
+}
+function armDismiss(){
+  const r = selected();
+  if (!r || r.kind !== "finding") return;
+  const f = r.data, d = dismissPreview(f);
+  if (!S.dismissArmed){ S.dismissArmed = true; render(); return; }
+  if (d.crosses){ S.overlay = "dismiss"; render(); return; }
+  S.dismissArmed = false;
+  say(`Dismissed and suppressed. ${plural(d.removed, "deposit")} removed; concentration for ${f.cls} ${d.before.toFixed(6)} → ${d.after.toFixed(6)} against an alert threshold of ${FX.alertThreshold.toFixed(2)}. It did not cross the line.`);
+}
+function armGrant(){
+  if (!S.grantArmed){ S.grantArmed = true; render(); return; }
+  say("The second stroke is gated on the BLAST RADIUS dwell timer, which lives in prototypes/verdict-hold.html.");
+}
+
+window.addEventListener("keydown", (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === "k"){
+    e.preventDefault();
+    S.overlay = S.overlay === "omni-query" ? "omni-cmd" : "omni-query";
+    render(); return;
+  }
+  if (e.key === "Escape"){
+    /* Escape closes the topmost surface and NEVER marks read. Buzz binds bare
+       Escape to mark-channel-read; a queue must not be clearable by accident. */
+    if (S.overlay){ S.overlay = null; render(); return; }
+    if (S.dismissArmed || S.grantArmed){ S.dismissArmed = false; S.grantArmed = false; render(); return; }
+    if (S.toast){ S.toast = null; render(); }
+    return;
+  }
+  if (S.overlay === "omni-query" && e.key === ">"){ e.preventDefault(); S.overlay = "omni-cmd"; render(); return; }
+  if (S.overlay) return;
+  /* useAppShellKeyboardShortcuts.ts:60 ignores event.repeat, and so does this. */
+  if (mod || e.altKey || e.repeat) return;
+
+  const rows = orderedRows(); if (!rows.length) return;
+  let i = rows.findIndex(r => r.id === S.sel); if (i < 0) i = 0;
+  const r = rows[i], k = e.key.toLowerCase();
+
+  if (k === "j"){ e.preventDefault(); select(rows[Math.min(i + 1, rows.length - 1)].id); return; }
+  if (k === "k"){ e.preventDefault(); select(rows[Math.max(i - 1, 0)].id); return; }
+  if (!r) return;
+
+  if (r.kind === "finding"){
+    if (r.data.review === "not-yet-correlated" && "cdi".includes(k)){
+      e.preventDefault();
+      say("No incident record, and feedback needs one. Promote to a case (E) to create it.");
+      return;
+    }
+    if (k === "c"){ e.preventDefault(); verdict("Confirm"); return; }
+    if (k === "i"){ e.preventDefault(); verdict("Investigate"); return; }
+    if (k === "d"){ e.preventDefault(); armDismiss(); return; }
+    if (k === "s"){ e.preventDefault(); S.overlay = "snooze"; render(); return; }
+  }
+  if (r.kind === "hold"){
+    if (k === "g"){ e.preventDefault(); armGrant(); return; }
+    if (k === "r"){ e.preventDefault(); say("Refused. Recorded as a signed refusal in this case, and posted separately to the daemon. Nothing dispatches."); return; }
+    if (k === "s"){ e.preventDefault(); say(`A held action cannot be snoozed. It expires on its own in ${dur(holdLeft(r.data))} and nothing runs. Refuse it (R) if you do not want it to run.`); return; }
+  }
+  if (k === "e"){ e.preventDefault(); say("Promote opens a case channel and the incident record a verdict needs. It does not route this to anyone — no operator directory exists in either tree."); return; }
+  if (k === "m"){ e.preventDefault(); say("Marked done. localStorage only, per-pubkey, capped at 500 items. Done is not a decision, and the copy never says resolved."); return; }
+  if (k === "u"){ e.preventDefault(); say("Marked unread. Local only. Read, Done, Reviewed and Decided are four different facts."); return; }
+  if (e.key === "Enter"){ e.preventDefault(); say("Enter opens — the case, the lane, the containment detail. It is the only open verb."); return; }
+});
+
+/* ==========================================================================
+   DEEP LINKS.  The FRAGMENT is canonical:
+       watch.html#state=daemondown&sel=hA&ov=dismiss&theme=light
+   The fragment form is the one prototypes/watchfloor-ledger.html already uses,
+   and it survives a file:// double-click where a query string does not.
+   Revision 1 read `location.search` only, which meant the two prototypes in the
+   set that implemented deep links implemented two different mechanisms. The
+   query form still parses so revision-1 links keep working, and every state
+   change rewrites the fragment so a reviewer can copy the address bar.
+   ========================================================================== */
+function readLink(){
+  const p = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const q = new URLSearchParams(location.search.replace(/^\?/, ""));
+  const get = (k) => p.get(k) !== null ? p.get(k) : q.get(k);
+  const st = get("state");   if (st && STATES.includes(st)) S.state = st;
+  const th = get("theme");   if (th === "light" || th === "dark") S.theme = th;
+  const ov = get("ov");      if (ov) S.overlay = ov === "null" ? null : ov;
+  const sel = get("sel");
+  if (sel && orderedRows().find(r => r.id === sel)) S.sel = sel;
+  reselect();
+}
+let suppressHash = false;
+function pushHash(){
+  const p = new URLSearchParams();
+  p.set("state", S.state);
+  if (S.sel) p.set("sel", S.sel);
+  if (S.overlay) p.set("ov", S.overlay);
+  if (S.theme) p.set("theme", S.theme);
+  suppressHash = true;
+  history.replaceState(null, "", "#" + p.toString());
+  suppressHash = false;
+}
+window.addEventListener("hashchange", () => {
+  if (suppressHash) return;
+  readLink(); applyTheme(); render();
+});
+
+/* ========================================================================== */
+function render(){
+  renderStrip(); renderSidebar(); renderInbox(); renderDetail();
+  renderOverlay(); renderStates();
+}
+</script>
+
+<script>
+/* ==========================================================================
+   SPEC NOTES
+   ========================================================================== */
+const REGIONS = [
+  ["Governance strip (top, 28px)","04 §1.2; design-ground §11.1","APPENDIX §7 (three-lease vocabulary; committee of 1)","Four PartitionState values, a staleness clock, and who holds the watch. 28px fixed px, which is house practice — chromeLayout.ts:1-5 calls a fixed 40px top chrome “a deliberate exception to the rem-first rule” for the same reason."],
+  ["Incident mode band (24px)","design-ground §4.3","APPENDIX §6 (12 threat classes)","Renders only for SwarmMode::Incident, with the 2.5px authority rail on the strip above it. Never animated. It can also disappear: transition_down exists on the same type, so a band that could only ever appear would be one an operator learns to ignore."],
+  ["Colony rail (56px)","04 §1.2","—","CommunityRail geometry verbatim: w-14, 36px chips, the -left-2.5 h-5 w-1 active marker. It answers which deployment and nothing else."],
+  ["Sidebar (300px)","04 §1.2; design-ground §7.1","APPENDIX §1 (route table); §6 (12 lanes)","Four groups plus the eight-route link block. Findings is the one sidebar number that is a target rather than a count. Named you shows an em dash — absent, not zero. Every lane number is computed by concentration(), not typed."],
+  ["Queue 1 — Holds","04 §2.1","APPENDIX §4","kind 46010, p-tagged to every OperatorScope::Approve principal. Age-ordered; the flat list is never grouped, truncated or capped."],
+  ["C9 instrumentation","04 §3.0; 06 §5.1","APPENDIX §6 — C9 counters’ home is the queue-1 header on /","One line in the header, with the promotion bar and the denominators behind a disclosure, so the strip never separates the header from a CRITICAL row with twelve minutes left. Every number reads off the same per-state fixture as the queue."],
+  ["Reconcile line","07 §5.6","APPENDIX §4 item 3","The relay carries the hold’s notification; the daemon’s open-hold list is the record. perch_queue_reconcile_divergences_total is exported from day one. The daemon-unreachable sentence wraps and is never clipped."],
+  ["Queue 2 — Named you","04 §2.1","—","Deliberately not rendered. In a solo deployment its header is absent, not zero: nothing in Ambush names an operator and Perch does not p-tag escalations."],
+  ["Queue 3 — Findings to review","04 §2.1","APPENDIX §5 (B3, B3i, B3r)","Three served review states, each named in words on line 3 as well as marked. Header carries the shift target."],
+  ["Queue 4 — Case activity","04 §2.1","—","NIP-10 replies in a case channel you joined."],
+  ["Row anatomy (four lines)","04 §2.1; design-ground §11.1, §4.1","APPENDIX §8 laws 1 and 2; 08 §7.7","l1 verb or detector (trusted) + severity · l2 the subject, adversary-railed and never truncated · l3 agent · time · expiry · l4 N sources / M agents · threat-class slug. The 4px severity rail is square on the leading edge; the 2.5px pillar rail is rounded on the top edge. Different edge, different shape, different axis."],
+  ["Verdict pane","04 §2.2; 06 §5.5","APPENDIX §8 laws 1, 2, 4, 5, 6","Five slots, a const array, fixed order. BLAST RADIUS and WHAT GRANTING OPENS render explicit absences rather than collapsing. WHAT GRANTING OPENS always renders the capability lease and a second line naming whether a containment lease opens: two objects, two lines, never merged."],
+  ["Dismiss preview and dialog","04 §2.2; 06 §5.5","APPENDIX §8 law 5","First D arms and expands the arithmetic inline; second D commits. A dialog fires only when the delta crosses alert_threshold. Every number is recomputed by concentration() with the event id suppressed — nothing is typed. Both branches are reachable: f1/f2/f4 cross, f5/f7 do not."],
+  ["Provenance block","04 §2.2; 06 §5.10","APPENDIX §8 law 3","Two rows, always both, never merged. The tier is a word. There is no shield, no lock and no check glyph anywhere on this page."],
+  ["Grant control","04 §2.2; design-ground §4.5","APPENDIX §8 law 6","Full-width, outline only, background: transparent, label is a sentence. Refuse is a chip. Asymmetric because the friction is asymmetric."],
+  ["Cmd-K omnibox","04 §3.1, §2.9","APPENDIX §2","One dialog, two modes. Commands that write are never executed on Enter alone."],
+  ["Empty states","04 §2.1; 06 §5.2","APPENDIX §8 law 7","Each names what is deliberately not covered. The /gaps link is scoped to the swarm-produced-nothing queue; the empty hold queue names what ran without a hold instead. When all four queues are zero the inbox renders one state, not three."],
+  ["Adversary-controlled values","08 §7.7 control 1","APPENDIX §8; 16 INV-14","adv() escapes control, zero-width and bidi codepoints, caps at 512 characters, renders a plain text node in an amber-railed span, and never touches a markdown pipeline. One ADVERSARY-CONTROLLED label per slot and one legend per surface — not a tag per value, which made the ACTION sentence unreadable in the peer prototype."],
+];
+
+const DRAWN_WITHOUT_SPEC = [
+  ["Cold start as a state distinct from loading","No plan document specifies one. Drawn as: no governance value at all, no lane dots, 06 §5.1's stripEmpty copy in the C9 slot, and an ordered list of the three things that must land. PROPOSED."],
+  ["Four-line row, ~84px comfortable","design-ground §7.4 proposes ~40px for a one-line row. Four lines do not fit in 40, and three do not fit either once the subject of a destructive action is forbidden from truncating. PROPOSED."],
+  ["The reconcile line's wording and position","07 §5.6 mandates the reconciliation and the counter and specifies no rendering. PROPOSED."],
+  ["Detail panes for a case-activity row and a due snooze","04 §2.2 specifies the pane for holds and findings only; both other row types are selectable and must render something. Drawn with the same five slots, all as explicit absences. PROPOSED."],
+  ["Corner crosshair ticks on the verdict pane","pillars.svg:16-21 / hero-v2.svg:92-97 — a marketing motif no plan document assigns to a product surface. 12px arms, 28% opacity, aria-hidden, detail pane only. PROPOSED; delete it if it reads as decoration."],
+  ["The punched label notch as the BLAST RADIUS frame","design-ground §1.4(d) identifies the motif and nominates BLAST RADIUS; no plan document adopts it. PROPOSED."],
+  ["The accumulation trail beside the EVIDENCE header","pillars.svg:29-35's grammar as a static four-dot figure. PROPOSED."],
+  ["Three distinct empty-state marks","A dashed threshold rule, a hollow accumulation trail and an empty notched region. All three are the domain's own grammar; none is a shield, a lock, a magnifier or a generic disc. PROPOSED — and they replace revision 1's single disc repeated four times down one column."],
+  ["The eight-route sidebar link block","04 §1.2's wireframe shows four of the eight; the other four routes exist in APPENDIX §1 and must be reachable. PROPOSED as a two-column block."],
+  ["The Incident band's content line","design-ground §4.3 specifies the band's existence and its non-colour encoding, not its text. PROPOSED."],
+  ["The daemon-unreachable marking of hold rows as “from relay backfill · unconfirmed against the daemon”","04 §2.2 specifies the daemon-unreachable state for the pane; the queue-row marking is drawn here. PROPOSED."],
+];
+
+const DEPARTURES = [
+  ["D1","Queue headers read Holds / Named you / Findings to review / Case activity, not 06 §5.1's QUEUE_LABELS (Waiting on you / Named you / Your cases / Swarm).","04 §2.1's queue remap table, design-ground §11.1's drawing and 04 §1.2's sidebar all use the first set, and “Swarm” as a header for the review queue names the producer rather than the job — it cannot carry the reviewed / total shift target that 04 §2.1 makes load-bearing. PROPOSED BRIEF AMENDMENT: update 06 §5.1's QUEUE_LABELS to the 04 §2.1 words, and with them 17-COMPONENT-SPECS §6.2's WatchQueueSection title prop, which cites 06 as owner. 06 §5.2's empty-state title “Nothing is waiting on you” is unaffected and renders verbatim. UNRESOLVED between two artifacts until someone ratifies one set — INV-24 and perch-queue-lifecycle.spec.ts both key off these strings."],
+  ["D2","The terminal strip reads ⌘J, not APPENDIX §2's Cmd-backtick.","The shipped Buzz toggle is ⌘/Ctrl-J: TerminalBootstrap.tsx:146-168 registers a capture-phase handler on both keydown and keyup in the renderer process, matches event.code === \"KeyJ\" with meta-or-ctrl and no alt or shift, calls stopImmediatePropagation, and toggles only on the keyup. Rebinding it to backtick is work nobody costed. PROPOSED BRIEF AMENDMENT."],
+  ["D3","The omnibox command reads “> release containment cl_9b3645fc”, not 04 §3.1's “> release cap-77f3a2”.","A release acts on a containment lease, not a capability lease; cap- names the wrong object and APPENDIX §7 bans bare “lease” in a label for exactly this collision. PROPOSED CORRECTION to 04 §3.1."],
+  ["D4","The sidebar's route label for /handoff reads “Handoff”, not “End watch”.","APPENDIX §1 names the surface “Handoff — Take the watch / End watch”, and skeleton/desktop/src/app/perchViews.ts:132 sets the PERCH_NAV label to “Handoff”. Revision 1 rendered the action as the nav item, which disagreed with the registry that claims to be exhaustive. “End watch” survives as a command in the ⌘K palette, which is what it is."],
+  ["D5","There is no case sequence number anywhere. A row reads `case ·27799e23`; the pane reads the whole channel UUID.","APPENDIX §7: the case id IS the channel UUID. Neither tree mints a `case-0042`, so revision 1's four of them named nothing. The short form is the first eight hex of the UUID and the pane never truncates it."],
+  ["D6","Agents render as `ed25519:18085f16…` in a row and as the whole 64-hex key in the pane.","The demo fixture's finding F-2 is load-bearing: infer_agent_role (AMB crates/swarm-runtime/src/detection/pipeline.rs:583-604, called by resolve_deposits inside the swarm_detect --serve detection pipeline) returns None for every `swarm:ed25519:` id, so no card the shipped daemon produces carries a role-named agent. Revision 1 invented eight of them (whisker-7a3f, calico-4d81, …). A 365px row cannot hold 64 hex; BUZZ's own check-pubkey-truncation.mjs routes every display truncation through truncatePubkey/<PubKey> for exactly this reason, and a Perch build must do the same rather than slicing inline."],
+  ["D7","The daemon's own policy_decision.reason string is NOT rendered.","The shipped reason for every hold is the literal “authorized but held for human approval” (perch-demo-fixture.json holds.a.policy_decision.reason). copy-ban-list.tsv row `approve` is P0, case-insensitive, pattern appro(ve|ved|val), exempt `-`. Rendering it verbatim would fail the gate this page is drawn to pass. The pane renders rule_name, verdict and the gate's meaning in Perch's own words instead. 22-DEMO-FIXTURE's proposed amendment C-A2 (exempt policy_decision.reason) is the change that would let the verbatim string through; until it is ratified, withholding it is the honest option and this note is the disclosure."],
+];
+
+const RED_TEAM = [
+  ["BLOCKING — token namespace","Revision 1 declared --background --card --popover --foreground --muted-foreground --border --ring on :root. VERIFIED: `createThemeVars` (BUZZ desktop/src/shared/theme/adaptive-theme.ts:238-270) returns exactly those names among 38; `applyTheme` writes every one of them INLINE on document.documentElement at ThemeProvider.tsx:445-446 (`for (const [key,value] of Object.entries(vars)) root.style.setProperty(key, value)`) inside the renderer process on every theme load, and applyCachedVars repeats it on the cached-boot path at :405-406. An inline declaration on :root beats every normal-priority stylesheet rule, so revision 1's seven most-used colours would have silently reverted to the active Buzz syntax theme. FIXED: every token is --perch-* with perch-tokens.css's own names and values. Only --buzz-type-rem / --buzz-type-scale are still read under their Buzz names, because those two are the shipped zoom dial (globals/typography.css:16-17) and reading them is the point. The type SIZES --text-xs/-sm/-base/-lg were kept in revision 2 on the argument that a stylesheet name is overridable; the integrator pass overruled it, because those four are Buzz's own and carry the conversation type contract, so declaring them here re-sizes every inherited Buzz surface. All nine are now --perch-text-*, asserted by perch-tokens.test.mjs T-M2."],
+  ["BLOCKING — light-mode contrast","VERIFIED by re-measuring headless with preferredColorScheme=1: .row-l3 (the render-law-2 line) at 3.87:1, both render-law-1 absence strings at 4.23:1, .review-mark at 3.45:1, the separator dots at 1.77:1. Cause: revision 1 painted eleven readable-text rules with --foreground-faint while its own comment called that token “disabled controls only — never a readable string”, and painted separators with --border-strong. FIXED: --perch-foreground-faint is referenced by NO rule in this file, and every separator is ink. Re-measured: zero failures in either theme, in all nine states."],
+  ["BLOCKING — light severity below AA","VERIFIED: #b45309 measures 4.31:1 on --perch-surface-chrome and #8a6114 measures 4.505:1 on --perch-surface-raised, where one-decimal HSL rounding pushes it under. 19-TOKENS measured and replaced both (amendments T2 and T2b) after revision 1 was drawn and nothing propagated backward. FIXED: light severity is #a94e08 / #825b12 out of perch-tokens.css:115-116. #b45309 survives only as --perch-pillar-authority-mark, where the bar is 3:1."],
+  ["BLOCKING — the safety string was clipped","VERIFIED: at #state=daemondown the sentence “cannot reconcile — the daemon is the authority and it is unreachable” overflowed its parent by 19px under `white-space: nowrap`, and the detail pane painted over the tail, so it rendered “…and it is unreachab”. APPENDIX §4 item 3 makes that reconciliation state safety-load-bearing. FIXED: the warning wraps and takes its own full-width row; a boot assertion fails the page if any nowrap element overflows its parent."],
+  ["BLOCKING — the target of a destructive action was truncated","VERIFIED: at state=busy the row span holding svc-deploy@corp.example measured clientWidth 119 against scrollWidth 152 and rendered `svc-deploy@corp.e…`, so svc-deploy@corp.example and svc-deploy@corp.evil-lookalike.net were indistinguishable. Revision 1 protected the agent id and truncated the destructive action's target. FIXED: the subject owns line 2, wraps rather than truncates, and carries the adversary rail. A boot assertion fails the page on any truncated subject."],
+  ["BLOCKING — adversary strings rendered bare","VERIFIED: `grep -c ADVERSARY` on revision 1 returned 0 while it rendered host ids, file paths, process names and a service principal through an HTML-entity escape and nothing else. 08 §7.7 control 1 names the ACTION and BLAST RADIUS slots explicitly and requires control/bidi escaping, a 512 cap and a labelled rail. FIXED: adv() lifted verbatim from verdict-hold.html, plus a per-slot label and a per-surface legend."],
+  ["MAJOR — the ⚠ glyph","VERIFIED: revision 1 emitted it at two sites, four lines above a provenance block. skeleton/tools/copy-ban-list.tsv row `shield-glyph` is severity P0, pattern 🛡|🔒|🔐|⚠, exempt `-`. Revision 1's own summary claimed the copy lint was clean. FIXED: the caution register is a 2px leading rail plus an eyebrow plus words; a boot assertion scans every rendered text node against the shipped ban list."],
+  ["MAJOR — the type scale was severed from the shipped dial","VERIFIED: globals/typography.css:15-17 defines --buzz-type-scale and --buzz-type-rem, and the accessibility Font size preference moves --buzz-type-scale via data-font-size. Revision 1 declared a flat `--rem: 1rem`, so Cmd +/- zoom worked and the preference was inert. FIXED: the page reads the shipped names."],
+  ["MAJOR — no readable-text tier","VERIFIED by a headless computed-font-size census over visible non-chrome text nodes: revision 1 was 66% at 11px with 25.7% at 14px or above, and its primary hierarchy step was 11px→12px. FIXED by re-tiering: primary content (the ACTION sentence, row lines 1 and 2, card bodies, control labels, absence strings, provenance prose) is 14px; genuine meta is 12px; 11px is badges and key caps only; 8px is used zero times. The census is re-run at boot and printed to the console."],
+  ["MAJOR — the C9 strip","VERIFIED: in revision 1 the strip put four lines between the “HOLDS 4” header and a CRITICAL kill_process with 12m 04s left, and rendered “87 measurements written this week / 12 promoted / 340 did not clear the bar” unchanged in the empty state, where all four queues read zero. FIXED: one line in the header, the rest behind a disclosure, every number off the per-state fixture — and the empty shift renders 06 §5.1's stripEmpty copy instead."],
+  ["MAJOR — five canonical fixtures is zero canonical fixtures","VERIFIED: one case had five channel UUIDs across the five prototypes and 22-DEMO-FIXTURE, and hold ids came in six grammars. FIXED: build/fixtures/perch-demo-fixture.json is canonical here. Its two holds, its case channel, its incident id, its containment and rollback ids, its constants block and its clock are used verbatim, and everything The Watch needs beyond that scenario is derived by that file's own function with the labels listed below."],
+  ["MINOR — the deep-link convention","VERIFIED: revision 1 read location.search; watchfloor-ledger.html reads location.hash; three prototypes read neither, while two commitment blocks each told peers to copy a different mechanism. FIXED: the fragment is canonical here (it survives a file:// double-click), the query form still parses so revision-1 links keep working, and every state change rewrites the fragment."],
+  ["MINOR — a MEDIUM hold could not exist","VERIFIED: the shipped ruleset sets human_gate_severity: HIGH (AMB rulesets/default.yaml:93, read at daemon start by StaticApprovalGate, which returns RequireHuman at or above it for any of the twelve destructive actions), so LOW and MEDIUM can never reach this queue at all. Revision 1's fourth hold was MEDIUM. FIXED: every hold in the fixture is HIGH or CRITICAL. CONSEQUENCE for whoever builds the severity chip: on The Watch's hold queue only the top two steps of the four-step ramp are reachable, and a component that renders four is rendering two states nothing can produce. The full ramp still applies to findings and to the Ledger."],
+  ["MINOR — the /handoff nav label","VERIFIED: skeleton/desktop/src/app/perchViews.ts:132 sets label “Handoff” inside PERCH_NAV, whose doc comment at :111-114 says the sidebar renders from it; revision 1 rendered “End watch”. FIXED — see departure D4."],
+];
+
+const OPEN_ITEMS = [
+  ["O-1","Two operators, one hold.","APPENDIX §4 layer 1 p-tags EVERY OperatorScope::Approve principal, so more than one console can legitimately hold the same open hold. 12-BACKEND-BILL-API §4.4 resolves the daemon side with 409 hold_already_deciding, but leg 1 is published to the relay BEFORE leg 2, the relay has no compare-and-set, and a kind:9 is immutable — so both signed verdict cards land in the case channel forever with nothing marking the loser. schemas/card-ambush-verdict-v1.schema.json's leg2.state enum is sending|recorded|acknowledged|refused_late and carries no value meaning “another operator's decision was the one that executed”. This page DRAWS that state (state=divergence, the fourth row) so the hole is visible rather than theoretical, and the row says plainly that nothing pressed there will run. It cannot be closed here: it needs a `superseded` leg2.state value carrying the winning nostr_intent_event_id, a rule that publishes it from whichever console gets the 409, and a reconciliation rule that renders a verdict card with no matching daemon decision record as not-the-decision. Owner: 13-WIRE-SCHEMAS plus 16-INVARIANT-TESTS, as a P0 invariant with a two-console E2E."],
+  ["O-2","The daemon's policy reason is unrenderable under the shipped ban list.","See departure D7. Either C-A2 is ratified or every hold pane in the product paraphrases a string the operator may need verbatim in an audit."],
+  ["O-4","Two identifier strings the canonical fixture owns trip the shipped copy gate.",
+   "The demo fixture's telemetry event ids are literally <code>hunt-evt-1</code> and <code>hunt-evt-2</code> (perch-demo-fixture.json <code>deposits[].event_id</code>), and render law 5 requires the Dismiss preview to name the event id it suppresses on, so the string reaches a rendered surface. skeleton/tools/copy-ban-list.tsv's <code>hunt-noun</code> row exempts only <code>hunt_id</code>. 22-DEMO-FIXTURE has filed amendment C-A1 to add <code>hunt[_-][a-z0-9]</code> to that exempt column; this page's boot assertion allows exactly that one shape and names it, so a second allowance cannot arrive quietly. The related case is departure D7, where the daemon's own policy reason is withheld rather than allowed, because that row is P0 and this one is hygiene. Someone has to ratify C-A1 and C-A2 together or the copy gate and the canonical fixture disagree on the first commit that wires them."],
+  ["O-3","distinct_sources is decided two ways in the wave.","Six producers read pipeline.rs:573 and concluded strategy-scoped; 13-WIRE-SCHEMAS and 17-COMPONENT-SPECS read whisker_agent.rs:148-149, stopped there, and concluded agent-instance — and they own the schema const, the zod literal and the golden vector. The majority reading is verified below and is what this page renders. Someone has to ratify it into schemas/card-ambush-escalation-v1.schema.json's distinct_sources_counts const, because prose does not propagate into a decoder."],
+];
+
+const VERIFIED = [
+  ["distinct_sources really does count strategy-scoped ids, so the source note on this page is correct and render law 2 stands as written.",
+   "AMB crates/swarm-runtime/src/detection/pipeline.rs:543-580 — resolve_deposits, a pub(crate) fn called by detect_and_deposit_with_role at :80 inside the swarm_detect --serve detection pipeline, in the daemon process. At :573 it sets each PheromoneDeposit's agent_id to strategy_scoped_agent_id(agent_id, &finding.strategy_id) (crates/swarm-whisker/src/stream.rs:20-22 formats it \"{base}:{strategy_id}\"), so the id WhiskerAgent::tick already scoped per agent (crates/swarm-agents/src/whisker_agent.rs:148-149) gains a further segment PER DETECTOR before it is written to the substrate. concentration_for then does sources.insert(deposit.agent_id.0.clone()) at crates/swarm-pheromone/src/substrate.rs:1295, counting those strings.",
+   "One agent running three detectors therefore reports three distinct sources and clears min_sources_for_escalation: 2 alone. The ambush-touchpoints correction C-5 read whisker_agent.rs:148-149 and missed the strategy_scoped_agent_id call inside resolve_deposits; its proposed rewrite of the explanatory copy should be withdrawn. Four peer producers reached the same conclusion independently. The two artifacts that own the wire schema and the component sheet reached the opposite one, and theirs is the reading currently compiled into a const, a z.literal and a pinned golden hash — see open item O-3."],
+  ["The lane arithmetic on this page reproduces the canonical fixture exactly, which is what makes the derived numbers checkable rather than decorative.",
+   "concentration(\"execution\") sums strengthAt(confidence, secondsAgo) over the three deposits in build/fixtures/perch-demo-fixture.json's `deposits` array, applies the evaporation floor the way substrate.rs:1284 does, and counts distinct strategy-scoped ids the way substrate.rs:1295 does.",
+   "It returns 2.653617, which is byte-for-byte the fixture's own concentration.at_open_row.total_strength, with 2 sources / 1 agent matching its distinct_sources: 2 over a single producing agent. The page asserts this at boot and refuses to claim the match if it drifts — see the console output."],
+];
+</script>
+
+<script>
+function renderSpecNotes(){
+  const rows  = REGIONS.map(([a,b,c,d]) => `<tr><td>${a}</td><td class="c">${b}</td><td class="c">${c}</td><td>${d}</td></tr>`).join("");
+  const drawn = DRAWN_WITHOUT_SPEC.map(([a,b]) => `<li><b style="color:hsl(var(--perch-foreground))">${a}</b> — ${b}</li>`).join("");
+  const dep   = DEPARTURES.map(([n,a,b]) => `<tr><td>${n}</td><td>${a}</td><td>${b}</td></tr>`).join("");
+  const red   = RED_TEAM.map(([a,b]) => `<li><b style="color:hsl(var(--perch-foreground))">${a}</b> — ${b}</li>`).join("");
+  const open  = OPEN_ITEMS.map(([n,a,b]) => `<tr><td>${n}</td><td>${a}</td><td>${b}</td></tr>`).join("");
+  const ver   = VERIFIED.map(([a,b,c]) => `<li><b style="color:hsl(var(--perch-foreground))">${a}</b><br><span class="c">${b}</span><br>${c}</li>`).join("");
+
+  document.getElementById("specnotes").innerHTML = `
+  <p>This page is <b>prototypes/watch.html</b> — the primary surface at route <code>/</code>: The
+  Watch, its four queues, the governance strip, and the Verdict Row as its detail pane. The hold
+  state of that pane, with its two-stroke grant gate and its 1500 ms BLAST RADIUS dwell, is drawn
+  in <code>prototypes/verdict-hold.html</code>. Values are cited from
+  <code>APPENDIX-NORMATIVE.md</code> and <code>build/fixtures/perch-demo-fixture.json</code>, never
+  restated as new decisions.</p>
+
+  <h3>What the red team found, and what this revision did about it</h3>
+  <ul>${red}</ul>
+
+  <h3>Still open — not fixable inside this file</h3>
+  <table><thead><tr><th style="width:4%">#</th><th style="width:22%">Item</th><th>Why it is not closed here</th></tr></thead><tbody>${open}</tbody></table>
+
+  <h3>Region → owning section → appendix row</h3>
+  <table><thead><tr><th style="width:15%">Region</th><th style="width:15%">Owning plan section</th><th style="width:17%">Appendix row</th><th>What it must do</th></tr></thead><tbody>${rows}</tbody></table>
+
+  <h3>Deliberate departures, each with its evidence</h3>
+  <table><thead><tr><th style="width:4%">#</th><th style="width:30%">Departure</th><th>Why</th></tr></thead><tbody>${dep}</tbody></table>
+
+  <h3>Drawn without a spec</h3>
+  <ul>${drawn}</ul>
+
+  <h3>Verified in source while drawing this</h3>
+  <ul>${ver}</ul>
+
+  <h3>The fixture</h3>
+  <p><b style="color:hsl(var(--perch-foreground))">CANONICAL — used verbatim from
+  <code>build/fixtures/perch-demo-fixture.json</code>:</b> the clock (shift start
+  <code>1773734400000</code> = 08:00:00Z on 2026-03-17; “now” is
+  <code>clock.timestamps.open_row_ms</code> = <code>1773738965000</code> = 09:16:05Z, the instant the
+  fixture itself names as the operator's queue showing the open hold row); the whole
+  <code>constants</code> block; <code>cast.operator</code> and <code>cast.bridge</code> and
+  <code>cast.daemon.ingest_agent_id</code>; the case channel
+  <code>27799e23-ab25-4659-b381-3de47ea7ca4d</code>; the incident id
+  <code>incident:hunt-evt-1:1773738882400</code>; holds <code>h_a07aeacf</code> (isolate_host,
+  CRITICAL, leases a containment, reversible) and <code>h_1c28ae79</code> (block_egress, CRITICAL,
+  leases nothing); containment <code>cl_9b3645fc</code>; rollback <code>rb_81c4a588</code>; the three
+  <code>deposits</code> and the three findings they produced.</p>
+
+  <p><b style="color:hsl(var(--perch-foreground))">EXTENSIONS.</b> A queue with one row is not a
+  queue, so The Watch needs more cast than the demo scenario contains. Every extension id below is
+  derived by the demo fixture's own function — <code>id = sha256("perch-demo-fixture/v1/" + label)</code>
+  — so <code>22-DEMO-FIXTURE</code> can absorb any of them by adding the label to
+  <code>fixtures/derive-ids.mjs</code> and re-running it, rather than by hand. The labels are:</p>
+  <table><thead><tr><th style="width:34%">Label</th><th style="width:26%">Value</th><th>What it is</th></tr></thead><tbody>
+    <tr><td class="c">hold/quarantine-file/build-agent-07</td><td class="c">h_d5ee16b4</td><td>a HIGH containment action that IS reversible — the third rung of the 12 → 4 → 3 ladder</td></tr>
+    <tr><td class="c">hold/revoke-credential/svc-deploy</td><td class="c">h_81c8137f</td><td>a HIGH destructive action with no containment lease and no executable inverse — two explicit absences in one pane</td></tr>
+    <tr><td class="c">channel/case/2026-03-17-build-agent-07</td><td class="c">477e449c-…</td><td>second case channel</td></tr>
+    <tr><td class="c">channel/case/2026-03-17-svc-deploy</td><td class="c">c0b720d0-…</td><td>third case channel</td></tr>
+    <tr><td class="c">containment-lease/build-agent-07</td><td class="c">cl_330fb0a7</td><td>second containment lease</td></tr>
+    <tr><td class="c">rollback/build-agent-07</td><td class="c">rb_bad41bda</td><td>second rollback receipt</td></tr>
+    <tr><td class="c">ed25519/whisker-edr-1</td><td class="c">a178b7fd…</td><td>second producing agent</td></tr>
+    <tr><td class="c">ed25519/whisker-net-1</td><td class="c">257cd591…</td><td>third producing agent</td></tr>
+    <tr><td class="c">snooze/dns_exfiltration/build-agent-07</td><td class="c">sn_4f432ea6</td><td>the local kind:30300 reminder</td></tr>
+    <tr><td class="c">finding/… ×4, telemetry-event/… ×4</td><td class="c">0228ce76…, 41bda0d8…</td><td>the four extension findings and their telemetry events</td></tr>
+  </tbody></table>
+  <p>The eleven extension lanes' deposit sets (confidence, age, agent, detector, event id) are
+  choices, not derivations, and they are marked EXT in the source. Only <code>execution</code> is
+  canonical, and its computed <code>2.653617</code> is asserted against the fixture at boot.</p>
+
+  <h3>Rules this page holds itself to, and asserts at boot</h3>
+  <ul>
+    <li><b style="color:hsl(var(--perch-foreground))">No px font sizes and no 8px text.</b> Every
+      size derives from <code>--buzz-type-rem</code>, which is
+      <code>globals/typography.css:15-17</code>'s own name, so Cmd +/- zoom AND the accessibility
+      Font size preference both reach every string. <code>check-px-text.mjs</code> and its proposed
+      SVG-attribute regex would both pass this file: no <code>font-size=</code> attribute and no
+      <code>fontSize</code> prop exists anywhere in it.</li>
+    <li><b style="color:hsl(var(--perch-foreground))">Only <code>--perch-*</code>.</b> No Buzz shadcn
+      variable name is declared or read, because ThemeProvider writes 38 of them inline on the root
+      and no stylesheet can beat that.</li>
+    <li><b style="color:hsl(var(--perch-foreground))">Never a bare source count.</b> One function,
+      <code>sa(src, agents)</code>, produces every occurrence, with correct singulars.</li>
+    <li><b style="color:hsl(var(--perch-foreground))">Fixed verdict field order.</b>
+      <code>SLOTS</code> is a const array and every pane maps over it. An unfillable slot renders an
+      explicit absence in readable ink; none collapses.</li>
+    <li><b style="color:hsl(var(--perch-foreground))">Nothing that reads as a trust mark.</b> No
+      shield, no lock, no padlock, no warning sign, no check. Verification renders as the words
+      <code>NO SIGNATURE OF ITS OWN</code> plus the sentence saying what the daemon holds.</li>
+    <li><b style="color:hsl(var(--perch-foreground))">The grant control has no filled path.</b>
+      <code>.grant</code> declares <code>background: transparent</code> and there is no primary
+      variant to reach for.</li>
+    <li><b style="color:hsl(var(--perch-foreground))">Escape never marks read.</b> It closes the
+      topmost surface, disarms Dismiss and Grant, and clears the toast. Nothing else.</li>
+    <li><b style="color:hsl(var(--perch-foreground))">Vocabulary.</b> <code>lane</code> only for the
+      twelve threat-class channels; <code>queue</code> only for the four inbox categories;
+      <code>capability lease</code> / <code>containment lease</code> never bare. No
+      <code>Approve</code>, no <code>A</code> key, no quorum fraction, no exclamation mark, no
+      reassurance phrase. A boot assertion runs the shipped
+      <code>skeleton/tools/copy-ban-list.tsv</code> rows over every rendered text node in all nine
+      states and prints the result to the console.</li>
+    <li><b style="color:hsl(var(--perch-foreground))">Nothing moves.</b> The only animation on the
+      page is the omnibox caret. <code>prefers-reduced-motion</code> flattens even that.</li>
+  </ul>`;
+}
+
+/* ==========================================================================
+   BOOT ASSERTIONS.
+   These are not decoration. Four of this revision's blocking findings were
+   things a render would have shown and nobody rendered: a clipped safety
+   sentence, a truncated principal, a banned glyph and an AA failure that only
+   appears in light mode. Each now has an assertion that runs on load and says
+   so in the console rather than waiting for the next review.
+   ========================================================================== */
+function runAssertions(){
+  const out = [];
+  const ok  = (name, cond, detail) => out.push([cond ? "PASS" : "FAIL", name, detail || ""]);
+
+  /* A1 — the canonical lane arithmetic reproduces the canonical fixture. */
+  const ex = concentration("execution");
+  ok("A1 execution total_strength == perch-demo-fixture at_open_row",
+     Math.abs(ex.total - 2.653617) < 5e-7,
+     ex.total.toFixed(6) + " vs 2.653617");
+  ok("A1b execution distinct_sources == fixture", ex.sources === 2 && ex.agents === 1,
+     sa(ex.sources, ex.agents));
+
+  /* A2 — no Buzz shadcn variable name is declared or read. */
+  const css = Array.from(document.styleSheets)
+    .flatMap(s => { try { return Array.from(s.cssRules).map(r => r.cssText); } catch { return []; } })
+    .join("\n");
+  const BUZZ_NAMES = ["--background","--card","--card-foreground","--popover","--popover-foreground",
+    "--foreground","--muted","--muted-foreground","--accent","--accent-foreground","--secondary",
+    "--secondary-foreground","--destructive","--border","--input","--ring","--primary",
+    "--sidebar-background","--sidebar-foreground","--sidebar-border","--sidebar-ring"];
+  const leaked = BUZZ_NAMES.filter(n =>
+    new RegExp("(^|[^a-z-])" + n.replace(/-/g, "\\-") + "\\s*[:)]", "m").test(css));
+  ok("A2 no Buzz shadcn token name declared or read", leaked.length === 0, leaked.join(" "));
+
+  /* A3 — --perch-foreground-faint carries no text. */
+  ok("A3 --perch-foreground-faint referenced by no rule",
+     !/--perch-foreground-faint\s*\)/.test(css), "");
+
+  /* A4..A7 — per-state DOM checks. */
+  const banned = [
+    ["shield-glyph", /[\u{1F6E1}\u{1F512}\u{1F510}⚠]/u],
+    ["approve",      /appro(ve|ved|val)/i],
+    ["trust-claim",  /verified by|trusted|proof/i],
+    ["reassurance",  /everything looks good|all clear|you.{0,3}re all caught up|no data|nothing to see/i],
+    ["clowder",      /(^|[^a-z])clowders?([^a-z]|$)/i],
+    ["legacy",       /swarm team six/i],
+    ["exclamation",  /!/],
+  ];
+  /* The exempt columns below are copy-ban-list.tsv's OWN, verbatim. Nothing is
+     softened here: an amendment is a row in that file, not a local kindness. */
+  const softBanned = [
+    ["bare-source-count", /(^|[^a-z])sources?([^a-z]|$)/i, /agent/i],
+    ["bare-lease",        /(^|[^a-z])leases?([^a-z]|$)/i,
+                          /capability|containment|contingency|lease_id|lease_ttl|lease_store|lease_closed/i],
+    ["bare-lane",         /(^|[^a-z])lanes?([^a-z]|$)/i,
+                          /threat|twelve|12|lateral|exfiltration|privilege|command and control|initial access|persistence|supply chain|defense evasion|credential|discovery|execution|impact/i],
+    ["hunt-noun",         /(^|[^a-z])hunts?([^a-z]|$)/i, /hunt_id/i],
+    ["deny-label",        /(^|[^A-Za-z])Den(y|ied)([^A-Za-z]|$)/, /PolicyVerdict|policy_verdict/],
+  ];
+  /* ONE allowance, enumerated so a second can never arrive quietly. The demo
+     fixture's telemetry event ids are literally `hunt-evt-1` / `hunt-evt-2`
+     (perch-demo-fixture.json deposits[].event_id), and render law 5 requires the
+     Dismiss preview to name the event id it suppresses on. 22-DEMO-FIXTURE has
+     already filed amendment C-A1 to add `hunt[_-][a-z0-9]` to the row's exempt
+     column; until it is ratified this is a known, disclosed hit. See open item
+     O-4. Anything else fails. */
+  const PENDING_C_A1 = /^hunt-evt-[0-9]+$/;
+  const copyHits = [], overflows = [], truncations = [];
+  const savedState = S.state, savedSel = S.sel, savedOv = S.overlay;
+
+  for (const st of STATES){
+    S.state = st; S.overlay = null; reselect(); render();
+    /* every rendered text node on the product surface */
+    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let n;
+    while ((n = w.nextNode())){
+      const el = n.parentElement; if (!el) continue;
+      if (el.closest(".specnotes") || el.closest(".states")) continue;
+      if (el.tagName === "SCRIPT" || el.tagName === "STYLE") continue;
+      const t = (n.nodeValue || "").trim(); if (!t) continue;
+      for (const [id, re] of banned)
+        if (re.test(t) && (id !== "exclamation" || t.length > 3)) copyHits.push([st, id, t.slice(0, 70)]);
+      for (const [id, re, ex2] of softBanned)
+        if (re.test(t) && !ex2.test(t) && !(id === "hunt-noun" && PENDING_C_A1.test(t)))
+          copyHits.push([st, id, t.slice(0, 70)]);
+    }
+    document.querySelectorAll(".inbox *, .detail *, .strip *, .sidebar *").forEach(el => {
+      const cs = getComputedStyle(el);
+      if (cs.whiteSpace === "nowrap" && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1)
+        truncations.push([st, String(el.className).slice(0, 40), (el.textContent || "").trim().slice(0, 50)]);
+      const p = el.parentElement; if (!p) return;
+      if (cs.whiteSpace !== "nowrap" || cs.overflow !== "visible") return;
+      const pr = p.getBoundingClientRect(), er = el.getBoundingClientRect();
+      if (er.width > 0 && er.right > pr.right + 1)
+        overflows.push([st, String(el.className).slice(0, 40), Math.round(er.right - pr.right)]);
+    });
+  }
+  S.state = savedState; S.sel = savedSel; S.overlay = savedOv; reselect(); render();
+
+  ok("A4 shipped copy-ban-list.tsv clean (one disclosed allowance: open item O-4)", copyHits.length === 0,
+     copyHits.slice(0, 6).map(h => h.join(" | ")).join("  //  "));
+  ok("A5 no nowrap element overflows its parent", overflows.length === 0,
+     overflows.slice(0, 6).map(h => h.join(" | ")).join("  //  "));
+  ok("A6 no rendered value is truncated", truncations.length === 0,
+     truncations.slice(0, 6).map(h => h.join(" | ")).join("  //  "));
+
+  /* A7 — type census over the product surface. */
+  const hist = {}; let total = 0;
+  const w2 = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let m;
+  while ((m = w2.nextNode())){
+    const el = m.parentElement; if (!el) continue;
+    if (el.closest(".specnotes") || el.closest(".states")) continue;
+    if (el.tagName === "SCRIPT" || el.tagName === "STYLE") continue;
+    if (!(m.nodeValue || "").trim()) continue;
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden") continue;
+    const px = Math.round(parseFloat(cs.fontSize) * 10) / 10;
+    hist[px] = (hist[px] || 0) + 1; total++;
+  }
+  const ge14 = Object.entries(hist).filter(([k]) => +k >= 14).reduce((s, [, v]) => s + v, 0);
+  const lt12 = Object.entries(hist).filter(([k]) => +k < 12).reduce((s, [, v]) => s + v, 0);
+  ok("A7 at least 40% of product text is 14px or larger",
+     total > 0 && ge14 / total >= 0.40,
+     `${ge14}/${total} = ${(100 * ge14 / total).toFixed(1)}%  ·  under 12px: ${lt12} (${(100 * lt12 / total).toFixed(1)}%)  ·  ${JSON.stringify(hist)}`);
+  ok("A8 nothing renders at 8px", !hist["8"], "");
+
+  window.__PERCH_WATCH_ASSERTIONS__ = out;
+  const failed = out.filter(r => r[0] === "FAIL");
+  const label = failed.length ? "PERCH watch.html — " + failed.length + " ASSERTION(S) FAILED"
+                              : "PERCH watch.html — all " + out.length + " assertions pass";
+  console.log(label);
+  out.forEach(r => console.log("  " + r[0] + "  " + r[1] + (r[2] ? "   " + r[2] : "")));
+}
+
+/* ========================================================================== */
+readLink();
+applyTheme();
+renderSpecNotes();
+render();
+pushHash();
+runAssertions();
+</script>
+</body>
+</html>

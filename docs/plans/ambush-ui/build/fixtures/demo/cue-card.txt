@@ -1,0 +1,72 @@
+PERCH DEMO -- POCKET CUE CARD                        7:00  ·  9 beats
+scenario: hellcat-office   ·   fixture clock 2026-03-17, shift began 08:00Z
+====================================================================
+
+  0:00  COLD OPEN            The Watch, /, 09:20 into the shift
+  0:30  THE QUEUE            2 holds, 3 findings, review state served
+  1:30  WHY IT WAS HELD      concentration 1.7997 -> 2.6969, bar is 2.0
+  2:30  THE FIVE SLOTS       ACTION / BLAST RADIUS / IF YOU UNDO /
+                             WHY WE ARE ASKING / WHAT GRANTING OPENS
+  4:00  TWO-LEGGED WRITE     G arms, Enter records, then POST to :9090
+  4:45  THE CONTAINMENT      15 minutes, two facts, never one bar
+  5:20  THE SECOND HOLD      block_egress: no containment-lease slot at all
+  6:00  DISMISS              one finding out, two deposits gone, 2.57 -> 0.86
+  6:40  CLOSE                the four things that are not wired
+
+NUMBERS TO SAY OUT LOUD, all from the fixture
+  alert_threshold            2.0        rulesets/default.yaml:58
+  min_sources_for_escalation 2 source ids, scoped per detector not per agent  yaml:57
+  half_life_secs             3600       rulesets/default.yaml:55
+  human_gate_severity        HIGH       rulesets/default.yaml:93
+  capability lease TTL       60 s       rulesets/default.yaml:94
+  containment lease TTL      900 s      config/defaults.rs:23-27   <- 15x
+  hold TTL                   60 min     APPENDIX-NORMATIVE.md s6
+  destructive kinds          12 of 15
+  of those, leased           4
+  of those, reversible       3
+
+FOUR SENTENCES YOU MUST SAY. Do not let a beat run over them.
+  1. "The queue you are looking at is a fixture. RequireHuman is a refusal in
+      the shipped daemon, not a queue. B1 is what makes it real."
+  2. "This console never authorizes. It records my decision and posts it to a
+      separate process that re-derives authority from scratch."
+  3. "Nothing on this screen carries a signature that anyone can check. The
+      cards carry an envelope hash and the badge says tier 0."
+  4. "The governance re-check on the decision path is not wired. Those two
+      functions are private to the dispatcher and a decide route skips both."
+
+ONE ANSWER YOU WILL BE ASKED FOR
+  Q: "if two people are on shift, what stops them both deciding?"
+  A: "Nothing stops them starting. The daemon has a compare-and-set, so exactly
+      one decision runs and the second gets a 409 naming the winner. Both signed
+      intent cards stay on the relay forever, because a signed event is
+      immutable -- so the losing console publishes a third card that says which
+      one became the decision. The fixture carries all three; seed it with
+      contested: true."
+
+WORDS THAT ARE NOT AVAILABLE TO YOU
+  approve / approval / approved      say: record my decision  [copy-ban-allow: approve]
+  Deny (of a person)                 say: refuse  [copy-ban-allow: deny-label]
+  verified by / trusted / proof      say: attestation matches this body  [copy-ban-allow: trust-claim]
+  a bare count of sources            say: 2 sources / 1 agent
+  "all clear" / "you are all set"    say what is not covered  [copy-ban-allow: reassurance]
+  "hunt" as a noun                   say: case  (the field label hunt_id lives)
+  bare "lease"                       say which of the three  [copy-ban-allow: bare-lease]
+  bare "lane"                        say: one of the twelve threat-class channels
+  any exclamation mark               the only intensifier is the word "still"
+
+IF SOMETHING BREAKS
+  queue is empty          the seed ran before the live subscription opened.
+                          Reload, wait for the sidebar, re-seed.
+  every screen says
+  "Community connection
+  failed"                 the build stripped the mock bridge. pnpm build:e2e,
+                          then kill port 4173 before re-running.
+  grant refuses with
+  ContainmentRefused      correct, and worth showing: no containment lease store
+                          is configured. runtime.containment.lease_store_path.
+  decay curve is flat     the scenario's timestamps are milliseconds. Use
+                          fixtures/scenario/hellcat-office-demo.yaml, seconds.
+  "is that hash real?"    yes, and you can show it: node fixtures/validate.mjs
+                          recomputes all 14 envelope hashes from the committed
+                          bytes. It is keyless. It is still tier 0.

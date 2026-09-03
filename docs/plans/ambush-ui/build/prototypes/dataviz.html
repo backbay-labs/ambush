@@ -1,0 +1,2300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Perch viz plates</title>
+<style>
+/* ===========================================================================
+   PERCH — DATA-VISUALIZATION PLATES  (specimen for build/18-DATAVIZ.md)
+
+   Self-contained: no network, no build step, no CDN. Opens by double-click.
+
+   TOKEN NAMESPACE. Every custom property below is `--perch-*` and every value
+   is a bare HSL triplet, matching build/tokens/perch-tokens.css name for name
+   and value for value. This is NOT cosmetic. `createThemeVars`
+   (BUZZ desktop/src/shared/theme/adaptive-theme.ts:191-240) returns exactly 38
+   Buzz shadcn variables — `--background --card --card-foreground --foreground
+   --muted-foreground --popover --ring --border --input` among them — and
+   `applyTheme` (BUZZ desktop/src/shared/theme/ThemeProvider.tsx:427-446, running
+   in the renderer on every theme change) writes each one with
+   `root.style.setProperty(key, value)`; the cached-boot path `applyCachedVars`
+   (:398-412) writes the same set before first paint. Those are INLINE
+   declarations on the root element, which no normal-priority stylesheet rule
+   can beat. A drawing authored against the bare Buzz names therefore repaints
+   with whatever Buzz syntax theme is active the moment it is dropped into the
+   desktop app. Perch reads `--perch-*` only.
+
+   THEME ARRANGEMENT, also copied from perch-tokens.css rather than invented:
+   the COMPLETE light palette sits on bare `:root`; dark is redefined under the
+   selector list `:root.dark, :root[data-theme="dark"], .dark` AND under a
+   `prefers-color-scheme: dark` block guarded `:not(.light):not([data-theme="light"])`.
+   No colour exists only inside a media query, and nothing on <html> is
+   hard-coded, so a reviewer's OS setting reaches the palette. The toggle sets
+   data-theme and wins in both directions.
+
+   COLOUR REACHES SVG THROUGH A CLASS. Never a presentation attribute. A bare
+   HSL triplet does not resolve inside an SVG paint attribute, so that form
+   would render black; the same discipline keeps font-size off SVG attributes.
+   There is no `fill=` or `stroke=` attribute anywhere in this file and
+   viz/check-perch-chart-tokens.sh proves it.
+
+   TYPE. rem only, over the virtual rem mechanism at
+   BUZZ desktop/src/shared/styles/globals/typography.css:16-17. Content is
+   t-sm / t-base; t-2xs and t-3xs carry meta and glyph labels only.
+   =========================================================================== */
+
+/* ========================================================================== */
+/* 1. LIGHT — the complete palette, on bare :root                             */
+/* ========================================================================== */
+:root {
+  color-scheme: light;
+
+  --perch-surface-chrome: 140 15.8% 92.5%;      /* #e9efeb */
+  --perch-background:     135 18.2% 95.7%;      /* #f2f6f3 */
+  --perch-card:           0 0% 100%;            /* #ffffff */
+  --perch-popover:        0 0% 100%;            /* #ffffff */
+  --perch-surface-raised: 142.5 16% 90.2%;      /* #e2eae5 */
+  --perch-border:         145 15.8% 85.1%;      /* #d3dfd8 */
+  --perch-border-strong:  144.7 13.2% 74.7%;    /* #b6c7bd */
+  --perch-ring:           152.7 14.7% 29.4%;    /* #40564c  6.79 chrome / 7.91 card */
+
+  --perch-foreground:           161.5 30.2% 8.4%;   /* #0f1c18  15.01–17.51 */
+  --perch-foreground-secondary: 152.7 14.7% 29.4%;  /* #40564c  6.79–7.91 */
+  --perch-foreground-muted:     150 10.5% 37.3%;    /* #55695f  5.04–5.88 */
+  --perch-foreground-faint:     148.6 8.9% 46.1%;   /* #6b8075  3.45–4.23 NEVER TEXT */
+
+  --perch-pillar-substrate-ink:  142.8 64.2% 24.1%; /* #166534  6.12–7.13 */
+  --perch-pillar-substrate-mark: 142.4 71.8% 29.2%; /* #15803d  4.30–5.02 */
+  --perch-pillar-authority-ink:  22.7 82.5% 31.4%;  /* #92400e  6.08–7.09 */
+  --perch-pillar-authority-mark: 26 90.5% 37.1%;    /* #b45309  4.31–5.02 non-text only */
+  --perch-pillar-evidence-ink:   194.4 69.6% 27.1%; /* #155e75  6.23–7.27 */
+  --perch-pillar-evidence-mark:  192.9 82.3% 31%;   /* #0e7490  4.60–5.36 */
+
+  --perch-border-pillar-substrate: 141.4 26.4% 79.2%; /* #bcd8c6  1.31–1.52 DECORATION */
+  --perch-border-pillar-authority: 41.8 47.5% 76.9%;  /* #e0cfa8  1.32–1.54 DECORATION */
+  --perch-border-pillar-evidence:  194.3 38.2% 78.4%; /* #b3d3dd  1.36–1.58 DECORATION */
+
+  /* Severity. AMENDMENTS T2 and T2b from 19-TOKENS are APPLIED here: the values
+     this prototype's first draft carried — #b45309 HIGH and #8a6114 MEDIUM —
+     measure 4.31 and 4.74 on --perch-surface-chrome and 4.10 and 4.51 on
+     --perch-surface-raised. AA body text needs 4.5. Recomputed this session
+     from the sRGB triplets; see 18-DATAVIZ.md §3.2. */
+  --perch-sev-low:      152.1 15.1% 36.5%;   /* #4f6b5e  5.01–5.84 */
+  --perch-sev-medium:   39.1 75.7% 29%;      /* #825b12  5.21–6.08 */
+  --perch-sev-high:     26.1 91% 34.7%;      /* #a94e08  4.76–5.55 */
+  --perch-sev-critical: 3.2 71.3% 41%;       /* #b3261e  5.61–6.54 */
+  --perch-danger-mark:  3.2 71.3% 41%;       /* #b3261e  5.61–6.54 */
+
+  --perch-viz-series-1: 142.4 71.8% 29.2%;   /* #15803d  4.30–5.02 substrate */
+  --perch-viz-series-2: 192.9 82.3% 31%;     /* #0e7490  4.59–5.36 evidence  */
+  --perch-viz-series-3: 26 90.5% 37.1%;      /* #b45309  4.31–5.02 authority */
+  --perch-viz-series-4: 263.4 70% 50.4%;     /* #6d28d9  6.09–7.11 */
+  --perch-viz-series-5: 335.1 77.6% 42%;     /* #be185d  5.18–6.04 */
+  --perch-viz-series-6: 35.5 91.7% 32.9%;    /* #a16207  4.02–4.92 */
+
+  --perch-chart-rule:       26 90.5% 37.1%;   /* #b45309  the dashed threshold rule */
+  --perch-chart-rule-label: 39.2 74.7% 31%;   /* #8a6114  5.53 on --perch-card ONLY, 4.51 raised */
+  --perch-chart-axis-ink:   152.7 14.7% 29.4%;/* #40564c  6.79–7.91 */
+
+  /* THREE TOKENS 18-DATAVIZ ASKS 19-TOKENS TO ADD. Each is an ALIAS of a token
+     the package already ships, so adding them costs no new measurement — the
+     ratios below are recomputed, not asserted. §3.2 carries the paste-ready
+     block and the test extension. */
+  --perch-viz-grid:            145 15.8% 85.1%;   /* = --perch-border         1.37 card */
+  --perch-viz-unfilled:           142.5 16% 90.2%;   /* = --perch-surface-raised 1.23 card */
+  --perch-viz-suppressed-hatch:150 10.5% 37.3%;   /* = --perch-foreground-muted 5.88 card;
+                                                     drawn at alpha .35 → 1.65 composited */
+
+  --perch-alpha-area-top: 0.30;    /* [ASSET stigmergy.svg:4]  */
+  --perch-alpha-area-bottom: 0.02; /* [ASSET stigmergy.svg:4]  */
+  --perch-alpha-trail-rule: 0.10;  /* [ASSET stigmergy.svg:11] */
+  --perch-alpha-baseline: 0.20;    /* [ASSET stigmergy.svg:53] */
+  --perch-alpha-hatch: 0.35;
+
+  --perch-rail-pillar-thickness: 2.5px; /* [ASSET pillars.svg:28] */
+  --perch-radius-region: 0.5625rem;     /* [ASSET security-v2.svg:8] rx="9" */
+
+  /* the virtual rem, verbatim mechanism from BUZZ typography.css:16-17 */
+  --buzz-type-scale: 1;
+  --buzz-type-rem: calc(1rem * var(--buzz-type-scale));
+
+  --perch-font-sans: "Inter Variable", Inter, "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --perch-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* ========================================================================== */
+/* 2. DARK — explicit choice                                                  */
+/* ========================================================================== */
+:root.dark,
+:root[data-theme="dark"],
+.dark {
+  color-scheme: dark;
+
+  --perch-surface-chrome: 160 17.6% 3.3%;    /* #070a09 [ASSET hero-v2.svg:3] */
+  --perch-background:     165 28.6% 5.5%;    /* #0a1210 [ASSET] */
+  --perch-card:           162 29.4% 6.7%;    /* #0c1613 [ASSET pillars.svg:27] */
+  --perch-popover:        161.3 33.3% 9.4%;  /* #10201b */
+  --perch-surface-raised: 159.2 37.1% 13.7%; /* #163027 */
+  --perch-border:         154.3 31.8% 17.3%; /* #1e3a2e [ASSET pillars.svg:27] */
+  --perch-border-strong:  157.5 29.6% 21.2%; /* #26463a [ASSET] */
+  --perch-ring:           151.2 20.2% 46.7%; /* #5f8f78  4.99 card / 5.38 chrome */
+
+  --perch-foreground:           146.7 27.3% 93.5%; /* #eaf3ee  16.28 card */
+  --perch-foreground-secondary: 150 12.6% 65.9%;   /* #9db3a8   8.29 card */
+  --perch-foreground-muted:     149 12.8% 55.5%;   /* #7f9c8d   6.18 card */
+  --perch-foreground-faint:     151.4 8.7% 52.7%;  /* #7c9187   5.49 card, NEVER TEXT */
+
+  --perch-pillar-substrate-ink:  141.9 69.2% 58%;  /* #4ade80 [ASSET] 10.57 card */
+  --perch-pillar-substrate-mark: 141.9 69.2% 58%;  /* #4ade80 [ASSET] */
+  --perch-pillar-authority-ink:  37.7 92.1% 50.2%; /* #f59e0b [ASSET]  8.58 card */
+  --perch-pillar-authority-mark: 37.7 92.1% 50.2%; /* #f59e0b [ASSET] */
+  --perch-pillar-evidence-ink:   187.9 85.7% 53.3%;/* #22d3ee [ASSET] 10.20 card */
+  --perch-pillar-evidence-mark:  187.9 85.7% 53.3%;/* #22d3ee [ASSET] */
+
+  --perch-border-pillar-substrate: 154.3 31.8% 17.3%; /* 1.49 DECORATION */
+  --perch-border-pillar-authority: 36.9 28.9% 17.6%;  /* 1.42 DECORATION */
+  --perch-border-pillar-evidence:  195.4 37.6% 18.2%; /* 1.47 DECORATION */
+
+  --perch-sev-low:      155.2 13.2% 57.1%;  /* #83a094  6.51 card */
+  --perch-sev-medium:   38.6 63.5% 59.2%;   /* #d9aa55  8.63 card */
+  --perch-sev-high:     37.7 92.1% 50.2%;   /* #f59e0b  8.58 card */
+  --perch-sev-critical: 0 80.9% 69.2%;      /* #f07171  6.41 card */
+  --perch-danger-mark:  0 69.6% 60%;        /* #e05252  4.82 card, 3.70 raised — NEVER TEXT */
+
+  --perch-viz-series-1: 141.9 69.2% 58%;    /* #4ade80  8.11–11.41 */
+  --perch-viz-series-2: 187.9 85.7% 53.3%;  /* #22d3ee  7.82–11.00 */
+  --perch-viz-series-3: 37.7 92.1% 50.2%;   /* #f59e0b  6.58–9.26  */
+  --perch-viz-series-4: 255.1 91.7% 76.3%;  /* #a78bfa  5.19–7.30  */
+  --perch-viz-series-5: 328.6 85.5% 70.2%;  /* #f472b6  5.33–7.51  */
+  --perch-viz-series-6: 47.9 95.8% 53.1%;   /* #facc15  9.23–12.98 */
+
+  --perch-chart-rule:       37.7 92.1% 50.2%;  /* #f59e0b [ASSET stigmergy.svg:48] */
+  --perch-chart-rule-label: 36.9 49.2% 48.6%;  /* #b98a3f  5.94 card */
+  --perch-chart-axis-ink:   150.7 22.4% 64.1%; /* #8fb8a4  8.39 card */
+
+  --perch-viz-grid:             154.3 31.8% 17.3%; /* = --perch-border          1.49 card */
+  --perch-viz-unfilled:            159.2 37.1% 13.7%; /* = --perch-surface-raised  1.30 card */
+  --perch-viz-suppressed-hatch: 149 12.8% 55.5%;   /* = --perch-foreground-muted 6.18 card;
+                                                      at alpha .35 → 1.81 composited */
+}
+
+/* ========================================================================== */
+/* 3. DARK, by system preference. Declaration set identical to §2.            */
+/* ========================================================================== */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not([data-theme="light"]) {
+    color-scheme: dark;
+    --perch-surface-chrome: 160 17.6% 3.3%;
+    --perch-background:     165 28.6% 5.5%;
+    --perch-card:           162 29.4% 6.7%;
+    --perch-popover:        161.3 33.3% 9.4%;
+    --perch-surface-raised: 159.2 37.1% 13.7%;
+    --perch-border:         154.3 31.8% 17.3%;
+    --perch-border-strong:  157.5 29.6% 21.2%;
+    --perch-ring:           151.2 20.2% 46.7%;
+    --perch-foreground:           146.7 27.3% 93.5%;
+    --perch-foreground-secondary: 150 12.6% 65.9%;
+    --perch-foreground-muted:     149 12.8% 55.5%;
+    --perch-foreground-faint:     151.4 8.7% 52.7%;
+    --perch-pillar-substrate-ink:  141.9 69.2% 58%;
+    --perch-pillar-substrate-mark: 141.9 69.2% 58%;
+    --perch-pillar-authority-ink:  37.7 92.1% 50.2%;
+    --perch-pillar-authority-mark: 37.7 92.1% 50.2%;
+    --perch-pillar-evidence-ink:   187.9 85.7% 53.3%;
+    --perch-pillar-evidence-mark:  187.9 85.7% 53.3%;
+    --perch-border-pillar-substrate: 154.3 31.8% 17.3%;
+    --perch-border-pillar-authority: 36.9 28.9% 17.6%;
+    --perch-border-pillar-evidence:  195.4 37.6% 18.2%;
+    --perch-sev-low:      155.2 13.2% 57.1%;
+    --perch-sev-medium:   38.6 63.5% 59.2%;
+    --perch-sev-high:     37.7 92.1% 50.2%;
+    --perch-sev-critical: 0 80.9% 69.2%;
+    --perch-danger-mark:  0 69.6% 60%;
+    --perch-viz-series-1: 141.9 69.2% 58%;
+    --perch-viz-series-2: 187.9 85.7% 53.3%;
+    --perch-viz-series-3: 37.7 92.1% 50.2%;
+    --perch-viz-series-4: 255.1 91.7% 76.3%;
+    --perch-viz-series-5: 328.6 85.5% 70.2%;
+    --perch-viz-series-6: 47.9 95.8% 53.1%;
+    --perch-chart-rule:       37.7 92.1% 50.2%;
+    --perch-chart-rule-label: 36.9 49.2% 48.6%;
+    --perch-chart-axis-ink:   150.7 22.4% 64.1%;
+    --perch-viz-grid:             154.3 31.8% 17.3%;
+    --perch-viz-unfilled:            159.2 37.1% 13.7%;
+    --perch-viz-suppressed-hatch: 149 12.8% 55.5%;
+  }
+}
+
+/* ========================================================================== */
+/* 4. TYPE — rem only. Content is t-sm / t-base. t-2xs and t-3xs are meta.    */
+/* ========================================================================== */
+.t-3xs    { font-size: calc(var(--buzz-type-rem) * 0.5);    }  /* glyph labels only */
+.t-2xs    { font-size: calc(var(--buzz-type-rem) * 0.6875); }  /* meta: markers, ticks */
+.t-xs     { font-size: calc(var(--buzz-type-rem) * 0.75);   }  /* secondary content line */
+.t-sm     { font-size: calc(var(--buzz-type-rem) * 0.875);  }  /* PRIMARY content */
+.t-base   { font-size: var(--buzz-type-rem);                }  /* headline numbers */
+.t-lg     { font-size: calc(var(--buzz-type-rem) * 1.125);  }
+.t-xl     { font-size: calc(var(--buzz-type-rem) * 1.25);   }
+.t-eyebrow {
+  font-size: calc(var(--buzz-type-rem) * 0.75);
+  letter-spacing: 0.34em; font-weight: 600; line-height: 1; text-transform: uppercase;
+}
+.mono { font-family: var(--perch-font-mono); font-variant-numeric: tabular-nums; }
+.num  { font-family: var(--perch-font-mono); font-variant-numeric: tabular-nums; }
+
+/* ========================================================================== */
+/* 5. PAINT CLASSES — the ONLY way colour reaches an SVG node in this file.   */
+/*    There is no fill= or stroke= attribute anywhere below.                  */
+/* ========================================================================== */
+.f-none { fill: none; }
+.k-none { stroke: none; }
+.f-s1 { fill:   hsl(var(--perch-viz-series-1)); }
+.f-s2 { fill:   hsl(var(--perch-viz-series-2)); }
+.f-s3 { fill:   hsl(var(--perch-viz-series-3)); }
+.f-s4 { fill:   hsl(var(--perch-viz-series-4)); }
+.f-s5 { fill:   hsl(var(--perch-viz-series-5)); }
+.f-s6 { fill:   hsl(var(--perch-viz-series-6)); }
+.k-s1 { stroke: hsl(var(--perch-viz-series-1)); fill: none; }
+.k-s2 { stroke: hsl(var(--perch-viz-series-2)); fill: none; }
+.k-s3 { stroke: hsl(var(--perch-viz-series-3)); fill: none; }
+.k-s4 { stroke: hsl(var(--perch-viz-series-4)); fill: none; }
+.k-s5 { stroke: hsl(var(--perch-viz-series-5)); fill: none; }
+.k-s6 { stroke: hsl(var(--perch-viz-series-6)); fill: none; }
+.k-rule    { stroke: hsl(var(--perch-chart-rule)); fill: none; }
+.f-rulelab { fill:   hsl(var(--perch-chart-rule-label)); }
+.k-grid    { stroke: hsl(var(--perch-viz-grid)); fill: none; }
+.f-track   { fill:   hsl(var(--perch-viz-unfilled)); }
+.f-hatch   { fill:   hsl(var(--perch-viz-suppressed-hatch)); }
+.k-hatch   { stroke: hsl(var(--perch-viz-suppressed-hatch)); fill: none; }
+.f-axis    { fill:   hsl(var(--perch-chart-axis-ink)); }
+.k-axis    { stroke: hsl(var(--perch-chart-axis-ink)); fill: none; }
+.f-fg      { fill:   hsl(var(--perch-foreground)); }
+.f-muted   { fill:   hsl(var(--perch-foreground-muted)); }
+.f-crit    { fill:   hsl(var(--perch-sev-critical)); }
+.k-crit    { stroke: hsl(var(--perch-sev-critical)); fill: none; }
+.f-med     { fill:   hsl(var(--perch-sev-medium)); }
+.k-med     { stroke: hsl(var(--perch-sev-medium)); fill: none; }
+.f-danger  { fill:   hsl(var(--perch-danger-mark)); }
+.k-danger  { stroke: hsl(var(--perch-danger-mark)); fill: none; }
+.f-evid    { fill:   hsl(var(--perch-pillar-evidence-mark)); }
+.k-evid    { stroke: hsl(var(--perch-pillar-evidence-mark)); fill: none; }
+.f-card    { fill:   hsl(var(--perch-card)); }
+.k-border  { stroke: hsl(var(--perch-border-strong)); fill: none; }
+.a-area    { fill: url(#perchAreaGrad); }
+/* A <stop> takes stop-color, NOT fill. A class setting `fill` on a gradient stop is
+   silently ignored and the area paints in the UA default - caught by screenshot review,
+   not by any lint, which is why the review pass is not optional. */
+.stop-s1   { stop-color: hsl(var(--perch-viz-series-1)); }
+
+@keyframes perch-crossing {
+  from { transform: scale(1); opacity: 0.75; }
+  to   { transform: scale(3); opacity: 0; }
+}
+.crossring { transform-box: fill-box; transform-origin: center; opacity: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .crossring { animation: perch-crossing var(--perch-motion-crossing-duration, 3s) ease-out 1 both; }
+}
+@media (prefers-reduced-motion: reduce) { .crossring { display: none; } }
+
+/* ========================================================================== */
+/* 6. PAGE CHROME                                                            */
+/* ========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: hsl(var(--perch-background));
+  color: hsl(var(--perch-foreground));
+  font-family: var(--perch-font-sans);
+  font-size: var(--buzz-type-rem);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: 6.5rem;
+}
+a { color: hsl(var(--perch-pillar-evidence-mark)); }
+code, .mono { font-family: var(--perch-font-mono); }
+.dim  { color: hsl(var(--perch-foreground-muted)); }
+.dim2 { color: hsl(var(--perch-foreground-secondary)); }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 1.5rem; }
+
+header.masthead {
+  border-bottom: 1px solid hsl(var(--perch-border));
+  background: hsl(var(--perch-surface-chrome));
+  padding: 1.75rem 0 1.5rem;
+  margin-bottom: 1.75rem;
+}
+header.masthead .eyebrow { color: hsl(var(--perch-pillar-substrate-mark)); }
+header.masthead h1 {
+  margin: 0.55rem 0 0; font-size: calc(var(--buzz-type-rem) * 1.5);
+  font-weight: 600; letter-spacing: -0.01em;
+}
+header.masthead p { margin: 0.65rem 0 0; max-width: 78ch; }
+
+/* control strip, docked, with the body reserving its height */
+.dock {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: hsl(var(--perch-surface-chrome));
+  border-top: 1px solid hsl(var(--perch-border-strong));
+  padding: 0.6rem 0;
+}
+.dock .row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.dock .lbl { color: hsl(var(--perch-foreground-muted)); margin-right: 0.35rem; }
+button.seg {
+  appearance: none; cursor: pointer;
+  background: hsl(var(--perch-card));
+  color: hsl(var(--perch-foreground-secondary));
+  border: 1px solid hsl(var(--perch-border));
+  border-radius: 0.4rem; padding: 0.28rem 0.6rem;
+  font: inherit; font-size: calc(var(--buzz-type-rem) * 0.75);
+  font-family: var(--perch-font-mono);
+}
+button.seg:hover { border-color: hsl(var(--perch-border-strong)); }
+button.seg[aria-pressed="true"] {
+  border-color: hsl(var(--perch-pillar-substrate-mark));
+  color: hsl(var(--perch-foreground));
+  background: hsl(var(--perch-surface-raised));
+}
+button.seg:focus-visible { outline: 2px solid hsl(var(--perch-ring)); outline-offset: 2px; }
+
+/* ========================================================================== */
+/* 7. PLATE — the punched-notch region frame, from AMB security-v2.svg:8-32   */
+/* ========================================================================== */
+.plate {
+  position: relative;
+  background: hsl(var(--perch-card));
+  border: 1px solid hsl(var(--perch-border));
+  border-radius: var(--perch-radius-region);
+  padding: 1.75rem 1.5rem 1.4rem;
+  margin-bottom: 2.25rem;
+}
+.plate::before {
+  content: ""; position: absolute; inset: -1px -1px auto -1px; height: var(--perch-rail-pillar-thickness);
+  border-radius: var(--perch-radius-region) var(--perch-radius-region) 0 0;
+  background: hsl(var(--perch-rail-hue, var(--perch-pillar-substrate-mark)));
+}
+.plate[data-pillar="substrate"] { --perch-rail-hue: var(--perch-pillar-substrate-mark); border-color: hsl(var(--perch-border-pillar-substrate)); }
+.plate[data-pillar="authority"] { --perch-rail-hue: var(--perch-pillar-authority-mark); border-color: hsl(var(--perch-border-pillar-authority)); }
+.plate[data-pillar="evidence"]  { --perch-rail-hue: var(--perch-pillar-evidence-mark);  border-color: hsl(var(--perch-border-pillar-evidence)); }
+.plate .notch {
+  position: absolute; top: calc(var(--perch-rail-pillar-thickness) * -1 - 0.55rem);
+  background: hsl(var(--perch-card)); padding: 0 0.5rem;
+}
+.plate .notch-l { left: 1rem;  color: hsl(var(--perch-rail-hue, var(--perch-foreground))); }
+.plate .notch-r { right: 1rem; color: hsl(var(--perch-foreground-muted)); font-family: var(--perch-font-mono); }
+.plate h3 { margin: 0 0 0.35rem; font-weight: 600; letter-spacing: -0.005em; }
+.plate .purpose { margin: 0 0 1.15rem; max-width: 82ch; color: hsl(var(--perch-foreground-secondary)); }
+
+.figure {
+  background: hsl(var(--perch-card));
+  border: 1px solid hsl(var(--perch-border));
+  border-radius: 0.5rem; padding: 0.9rem 1rem 0.8rem; margin-bottom: 0.9rem;
+}
+.figure svg { display: block; width: 100%; height: auto; }
+/* CAP THE VIEWBOX WIDTH. An SVG at width:100% scales its own coordinate system,
+   so rem-sized <text> upscales with it and the t-2xs contract silently stops
+   holding. This is the rule 17-COMPONENT-SPECS asked 18-DATAVIZ to carry. */
+.figure .cap960 { max-width: 960px; margin: 0 auto; }
+.figure .cap720 { max-width: 720px; margin: 0 auto; }
+.figure .cap720L { max-width: 720px; margin: 0; }
+
+.caption { margin: 0.55rem 0 0; color: hsl(var(--perch-foreground-secondary)); }
+.caption b { color: hsl(var(--perch-foreground)); font-weight: 600; }
+.marks { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.5rem; }
+.mark {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  border: 1px solid hsl(var(--perch-border)); border-radius: 0.3rem;
+  padding: 0.12rem 0.4rem; color: hsl(var(--perch-foreground-muted));
+  font-family: var(--perch-font-mono);
+}
+.mark.derived { border-color: hsl(var(--perch-border-strong)); }
+.mark.served  { border-color: hsl(var(--perch-border-pillar-evidence)); color: hsl(var(--perch-pillar-evidence-ink)); }
+.mark.absent  { border-color: hsl(var(--perch-sev-medium)); color: hsl(var(--perch-sev-medium)); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  border-radius: 0.3rem; padding: 0.1rem 0.4rem; font-weight: 600;
+  letter-spacing: 0.06em; border: 1px solid currentColor;
+}
+.chip.low      { color: hsl(var(--perch-sev-low)); }
+.chip.medium   { color: hsl(var(--perch-sev-medium)); }
+.chip.high     { color: hsl(var(--perch-sev-high)); }
+.chip.critical { color: hsl(var(--perch-sev-critical)); }
+.chip .bar { display: inline-flex; gap: 1px; }
+.chip .bar i { width: 3px; height: 8px; background: currentColor; display: block; }
+.chip .bar i.off { background: hsl(var(--perch-viz-unfilled)); }
+
+.stateblock {
+  border: 1px dashed hsl(var(--perch-border-strong)); border-radius: 0.5rem;
+  padding: 1rem 1.1rem; background: hsl(var(--perch-surface-raised));
+}
+.stateblock h4 { margin: 0 0 0.4rem; font-weight: 600; }
+.stateblock p  { margin: 0 0 0.5rem; color: hsl(var(--perch-foreground-secondary)); max-width: 78ch; }
+.stateblock a  { display: inline-block; margin-top: 0.15rem; }
+.skel { height: 0.6rem; border-radius: 0.3rem; background: hsl(var(--perch-viz-unfilled)); margin-bottom: 0.5rem; }
+@media (prefers-reduced-motion: no-preference) { .skel { animation: perch-skel 1.6s ease-in-out infinite; } }
+@keyframes perch-skel { 0%,100% { opacity: 0.55; } 50% { opacity: 0.95; } }
+.skel.w1 { width: 62%; } .skel.w2 { width: 84%; } .skel.w3 { width: 45%; }
+
+.warn {
+  border-left: var(--perch-rail-pillar-thickness) solid hsl(var(--perch-sev-medium));
+  padding: 0.5rem 0 0.5rem 0.75rem; margin: 0.7rem 0 0;
+  color: hsl(var(--perch-foreground-secondary)); max-width: 84ch;
+}
+.warn.bad { border-left-color: hsl(var(--perch-sev-critical)); }
+
+.tbl { width: 100%; border-collapse: collapse; margin-top: 0.7rem; }
+.tbl th, .tbl td { text-align: left; padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid hsl(var(--perch-border)); vertical-align: top; }
+.tbl th { color: hsl(var(--perch-foreground-muted)); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+.tbl td.n { font-family: var(--perch-font-mono); font-variant-numeric: tabular-nums; }
+.tbl caption { caption-side: bottom; text-align: left; padding-top: 0.45rem; color: hsl(var(--perch-foreground-muted)); }
+
+details.contract { margin-top: 0.9rem; }
+details.contract summary { cursor: pointer; color: hsl(var(--perch-foreground-muted)); font-family: var(--perch-font-mono); list-style: none; }
+details.contract summary::-webkit-details-marker { display: none; }
+details.contract summary::before { content: "▸ "; }
+details.contract[open] summary::before { content: "▾ "; }
+details.contract pre {
+  margin: 0.6rem 0 0; padding: 0.85rem 1rem; overflow-x: auto;
+  background: hsl(var(--perch-surface-raised)); border: 1px solid hsl(var(--perch-border));
+  border-radius: 0.4rem; font-family: var(--perch-font-mono); line-height: 1.55;
+  color: hsl(var(--perch-foreground-secondary));
+}
+details.specnotes { margin: 2.5rem 0 3rem; border-top: 1px solid hsl(var(--perch-border)); padding-top: 1.25rem; }
+details.specnotes summary { cursor: pointer; color: hsl(var(--perch-foreground-muted)); list-style: none; }
+details.specnotes summary::-webkit-details-marker { display: none; }
+details.specnotes h3 { margin: 1.6rem 0 0.5rem; font-weight: 600; }
+details.specnotes p, details.specnotes li { color: hsl(var(--perch-foreground-secondary)); max-width: 92ch; }
+
+/* VIZ-5 board */
+.leasegrid { width: 100%; border-collapse: collapse; }
+.leasegrid th {
+  text-align: left; color: hsl(var(--perch-foreground-muted)); font-weight: 600;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  padding-bottom: 0.4rem; border-bottom: 1px solid hsl(var(--perch-border-strong));
+}
+.leasegrid td { padding: 0.6rem 0.7rem 0.6rem 0; border-bottom: 1px solid hsl(var(--perch-border)); vertical-align: top; }
+.leasegrid td .sub { color: hsl(var(--perch-foreground-muted)); display: block; margin-top: 0.12rem; }
+.state-open     { color: hsl(var(--perch-pillar-evidence-ink)); }
+.state-expiring { color: hsl(var(--perch-sev-high)); }
+.state-expired  { color: hsl(var(--perch-sev-critical)); font-weight: 600; }
+.state-released { color: hsl(var(--perch-foreground-muted)); }
+
+/* VIZ-4 timeline */
+.tl { margin: 0; padding: 0; list-style: none; }
+.tlrow { display: grid; grid-template-columns: 4.75rem 1fr; gap: 0.75rem; padding: 0.55rem 0; border-bottom: 1px solid hsl(var(--perch-border)); }
+.tlrow .when { color: hsl(var(--perch-foreground-muted)); font-family: var(--perch-font-mono); padding-top: 0.12rem; }
+.tlrow .body { border-left: 4px solid hsl(var(--tl-rail, var(--perch-foreground-muted))); padding-left: 0.75rem; }
+.tlrow .body .k { font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: hsl(var(--tl-rail, var(--perch-foreground))); }
+.tlrow .body .l1 { margin: 0.18rem 0 0; }
+.tlrow .body .l2 { margin: 0.1rem 0 0; color: hsl(var(--perch-foreground-muted)); }
+.tlrow.divider .body { border-left-style: dashed; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 0.9rem; margin-top: 0.6rem; color: hsl(var(--perch-foreground-muted)); }
+.legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.legend svg { width: 34px; height: 8px; display: block; }
+
+.node { }
+.tblwrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="eyebrow t-eyebrow">Perch · specimen</div>
+    <h1>Data-visualization plates</h1>
+    <p class="t-sm dim2">
+      Six primitives — <span class="mono">VIZ-1</span> ConcentrationCurve,
+      <span class="mono">VIZ-2</span> HostHeat, <span class="mono">VIZ-3</span> KillChainGraph,
+      <span class="mono">VIZ-4</span> IncidentTimeline, <span class="mono">VIZ-5</span>
+      ContainmentLeaseTimer, <span class="mono">VIZ-6</span> RateSparkline — in every state, in both
+      themes, in both data regimes.
+      <span class="mono">18-DATAVIZ.md</span> is the spec; this page is the specimen.
+    </p>
+    <p class="t-sm dim2">
+      Numbers are computed on load from the same closed form the runtime evaluates —
+      <span class="mono">strength(t) = confidence · 0.5^((t − timestamp) / decay_half_life)</span> —
+      over the canonical scenario in <span class="mono">fixtures/perch-demo-fixture.json</span>.
+      The five concentration checkpoints this page draws reproduce that file to six decimal places;
+      <span class="mono">viz/dataviz-fixture.mjs</span> asserts it and fails loudly if either side moves.
+    </p>
+    <p class="t-sm dim2" id="deeplink"></p>
+  </div>
+</header>
+
+<main class="wrap" id="plates"></main>
+
+<div class="wrap">
+<details class="specnotes" id="specnotes">
+  <summary class="t-eyebrow">Spec notes</summary>
+  <div id="specbody"></div>
+</details>
+</div>
+
+<div class="dock">
+  <div class="wrap">
+    <div class="row" style="margin-bottom:.4rem">
+      <span class="lbl t-2xs mono">STATE</span><span id="stateRow" class="row"></span>
+    </div>
+    <div class="row">
+      <span class="lbl t-2xs mono">REGIME</span><span id="regimeRow" class="row"></span>
+      <span class="lbl t-2xs mono" style="margin-left:1rem">THEME</span><span id="themeRow" class="row"></span>
+      <span class="lbl t-2xs mono" style="margin-left:1rem">PLATE</span><span id="plateRow" class="row"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===========================================================================
+   DEEP LINKS — one reader, two accepted forms.
+
+   Two peer prototypes shipped two conventions: `?state=&sel=&ov=` (The Watch)
+   and `#state=&screen=` (Watchfloor + Ledger). Rather than add a third, this
+   page WRITES the query form and ACCEPTS either on read, so a link written in
+   the fragment form still resolves here. `readDeepLink` is the single place
+   that knows; nothing else in the page reads location.
+   =========================================================================== */
+function readDeepLink() {
+  const q = new URLSearchParams(location.search);
+  const hRaw = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+  const hp = new URLSearchParams(hRaw);
+  const pick = (k) => q.get(k) ?? hp.get(k);
+  return { state: pick("state"), regime: pick("regime"), theme: pick("theme"), plate: pick("plate") };
+}
+function writeDeepLink() {
+  const q = new URLSearchParams();
+  q.set("state", STATE);
+  q.set("regime", REGIME);
+  if (THEME !== "system") q.set("theme", THEME);
+  if (PLATE !== "all") q.set("plate", PLATE);
+  const url = location.pathname + "?" + q.toString();
+  try { history.replaceState(null, "", url); } catch (_) { /* file:// in some browsers */ }
+  const el = document.getElementById("deeplink");
+  if (el) {
+    el.innerHTML = '<span class="mono t-2xs dim">deep link · </span>' +
+      '<span class="mono t-2xs">?' + esc(q.toString()) + '</span>' +
+      '<span class="mono t-2xs dim"> · a #fragment of the same shape is also accepted</span>';
+  }
+}
+
+/* ===========================================================================
+   FIXTURE — the canonical scenario, bound not copied.
+
+   SPINE. Every value in FX.canon below is lifted verbatim from
+   build/fixtures/perch-demo-fixture.json (22-DEMO-FIXTURE.md), which is the one
+   canonical fixture. Ids, clock, policy, holds, leases, receipt and channel
+   UUIDs are that file's.
+
+   EXTENSION. The canonical scenario is single-host, single-threat-class and
+   two-detector by design, so VIZ-2 (a ranked host list), VIZ-3 (an incident
+   graph with rejections) and VIZ-6 (a source distribution) cannot be drawn from
+   it alone. FX.ext supplies exactly what is missing. Every extension id is
+   derived by the SAME public function the canonical fixture uses,
+   sha256("perch-demo-fixture/v1/" + label), under an `ext/` label prefix; run
+   `node viz/dataviz-fixture.mjs` to regenerate the table.
+
+   THE EXTENSION CANNOT MOVE THE CANONICAL NUMBERS. concentration_for
+   (AMB crates/swarm-pheromone/src/substrate.rs:1268-1304, called on every
+   concentration-monitor tick inside `swarm_detect --serve`, reducing one threat
+   class's deposits to a PheromoneConcentration) filters by threat class at :1281
+   before summing. Every extension deposit is in a class other than `execution`,
+   and viz/dataviz-fixture.mjs asserts all five checkpoints are byte-identical
+   with the extension loaded and without it.
+   =========================================================================== */
+
+const FX = {
+  clock: {
+    shift_start_s: 1773734400,
+    now_s: 1773739200,          /* 2026-03-17T09:20:00Z — demo_now_ms / 1000 */
+    window_s: 600,              /* the drawn window: 09:10:00 → 09:20:00 */
+    cross_s: 1773738881,
+    hold_a_ms: 1773738882600, hold_b_ms: 1773738882700,
+    incident_ms: 1773738882400, open_row_ms: 1773738965000,
+    leg1_ms: 1773738979000, decide_ms: 1773738979300,
+    receipt_ms: 1773738979800, lease_ms: 1773738979900,
+    dismiss_leg1_ms: 1773739124000, dismiss_applied_ms: 1773739124200,
+    rollback_ms: 1773739879900,
+  },
+  policy: {
+    threat_class: "execution",
+    half_life_secs: 3600, evaporation_threshold: 0.01,
+    min_sources_for_escalation: 2, alert_threshold: 2.0, incident_threshold: 5.0,
+  },
+  ttl: { capability_ms: 60000, containment_ms: 900000, contingency_ms: 300000, hold_ms: 3600000 },
+  channels: {
+    case:  { id: "27799e23-ab25-4659-b381-3de47ea7ca4d", name: "case-2026-03-17-host-ops-1" },
+    lane:  { id: "b8240a37-88b1-4a9f-8b77-5cc005891115", name: "execution" },
+    watch: { id: "426cef7e-808f-4988-af82-42d911a0d480", name: "watch" },
+  },
+  operator: { operator_id: "perch-operator-1" },
+  incident_id: "incident:hunt-evt-1:1773738882400",
+  holds: {
+    a: { hold_id: "h_a07aeacf", action_kind: "isolate_host", severity: "CRITICAL",
+         state: "executed", held_at_ms: 1773738882600, expires_at_ms: 1773742482600,
+         leases_a_containment: true, hunt_id: "hunt-evt-1", host_id: "host-ops-1" },
+    b: { hold_id: "h_1c28ae79", action_kind: "block_egress", severity: "CRITICAL",
+         state: "notified", held_at_ms: 1773738882700, expires_at_ms: 1773742482700,
+         leases_a_containment: false, hunt_id: "hunt-evt-2", target: "198.51.100.20" },
+  },
+  capability_lease: {
+    capability_id: "lease:hunt-evt-1:isolate_host:1773738979300",
+    expires_at_ms: 1773739039300, action: "isolate_host", scope: "host-ops-1",
+  },
+  containment_lease_id: "cl_9b3645fc",
+  rollback_id: "rb_81c4a588",
+  receipt_id: "resp:hunt-evt-1:lease:hunt-evt-1:isolate_host:1773738979300",
+  daemon_agent: "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+  ev: {
+    finding_spt_1: "ad87733a20dc8c74e001bd9f60db48f01ad01513b3ea0df29c471b3872e9874a",
+    finding_scr_1: "8ed31965a6519634764a93b0ec1c39aef455712e77fc73beebf3f3a327755ac8",
+    finding_spt_2: "2b1c9dceec6de43e267f3017cea73b7cc8f92696b9e0ffb71cad9add387f2536",
+    escalation:    "c66fe87fc3abf39a7005fe7d65ecd44af23870ab15dc2be462e9f3b98649bea6",
+    hold_a_open:   "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c",
+    verdict_grant: "243aad87527a33433a60e2f990d83de1e84618a69e583fbd8172de4e8fe7d9d8",
+    verdict_dismiss:"58d921fd6fe2d6f6d9d8cd3a22295bcbd5ffd9ed13eef3ace9398d6472f5a0fd",
+    receipt:       "db8416d557869aa5f33e11a7cb1cb395ba27b3bc40e1deae9ccb376e1486975a",
+    lease:         "c747d4d4edd72ff763635a82e8ab0828799949b875a5edf0567cd8cf79826e34",
+    rollback:      "036f30a1e31fd5033c407315fa7096670cc772ac8f4410923bb3b8cedc29e88b",
+  },
+  /* --- extension identities, derived. `ext/ed25519/whisker-1`, `ext/ed25519/stalker-1` --- */
+  extAgents: {
+    whisker: "swarm:ed25519:70c83cc106a4c3305abcb2b125317a91209a46f1b55e341e88f53e4c16ff1dfc:whisker-2c19",
+    stalker: "swarm:ed25519:6db3b52e7e8754622695d4b37b8b6b93911bd33e1fee9c2811f9a15ef3b9e6a9:stalker-4e77",
+  },
+};
+
+/* Short labels for display. The whole id is always reachable in the table
+   toggle; PubKey's own doc comment (BUZZ desktop/src/shared/ui/PubKey.tsx:21-31)
+   is why a decision is never made against a truncation, and why the table path
+   is mandatory rather than optional. */
+const agentLabel = (id) => {
+  const seg = id.split(":");
+  return seg.length >= 4 ? seg[3] : (seg[1] === "ed25519" ? "daemon-ingest" : id);
+};
+const strategyOf = (agentId) => agentId.split(":").slice(-1)[0];
+const agentBaseOf = (agentId) => agentId.split(":").slice(0, -1).join(":");
+
+function dep(agentBase, strategy, threatClass, tS, confidence, eventId, host, indicator, severity, origin) {
+  return {
+    agent_id: agentBase + ":" + strategy,
+    strategy_id: strategy,
+    threat_class: threatClass,
+    confidence: confidence,
+    timestamp: tS,                                  /* UNIX SECONDS */
+    decay_half_life: FX.policy.half_life_secs,      /* SECONDS, per deposit */
+    event_id: eventId,
+    host_id: host,                                  /* null is legal — D2 */
+    indicator: indicator,
+    severity: severity,
+    origin: origin,
+  };
+}
+
+/* --- CANONICAL: the `execution` lane. Three deposits, two strategies, one agent. --- */
+const CANON_DEPOSITS = [
+  dep(FX.daemon_agent, "suspicious_process_tree", "execution", 1773738872, 0.9, "hunt-evt-1", "host-ops-1", "WINWORD → powershell.exe -enc", "CRITICAL", "canonical"),
+  dep(FX.daemon_agent, "suspicious_scripting",    "execution", 1773738872, 0.9, "hunt-evt-1", "host-ops-1", "powershell.exe -enc AAA=",     "CRITICAL", "canonical"),
+  dep(FX.daemon_agent, "suspicious_process_tree", "execution", 1773738881, 0.9, "hunt-evt-2", "host-ops-1", "OUTLOOK → powershell.exe",      "CRITICAL", "canonical"),
+];
+
+/* --- EXTENSION: other threat classes only, so the canonical sum cannot move. --- */
+const EXT_DEPOSITS = [
+  dep(FX.extAgents.whisker, "lsass_handle",       "credential_access",   1773738680, 0.62, "evt-cc7398", "host-ops-2", "lsass handle open", "MEDIUM", "extension"),
+  dep(FX.extAgents.whisker, "lsass_handle",       "credential_access",   1773739010, 0.44, "evt-f0a6e1", "host-ops-3", "lsass handle open", "MEDIUM", "extension"),
+  dep(FX.extAgents.stalker, "beacon_jitter",      "command_and_control", 1773738790, 0.55, "evt-3035e2", "host-ops-2", "198.51.100.20:4444", "MEDIUM", "extension"),
+  dep(FX.extAgents.stalker, "beacon_jitter",      "command_and_control", 1773739105, 0.31, "evt-fd3ca4", "host-ops-4", "198.51.100.20:8443", "MEDIUM", "extension"),
+  dep(FX.extAgents.stalker, "smb_admin_share",    "lateral_movement",    1773738900, 0.48, "evt-43cc5e", "host-ops-3", "ADMIN$ connect",     "MEDIUM", "extension"),
+  dep(FX.extAgents.whisker, "sched_task_persist", "persistence",         1773738960, 0.37, "evt-ba6e76", "host-ops-4", "Run key write",      "MEDIUM", "extension"),
+  /* host_id resolves to None. deposit_host_id (AMB swarm-pheromone/src/substrate.rs:1336-1348,
+     called while the deposits route shapes each row) reads indicator["host_id"], falls back to
+     /evidence/host_metadata/host_id and returns None. D2: this row is drawn, sorted last. */
+  dep(FX.extAgents.stalker, "dns_tunnel_entropy", "data_exfiltration",   1773739050, 0.29, "evt-674d9c", null,         "TXT beacon entropy", "MEDIUM", "extension"),
+];
+
+const DEPOSITS = CANON_DEPOSITS.concat(EXT_DEPOSITS);
+
+/* One Dismiss marker, canonical. is_suppressed_by_feedback keys on
+   (threat_class, event_id) and fires when the marker timestamp is >= the
+   deposit's — AMB crates/swarm-pheromone/src/substrate.rs:1367-1380 with the key
+   built at :1412-1421. hunt-evt-1 fanned out to TWO detectors from one telemetry
+   event, which is why dismissing it reaches a detector nobody reviewed. */
+const DISMISS = {
+  event_id: "hunt-evt-1",
+  threat_class: "execution",
+  timestamp: Math.floor(FX.clock.dismiss_applied_ms / 1000),
+  operator: FX.operator.operator_id,
+};
+
+/* Extension incident members. Reason grammars are the runtime's own:
+   included_reason (AMB crates/swarm-runtime/src/correlation.rs:495-506),
+   no_supporting_evidence_reason (:468-479) and insufficient_weighted_score_reason
+   (:481-493), each built from score_breakdown (:455-466) and
+   shared_keys_summary (:447-453) inside the correlation stage. */
+const EXT_REJECTED = [
+  { finding_id: "234ce4687c0d692ab08aed157a6db67f", strategy_id: "beacon_jitter", host_id: "host-ops-2",
+    confidence_score: 0.41, dims: ["semantic"],
+    reason: "requires at least one entity or causal link before semantic evidence can reinforce correlation; shared strategy:beacon_jitter" },
+  { finding_id: "07cae5f1907d6ff59641398e4f67025f", strategy_id: "lsass_handle", host_id: "host-ops-3",
+    confidence_score: 0.28, dims: ["semantic", "entity"],
+    reason: "weighted_score=0.6 below threshold 2 from shared strategy:lsass_handle, user:alice (semantic=0.35, entity=0.25)" },
+];
+
+/* ===========================================================================
+   THE CLOSED FORM — transcribed, not designed.
+
+   AMB crates/swarm-core/src/pheromone.rs:280-287, PheromoneDeposit::strength_at.
+   Called by concentration_for (crates/swarm-pheromone/src/substrate.rs:1268-1304)
+   on every concentration-monitor tick inside `swarm_detect --serve`, which sums
+   it over the non-evaporated, non-suppressed deposits of one threat class and
+   reports distinct_sources as the count of distinct agent_id strings (:1295,
+   :1301).
+
+       pub fn strength_at(&self, now: i64) -> f64 {
+           if now <= self.timestamp { return self.confidence; }
+           let elapsed = (now - self.timestamp) as f64;
+           self.confidence * (0.5_f64).powf(elapsed / self.decay_half_life)
+       }
+   =========================================================================== */
+function strengthAt(d, nowS) {
+  if (nowS <= d.timestamp) return d.confidence;         /* verbatim guard */
+  return d.confidence * Math.pow(0.5, (nowS - d.timestamp) / d.decay_half_life);
+}
+
+/* concentration_for's reduction, restricted to the deposits that existed at
+   nowS. The restriction is render rule CR-4: without it, strength_at's
+   `now <= timestamp` guard makes every future deposit contribute its full
+   confidence to a past sample, and the history paints flat. */
+function concentrationAt(nowS, opts) {
+  opts = opts || {};
+  const cls = opts.threat_class || FX.policy.threat_class;
+  const set = opts.deposits || DEPOSITS;
+  const suppressed = opts.suppressed || null;
+  let total = 0, peak = 0;
+  const sources = new Set(), agents = new Set(), contributing = [];
+  for (const d of set) {
+    if (cls !== "*" && d.threat_class !== cls) continue;                 /* substrate.rs:1281 */
+    if (d.timestamp > nowS) continue;                                    /* CR-4 */
+    if (suppressed && suppressed.marker <= nowS && d.event_id === suppressed.event_id
+        && suppressed.marker >= d.timestamp) continue;                   /* :1367-1380 */
+    const s = strengthAt(d, nowS);
+    if (s < FX.policy.evaporation_threshold) continue;                   /* is_evaporated :1283 */
+    if (s <= 0) continue;                                                /* :1290 */
+    total += s;
+    peak = Math.max(peak, d.confidence);
+    sources.add(d.agent_id);                                             /* :1295 */
+    agents.add(agentBaseOf(d.agent_id));
+    contributing.push({ d: d, s: s });
+  }
+  return {
+    total_strength: total,
+    distinct_sources: sources.size,
+    real_agents: agents.size,
+    peak_confidence: peak,
+    sourceIds: Array.from(sources).sort(),
+    agentIds: Array.from(agents).sort(),
+    contributing: contributing,
+  };
+}
+
+/* ===========================================================================
+   RENDER LAW 2, AND THE ABSENCE IT NEEDS IN PHASE 1.
+
+   `distinct_sources` counts STRATEGY-SCOPED ids. Verified this session at the
+   line: WhiskerAgent::tick (AMB crates/swarm-agents/src/whisker_agent.rs:148-149,
+   in the daemon's agent loop) builds `"{derived_identity}:{instance}"` and hands
+   it to detect_and_deposit_with_role (crates/swarm-runtime/src/detection/pipeline.rs:60-91,
+   the production deposit path), which passes it to resolve_deposits at :80;
+   resolve_deposits then writes each deposit's agent_id as
+   `strategy_scoped_agent_id(agent_id, &finding.strategy_id)` at :573, which
+   crates/swarm-whisker/src/stream.rs:20-22 defines as `format!("{}:{strategy_id}", base.0)`.
+   concentration_for inserts that whole string (substrate.rs:1295). The workspace
+   asserts it: query_counts_strategy_scoped_agent_ids_as_distinct_sources
+   (substrate.rs:2104-2126) deposits two strategies on one agent and asserts
+   distinct_sources == 2; the sibling at :2128-2153 asserts 1 for a repeat.
+
+   THE PHASE-1 GAP, which is a different fact. RuntimeEvent::Escalation
+   (crates/swarm-runtime/src/runtime_events.rs:288-297) has eight fields and
+   carries `distinct_sources: usize` and NO ids, so a card built from it can
+   name the first number and cannot compute the second. Only B4
+   (GET /v1/operator/pheromone/deposits, Phase 2) serves the id list. The second
+   half therefore renders as a NAMED ABSENCE, never as a repeat of the first
+   number and never as a fabricated agent count.
+   =========================================================================== */
+
+/** ids present: the full law-2 phrase, with plurals. */
+function sourcesAgents(sourceIds) {
+  const src = new Set(sourceIds).size;
+  const ag = new Set(sourceIds.map(agentBaseOf)).size;
+  return src + (src === 1 ? " source / " : " sources / ") + ag + (ag === 1 ? " agent" : " agents");
+}
+/** ids absent: the first number, then the absence, then the reason. */
+const SOURCE_ABSENCE = {
+  "escalation-card":
+    "the escalation event carries a count and no ids (runtime_events.rs:288-297)",
+  "concentration-frame":
+    "the 26001 concentration frame carries a count and no ids",
+};
+function sourceAttribution(a) {
+  if (a.kind === "ids") return { text: sourcesAgents(a.sourceIds), absent: false, why: null };
+  const n = a.distinctSources;
+  return {
+    text: n + (n === 1 ? " source / " : " sources / ") + "agent count not carried",
+    absent: true,
+    why: SOURCE_ABSENCE[a.reason] + ", and only GET /v1/operator/pheromone/deposits (B4) serves the ids",
+  };
+}
+/** The one renderer. Both halves always ship; there is no bare-count path. */
+function srcSpan(a, cls) {
+  const r = sourceAttribution(a);
+  return '<span class="' + (cls || "mono") + '" data-perch-role="source-count"' +
+    (r.absent ? ' data-source-ids="absent"' : "") + '>' + esc(r.text) + "</span>" +
+    (r.absent ? ' <span class="mark absent t-2xs">' + esc(r.why) + "</span>" : "");
+}
+/** Regime A carries ids; regime B does not. This is the whole difference. */
+function attrFor(conc, reason) {
+  return REGIME === "A"
+    ? { kind: "ids", sourceIds: conc.sourceIds }
+    : { kind: "count-only", distinctSources: conc.distinct_sources, reason: reason || "concentration-frame" };
+}
+
+/* ===========================================================================
+   SNAPSHOT DISAGREEMENT — ε is derived, not invented.
+
+   APPENDIX-NORMATIVE §6 records the interpolation tolerance as "2% of
+   alert_threshold · invented". 18-DATAVIZ §2.4 replaces it with
+   policy.evaporation_threshold and files brief amendment A11. The reason in one
+   line: exponential interpolation over a FIXED deposit set is exact (reproduced
+   to 2.2e-16), so the tolerance is not an error budget — it detects an
+   unmodelled deposit, and one deposit's worth is exactly the evaporation floor,
+   because a contribution below it would have been evaporated on arrival.
+
+   ARBITRATION, recorded because a peer prototype holds the other value:
+   prototypes/watchfloor-ledger.html sets TOLERANCE = 0.02 * alert_threshold =
+   0.04 and says in its own notes that it uses the invented constant knowingly.
+   Both files draw VIZ-1. One constant has to win. This page uses ε and there is
+   exactly one place it is computed — snapshotEpsilon() — so a component cannot
+   hold two values. If A11 is rejected, change this function and nothing else.
+   =========================================================================== */
+function snapshotEpsilon(served) {
+  return Math.max(FX.policy.evaporation_threshold, 1e-9 * Math.abs(served));
+}
+function snapshotDisagrees(derived, served) {
+  return Math.abs(served - derived) >= snapshotEpsilon(served);
+}
+
+/* --------------------------------------------------------------- formatting */
+const f2 = (n) => n.toFixed(2);
+const f3 = (n) => n.toFixed(3);
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function clockOf(tS) {
+  const d = new Date(tS * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + ":" + p(d.getUTCSeconds());
+}
+const hhmm = (tS) => clockOf(tS).slice(0, 5);
+const mmss = (ms) => {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+};
+
+/* ===========================================================================
+   STATE
+   =========================================================================== */
+const STATES = [
+  ["populated", "POPULATED"], ["empty", "EMPTY"], ["loading", "LOADING"],
+  ["stale", "STALE"], ["degraded", "DEGRADED"], ["error", "ERROR"],
+  ["volume", "HIGH-VOLUME"], ["suppressed", "SUPPRESSED"], ["disagree", "DISAGREE"],
+];
+const REGIMES = [
+  ["A", "A · deposit-backed"],
+  ["B", "B · snapshot-only"],
+];
+const PLATES = [["all", "ALL"], ["v1", "VIZ-1"], ["v2", "VIZ-2"], ["v3", "VIZ-3"],
+                ["v4", "VIZ-4"], ["v5", "VIZ-5"], ["v6", "VIZ-6"]];
+
+let STATE = "populated";
+let REGIME = "A";
+let THEME = "system";
+let PLATE = "all";
+const tableOpen = {};
+
+function applyTheme() {
+  const r = document.documentElement;
+  if (THEME === "system") r.removeAttribute("data-theme");
+  else r.setAttribute("data-theme", THEME);
+}
+function setState(s)  { STATE = s;  renderAll(); }
+function setRegime(r) { REGIME = r; renderAll(); }
+function setPlate(p)  { PLATE = p;  renderAll(); }
+function setTheme(t)  { THEME = t;  applyTheme(); renderAll(); }
+
+/* ===========================================================================
+   SVG HELPERS — class-only paint. No fill=/stroke= attribute exists in this
+   file; viz/check-perch-chart-tokens.sh asserts it.
+   =========================================================================== */
+function T(x, y, cls, anchor, txt, extra) {
+  return '<text x="' + x + '" y="' + y + '" class="' + cls + '"' +
+    (anchor ? ' text-anchor="' + anchor + '"' : "") + (extra || "") + ">" + esc(txt) + "</text>";
+}
+function sevChip(sev) {
+  const order = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+  const n = order.indexOf(sev) + 1;
+  let bars = "";
+  for (let i = 0; i < 4; i++) bars += '<i class="' + (i < n ? "" : "off") + '"></i>';
+  return '<span class="chip t-2xs ' + sev.toLowerCase() + '">' + sev +
+    '<span class="bar" aria-hidden="true">' + bars + "</span></span>";
+}
+function derivedMark(fn) { return '<span class="mark derived t-2xs">derived · ' + esc(fn) + "</span>"; }
+function servedMark(route) { return '<span class="mark served t-2xs">served · ' + esc(route) + "</span>"; }
+function stateBlock(title, body, actionLabel, actionHref) {
+  return '<div class="stateblock">' +
+    '<h4 class="t-base">' + esc(title) + "</h4>" +
+    '<p class="t-sm">' + body + "</p>" +
+    (actionLabel ? '<a class="t-sm mono" href="' + actionHref + '">' + esc(actionLabel) + " →</a>" : "") +
+    "</div>";
+}
+function loadingBlock(label) {
+  return '<div class="stateblock" role="status" aria-live="polite">' +
+    '<p class="t-sm dim" style="margin-bottom:.75rem">' + esc(label) + "</p>" +
+    '<div class="skel w2"></div><div class="skel w1"></div><div class="skel w3"></div></div>';
+}
+function errorBlock(what, stillTrue) {
+  return '<div class="stateblock" role="alert">' +
+    '<h4 class="t-base">' + esc(what) + "</h4>" +
+    '<p class="t-sm">' + stillTrue + "</p></div>";
+}
+function tableToggle(key, label) {
+  return '<button class="seg" type="button" data-table="' + key + '" aria-pressed="' +
+    (tableOpen[key] ? "true" : "false") + '">' + (tableOpen[key] ? "hide" : "show") + " " + esc(label) +
+    "</button>";
+}
+/* The shared <defs>: one area gradient, one suppression hatch, defined once. */
+function defs(id) {
+  return '<defs>' +
+    '<linearGradient id="perchAreaGrad" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0" class="stop-s1" stop-opacity="0.30"></stop>' +
+      '<stop offset="1" class="stop-s1" stop-opacity="0.02"></stop>' +
+    '</linearGradient>' +
+    '<pattern id="perchHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+      '<line x1="0" y1="0" x2="0" y2="6" class="k-hatch" stroke-width="1" stroke-opacity="0.35"></line>' +
+    "</pattern></defs>";
+}
+
+
+/* A plate that has no regime-B form says so, rather than ignoring the toggle.
+   Only VIZ-1 and VIZ-4 have two regimes: VIZ-1 because the 26001 frame carries a
+   concentration without a deposit list, and VIZ-4 because an escalation card
+   carries a count without ids. VIZ-2, VIZ-3 and VIZ-5 read objects the runtime
+   serves whole, and there is no snapshot form of any of them. */
+function noRegimeB(what, why) {
+  if (REGIME !== "B") return "";
+  return '<p class="warn t-sm"><b>No regime B for this plate.</b> ' + what +
+    " is deposit- or record-backed only: " + why + " The regime toggle changes nothing here, " +
+    "and saying so is cheaper than letting a reviewer wonder whether it should have.</p>";
+}
+
+/* ===========================================================================
+   VIZ-1 — ConcentrationCurve
+   Geometry transcribed from AMB docs/assets/stigmergy.svg at a 960 viewBox:
+   label gutter ends x=174 (:54), plot x 186→940 (:46-53), area gradient 0.30→0.02
+   (:4), curve 2px round-join (:47), threshold rule 1.2px 5-5 dashed at 0.60 (:48),
+   drop-line 1px at 0.45 (:50), crossing r=5 + one-shot ring (:51-52), baseline
+   1px at 0.20 (:53). Perch never renders the reference's own numbers —
+   stigmergy.svg:49 says alert_threshold 1.20 and :9 a 45 s half-life; the shipped
+   values are 2.0 and 3600 (AMB rulesets/default.yaml:55,58) and the chart reads
+   config, always.
+   =========================================================================== */
+const V1 = { w: 960, h: 336, gut: 174, x0: 186, x1: 940, yTop: 150, yBase: 300, trainY: 54, trainDy: 32 };
+
+function v1Series(suppressed) {
+  const n = 120, from = FX.clock.now_s - FX.clock.window_s, to = FX.clock.now_s;
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const t = from + ((to - from) * i) / n;
+    const c = concentrationAt(t, { suppressed: suppressed ? { event_id: DISMISS.event_id, marker: DISMISS.timestamp } : null });
+    pts.push({ t: t, v: c.total_strength, sources: c.distinct_sources });
+  }
+  return { pts: pts, from: from, to: to };
+}
+function v1Scale(series) {
+  const peak = Math.max.apply(null, series.pts.map((p) => p.v).concat([0]));
+  const yMax = Math.max(FX.policy.alert_threshold * 1.35, peak) * 1.08;
+  const X = (t) => V1.x0 + ((t - series.from) / (series.to - series.from)) * (V1.x1 - V1.x0);
+  const Y = (v) => V1.yBase - (Math.min(v, yMax) / yMax) * (V1.yBase - V1.yTop);
+  return { X: X, Y: Y, yMax: yMax, peak: peak };
+}
+
+function v1Chart(o) {
+  const series = v1Series(o.suppressed);
+  const s = v1Scale(series);
+  const P = FX.policy;
+  let g = "";
+
+  /* --- gridlines + y ticks --- */
+  const ticks = [0, P.alert_threshold / 2, P.alert_threshold, s.yMax * 0.92];
+  for (const v of ticks) {
+    const y = s.Y(v);
+    g += '<line x1="' + V1.x0 + '" y1="' + y.toFixed(1) + '" x2="' + V1.x1 + '" y2="' + y.toFixed(1) +
+         '" class="k-grid" stroke-width="1" stroke-opacity="0.7"></line>';
+    g += T(V1.x0 - 8, y + 3.5, "f-axis t-2xs mono", "end", f2(v));
+  }
+
+  /* --- the suppression span: hatch + marker + step, never a redraw (CR-3) --- */
+  if (o.suppressed) {
+    const firstSup = Math.min.apply(null, CANON_DEPOSITS
+      .filter((d) => d.event_id === DISMISS.event_id).map((d) => d.timestamp));
+    const xa = s.X(firstSup), xb = s.X(DISMISS.timestamp);
+    g += '<rect x="' + xa.toFixed(1) + '" y="' + V1.yTop + '" width="' + Math.max(0, xb - xa).toFixed(1) +
+         '" height="' + (V1.yBase - V1.yTop) + '" fill="url(#perchHatch)"></rect>';
+    g += '<line x1="' + xb.toFixed(1) + '" y1="' + (V1.yTop - 10) + '" x2="' + xb.toFixed(1) + '" y2="' + V1.yBase +
+         '" class="k-med" stroke-width="1.4" stroke-dasharray="4 3"></line>';
+    const lateMarker = xb > V1.x0 + (V1.x1 - V1.x0) * 0.6;
+    g += T(lateMarker ? xb - 6 : xb + 6, V1.yTop - 2, "f-med t-2xs mono",
+           lateMarker ? "end" : "start",
+           "DISMISSED " + hhmm(DISMISS.timestamp) + " by " + DISMISS.operator);
+  }
+
+  /* --- area + curve --- */
+  let d = "", area = "";
+  series.pts.forEach((p, i) => {
+    const x = s.X(p.t).toFixed(1), y = s.Y(p.v).toFixed(1);
+    d += (i ? "L" : "M") + x + " " + y;
+    area += (i ? "L" : "M" + x + " " + V1.yBase + "L") + x + " " + y;
+  });
+  area += "L" + s.X(series.to).toFixed(1) + " " + V1.yBase + "Z";
+  g += '<path d="' + area + '" class="a-area k-none"></path>';
+  g += '<path d="' + d + '" class="k-s1" stroke-width="2" stroke-linejoin="round"></path>';
+
+  /* --- thresholds. An off-scale threshold is NAMED, never omitted. --- */
+  const yAlert = s.Y(P.alert_threshold);
+  g += '<line x1="' + V1.x0 + '" y1="' + yAlert.toFixed(1) + '" x2="' + V1.x1 + '" y2="' + yAlert.toFixed(1) +
+       '" class="k-rule" stroke-width="1.2" stroke-opacity="0.6" stroke-dasharray="5 5"></line>';
+  g += T(V1.x0 + 4, yAlert - 8, "f-rulelab t-xs mono", "start", "alert_threshold " + f2(P.alert_threshold));
+  if (P.incident_threshold > s.yMax) {
+    g += '<line x1="' + V1.x0 + '" y1="' + (V1.yTop - 12) + '" x2="' + V1.x1 + '" y2="' + (V1.yTop - 12) +
+         '" class="k-crit" stroke-width="1.2" stroke-opacity="0.6" stroke-dasharray="2 6"></line>';
+    g += T(V1.x1, V1.yTop - 17, "f-crit t-xs mono", "end",
+           "incident_threshold " + f2(P.incident_threshold) + " — above this view");
+  }
+
+  /* --- the crossing: ring + drop-line + label, three channels for one fact --- */
+  let cross = null;
+  for (let i = 1; i < series.pts.length; i++) {
+    if (series.pts[i - 1].v < P.alert_threshold && series.pts[i].v >= P.alert_threshold) { cross = series.pts[i]; break; }
+  }
+  if (cross) {
+    const cx = s.X(cross.t), cy = s.Y(cross.v);
+    g += '<line x1="' + cx.toFixed(1) + '" y1="' + cy.toFixed(1) + '" x2="' + cx.toFixed(1) + '" y2="' + V1.yBase +
+         '" class="k-rule" stroke-width="1" stroke-opacity="0.45"></line>';
+    g += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="5" class="f-s3 k-none"></circle>';
+    g += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="5" class="k-rule crossring" stroke-width="1.5"></circle>';
+    g += T(cx + 10, cy - 8, "f-rulelab t-xs mono", "start", "crossed at " + hhmm(cross.t) + " · " + f2(cross.v));
+  }
+
+  /* --- baseline + x ticks --- */
+  g += '<line x1="' + V1.x0 + '" y1="' + V1.yBase + '" x2="' + V1.x1 + '" y2="' + V1.yBase +
+       '" class="k-s1" stroke-width="1" stroke-opacity="0.2"></line>';
+  for (let i = 0; i <= 4; i++) {
+    const t = series.from + ((series.to - series.from) * i) / 4;
+    g += T(s.X(t), V1.yBase + 18, "f-axis t-xs mono", i === 0 ? "start" : (i === 4 ? "end" : "middle"), hhmm(t));
+  }
+
+  /* --- deposit trains, one row per strategy-scoped source, ABOVE the plot ---
+     Departure D8: the reference decays radius 4.26→2.79 and opacity 0.73→0.40
+     left to right, a fixed ramp carrying no data that fades the FRESHEST
+     deposit most. Perch binds radius to confidence and opacity to the fraction
+     of the deposit still standing after decay. */
+  const byStrategy = {};
+  for (const dp of CANON_DEPOSITS) (byStrategy[dp.strategy_id] = byStrategy[dp.strategy_id] || []).push(dp);
+  const names = Object.keys(byStrategy).sort();
+  const shown = STATE === "volume" ? names.slice(0, 1) : names;
+  shown.forEach((name, i) => {
+    const y = V1.trainY + i * V1.trainDy;
+    const row = byStrategy[name];
+    const firstX = s.X(Math.min.apply(null, row.map((r) => r.timestamp)));
+    g += '<line x1="' + firstX.toFixed(1) + '" y1="' + y + '" x2="' + V1.x1 + '" y2="' + y +
+         '" class="k-s1" stroke-width="1" stroke-opacity="0.1" stroke-dasharray="2 5"></line>';
+    g += T(V1.gut, y + 4, "f-axis t-xs mono", "end", name);
+    row.forEach((dp, j) => {
+      const isSup = o.suppressed && dp.event_id === DISMISS.event_id;
+      const r = 2.6 + 2.2 * dp.confidence;
+      const frac = strengthAt(dp, FX.clock.now_s) / dp.confidence;
+      const op = (0.35 + 0.55 * frac).toFixed(2);
+      const x = s.X(dp.timestamp);
+      g += '<circle cx="' + x.toFixed(1) + '" cy="' + y + '" r="' + r.toFixed(2) + '" class="' +
+           (isSup ? "f-hatch" : "f-s1") + ' k-none" fill-opacity="' + (isSup ? "0.30" : op) + '"></circle>';
+      if (isSup) {
+        g += '<path d="M' + (x - 4) + " " + (y - 4) + "l8 8M" + (x + 4) + " " + (y - 4) + "l-8 8" +
+             '" class="k-danger" stroke-width="1.2"></path>';
+      }
+      if (j === 0) g += T(x + 14, y - 9, "f-muted t-2xs mono", "start", dp.indicator);
+    });
+  });
+  if (shown.length < names.length) {
+    g += T(V1.gut, V1.trainY + shown.length * V1.trainDy + 4, "f-axis t-xs mono", "end",
+           "+" + (names.length - shown.length) + " folded");
+    g += T(V1.x0 + 4, V1.trainY + shown.length * V1.trainDy + 4, "f-muted t-2xs", "start",
+           (names.length - shown.length) + " strategy rows folded; the curve still sums all of them");
+  }
+
+  const label = "Concentration decay for the execution threat class over the last " +
+    (FX.clock.window_s / 60) + " minutes; total_strength " + f2(series.pts[series.pts.length - 1].v) +
+    " against alert_threshold " + f2(P.alert_threshold) + ".";
+  return {
+    svg: '<div class="cap960"><svg viewBox="0 0 ' + V1.w + " " + V1.h + '" role="img" aria-label="' +
+      esc(label) + '"><title>Concentration decay — execution</title>' + defs() + g + "</svg></div>",
+    series: series, scale: s, cross: cross,
+  };
+}
+
+function v1Table(suppressed) {
+  const c = concentrationAt(FX.clock.now_s, {
+    suppressed: suppressed ? { event_id: DISMISS.event_id, marker: DISMISS.timestamp } : null,
+  });
+  let rows = "";
+  for (const it of c.contributing) {
+    rows += "<tr><td class=\"t-xs mono\">" + esc(agentLabel(it.d.agent_id)) + "</td>" +
+      '<td class="t-xs mono">' + esc(it.d.strategy_id) + "</td>" +
+      '<td class="t-xs mono">' + esc(it.d.host_id || "«no host_id»") + "</td>" +
+      '<td class="t-xs mono">' + clockOf(it.d.timestamp) + "</td>" +
+      '<td class="n t-xs">' + f2(it.d.confidence) + "</td>" +
+      '<td class="n t-xs">' + f3(it.s) + "</td></tr>";
+  }
+  return '<div class="tblwrap"><table class="tbl"><caption class="t-2xs">' +
+    esc(sourcesAgents(c.sourceIds)) +
+    " · one row per contributing deposit · strength is strength_at(now)</caption>" +
+    '<thead><tr><th class="t-2xs">agent</th><th class="t-2xs">strategy_id</th><th class="t-2xs">host_id</th>' +
+    '<th class="t-2xs">timestamp</th><th class="t-2xs">confidence</th><th class="t-2xs">strength_at</th></tr></thead>' +
+    "<tbody>" + rows + "</tbody></table></div>";
+}
+
+function plateV1() {
+  const P = FX.policy;
+  if (STATE === "loading") return loadingBlock("Reading the trails...");
+  if (STATE === "empty") {
+    return stateBlock(
+      "Concentration 0.00",
+      "Every deposit in this threat class has decayed below the evaporation floor of " +
+      P.evaporation_threshold + ". Nothing was deleted; strength approached zero.");
+  }
+  if (STATE === "error") {
+    return errorBlock("The daemon did not answer.",
+      "History below is what Perch already received. No decision can be recorded while this lasts, " +
+      "and nothing here is a claim about what the daemon holds now.");
+  }
+
+  const suppressed = STATE === "suppressed";
+  const ch = v1Chart({ suppressed: suppressed });
+  const c = concentrationAt(FX.clock.now_s, {
+    suppressed: suppressed ? { event_id: DISMISS.event_id, marker: DISMISS.timestamp } : null,
+  });
+  const attr = attrFor(c, "concentration-frame");
+
+  let out = '<div class="figure">' + ch.svg +
+    '<p class="caption t-sm">total_strength <b class="mono">' + f2(c.total_strength) + "</b> &middot; " +
+    srcSpan(attr, "mono") + ' &middot; peak_confidence <b class="mono">' + f2(c.peak_confidence) + "</b></p>" +
+    '<div class="marks">' +
+      derivedMark("strength_at() summed per deposit") +
+      (REGIME === "A"
+        ? servedMark("GET /v1/operator/pheromone/deposits")
+        : servedMark("kind 26001 concentration frame, 1 Hz")) +
+    "</div></div>";
+
+  if (REGIME === "B") {
+    out += '<p class="warn t-sm"><b>Regime B, snapshot only.</b> This surface holds 1 Hz concentration ' +
+      "frames and no deposit list, so the segment between two samples is drawn with " +
+      '<span class="mono">S(t) = S(t0) * 2^(-(t - t0)/H)</span> using the resolved policy half-life ' +
+      P.half_life_secs + " s. That is exact only if every live deposit in this threat class carries " +
+      'that half-life; <span class="mono">decay_half_life</span> is a per-deposit field ' +
+      "(AMB swarm-core/src/pheromone.rs:222) and a per-class override would break the assumption. " +
+      "The caption states it rather than implying precision.</p>";
+  }
+
+  if (STATE === "stale") {
+    out += '<p class="warn t-sm"><b>Telemetry is stale.</b> The indicators are the last received values, ' +
+      "48 s old. The forward segment past the last sample is an extrapolation and a <i>lower bound</i>: " +
+      "decay only subtracts and a new deposit only adds, except after a dismissal, which subtracts " +
+      "retroactively.</p>";
+  }
+  if (STATE === "degraded") {
+    out += '<p class="warn t-sm"><b>Sequence gap.</b> envelopes 4,118 to 4,393 from ' +
+      esc(agentLabel(FX.extAgents.whisker)) + " (275 not delivered). The segment spanning the gap is drawn " +
+      "dashed. This is a gap in what Perch received, not a gap in what the daemon recorded.</p>";
+  }
+  if (STATE === "volume") {
+    out += '<p class="warn t-sm"><b>Folded.</b> Strategy rows above the plot fold to the top contributor; ' +
+      "the curve still sums every one of them and the caption says so.</p>";
+  }
+  if (STATE === "disagree") {
+    const derived = c.total_strength;
+    const served = derived + 0.037;      /* one unmodelled deposit's worth, above epsilon */
+    out += '<p class="warn t-sm"><b>The curve snapped to the runtime.</b> derived <span class="mono">' +
+      f3(derived) + '</span> &middot; served <span class="mono">' + f3(served) +
+      '</span> &middot; absolute difference <span class="mono">' +
+      f3(Math.abs(served - derived)) + '</span> is at or above epsilon <span class="mono">' +
+      f3(snapshotEpsilon(served)) +
+      '</span>. Epsilon is <span class="mono">policy.evaporation_threshold</span>, which is one deposit&rsquo;s ' +
+      "worth: a contribution smaller than the floor would have evaporated on arrival, so any deposit " +
+      "this console did not see moves the sum by at least that much. The runtime&rsquo;s snapshot is " +
+      "authoritative and the disagreement is counted, not hidden. Consecutive snaps inside one second " +
+      "fold into one row with a count, so a flapping value cannot strobe. " +
+      '<span class="mono">' + (snapshotDisagrees(derived, served) ? "snapshotDisagrees -> true" : "agrees") +
+      "</span></p>";
+  }
+  if (suppressed) {
+    const at = Math.floor(FX.clock.dismiss_leg1_ms / 1000);
+    const before = concentrationAt(at, {}).total_strength;
+    const after = concentrationAt(FX.clock.now_s, {
+      suppressed: { event_id: DISMISS.event_id, marker: DISMISS.timestamp } }).total_strength;
+    const removed = CANON_DEPOSITS.filter((d) => d.event_id === DISMISS.event_id);
+    const reviewed = 1;
+    out += '<p class="warn t-sm"><b>Dismiss previews its arithmetic.</b> Dismissing <span class="mono">' +
+      "hunt_id " + esc(DISMISS.event_id) + "</span> removes " + removed.length +
+      " deposits from every sum at or before the marker, " + (removed.length - reviewed) +
+      " of them from a detector you did not review, because one telemetry event fanned out to " +
+      removed.length + '. <span class="mono">' + f2(before) + " - " + f2(before - after) + " -> " +
+      f2(after) + '</span>, now <b>below</b> alert_threshold <span class="mono">' + f2(P.alert_threshold) +
+      '</span>. The suppression key is <span class="mono">(threat_class, event_id)</span>, so it reaches ' +
+      "every detector that fired on that event. The dots stay on the trail with a cross over them; " +
+      "removing them would be the silent edit render law 5 forbids.</p>";
+  }
+
+  out += '<div class="marks" style="margin-top:.6rem">' + tableToggle("v1", "the contributing deposits") + "</div>";
+  if (tableOpen.v1) out += v1Table(suppressed);
+  return out;
+}
+
+const V1_CONTRACT =
+`export type ConcentrationCurveProps = {
+  threatClass: string;
+  policy: ThreatClassPolicy;            // served; every literal on the chart comes from here
+  samples: ConcentrationSample[];       // regime B; authoritative
+  deposits: DepositView[] | null;       // regime A when present; null on /watch-floor
+  suppressions: SuppressionMarker[];
+  now: UnixSeconds;
+  nowFromDaemon: UnixSeconds | null;    // deposits route's now_seconds; drives the skew warning
+  attribution: SourceAttribution;       // CR-5: ids, or a NAMED absence. Never a bare count.
+  state: VizState;
+};
+
+// CR-5, revised. There is no shape that carries a bare count, and no shape that
+// invents an agent count the wire did not send.
+export type SourceAttribution =
+  | { kind: "ids";        sourceIds: string[] }
+  | { kind: "count-only"; distinctSources: number;
+      reason: "escalation-card" | "concentration-frame" };`;
+
+/* ===========================================================================
+   VIZ-2 - HostHeat. Estate-wide by design: the question is "which machine do I
+   look at first", which is not a per-class question. Per-host concentration
+   does NOT exist in the runtime - concentration_for sums by threat class only
+   and swarm-pheromone has no host axis - so every number here is derived and
+   the plate carries ONE derived marker for the whole chart.
+   =========================================================================== */
+const UNATTRIBUTED = " unattributed";
+
+function hostTotals(suppressed) {
+  const acc = {};
+  const sup = suppressed ? { event_id: DISMISS.event_id, marker: DISMISS.timestamp } : null;
+  for (const d of DEPOSITS) {
+    if (d.timestamp > FX.clock.now_s) continue;
+    if (sup && sup.marker <= FX.clock.now_s && d.event_id === sup.event_id && sup.marker >= d.timestamp) continue;
+    const s = strengthAt(d, FX.clock.now_s);
+    if (s < FX.policy.evaporation_threshold || s <= 0) continue;
+    const key = d.host_id === null ? UNATTRIBUTED : d.host_id;
+    const a = (acc[key] = acc[key] || { host: d.host_id, total: 0, ids: [], count: 0, byClass: {} });
+    a.total += s; a.ids.push(d.agent_id); a.count += 1;
+    a.byClass[d.threat_class] = (a.byClass[d.threat_class] || 0) + s;
+  }
+  const rows = Object.keys(acc).map((k) => {
+    const a = acc[k];
+    a.dominant = Object.keys(a.byClass).sort((x, y) => a.byClass[y] - a.byClass[x])[0];
+    a.unattributed = k === UNATTRIBUTED;
+    return a;
+  });
+  /* D2: the unattributed row is always LAST regardless of strength, and never dropped. */
+  rows.sort((a, b) => (a.unattributed ? 1 : b.unattributed ? -1 : b.total - a.total));
+  return rows;
+}
+
+function plateV2() {
+  if (STATE === "loading") return loadingBlock("Reading the trails...");
+  if (STATE === "empty") {
+    return stateBlock(
+      "Concentration 0.00 on every host",
+      "Every deposit has decayed below the evaporation floor of " + FX.policy.evaporation_threshold +
+      ". The evasion catalogue declares 18 techniques across 11 detectors that no detector covers, " +
+      "so a quiet estate and an uncovered one look identical from here.",
+      "What the swarm does not cover", "#gaps");
+  }
+  if (STATE === "error") {
+    return errorBlock("41 of 58 deposits carry no host_id.",
+      'Neither <span class="mono">indicator.host_id</span> nor ' +
+      '<span class="mono">/evidence/host_metadata/host_id</span> resolves on them ' +
+      "(deposit_host_id, AMB swarm-pheromone/src/substrate.rs:1336-1348). The bars below cover 17 deposits.");
+  }
+
+  const rows = hostTotals(STATE === "suppressed");
+  const max = Math.max.apply(null, rows.map((r) => r.total).concat([FX.policy.alert_threshold * 1.05]));
+  const W = 720, barX = 232, barW = W - barX - 78, rowH = 46;
+  let g = "", i = 0;
+  for (const r of rows) {
+    const y = 14 + i * rowH;
+    const over = r.total >= FX.policy.alert_threshold;
+    const w = (r.total / max) * barW;
+    const wAlert = Math.min(w, (FX.policy.alert_threshold / max) * barW);
+    g += '<rect x="' + barX + '" y="' + (y + 3) + '" width="' + barW + '" height="8" rx="2" class="f-track k-none"></rect>';
+    g += '<rect x="' + barX + '" y="' + (y + 3) + '" width="' + wAlert.toFixed(1) + '" height="8" rx="2" class="f-s1 k-none"></rect>';
+    if (over) {
+      g += '<rect x="' + (barX + wAlert).toFixed(1) + '" y="' + (y + 3) + '" width="' + (w - wAlert).toFixed(1) +
+           '" height="8" rx="2" class="f-s3 k-none"></rect>';
+    }
+    g += T(0, y + 11, (r.unattributed ? "f-muted" : "f-fg") + " t-sm mono", "start",
+           r.unattributed ? "host unattributed" : r.host);
+    g += T(0, y + 27, "f-axis t-xs mono", "start",
+           (r.unattributed
+             ? "no host_id on " + r.count + " deposit" + (r.count === 1 ? "" : "s")
+             : sourcesAgents(r.ids) + " · " + r.dominant));
+    g += T(W, y + 11, "f-fg t-sm mono", "end", f2(r.total));
+    i++;
+  }
+  /* one threshold tick across every bar, at the same x */
+  const tx = barX + (FX.policy.alert_threshold / max) * barW;
+  g += '<line x1="' + tx.toFixed(1) + '" y1="8" x2="' + tx.toFixed(1) + '" y2="' + (14 + rows.length * rowH - 8) +
+       '" class="k-rule" stroke-width="1" stroke-opacity="0.6" stroke-dasharray="3 3"></line>';
+  g += T(tx, 14 + rows.length * rowH + 6, "f-rulelab t-xs mono", "middle",
+         "alert_threshold " + f2(FX.policy.alert_threshold));
+
+  const h = 14 + rows.length * rowH + 18;
+  let out = '<div class="figure"><div class="cap720"><svg viewBox="0 0 ' + W + " " + h +
+    '" role="img" aria-label="' + esc("Hosts ranked by summed pheromone strength; " + rows.length +
+    " rows; the leading host is " + (rows[0].host || "unattributed") + " at " + f2(rows[0].total) +
+    " against alert_threshold " + f2(FX.policy.alert_threshold) + ".") +
+    '"><title>Host concentration, ranked</title>' + defs() + g + "</svg></div>" +
+    '<p class="caption t-sm">Estate-wide, every threat class, at ' + hhmm(FX.clock.now_s) + " UTC. " +
+    "Bar hue is the substrate pillar; the segment past the threshold is the authority pillar. " +
+    "<b>Threat class is a label, never a hue.</b></p>" +
+    '<div class="marks">' +
+      derivedMark("per-host sum of strength_at(); the runtime has no per-host concentration") +
+      servedMark("GET /v1/operator/pheromone/deposits") +
+    "</div></div>";
+
+  out += noRegimeB("HostHeat",
+    "the runtime publishes no per-host concentration at all, so there is no snapshot to fall back to " +
+    "and the plate is empty without B4.");
+  if (STATE === "stale") out += '<p class="warn t-sm">Bars are the last received values; the ranking may already have changed.</p>';
+  if (STATE === "degraded") out += '<p class="warn t-sm">The bridge is shedding the evidence stream to protect the alarm stream. Deposits still arrive on the daemon read; the cards do not.</p>';
+  if (STATE === "volume") out += '<p class="warn t-sm">Above 200 rows this list virtualizes through the inherited VirtualizedList; ordering is computed once per snapshot, never per frame.</p>';
+  if (STATE === "suppressed") out += '<p class="warn t-sm">Rows drop together when they rest on the same telemetry event: the suppression key is <span class="mono">(threat_class, event_id)</span>, not a host.</p>';
+  if (STATE === "disagree") out += '<p class="warn t-sm">A host row has no served counterpart to disagree with: the runtime publishes no per-host concentration at all. That is why the derived marker is on the plate and not on the rows.</p>';
+
+  out += '<div class="marks" style="margin-top:.6rem">' + tableToggle("v2", "the host table") + "</div>";
+  if (tableOpen.v2) {
+    let body = "";
+    for (const r of rows) {
+      body += '<tr><td class="t-xs mono">' + esc(r.unattributed ? "no host_id" : r.host) + "</td>" +
+        '<td class="n t-xs">' + f3(r.total) + "</td>" +
+        '<td class="t-xs mono">' + esc(sourcesAgents(r.ids)) + "</td>" +
+        '<td class="t-xs mono">' + esc(r.dominant) + "</td>" +
+        '<td class="n t-xs">' + r.count + "</td></tr>";
+    }
+    out += '<div class="tblwrap"><table class="tbl"><caption class="t-2xs">The same rows as text. ' +
+      "The unattributed row is sorted last and is never dropped: a short bar list is the kind of wrong " +
+      'that looks right.</caption><thead><tr><th class="t-2xs">host_id</th><th class="t-2xs">total_strength</th>' +
+      '<th class="t-2xs">attribution</th><th class="t-2xs">dominant threat class</th><th class="t-2xs">deposits</th>' +
+      "</tr></thead><tbody>" + body + "</tbody></table></div>";
+  }
+  return out;
+}
+
+const V2_CONTRACT =
+`export type HostHeatRow = {
+  host_id: string | null;      // null is LEGAL and is rendered, never dropped (D2)
+  total_strength: number;      // sum of strength_at(now) over that host's surviving deposits
+  sourceIds: string[];         // CR-5
+  depositCount: number;
+  dominantThreatClass: string;
+};
+export type HostHeatProps = {
+  rows: HostHeatRow[]; policy: ThreatClassPolicy; now: UnixSeconds; state: VizState;
+};`;
+
+/* ===========================================================================
+   VIZ-3 - KillChainGraph. `rejected` is REQUIRED and non-optional: a graph that
+   shows only what was included is an argument, not evidence. Reason strings use
+   the runtime's own grammars - included_reason
+   (AMB crates/swarm-runtime/src/correlation.rs:495-506), which the correlation
+   stage builds from score_breakdown (:455-466) and shared_keys_summary (:447-453)
+   when it accepts a candidate, and the two rejection builders at :468-479 and
+   :481-493.
+   =========================================================================== */
+const DIMENSIONS = [
+  ["temporal", "", "solid"],
+  ["causal",   "4 2", "4 2"],
+  ["entity",   "2 2", "2 2"],
+  ["semantic", "6 3", "6 3"],
+];
+
+const GRAPH = {
+  incident_id: FX.incident_id,
+  included: [
+    { col: 0, row: 1, finding_id: FX.ev.finding_spt_1, strategy_id: "suspicious_process_tree",
+      host_id: "host-ops-1", hunt_id: "hunt-evt-1", confidence_score: 1.0,
+      shared_keys: [], dims: [],
+      reason: "seed investigation" },
+    { col: 1, row: 0, finding_id: FX.ev.finding_scr_1, strategy_id: "suspicious_scripting",
+      host_id: "host-ops-1", hunt_id: "hunt-evt-1", confidence_score: 0.9,
+      shared_keys: ["host:host-ops-1", "event:hunt-evt-1"], dims: ["causal", "entity"],
+      reason: "shared host:host-ops-1, event:hunt-evt-1 with weighted_score=3.1 across [causal, entity] (causal=1.8, entity=1.3)" },
+    { col: 1, row: 2, finding_id: FX.ev.finding_spt_2, strategy_id: "suspicious_process_tree",
+      host_id: "host-ops-1", hunt_id: "hunt-evt-2", confidence_score: 0.9,
+      shared_keys: ["host:host-ops-1", "strategy:suspicious_process_tree"], dims: ["entity", "temporal"],
+      reason: "shared host:host-ops-1, strategy:suspicious_process_tree with weighted_score=2.6 across [entity, temporal] (entity=1.3, temporal=1.3)" },
+  ],
+  rejected: EXT_REJECTED,
+};
+
+function plateV3() {
+  if (STATE === "loading") return loadingBlock("Reading the case...");
+  if (STATE === "empty") {
+    return stateBlock(
+      "No incident record for this case yet",
+      "This case was promoted by hand, so the correlation stage has produced no graph. A decision " +
+      "recorded now attaches to the single-member incident record minted at promotion. That mint is " +
+      'backend bill item <span class="mono">B3i</span> and it does not exist today.');
+  }
+  if (STATE === "error") {
+    return errorBlock("POST /v1/providence/feedback returned 404 incident_not_found.",
+      'This is the wall <span class="mono">B3i</span> exists to remove. ' +
+      "providence_feedback_handler loads by incident_id and 404s when it misses " +
+      "(AMB crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs:129-137, in " +
+      "swarm_detect --serve), and resolve_feedback_target then requires included_members to " +
+      "contain the finding_id. A dismissal recorded against a case with no incident record " +
+      "reaches nothing.");
+  }
+
+  const NW = 232, NH = 56, COLW = 300, ROWH = 76, PAD = 12;
+  const cols = [PAD, PAD + COLW];
+  const W = 760;
+  const nodeXY = (m) => ({ x: cols[m.col], y: PAD + m.row * ROWH });
+  let g = "";
+
+  /* edges first, so nodes sit above them */
+  const seed = GRAPH.included[0];
+  for (const m of GRAPH.included) {
+    if (m === seed) continue;
+    const a = nodeXY(seed), b = nodeXY(m);
+    const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2;
+    const dash = (DIMENSIONS.find((d) => d[0] === m.dims[0]) || DIMENSIONS[0])[2];
+    g += '<path d="M' + x1 + " " + y1 + "C" + (x1 + 34) + " " + y1 + " " + (x2 - 34) + " " + y2 + " " + x2 + " " + y2 +
+      '" class="k-border" stroke-width="1.4"' + (dash === "solid" ? "" : ' stroke-dasharray="' + dash + '"') + "></path>";
+    g += T((x1 + x2) / 2, (y1 + y2) / 2 - 6, "f-axis t-2xs mono", "middle", m.dims[0]);
+  }
+
+  const drawNode = (m, y, rejected) => {
+    const x = rejected ? PAD : nodeXY(m).x;
+    const yy = rejected ? y : nodeXY(m).y;
+    g += '<rect x="' + x + '" y="' + yy + '" width="' + NW + '" height="' + NH +
+      '" rx="6" class="f-card k-evid" stroke-width="1"' +
+      (rejected ? ' stroke-dasharray="3 3" opacity="0.62"' : "") + "></rect>";
+    g += '<rect x="' + x + '" y="' + yy + '" width="' + NW + '" height="2.5" rx="1.2" class="f-evid k-none"' +
+      (rejected ? ' opacity="0.62"' : "") + "></rect>";
+    g += T(x + 10, yy + 20, "f-fg t-sm mono", "start", m.strategy_id);
+    g += T(x + 10, yy + 34, "f-axis t-xs mono", "start",
+      m.host_id + " · " + m.finding_id.slice(0, 10) + " · " + m.confidence_score.toFixed(2));
+    g += T(x + 10, yy + 48, "f-muted t-2xs", "start",
+      (m.reason.length > 33 ? m.reason.slice(0, 33) + "…" : m.reason));
+  };
+  for (const m of GRAPH.included) drawNode(m, 0, false);
+
+  const rejTop = PAD + 3 * ROWH + 6;
+  g += '<line x1="' + PAD + '" y1="' + rejTop + '" x2="' + (W - PAD) + '" y2="' + rejTop +
+    '" class="k-border" stroke-width="1"></line>';
+  g += T(PAD, rejTop + 18, "f-muted t-xs mono", "start",
+    "REJECTED · " + GRAPH.rejected.length + " candidates the correlation stage refused to join");
+  GRAPH.rejected.forEach((m, i) => {
+    const y = rejTop + 30 + i * (NH + 26);
+    drawNode(m, y, true);
+    g += T(PAD + NW + 14, y + 20, "f-muted t-2xs", "start", m.reason.slice(0, 68));
+    if (m.reason.length > 68) g += T(PAD + NW + 14, y + 34, "f-muted t-2xs", "start", m.reason.slice(68));
+  });
+
+  const H = rejTop + 30 + GRAPH.rejected.length * (NH + 26) + PAD;
+  let out = '<div class="figure"><div class="cap720"><svg viewBox="0 0 ' + W + " " + H +
+    '" role="img" aria-label="' + esc("Incident member graph: " + GRAPH.included.length +
+      " findings joined, " + GRAPH.rejected.length + " refused, across the temporal, causal, entity and semantic dimensions.") +
+    '"><title>Incident member graph</title>' + defs() + g + "</svg></div>" +
+    '<p class="caption t-sm">' + GRAPH.included.length + " joined, " + GRAPH.rejected.length +
+    " refused, for <span class=\"mono\">" + esc(GRAPH.incident_id) + "</span>. " +
+    "Edges are typed by <b>dash pattern, not by hue</b>: four more hues would collide with the series " +
+    "rotation, and the pillar hues are spoken for.</p>" +
+    '<div class="legend t-2xs">' +
+      DIMENSIONS.map((d) =>
+        '<span><svg viewBox="0 0 34 8" aria-hidden="true"><line x1="0" y1="4" x2="34" y2="4" class="k-border" stroke-width="1.4"' +
+        (d[2] === "solid" ? "" : ' stroke-dasharray="' + d[2] + '"') + "></line></svg>" + d[0] + "</span>").join("") +
+    "</div>" +
+    '<div class="marks">' + servedMark("IncidentRecord.member_decisions") + "</div></div>";
+
+  out += noRegimeB("KillChainGraph",
+    "an incident record is served whole by the correlation stage and has no ephemeral form.");
+  if (STATE === "stale") out += '<p class="warn t-sm">This record is a snapshot taken when the correlation stage assembled it, not a live view. Assembled 09:14:42 UTC.</p>';
+  if (STATE === "degraded") out += '<p class="warn t-sm">The correlation stage is behind: 3 queued, 1 running. A candidate not yet scored is absent from both halves of this graph, and absent is not the same as refused.</p>';
+  if (STATE === "volume") out += '<p class="warn t-sm">Above 12 nodes the drawing shows the seed and its direct links and the rest moves to the table. A 41-node graph is a picture of a picture.</p>';
+  if (STATE === "suppressed") out += '<p class="warn t-sm">A member resting on a dismissed telemetry event <b>stays on the graph</b>: the record is what it was when assembled. The dismissal rides as a member note, never as a deletion.</p>';
+  if (STATE === "disagree") out += '<p class="warn t-sm">Nothing on this plate is derived, so nothing here can disagree with the runtime. Every field is read from the incident record.</p>';
+
+  out += '<div class="marks" style="margin-top:.6rem">' + tableToggle("v3", "the member table") + "</div>";
+  if (tableOpen.v3) {
+    const row = (m, inc) =>
+      '<tr><td class="t-xs mono">' + (inc ? "included" : "rejected") + "</td>" +
+      '<td class="t-xs mono">' + esc(m.strategy_id) + "</td>" +
+      '<td class="t-xs mono">' + esc(m.finding_id) + "</td>" +
+      '<td class="n t-xs">' + m.confidence_score.toFixed(2) + "</td>" +
+      '<td class="t-xs">' + esc(m.reason) + "</td></tr>";
+    out += '<div class="tblwrap"><table class="tbl"><caption class="t-2xs">Both halves, with the full ' +
+      "finding_id. A truncated identifier is forgeable by vanity grinding, so the whole value is always " +
+      'reachable.</caption><thead><tr><th class="t-2xs">decision</th><th class="t-2xs">strategy_id</th>' +
+      '<th class="t-2xs">finding_id</th><th class="t-2xs">confidence</th><th class="t-2xs">reason</th></tr></thead><tbody>' +
+      GRAPH.included.map((m) => row(m, true)).join("") +
+      GRAPH.rejected.map((m) => row(m, false)).join("") + "</tbody></table></div>";
+  }
+  return out;
+}
+
+const V3_CONTRACT =
+`// AMB crates/swarm-spine/src/incident.rs:114-132, :99-111, :135-170
+export type IncidentGraphDimension = "temporal" | "causal" | "entity" | "semantic"; // closed, 4
+export type IncidentMemberDecision = {
+  investigation_id: string; hunt_id: string; finding_id: string;
+  reason: string;                          // rendered VERBATIM on a rejected node
+  shared_keys: string[];
+  evidence_links: IncidentEvidenceLink[];
+  confidence_score: number;
+};
+export type KillChainProps = {
+  incidentId: string;
+  included: IncidentMemberDecision[];
+  rejected: IncidentMemberDecision[];      // REQUIRED. No default, no optional marker.
+  dimensions: IncidentGraphDimension[];
+  state: VizState;
+};`;
+
+/* ===========================================================================
+   VIZ-4 - IncidentTimeline. Row-kind union CLOSED at eleven: six restated from
+   Ambush's own review workbench (.timeline-item plus five modifiers, built by
+   format! at AMB crates/swarm-runtime-http/src/http/render.rs:66-71 and served
+   under `swarmctl serve`) and five added. The renderer switch is exhaustive
+   with no default arm, so a twelfth kind fails to compile rather than shipping
+   as a grey line.
+   =========================================================================== */
+const ROW_KINDS = [
+  ["ingest",            "substrate", "RuntimeEvent::Ingest, tallied at the bridge"],
+  ["finding",           "substrate", "ambush:finding:v1"],
+  ["escalation",        "authority", "RuntimeEvent::Escalation"],
+  ["mode_transition",   "authority", "RuntimeEvent::ModeTransition / kind 26003"],
+  ["agent_health",      "evidence",  "kind 26002"],
+  ["response_execution","evidence",  "ambush:receipt:v1"],
+  ["suppression",       "medium",    "a Dismiss marker deposit"],
+  ["hold",              "authority", "kind 46010 / ambush:hold:v1"],
+  ["decision",          "fg",        "ambush:verdict:v1"],
+  ["containment_open",  "evidence",  "ambush:lease:v1"],
+  ["containment_close", "evidence",  "ambush:rollback:v1"],
+];
+const RAIL = {
+  substrate: "var(--perch-pillar-substrate-mark)",
+  authority: "var(--perch-pillar-authority-mark)",
+  evidence:  "var(--perch-pillar-evidence-mark)",
+  medium:    "var(--perch-sev-medium)",
+  fg:        "var(--perch-foreground)",
+  muted:     "var(--perch-foreground-muted)",
+};
+
+function crossingSpark(atS) {
+  const W = 620, H = 30, from = atS - 90, to = atS + 90;
+  const P = FX.policy;
+  const pts = [];
+  for (let i = 0; i <= 60; i++) {
+    const t = from + ((to - from) * i) / 60;
+    pts.push({ t: t, v: concentrationAt(t, {}).total_strength });
+  }
+  const yMax = Math.max(P.alert_threshold * 1.25, Math.max.apply(null, pts.map((p) => p.v))) * 1.06;
+  const X = (t) => ((t - from) / (to - from)) * W;
+  const Y = (v) => H - 4 - (v / yMax) * (H - 8);
+  let d = "";
+  pts.forEach((p, i) => { d += (i ? "L" : "M") + X(p.t).toFixed(1) + " " + Y(p.v).toFixed(1); });
+  const yA = Y(P.alert_threshold);
+  return '<svg viewBox="0 0 ' + W + " " + H + '" style="max-width:620px" aria-hidden="true">' +
+    '<line x1="0" y1="' + (H - 4) + '" x2="' + W + '" y2="' + (H - 4) + '" class="k-s1" stroke-width="1" stroke-opacity="0.2"></line>' +
+    '<line x1="0" y1="' + yA.toFixed(1) + '" x2="' + W + '" y2="' + yA.toFixed(1) +
+      '" class="k-rule" stroke-width="1" stroke-opacity="0.6" stroke-dasharray="4 4"></line>' +
+    '<path d="' + d + '" class="k-s1" stroke-width="1.6" stroke-linejoin="round"></path>' +
+    '<circle cx="' + X(atS).toFixed(1) + '" cy="' + Y(concentrationAt(atS, {}).total_strength).toFixed(1) +
+      '" r="3" class="f-s3 k-none"></circle></svg>';
+}
+
+function tlRow(kind, whenS, k, l1, l2, extra) {
+  const spec = ROW_KINDS.find((r) => r[0] === kind);
+  const rail = RAIL[spec ? spec[1] : "muted"];
+  return '<li class="tlrow' + (extra && extra.divider ? " divider" : "") + '" style="--tl-rail:' + rail + '">' +
+    '<span class="when t-xs">' + clockOf(whenS) + "</span>" +
+    '<span class="body"><span class="k t-2xs">' + esc(k) + "</span>" +
+    '<p class="l1 t-sm">' + l1 + "</p>" +
+    (l2 ? '<p class="l2 t-xs">' + l2 + "</p>" : "") +
+    (extra && extra.svg ? '<div style="margin-top:.45rem">' + extra.svg + "</div>" : "") +
+    "</span></li>";
+}
+
+function plateV4() {
+  if (STATE === "loading") return loadingBlock("Reading case " + FX.channels.case.name + "...");
+  if (STATE === "empty") {
+    return stateBlock(
+      "Nothing has been recorded in this case",
+      "The evasion catalogue declares 18 techniques across 11 detectors that no detector covers. " +
+      "An empty case is a claim about what was looked for, not about what is there.",
+      "What the swarm does not cover", "#gaps");
+  }
+  if (STATE === "error") {
+    return errorBlock("The live subscription closed.",
+      "Rows below are the ones already received. The case is not empty and the record is not complete; " +
+      "no row here is a claim that nothing else happened.");
+  }
+
+  const s = (ms) => Math.floor(ms / 1000);
+  const conc = concentrationAt(FX.clock.cross_s, {});
+  const attrEsc = attrFor(conc, "escalation-card");
+  const belowConc = concentrationAt(FX.clock.cross_s - 1, {});
+  let rows = "";
+
+  rows += tlRow("finding", 1773738872, "FINDING",
+    '<span class="mono">suspicious_process_tree</span> on <span class="mono">host-ops-1</span>',
+    'confidence 0.90 &middot; <span class="mono">hunt_id hunt-evt-1</span> &middot; event ' + FX.ev.finding_spt_1.slice(0, 10));
+  rows += tlRow("finding", 1773738872, "FINDING",
+    '<span class="mono">suspicious_scripting</span> on <span class="mono">host-ops-1</span>',
+    'confidence 0.90 &middot; <span class="mono">hunt_id hunt-evt-1</span> &middot; one telemetry event, two detectors');
+  rows += tlRow("escalation", 1773738872, "DIVERSITY THRESHOLD",
+    'distinct_sources ' + esc(sourcesAgents(belowConc.sourceIds)) +
+    ' reached min_sources_for_escalation <span class="mono">' + FX.policy.min_sources_for_escalation + "</span>.",
+    'total_strength <span class="mono">' + f2(belowConc.total_strength) +
+    '</span> is still below alert_threshold <span class="mono">' + f2(FX.policy.alert_threshold) +
+    "</span> &mdash; exceeds_threshold needs both axes.");
+  rows += tlRow("finding", 1773738881, "FINDING",
+    '<span class="mono">suspicious_process_tree</span> on <span class="mono">host-ops-1</span>',
+    'confidence 0.90 &middot; <span class="mono">hunt_id hunt-evt-2</span>');
+  rows += tlRow("escalation", FX.clock.cross_s, "ESCALATION · ALERT",
+    'total_strength <span class="mono">' + f2(conc.total_strength) +
+    '</span> crossed alert_threshold <span class="mono">' + f2(FX.policy.alert_threshold) + "</span> " +
+    sevChip("CRITICAL"),
+    srcSpan(attrEsc, "mono") + ' &middot; peak_confidence <span class="mono">' + f2(conc.peak_confidence) + "</span>",
+    { svg: crossingSpark(FX.clock.cross_s) });
+  rows += tlRow("mode_transition", s(FX.clock.incident_ms), "INCIDENT RECORD",
+    'minted <span class="mono">' + esc(FX.incident_id) + "</span>",
+    "the member graph is on the Case Canvas, not in this column");
+  rows += tlRow("hold", s(FX.clock.hold_a_ms), "HOLD",
+    '<span class="mono">isolate_host</span> on <span class="mono">host-ops-1</span> ' + sevChip("CRITICAL"),
+    '<span class="mono">' + esc(FX.holds.a.hold_id) + '</span> &middot; rule <span class="mono">static.human_gate</span> ' +
+    "&middot; opens a containment lease");
+  rows += tlRow("hold", s(FX.clock.hold_b_ms), "HOLD",
+    '<span class="mono">block_egress</span> on <span class="mono">198.51.100.20</span> ' + sevChip("CRITICAL"),
+    '<span class="mono">' + esc(FX.holds.b.hold_id) + "</span> &middot; <b>no containment lease</b>: " +
+    "is_containment_action matches four of the twelve destructive actions and this is not one of them, " +
+    "so there is no TTL, no countdown and no rollback receipt");
+  rows += tlRow("decision", s(FX.clock.decide_ms), "DECISION",
+    'granted &middot; <span class="mono">isolate_host</span> on <span class="mono">host-ops-1</span>',
+    "recorded by <span class=\"mono\">" + esc(FX.operator.operator_id) + "</span> &middot; " +
+    '<span class="mono">' + esc(FX.ev.verdict_grant.slice(0, 16)) + "</span> &middot; " +
+    derivedMark("hold store; the daemon record does not name a human until B2o"));
+  rows += tlRow("containment_open", s(FX.clock.lease_ms), "CONTAINMENT LEASE OPENED",
+    '<span class="mono">' + esc(FX.containment_lease_id) + "</span> on <span class=\"mono\">host-ops-1</span>",
+    'TTL <span class="mono">' + FX.ttl.containment_ms + " ms</span> (15 min) &middot; " +
+    'the capability lease is a different object at <span class="mono">' + FX.ttl.capability_ms + " ms</span>");
+  rows += tlRow("response_execution", s(FX.clock.receipt_ms), "RESPONSE EXECUTION",
+    'receipt <span class="mono">' + esc(FX.receipt_id.slice(0, 34)) + "…</span>",
+    '<b>NO SIGNATURE OF ITS OWN</b> &mdash; this card is a copy; the daemon holds the record. ' +
+    "The re-read affordance fetches it by id and compares canonical bytes.");
+  rows += tlRow("suppression", s(FX.clock.dismiss_applied_ms), "SUPPRESSION",
+    'dismissed <span class="mono">hunt_id hunt-evt-1</span>',
+    "reached 2 deposits across 2 detectors, 1 of which was never reviewed");
+
+  if (STATE === "stale") {
+    rows += tlRow("finding", s(FX.clock.dismiss_applied_ms) + 60, "LATE-PUBLISHED",
+      "held in the bridge spool 22 min",
+      '<span class="mono">created_at</span> is a transport timestamp, stamped at publish; ordering ' +
+      "on this column is emitted_at_ms with seq breaking ties inside one issuer", { divider: true });
+  }
+  if (STATE === "degraded") {
+    rows += tlRow("ingest", s(FX.clock.open_row_ms), "GAP",
+      "sequence 4,118 to 4,393 from " + esc(agentLabel(FX.extAgents.whisker)) + " (275 envelopes not delivered)",
+      "This is a gap in what Perch received. Re-fetch from the daemon to close it.", { divider: true });
+    rows += tlRow("ingest", s(FX.clock.open_row_ms) + 4, "COALESCED",
+      "340 finding cards coalesced into 12",
+      "bridge over budget 09:16:05 to 09:16:13 &middot; a coalesced block is not a gap and never renders as one",
+      { divider: true });
+  }
+  if (STATE === "volume") {
+    rows += tlRow("ingest", FX.clock.now_s, "MORE",
+      "1,884 further rows in this case",
+      "500-row page size; the column virtualizes and the footer states the count", { divider: true });
+  }
+  if (STATE === "disagree") {
+    rows += tlRow("escalation", FX.clock.now_s, "SNAPPED",
+      "the concentration detail snapped to the runtime's snapshot",
+      'derived and served differ by more than epsilon = policy.evaporation_threshold ' +
+      '<span class="mono">' + FX.policy.evaporation_threshold + "</span>", { divider: true });
+  }
+
+  let out = '<div class="figure"><ul class="tl">' + rows + "</ul>" +
+    '<p class="caption t-sm">A threshold crossing is <b>a row with its own arithmetic</b>, never a tick ' +
+    "on somebody else's axis. The inline detail is computed from the same closed form the flagship " +
+    "chart uses, never a decorative squiggle.</p></div>";
+
+  out += '<div class="marks" style="margin-top:.6rem">' + tableToggle("v4", "the closed row-kind union") + "</div>";
+  if (tableOpen.v4) {
+    out += '<div class="tblwrap"><table class="tbl"><caption class="t-2xs">Eleven kinds, closed. The ' +
+      "renderer switch is exhaustive with no default arm: a twelfth kind is a compile error, not a grey " +
+      'line.</caption><thead><tr><th class="t-2xs">kind</th><th class="t-2xs">rail</th>' +
+      '<th class="t-2xs">source</th></tr></thead><tbody>' +
+      ROW_KINDS.map((r) =>
+        '<tr><td class="t-xs mono">' + r[0] + '</td><td class="t-xs mono">' + r[1] +
+        '</td><td class="t-xs mono">' + esc(r[2]) + "</td></tr>").join("") +
+      "</tbody></table></div>";
+  }
+  return out;
+}
+
+const V4_CONTRACT =
+`export type TimelineRowKind =
+  | "ingest" | "finding" | "escalation" | "mode_transition" | "agent_health"
+  | "response_execution" | "suppression" | "hold" | "decision"
+  | "containment_open" | "containment_close";      // CLOSED at eleven
+
+// The renderer is an exhaustive switch with NO default arm.
+function renderRow(row: TimelineRow): JSX.Element {
+  switch (row.kind) {
+    case "ingest":            return <IngestRow {...row} />;
+    /* ... nine more ... */
+    case "containment_close": return <ContainmentCloseRow {...row} />;
+  }
+}
+
+// A decision row's second half is a DERIVED marker until B2o threads
+// approved_by through ResponseReceiptAudit, which today has exactly two fields
+// (policy, governance) and whose governing_agent_id is Tom, not a human
+// (AMB crates/swarm-response/src/lib.rs:118-142).`;
+
+/* ===========================================================================
+   VIZ-5 - ContainmentLeaseTimer. Not a chart: a table with one live column.
+   The struct's own doc comment is the design spec -
+   AMB crates/swarm-runtime-http/src/http/containment.rs:76-81, on the view
+   containment_lease_list_handler builds from sweep.open_leases() inside
+   `swarm_detect --serve`: remaining_ms SATURATES AT ZERO, so it alone cannot
+   distinguish "expires in an instant" from "expired an hour ago and the sweep
+   has not managed to release it". `expired` is the field that answers that.
+   TWO FACTS, TWO LINES. A single progress bar reaching zero renders the two
+   states identically, which is precisely what the API refused to do.
+
+   The TTL on this board is runtime.containment.lease_ttl_ms, default 900,000 ms
+   (AMB crates/swarm-core/src/config/defaults.rs:23-27, doc "Fifteen minutes").
+   The 60,000 ms in APPENDIX section 6 is the CAPABILITY lease, a different
+   object. A board rendering 60 s beside a ContainmentLeaseView is wrong by 15x.
+   =========================================================================== */
+const LEASES = [
+  { lease_id: FX.containment_lease_id, action: "isolate_host", scope: "host-ops-1",
+    issued_at_ms: FX.clock.lease_ms, expires_at_ms: FX.clock.lease_ms + FX.ttl.containment_ms,
+    expired: false, undo: "restore_host_connectivity", reversible: true, origin: "canonical" },
+  { lease_id: "cl_1f56ce4e", action: "quarantine_file", scope: "host-ops-2",
+    issued_at_ms: FX.clock.now_s * 1000 - FX.ttl.containment_ms + 11000,
+    expires_at_ms: FX.clock.now_s * 1000 + 11000,
+    expired: false, undo: "release_quarantined_file", reversible: true, origin: "extension" },
+  { lease_id: "cl_ffc3fc0e", action: "suspend_process", scope: "host-ops-3",
+    issued_at_ms: FX.clock.now_s * 1000 - FX.ttl.containment_ms - 3_540_000,
+    expires_at_ms: FX.clock.now_s * 1000 - 3_540_000,
+    expired: true, undo: "resume_process", reversible: true, origin: "extension" },
+  { lease_id: "cl_2046eea5", action: "terminate_user_session", scope: "host-ops-4",
+    issued_at_ms: FX.clock.now_s * 1000 - 438000,
+    expires_at_ms: FX.clock.now_s * 1000 + 462000,
+    expired: false, undo: null, reversible: false, origin: "extension" },
+];
+
+function leaseState(l, nowMs) {
+  const remaining = Math.max(0, l.expires_at_ms - nowMs);   /* saturating_sub, containment.rs:276 */
+  if (l.expired) return { key: "expired", remaining: remaining };
+  if (remaining < 15000) return { key: "expiring", remaining: remaining };
+  return { key: "open", remaining: remaining };
+}
+
+function plateV5() {
+  const nowMs = FX.clock.now_s * 1000;
+  if (STATE === "loading") return loadingBlock("Reading open containment leases...");
+  if (STATE === "empty") {
+    return stateBlock(
+      "No open containment lease",
+      "Nothing is contained. Four of the twelve destructive actions mint a containment lease " +
+      "(is_containment_action, AMB crates/swarm-runtime/src/containment.rs:54-63); the other eight " +
+      "never appear on this board at all, which is why an empty board is not the same as a quiet estate.",
+      "The decision record", "#ledger");
+  }
+  if (STATE === "error") {
+    return errorBlock("No containment lease store is configured.",
+      '<span class="mono">ContainmentSettings.lease_store_path</span> defaults to None, and with no ' +
+      "store prepare_containment returns RuntimeError::ContainmentRefused " +
+      "(AMB crates/swarm-runtime/src/lib.rs:836-844) for all four containment actions. A granted " +
+      "<span class=\"mono\">isolate_host</span> therefore fails at the decide route. The other eight " +
+      "destructive actions are unaffected. This is a configuration, not a fault, and it is a " +
+      "first-class state on this board rather than a 500.");
+  }
+
+  const shown = STATE === "suppressed" ? LEASES.slice(0, 1) : LEASES;
+  let rows = "";
+  for (const l of shown) {
+    const st = leaseState(l, nowMs);
+    const cls = "state-" + st.key;
+    const word = st.key === "expired"
+      ? "EXPIRED, HOST STILL CONTAINED"
+      : st.key === "expiring" ? "EXPIRING" : "OPEN";
+    rows += "<tr>" +
+      '<td class="t-sm mono">' + esc(l.lease_id) + '<span class="sub t-2xs">' + esc(l.scope) + "</span></td>" +
+      '<td class="t-sm mono">' + esc(l.action) + '<span class="sub t-2xs">issued ' +
+        clockOf(Math.floor(l.issued_at_ms / 1000)) + " &middot; TTL " + (FX.ttl.containment_ms / 1000) + " s</span></td>" +
+      '<td class="t-sm mono ' + cls + '">' + mmss(st.remaining) +
+        '<span class="sub t-2xs ' + cls + '">' + esc(word) + "</span></td>" +
+      '<td class="t-sm mono">' + (st.key === "expired" ? "expired: true" : "expired: false") +
+        '<span class="sub t-2xs">' + (st.key === "expired"
+          ? "the sweep tried and failed; this is not a countdown that finished"
+          : "remaining_ms and expired are two fields, never one bar") + "</span></td>" +
+      '<td class="t-sm mono">' + (l.undo ? esc("UNDO: " + l.undo) : "NO UNDO MAPPED") +
+        '<span class="sub t-2xs">' + (l.undo
+          ? "resolve_inverse maps this action"
+          : "a terminated session cannot be resumed; the containment stays in effect") + "</span></td>" +
+      "</tr>";
+  }
+
+  let out = '<div class="figure"><div class="tblwrap"><table class="leasegrid">' +
+    '<thead><tr><th class="t-2xs">CONTAINMENT LEASE</th><th class="t-2xs">ACTION</th>' +
+    '<th class="t-2xs">REMAINING</th><th class="t-2xs">EXPIRED</th><th class="t-2xs">IF YOU UNDO</th>' +
+    "</tr></thead><tbody>" + rows + "</tbody></table></div>" +
+    '<p class="caption t-sm">Ordering is the daemon&rsquo;s (<span class="mono">expires_at_ms</span>, then ' +
+    '<span class="mono">lease_id</span>) and is never re-sorted here, so two operators on two screens ' +
+    "read the same list in the same order. One board-level clock publishes a single " +
+    '<span class="mono">nowMillis</span>; no row owns an interval.</p>' +
+    '<div class="marks">' + servedMark("GET /v1/response/containment/leases") +
+      derivedMark("mm:ss from observed_at_ms plus local elapsed time") + "</div></div>";
+
+  out += '<p class="warn t-sm"><b>The ladder is 12 destructive, 4 leased, 3 reversible.</b> ' +
+    'The block_egress hold <span class="mono">' + esc(FX.holds.b.hold_id) + "</span> in this same case " +
+    "has <b>no row on this board and no empty row either</b>: it mints no containment lease, so it has " +
+    "no TTL, no countdown and no rollback receipt. Of the four that do lease, " +
+    '<span class="mono">terminate_user_session</span> maps to InverseGap::Irreversible ' +
+    "(AMB crates/swarm-response/src/rollback.rs:181-189), leaving three with executable inverses.</p>";
+
+  out += noRegimeB("ContainmentLeaseTimer",
+    "open containment leases are read from the daemon's own listing, which is neither a deposit list " +
+    "nor an ephemeral frame.");
+  if (STATE === "stale") out += '<p class="warn t-sm">The countdowns derive from <span class="mono">observed_at_ms</span> plus local elapsed time. A containment lease that lapsed inside the staleness window still shows as open here, and this note is the only thing that says so.</p>';
+  if (STATE === "degraded") out += '<p class="warn t-sm">The daemon is unreachable: readable, not releasable. An open containment lease&rsquo;s own TTL is the only backstop while this lasts.</p>';
+  if (STATE === "volume") out += '<p class="warn t-sm">A colony with more than 200 open containments is an incident, not a scrolling problem. This list is deliberately plain.</p>';
+  if (STATE === "suppressed") out += '<p class="warn t-sm">A dismissal never closes a containment. The rows a dismissal touches are evidence rows, not containment rows, and this board did not change.</p>';
+  if (STATE === "disagree") out += '<p class="warn t-sm">Perch lists 4 open containment leases; <span class="mono">swarmctl quarantine list</span> against the same daemon returns 3. Neither number is treated as right until the read repeats, and the disagreement is itself one of the counters the shift reports.</p>';
+
+  out += '<div class="marks" style="margin-top:.6rem">' + tableToggle("v5", "the release outcomes") + "</div>";
+  if (tableOpen.v5) {
+    const STATUSES = [
+      ["reversed", "the inverse ran against the real target and succeeded", "restored() is true"],
+      ["simulated", "the inverse was rehearsed; no real target was touched", "restored() is false"],
+      ["irreversible", "no inverse exists; the world was not restored and no adapter can restore it", "restored() is false"],
+      ["unsupported", "the configured adapter cannot execute this inverse", "restored() is false"],
+      ["failed", "the inverse was attempted against a real target and failed", "restored() is false"],
+    ];
+    out += '<div class="tblwrap"><table class="tbl"><caption class="t-2xs">' +
+      "RollbackStepStatus, five values, never collapsed (AMB crates/swarm-response/src/rollback.rs:209-223). " +
+      'A release returning HTTP 200 is read from <span class="mono">lease_closed</span> in the body, never ' +
+      'from the status code.</caption><thead><tr><th class="t-2xs">status</th><th class="t-2xs">meaning</th>' +
+      '<th class="t-2xs">restored()</th></tr></thead><tbody>' +
+      STATUSES.map((s) => '<tr><td class="t-xs mono">' + s[0] + '</td><td class="t-xs">' + esc(s[1]) +
+        '</td><td class="t-xs mono">' + s[2] + "</td></tr>").join("") +
+      "</tbody></table></div>";
+  }
+  return out;
+}
+
+const V5_CONTRACT =
+`// AMB crates/swarm-runtime-http/src/http/containment.rs:71-95
+export type ContainmentLeaseView = {
+  lease: {
+    lease_id: string; action: ResponseAction;   // the TYPED variant, never its name
+    origin_receipt_id: string; governance_receipt_id: string | null;
+    blast_radius: ResponseBlastRadiusPreview; rollback: ResponseRollbackPreview;
+    issued_at_ms: UnixMillis; expires_at_ms: UnixMillis;
+  };
+  remaining_ms: number;   // SATURATES AT ZERO
+  expired: boolean;       // the field that answers what remaining_ms cannot
+};
+
+// deriveContainmentState takes a NAMED struct so a caller cannot pass
+// remaining_ms and lose \`expired\`.
+export function deriveContainmentState(f: ContainmentFacts): ContainmentState;`;
+
+/* ===========================================================================
+   VIZ-6 - RateSparkline. Three 1 Hz series plus one capped distribution.
+   `shed` is NOT on the wire: it is the bridge's own counter
+   (perch_bridge_dropped_events_total), read from the same process that
+   publishes the gauge, and it is a different fact from `rejected` - rejected
+   means the daemon refused the telemetry, shed means the bridge dropped a frame
+   it had already accepted. Two series, never merged into one line.
+   =========================================================================== */
+function lcg(seed) { let s = seed >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+function seriesFrom(seed, n, base, jitter) {
+  const r = lcg(seed), out = [];
+  for (let i = 0; i < n; i++) out.push(Math.max(0, base + (r() - 0.5) * 2 * jitter));
+  return out;
+}
+function sparkPath(vals, w, h, pad) {
+  const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  const span = hi - lo;
+  const y = (v) => (span < 1e-9 ? h / 2 : h - pad - ((v - lo) / span) * (h - 2 * pad));
+  let d = "";
+  vals.forEach((v, i) => { d += (i ? "L" : "M") + ((i / (vals.length - 1)) * w).toFixed(1) + " " + y(v).toFixed(1); });
+  return { d: d, lastY: y(vals[vals.length - 1]), lo: lo, hi: hi };
+}
+function sparkline(vals, cls, w, h, stopped) {
+  const p = sparkPath(vals, w, h, 2);
+  return '<svg viewBox="0 0 ' + w + " " + h + '" style="width:' + w + "px;height:" + h +
+    'px" aria-hidden="true"><path d="' + p.d + '" class="' + cls + '" stroke-width="1.5"></path>' +
+    (stopped ? "" : '<circle cx="' + w + '" cy="' + p.lastY.toFixed(1) + '" r="1.5" class="' +
+      cls.replace("k-", "f-") + ' k-none"></circle>') + "</svg>";
+}
+
+const BY_SOURCE = [
+  ["edr", 0.41, "f-s1"], ["sysmon", 0.24, "f-s2"], ["zeek", 0.17, "f-s3"],
+  ["auditd", 0.09, "f-s4"], ["cloudtrail", 0.06, "f-s5"], ["other", 0.03, "f-s6"],
+];
+
+function plateV6() {
+  if (STATE === "loading") return loadingBlock("Reading the ingest gauge...");
+  if (STATE === "empty") {
+    return stateBlock(
+      "No telemetry in this window",
+      "Zero accepted <b>and</b> zero rejected. That means the daemon is not receiving input, not that " +
+      "it is refusing it. The two readings look the same on a gauge and mean opposite things, so the " +
+      "row says which one this is.");
+  }
+  if (STATE === "error") {
+    return errorBlock("The relay refused a frame: rate-limited, shared admission unavailable.",
+      "Held actions still arrive. The alarm stream has its own Nostr identity and its own write " +
+      "budget, and it is never coalesced and never shed.");
+  }
+
+  const stale = STATE === "stale";
+  const accepted = seriesFrom(20260317, 60, 3645, 260);
+  const rejected = seriesFrom(77, 60, 18, 9);
+  const shed = seriesFrom(913, 60, STATE === "degraded" ? 140 : 0, STATE === "degraded" ? 60 : 0);
+  const row = (label, value, vals, cls, note) =>
+    '<div style="display:flex;align-items:baseline;gap:.85rem;padding:.5rem 0;border-bottom:1px solid hsl(var(--perch-border))">' +
+      '<span class="t-sm" style="min-width:12rem">' + esc(label) + "</span>" +
+      '<span class="t-base mono" style="min-width:6rem;text-align:right">' + esc(value) + "</span>" +
+      '<span style="display:flex;align-items:center">' + sparkline(vals, cls, 220, 22, stale) + "</span>" +
+      '<span class="t-xs dim">' + note + "</span></div>";
+
+  let out = '<div class="figure">' +
+    row("accepted, per second", Math.round(accepted[59]).toLocaleString("en-US"), accepted, "k-s1",
+        "scale is this window&rsquo;s own min to max, not zero-based; the absolute value sits beside it") +
+    row("rejected by the daemon", String(Math.round(rejected[59])), rejected, "k-s3",
+        "the daemon refused the telemetry") +
+    row("shed by the bridge", String(Math.round(shed[59])), shed, "k-med",
+        "a frame the bridge had already accepted and then dropped; a different fact, never merged");
+
+  /* the by_source distribution, capped at 5 + other AT THE BRIDGE */
+  const W = 720, H = 34;
+  let x = 0, bars = "", labels = "";
+  BY_SOURCE.forEach((s, i) => {
+    const w = s[1] * W - 1;
+    bars += '<rect x="' + x.toFixed(1) + '" y="0" width="' + Math.max(0, w).toFixed(1) +
+      '" height="10" rx="1" class="' + s[2] + ' k-none"></rect>';
+    if (s[1] > 0.05) {
+      const txt = s[0] + " " + Math.round(s[1] * 100) + "%";
+      const est = txt.length * 6.2;                 /* 11px mono, measured empirically */
+      const overflows = x + 1 + est > W;
+      labels += T(overflows ? x + s[1] * W - 1 : x + 1, 26, "f-axis t-2xs mono",
+                  overflows ? "end" : "start", txt);
+    }
+    x += s[1] * W;
+  });
+  out += '<div style="margin-top:.9rem"><div class="cap720L"><svg viewBox="0 0 ' + W + " " + H +
+    '" role="img" aria-label="' + esc("Ingest by source: edr 41 percent, sysmon 24, zeek 17, auditd 9, cloudtrail 6, other 3.") +
+    '"><title>Ingest by source</title>' + defs() + bars + labels + "</svg></div>" +
+    '<p class="caption t-sm">Capped at five segments plus <span class="mono">other</span>, and the cap is ' +
+    "applied <b>at the bridge</b>, not in the component, so the wire payload is bounded.</p></div>" +
+    '<div class="marks">' + servedMark("kind 26000 ingest gauge, 1 Hz") +
+      derivedMark("perch_bridge_dropped_events_total, a bridge counter") + "</div></div>";
+
+  out += '<p class="warn t-sm"><b>The stream Perch refuses to carry.</b> ' +
+    '<span class="mono">RuntimeEvent::Ingest</span> is emitted once per accepted telemetry event and the ' +
+    "hot path sustains 3,645 per second. Publishing one relay event per ingested event would exceed the " +
+    "per-pubkey write quota by roughly 1,800x, fill the case with rows nobody reads, double the Postgres " +
+    "write volume, and duplicate what the ReplayBundle already holds. The console shows a <b>rate</b>; " +
+    "the drill-down is the case-scoped terminal, where the raw record actually lives. A 1-in-N sample " +
+    "would be worse than a rate, because it looks like a record.</p>";
+
+  if (stale) out += '<p class="warn t-sm">The line <b>stops</b> rather than flat-lining. A drawn flat line is a claim that the rate was zero, and this console does not know that.</p>';
+  if (STATE === "degraded") out += '<p class="warn t-sm">The bridge is shedding the evidence stream oldest-first so the alarm stream keeps its budget. The shed count is on the wire as <span class="mono">perch_bridge_dropped_events_total</span> and is drawn as its own series.</p>';
+  if (STATE === "volume") out += '<p class="warn t-sm">Sustained above the 3,645 per second hot-path measurement, shedding starts at the pacer, is counted, and is drawn. Nothing is silently discarded.</p>';
+  if (STATE === "suppressed") out += '<p class="warn t-sm">A dismissal is a pheromone-substrate act and does not touch ingest. This gauge is unchanged, and saying so is cheaper than letting an operator wonder.</p>';
+  if (STATE === "disagree") out += '<p class="warn t-sm">The bridge&rsquo;s tally and the daemon&rsquo;s own /metrics counter differ. Neither is wrong: the bridge counts what it received on a broadcast channel whose lagged receivers drop silently, so the difference is <b>a lower bound on the drop</b>, not an error.</p>';
+
+  out += '<div class="marks" style="margin-top:.6rem">' + tableToggle("v6", "the last ten samples") + "</div>";
+  if (tableOpen.v6) {
+    let body = "";
+    for (let i = 50; i < 60; i++) {
+      body += '<tr><td class="t-xs mono">t-' + String(59 - i).padStart(2, "0") + "s</td>" +
+        '<td class="n t-xs">' + Math.round(accepted[i]) + "</td>" +
+        '<td class="n t-xs">' + Math.round(rejected[i]) + "</td>" +
+        '<td class="n t-xs">' + Math.round(shed[i]) + "</td></tr>";
+    }
+    out += '<div class="tblwrap"><table class="tbl"><caption class="t-2xs">The sparkline itself is ' +
+      "aria-hidden: it is a redundant encoding of the number beside it, and announcing a path is noise. " +
+      'This table is the reachable form.</caption><thead><tr><th class="t-2xs">sample</th>' +
+      '<th class="t-2xs">accepted</th><th class="t-2xs">rejected</th><th class="t-2xs">shed</th>' +
+      "</tr></thead><tbody>" + body + "</tbody></table></div>";
+  }
+  return out;
+}
+
+const V6_CONTRACT =
+`// Ephemeral kind 26000, 1 Hz. Built by the bridge from
+// RuntimeEvent::Ingest { emitted_at_ms, correlation_id, event_id, source,
+// host_id, accepted, reason } (AMB crates/swarm-runtime/src/runtime_events.rs:215-223),
+// tallied and dropped at source.
+export type IngestGauge = {
+  emitted_at_ms: UnixMillis;
+  accepted: number;                    // per second
+  rejected: number;                    // the daemon refused the telemetry
+  by_source: Record<string, number>;   // capped at 5 + "other" AT THE BRIDGE
+};
+export type RateSparklineProps = {
+  values: number[];                    // 60 samples; the component never fetches
+  seriesClass: "viz-series-1" | "sev-medium" | "sev-high";
+  stale?: boolean;                     // stops the line rather than drawing a flat one
+  label: string; value: string;
+};`;
+
+/* ===========================================================================
+   PLATES
+   =========================================================================== */
+function plate(id, name, pillar, contractLabel, purpose, body, contract) {
+  return '<section class="plate" data-pillar="' + pillar + '" aria-labelledby="h-' + id + '">' +
+    '<span class="notch notch-l t-eyebrow">' + esc(name) + "</span>" +
+    '<span class="notch notch-r t-2xs">' + esc(contractLabel) + "</span>" +
+    '<h3 id="h-' + id + '" class="t-lg">' + esc(purpose[0]) + "</h3>" +
+    '<p class="purpose t-sm">' + purpose[1] + "</p>" +
+    body +
+    '<details class="contract"><summary class="t-xs">component contract</summary><pre class="t-xs">' +
+    esc(contract) + "</pre></details></section>";
+}
+
+const PLATE_DEFS = [
+  ["v1", "VIZ-1 · ConcentrationCurve", "substrate", "/lanes/$laneId (threat class) · Case Canvas · /watch-floor",
+   ["Is this threat class climbing toward the bar, and which detector put each step there?",
+    "The only chart in Perch whose numbers an operator acts on, and the only one whose arithmetic " +
+    "the console reproduces rather than reads. Every literal on it comes from the served policy."],
+   plateV1, () => V1_CONTRACT],
+  ["v2", "VIZ-2 · HostHeat", "substrate", "/lanes/$laneId (threat class) · /watch-floor",
+   ["Which three machines do I look at first?",
+    "A sorted bar list, not a treemap and not a heat grid. Rank is the question; a two-dimensional " +
+    "encoding answers a different one and virtualizes worse."],
+   plateV2, () => V2_CONTRACT],
+  ["v3", "VIZ-3 · KillChainGraph", "evidence", "Case Canvas",
+   ["What did the swarm join together, and what did it refuse to join?",
+    "A left-to-right graph over one incident record's members. The refused half is not optional: a " +
+    "graph showing only inclusions is an argument, not evidence."],
+   plateV3, () => V3_CONTRACT],
+  ["v4", "VIZ-4 · IncidentTimeline", "authority", "/cases/$caseId · Case Canvas",
+   ["What happened, in what order, and where did the number cross the bar?",
+    "One column, one row per typed event, a 4px left rail per kind. The union is closed at eleven and " +
+    "the switch has no default arm."],
+   plateV4, () => V4_CONTRACT],
+  ["v5", "VIZ-5 · ContainmentLeaseTimer", "evidence", "/leases (containment) · Verdict Row · /watch-floor",
+   ["What is still contained, and is the sweep keeping up?",
+    "Not a chart. A table with one live column, and the one surface where a progress bar is forbidden " +
+    "by name."],
+   plateV5, () => V5_CONTRACT],
+  ["v6", "VIZ-6 · RateSparkline", "substrate", "/ · threat-class lane headers · /tuning · /watch-floor",
+   ["Is the estate still talking to us, and are we dropping any of it?",
+    "Three 1 Hz series plus one capped distribution. Only ever adjacent to the number it summarizes."],
+   plateV6, () => V6_CONTRACT],
+];
+
+/* ===========================================================================
+   SPEC NOTES
+   =========================================================================== */
+function specNotes() {
+  const region = [
+    ["Palette, all tokens", "19-TOKENS.md + tokens/perch-tokens.css, name for name and value for value",
+     "amendments T1, T2, T2b applied"],
+    ["Theme arrangement", "tokens/perch-tokens.css: light on bare :root, dark under class + attribute + guarded media", "-"],
+    ["Type ramp, rem only", "05 sections 3.1-3.2; virtual rem at BUZZ typography.css:16-17", "-"],
+    ["Fixture spine", "fixtures/perch-demo-fixture.json, the one canonical scenario (22-DEMO-FIXTURE.md)", "-"],
+    ["Fixture extension", "viz/dataviz-fixture.mjs, ext/ labels, same public derivation", "-"],
+    ["Plate frame (punched notch)", "AMB docs/assets/security-v2.svg:8-33", "-"],
+    ["Chart geometry", "AMB docs/assets/stigmergy.svg:4,9-54", "-"],
+    ["Closed form", "AMB crates/swarm-core/src/pheromone.rs:280-287", "section 6, half_life 3600"],
+    ["Concentration reduction", "AMB crates/swarm-pheromone/src/substrate.rs:1268-1304", "section 6"],
+    ["Snapshot-disagreement epsilon", "18-DATAVIZ section 2.4, brief amendment A11", "replaces the invented 2 percent row"],
+    ["Containment lease TTL", "AMB crates/swarm-core/src/config/defaults.rs:23-27 = 900,000 ms", "correction X5"],
+    ["Capability lease TTL", "AMB rulesets/default.yaml:94 = 60,000 ms", "section 6, unchanged"],
+    ["Containment actions", "AMB crates/swarm-runtime/src/containment.rs:54-63 = 4 of 12", "section 6"],
+    ["Rollback statuses", "AMB crates/swarm-response/src/rollback.rs:209-223 = 5", "section 6"],
+    ["Incident graph dimensions", "AMB crates/swarm-spine/src/incident.rs:114-132 = 4", "section 6"],
+    ["Correlation reason grammars", "AMB crates/swarm-runtime/src/correlation.rs:447-506", "-"],
+  ];
+  const drawn = [
+    "The three tokens this layer asks for: --perch-viz-grid, --perch-viz-unfilled and " +
+      "--perch-viz-suppressed-hatch. Each is an ALIAS of a token perch-tokens.css already ships, so " +
+      "adding them costs no new colour decision. The paste-ready block and the test extension are in " +
+      "18-DATAVIZ section 3.2.",
+    "The suppression hatch geometry: 45 degrees, 1px, 6px pitch, at alpha 0.35 (composited 1.81 dark / " +
+      "1.65 light against the card). It is a texture, redundant with a marker line, a step and a " +
+      "sentence, and is deliberately not a classification channel.",
+    "The six-series dash rotation solid / 4 2 / 2 2 / 6 3 / 8 2 2 2 / 1 3. Only the pairing rule is argued.",
+    "The kill-chain node geometry (232x56, three lines) and the fixed two-column layout.",
+    "VIZ-2 drawn ESTATE-WIDE rather than per threat class. The question the plate answers is which " +
+      "machine to open first, which is not a per-class question. A per-class variant takes the same " +
+      "component with a threatClass filter.",
+    "The min-max sparkline scale over a zero-based one, and the stopped line under staleness.",
+    "The source-diversity crossing as a first-class timeline row. That it renders is verified; that it " +
+      "deserves its own row is a design call.",
+    "The 60-sample telemetry series shapes. Only the 3,645 per second centre is measured; the jitter is " +
+      "a deterministic LCG so the drawing is stable across reloads and is shape-only.",
+    "The four extension containment leases (cl_1f56ce4e, cl_ffc3fc0e, cl_2046eea5) and the two extension " +
+      "rejected members. The canonical scenario has one containment lease and no rejections; four of the " +
+      "five board states and the whole refused half of VIZ-3 are undrawable without them.",
+  ];
+  const corrections = [
+    ["X1", "ambush-touchpoints correction C-5", "WRONG, and re-verified this session at the line. " +
+      "WhiskerAgent::tick (AMB crates/swarm-agents/src/whisker_agent.rs:148-149) builds " +
+      "'{identity}:{instance}' and hands it to detect_and_deposit_with_role, which passes it to " +
+      "resolve_deposits at pipeline.rs:80; resolve_deposits writes each deposit's agent_id as " +
+      "strategy_scoped_agent_id(agent_id, strategy_id) at pipeline.rs:573, defined at " +
+      "swarm-whisker/src/stream.rs:20-22 as format!(\"{}:{strategy_id}\", base.0). concentration_for " +
+      "inserts that whole string at substrate.rs:1295. Two workspace tests assert it: " +
+      "query_counts_strategy_scoped_agent_ids_as_distinct_sources (substrate.rs:2104-2126) and " +
+      "query_collapses_repeated_strategy_scoped_agent_ids_to_one_source (:2128-2153). Render law 2 " +
+      "stands; the explanatory copy must NOT be rewritten."],
+    ["X2", "APPENDIX section 6 interpolation tolerance", "2 percent of alert_threshold is marked " +
+      "invented and is replaced by epsilon = policy.evaporation_threshold. Amendment A11."],
+    ["X5", "APPENDIX section 6 lease_ttl_ms", "Correct for the capability lease. This board renders " +
+      "runtime.containment.lease_ttl_ms = 900,000 ms. 60 s beside a ContainmentLeaseView is wrong by 15x."],
+    ["X8", "18-DATAVIZ CR-5, first draft", "REVISED. sourceIds cannot be non-optional in Phase 1: " +
+      "RuntimeEvent::Escalation (AMB crates/swarm-runtime/src/runtime_events.rs:288-297) has eight " +
+      "fields and carries no ids, and no card or frame schema carries source_ids. SourceAttribution " +
+      "is now a two-arm union and the absent arm renders a NAMED absence, never a fabricated agent count."],
+    ["X9", "this prototype's own first draft", "Its palette was authored against the BARE Buzz shadcn " +
+      "names, which ThemeProvider writes inline on the root element; every colour on every plate would " +
+      "have silently reverted to the active Buzz syntax theme. Rewritten to --perch-*."],
+    ["X10", "this prototype's own first draft", "It painted colour through SVG presentation " +
+      "attributes and recorded that as a deliberate standalone deviation. With HSL-triplet tokens that " +
+      "form does not resolve at all. The deviation is DELETED: colour now reaches every SVG node " +
+      "through a class, exactly as a shipped component must, and viz/check-perch-chart-tokens.sh " +
+      "proves no fill= or stroke= attribute exists in this file."],
+  ];
+
+  let h = '<p class="t-sm dim2" style="margin-top:1rem">Every region of this page, the artifact that ' +
+    "governs it, and the appendix row that fixes its values. Values drawn here that no plan document " +
+    "specifies are listed under <b>Drawn but unspecified</b> and repeated in " +
+    '<span class="mono">18-DATAVIZ.md</span> section 15.</p>';
+
+  h += "<h3>Region to governing artifact</h3>" +
+    '<div class="tblwrap"><table class="tbl"><thead><tr><th class="t-2xs">Region</th>' +
+    '<th class="t-2xs">Owner</th><th class="t-2xs">Appendix row</th></tr></thead><tbody>' +
+    region.map((r) => '<tr><td class="t-xs">' + esc(r[0]) + '</td><td class="t-xs">' + esc(r[1]) +
+      '</td><td class="t-xs mono">' + esc(r[2]) + "</td></tr>").join("") + "</tbody></table></div>";
+
+  h += "<h3>Drawn but unspecified</h3><ul>" +
+    drawn.map((d) => '<li class="t-sm">' + esc(d) + "</li>").join("") + "</ul>";
+
+  h += "<h3>Corrections this specimen issues</h3>" +
+    '<div class="tblwrap"><table class="tbl"><thead><tr><th class="t-2xs">#</th>' +
+    '<th class="t-2xs">Target</th><th class="t-2xs">Correction</th></tr></thead><tbody>' +
+    corrections.map((c) => '<tr><td class="t-xs mono">' + esc(c[0]) + '</td><td class="t-xs">' +
+      esc(c[1]) + '</td><td class="t-xs">' + esc(c[2]) + "</td></tr>").join("") + "</tbody></table></div>";
+
+  h += "<h3>The fixture, and what is spine and what is extension</h3>" +
+    '<p class="t-sm">Spine, verbatim from <span class="mono">fixtures/perch-demo-fixture.json</span>: ' +
+    'case channel <span class="mono">' + FX.channels.case.id + '</span>, threat class ' +
+    '<span class="mono">execution</span>, host <span class="mono">host-ops-1</span>, three deposits ' +
+    "across two detectors on one agent, holds <span class=\"mono\">" + FX.holds.a.hold_id +
+    '</span> (isolate_host, leases a containment) and <span class="mono">' + FX.holds.b.hold_id +
+    '</span> (block_egress, leases nothing), containment lease <span class="mono">' +
+    FX.containment_lease_id + '</span>, incident <span class="mono">' + FX.incident_id + "</span>, " +
+    "and the five concentration checkpoints 1.799653 / 2.696884 / 2.653617 / 2.573610 / 0.858696.</p>" +
+    '<p class="t-sm">Extension, derived under <span class="mono">ext/</span> labels by the same public ' +
+    'function: seven deposits in six OTHER threat classes on hosts <span class="mono">host-ops-2</span>, ' +
+    '<span class="mono">host-ops-3</span>, <span class="mono">host-ops-4</span> and one with no ' +
+    '<span class="mono">host_id</span>; two agent identities; three containment leases; two rejected ' +
+    "incident members. Because <span class=\"mono\">concentration_for</span> filters by threat class " +
+    "before it sums (AMB crates/swarm-pheromone/src/substrate.rs:1281), no extension deposit can move a " +
+    'canonical number, and <span class="mono">node viz/dataviz-fixture.mjs</span> asserts all five ' +
+    "checkpoints are identical with the extension loaded and without it. Run it; it fails loudly.</p>";
+
+  h += "<h3>Type census</h3>" +
+    '<p class="t-sm">The ramp on this page is 8 / 11 / 12 / 14 / 16 / 18 px at a 16px virtual rem. ' +
+    "Primary content is <span class=\"mono\">t-sm</span> (14px): chart captions, host names, threat-class lane " +
+    "values, timeline row line 1, containment-board cells, sparkline labels. " +
+    '<span class="mono">t-xs</span> (12px) carries second lines and axis time ticks. ' +
+    '<span class="mono">t-2xs</span> (11px) carries genuine meta: derived and served markers, y-axis ' +
+    "numerals, table headers and captions. <span class=\"mono\">t-3xs</span> (8px) is not used on any " +
+    "product surface on this page. <span class=\"mono\">viz/type-census.mjs</span> measures it.</p>";
+  return h;
+}
+
+/* ===========================================================================
+   RENDER
+   =========================================================================== */
+function seg(label, active, attr, value) {
+  return '<button class="seg" type="button" ' + attr + '="' + value + '" aria-pressed="' +
+    (active ? "true" : "false") + '">' + esc(label) + "</button>";
+}
+function renderControls() {
+  document.getElementById("stateRow").innerHTML =
+    STATES.map((s) => seg(s[1], STATE === s[0], "data-state", s[0])).join("");
+  document.getElementById("regimeRow").innerHTML =
+    REGIMES.map((r) => seg(r[1], REGIME === r[0], "data-regime", r[0])).join("");
+  document.getElementById("themeRow").innerHTML =
+    [["system", "SYSTEM"], ["light", "LIGHT"], ["dark", "DARK"]]
+      .map((t) => seg(t[1], THEME === t[0], "data-theme-set", t[0])).join("");
+  document.getElementById("plateRow").innerHTML =
+    PLATES.map((p) => seg(p[1], PLATE === p[0], "data-plate", p[0])).join("");
+}
+function renderAll() {
+  let html = "";
+  for (const d of PLATE_DEFS) {
+    if (PLATE !== "all" && PLATE !== d[0]) continue;
+    html += plate(d[0], d[1], d[2], d[3], d[4], d[5](), d[6]());
+  }
+  document.getElementById("plates").innerHTML = html;
+  document.getElementById("specbody").innerHTML = specNotes();
+  renderControls();
+  writeDeepLink();
+}
+
+document.addEventListener("click", function (e) {
+  const t = e.target.closest ? e.target.closest("button") : null;
+  if (!t) return;
+  if (t.dataset.state) { setState(t.dataset.state); return; }
+  if (t.dataset.regime) { setRegime(t.dataset.regime); return; }
+  if (t.dataset.themeSet) { setTheme(t.dataset.themeSet); return; }
+  if (t.dataset.plate) { setPlate(t.dataset.plate); return; }
+  if (t.dataset.table) { tableOpen[t.dataset.table] = !tableOpen[t.dataset.table]; renderAll(); }
+});
+
+(function boot() {
+  const dl = readDeepLink();
+  if (dl.state && STATES.some((s) => s[0] === dl.state)) STATE = dl.state;
+  if (dl.regime && REGIMES.some((r) => r[0] === dl.regime)) REGIME = dl.regime;
+  if (dl.plate && PLATES.some((p) => p[0] === dl.plate)) PLATE = dl.plate;
+  if (dl.theme === "light" || dl.theme === "dark" || dl.theme === "system") THEME = dl.theme;
+  applyTheme();
+  renderAll();
+})();
+</script>
+</body>
+</html>

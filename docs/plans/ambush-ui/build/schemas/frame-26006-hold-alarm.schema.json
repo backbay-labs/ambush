@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/frame-26006-hold-alarm.schema.json",
+  "title": "kind:26006 \u2014 hold alarm",
+  "description": "The live nudge, and the ONLY live path to a hold. The fork makes 46010 channel-scoped, and fan_out_scoped routes a channel-bearing event through the channel indexes only while a REQ with no #h registers globally \u2014 the invariant is stated outright in the source at crates/buzz-relay/src/subscription.rs:487-492. A REQ of {kinds:[46010],\"#p\":[me]} therefore cannot deliver a hold and no document may specify one.\n\nNEVER COALESCED, NEVER SHED. The <=400 ms end-to-end budget is on this frame, not on the durable row.\n\nA NUDGE WITH NO AUTHORITY. It triggers the needs-action query; a row appears only if the daemon-backed hold list confirms it. A Perch that is disconnected when the alarm fires MISSES IT \u2014 ephemerals are never stored \u2014 so the query also runs on connect and on every reconnect.\n\nGLOBAL, NO h TAG, AND `26006` IS ADDED TO P_GATED_KINDS. This is the ratified answer to the alarm-disclosure hole; it is ADR 0017 clause C3 and APPENDIX-NORMATIVE.md section 3's 'global (no h)' survives unchanged. 13-WIRE-SCHEMAS.md amendment W-1 previously specified an h tag naming a standing #watch channel; W-1 is WITHDRAWN and W-9 records why in one sentence: the p-gate does not run on a channel-scoped subscription. crates/buzz-relay/src/handlers/req.rs:218 wraps p_gated_filters_authorized in `if channel_id.is_none()`, with the comment at :215-217 saying so \u2014 'Only applies to GLOBAL subscriptions (channel_id = None)'. So an h-tagged 26006 is delivered through the channel index, where the gate is never consulted, and any member of the #watch channel opening {kinds:[26006],\"#h\":[watch]} would receive every operator's alarms. The h tag narrows the disclosure ring; it does not close it. It also silently breaks the only shipped client filter (skeleton/desktop/src/shared/api/perchSubscriptions.ts writes a global {kinds:[26006],\"#p\":[me],limit:0}), which would deliver zero frames with nothing failing loudly.\n\nWHAT C3 BUYS. With 26006 in P_GATED_KINDS (crates/buzz-core/src/kind.rs:159-169, which already carries KIND_AGENT_OBSERVER_FRAME \u2014 an ephemeral, included for exactly this filter-layer enforcement, per the doc comment at :156-158), p_gated_filters_authorized (req.rs:1182-1215) requires every global filter naming 26006 to carry a #p whose values are ALL the authed pubkey (:1211-1213) and CLOSEs the subscription otherwise with 'restricted: p-gated events require #p matching your pubkey'. A member cannot subscribe to another operator's alarms at all. The cost is one line in buzz-core \u2014 a THIRD fork site beyond the two ingest.rs arms \u2014 which is brief amendment AD-A7's framing: 'three hunks in buzz-relay/src/handlers/ingest.rs and one line in buzz-core/src/kind.rs; zero client registration points'.",
+  "type": "object",
+  "required": [
+    "schema",
+    "kind",
+    "issuer",
+    "emitted_at_ms",
+    "seq",
+    "hold_id",
+    "action_kind",
+    "severity",
+    "case_channel",
+    "expires_at_ms"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "ambush.perch.frame.hold_alarm.v1"
+    },
+    "kind": {
+      "const": 26006
+    },
+    "issuer": {
+      "$ref": "common.schema.json#/$defs/SpineIssuer",
+      "description": "The bridge's spine identity, for display only. THE ADMITTED-ISSUER RULE MATCHES THE NOSTR EVENT'S `pubkey`, NOT THIS FIELD \u2014 this one is inside the content an adversary controls."
+    },
+    "emitted_at_ms": {
+      "$ref": "common.schema.json#/$defs/UnixMillis"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-kind monotonic counter assigned by the bridge. A gap between two frames the console actually received proves loss on a live connection; it says nothing about frames emitted while the console was disconnected, because ephemerals are never stored (crates/buzz-relay/src/handlers/event.rs:794-906 writes nothing to Postgres in either branch)."
+    },
+    "hold_id": {
+      "$ref": "common.schema.json#/$defs/HoldId",
+      "description": "Opaque random token. Never derived from hunt_id \u2014 this frame is the widest-audience object in the registry and hunt_id is a join key into detection data."
+    },
+    "action_kind": {
+      "$ref": "common.schema.json#/$defs/ResponseActionKind"
+    },
+    "severity": {
+      "$ref": "common.schema.json#/$defs/Severity"
+    },
+    "case_channel": {
+      "$ref": "common.schema.json#/$defs/Uuid"
+    },
+    "expires_at_ms": {
+      "$ref": "common.schema.json#/$defs/UnixMillis"
+    }
+  },
+  "examples": [
+    {
+      "schema": "ambush.perch.frame.hold_alarm.v1",
+      "kind": 26006,
+      "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+      "emitted_at_ms": 1773738882610,
+      "seq": 8,
+      "hold_id": "h_a07aeacf",
+      "action_kind": "isolate_host",
+      "severity": "CRITICAL",
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "expires_at_ms": 1773742482600
+    }
+  ],
+  "x-transport": {
+    "kind": 26006,
+    "ephemeral": true,
+    "why_no_relay_change_for_the_EPHEMERAL_PATH": "handle_event short-circuits every 20000-29999 kind into handle_ephemeral_event and RETURNS at crates/buzz-relay/src/handlers/event.rs:751, before ingest_event is reached at :761, so required_scope_for_kind never sees a 26xxx. Proved in-tree by the test ephemeral_kinds_not_in_scope_allowlist at crates/buzz-relay/src/handlers/ingest.rs:3851-3854. The INGEST path needs no change; the READ path needs the one P_GATED_KINDS line below.",
+    "websocket_only": "POST /events goes straight into ingest_event (crates/buzz-relay/src/api/bridge.rs:925) with no ephemeral branch, so an HTTP-posted 26xxx is rejected 'restricted: unknown event kind'. The bridge must hold a live WebSocket.",
+    "h_tag": "NONE. Channel-less, published through the Uuid::nil() global routing sentinel at crates/buzz-relay/src/handlers/event.rs:875-903.",
+    "p_tags": "one per Approve-scoped operator principal. Under P_GATED_KINDS these stop being a client-side paging hint and become the relay's own authorization test.",
+    "relay_change_required": "ONE LINE: add KIND_RESPONSE_HELD_ALARM (26006) to P_GATED_KINDS in crates/buzz-core/src/kind.rs:159-169. Owned by adr/0017 clause C3 and 10-RELAY-FORK.md; the two-connection E2E that proves a non-p-tagged member is CLOSEd belongs with it."
+  }
+}
