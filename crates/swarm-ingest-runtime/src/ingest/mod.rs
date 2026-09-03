@@ -123,7 +123,6 @@ type IngestBuiltRuntime = (
     Arc<CompositeDetector>,
 );
 
-const MAX_INGEST_FUTURE_SKEW_MS: i64 = 5 * 60 * 1_000;
 const TIMESTAMP_MILLISECONDS_CUTOFF: i64 = 100_000_000_000;
 const HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE: usize = 256;
 const HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES: usize = 256;
@@ -1713,7 +1712,8 @@ fn validate_live_event_timestamp(
     observed_now_ms: i64,
 ) -> Result<(), IngestProcessingError> {
     let normalized_timestamp_ms = normalized_ingest_timestamp_ms(timestamp)?;
-    let maximum_timestamp_ms = observed_now_ms.saturating_add(MAX_INGEST_FUTURE_SKEW_MS);
+    let maximum_timestamp_ms =
+        observed_now_ms.saturating_add(swarm_core::MAX_TELEMETRY_FUTURE_SKEW_MS);
     if normalized_timestamp_ms > maximum_timestamp_ms {
         return Err(IngestProcessingError::FutureEventTimestamp {
             timestamp,

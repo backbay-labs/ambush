@@ -4,8 +4,8 @@
   "corpus_version": 1,
   "oracle_digests": {
     "manifest_sha256": "7f90e9dc52acc0ec6a3df81229e5d218cd5387fca61aca1e959729cde1dd91ca",
-    "ambiguous_fixture_sha256": "f6586beed885ae5c1bc9e4db8739144ae7536941f46506634e752f11c228d2ab",
-    "withheld_fixture_sha256": "9e2cc129b765a431fc5cd15f34ccdf996a3097d1715290e77990285e7e63a7c8"
+    "ambiguous_fixture_sha256": "eff1e94ae5ad37f7fe5b0f9cb2f94e46b6940e32d08d39863c60d2af07be7e93",
+    "withheld_fixture_sha256": "099ecaf0b7934277867117f394a8b529f72fdd5200c686950b2e36bfcbcd027c"
   },
   "denominators": {
     "adjudicated_cases": 2,

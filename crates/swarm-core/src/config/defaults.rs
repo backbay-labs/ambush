@@ -125,7 +125,10 @@ pub(super) const fn default_hypothesis_graph_max_decisions() -> usize {
 }
 
 pub(super) const fn default_hypothesis_graph_max_tasks() -> usize {
-    128
+    // One maximally bounded replay can create 65 acquisition targets,
+    // 67 edge challenges, and one falsification target. Keep the shipped
+    // default above that 133-task production seed ceiling.
+    256
 }
 
 pub(super) const fn default_hypothesis_graph_max_lease_ms() -> u64 {

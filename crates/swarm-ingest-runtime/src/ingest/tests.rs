@@ -2190,8 +2190,8 @@ async fn handler_queues_durable_replay_without_graph_io_on_request_path() {
     assert_eq!(reconciliation.failures, 0);
     let summary = graph.summary().unwrap();
     assert_eq!(summary.evidence_count, 1);
-    assert_eq!(summary.edge_count, 1);
-    assert_eq!(summary.pending_task_count, 3);
+    assert_eq!(summary.edge_count, 3);
+    assert_eq!(summary.pending_task_count, 5);
     assert_eq!(summary.metrics.submissions, 1);
     drop(graph);
     drop(state);
@@ -2233,7 +2233,7 @@ async fn startup_reconciliation_recovers_durable_replays_missing_from_graph() {
     let summary = state.current_hypothesis_graph().unwrap().summary().unwrap();
     assert_eq!(summary.evidence_count, 2);
     assert_eq!(summary.hypothesis_count, 4);
-    assert_eq!(summary.pending_task_count, 6);
+    assert_eq!(summary.pending_task_count, 10);
 
     let retry = state.reconcile_hypothesis_graph_replays().unwrap();
     assert_eq!(retry.examined, 0);
@@ -2249,7 +2249,7 @@ async fn scheduler_budget_retries_share_each_reconciliation_tick_and_converge() 
     let mut config = test_config("suspicious_process_tree");
     let graph_root = temp_path("reconcile-scheduler-budget-retry");
     enable_collective_hypothesis_graph(&mut config, &graph_root);
-    config.hypothesis_graph.max_work_units_per_tick = 3;
+    config.hypothesis_graph.max_work_units_per_tick = 5;
     let state =
         IngestState::from_config(temp_path("reconcile-scheduler-budget-retry-config"), config)
             .unwrap();
@@ -2533,6 +2533,16 @@ fn replay_reconciliation_quarantines_only_replay_local_failures() {
         &invalid_replay
     ));
 
+    let oversized_seed = swarm_runtime::hypothesis_graph::service::GraphServiceError::Admission(
+        swarm_core::hypothesis_graph::GraphAdmissionError::ResourceLimitExceeded {
+            resource: "replay.task_targets".to_string(),
+            limit: 5,
+        },
+    );
+    assert!(!super::replay_submission_failure_is_retryable(
+        &oversized_seed
+    ));
+
     for resource in ["scheduler.work_units_per_tick", "scheduler.claims_per_tick"] {
         let exhausted_tick = swarm_runtime::hypothesis_graph::service::GraphServiceError::Admission(
             swarm_core::hypothesis_graph::GraphAdmissionError::ResourceLimitExceeded {
@@ -2784,7 +2794,7 @@ async fn reconciliation_retries_old_failed_replays_beyond_graph_task_capacity() 
     let mut config = test_config("suspicious_process_tree");
     let graph_root = temp_path("reconcile-all-replays-beyond-task-capacity");
     enable_collective_hypothesis_graph(&mut config, &graph_root);
-    config.hypothesis_graph.max_tasks = 3;
+    config.hypothesis_graph.max_tasks = 5;
     let state = IngestState::from_config(
         temp_path("reconcile-all-replays-beyond-task-capacity-config"),
         config,
@@ -2840,21 +2850,25 @@ async fn reconciliation_retries_old_failed_replays_beyond_graph_task_capacity() 
             true,
         )
         .unwrap();
-    let challenge = weaver
-        .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
-            created_at_ms + 11,
-        ))
-        .unwrap()
-        .unwrap();
-    assert_eq!(challenge.hunt_id, "a-active");
-    assert!(
-        weaver
-            .complete_challenge(
-                &challenge.task_id,
-                swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 12),
-            )
+    for offset in 0..3 {
+        let challenge = weaver
+            .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                created_at_ms + 11 + offset * 2,
+            ))
             .unwrap()
-    );
+            .unwrap();
+        assert_eq!(challenge.hunt_id, "a-active");
+        assert!(
+            weaver
+                .complete_challenge(
+                    &challenge.task_id,
+                    swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                        created_at_ms + 12 + offset * 2,
+                    ),
+                )
+                .unwrap()
+        );
+    }
 
     let retried = state.reconcile_hypothesis_graph_replays().unwrap();
     assert_eq!(retried.examined, 4);
@@ -3883,21 +3897,25 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         .unwrap();
     assert_eq!(completion.acquisitions, 1);
     assert_eq!(completion.falsifications, 1);
-    let first_challenge = weaver
-        .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
-            created_at_ms + 2,
-        ))
-        .unwrap()
-        .unwrap();
-    assert_eq!(first_challenge.hunt_id, hunt_id);
-    assert!(
-        weaver
-            .complete_challenge(
-                &first_challenge.task_id,
-                swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 3),
-            )
+    for offset in 0..3 {
+        let challenge = weaver
+            .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                created_at_ms + 2 + offset * 2,
+            ))
             .unwrap()
-    );
+            .unwrap();
+        assert_eq!(challenge.hunt_id, hunt_id);
+        assert!(
+            weaver
+                .complete_challenge(
+                    &challenge.task_id,
+                    swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                        created_at_ms + 3 + offset * 2,
+                    ),
+                )
+                .unwrap()
+        );
+    }
     let graph_id = graph.graph_id().to_string();
     let app = detect_http_router(state.clone());
 
@@ -3949,7 +3967,7 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         .unwrap();
     assert_eq!(tasks.status(), StatusCode::OK);
     let tasks: Value = parse_json(tasks).await;
-    assert_eq!(tasks["data"].as_array().unwrap().len(), 3);
+    assert_eq!(tasks["data"].as_array().unwrap().len(), 5);
 
     let first_task_page = app
         .clone()
@@ -3983,8 +4001,26 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         .unwrap();
     assert_eq!(second_task_page.status(), StatusCode::OK);
     let second_task_page: Value = parse_json(second_task_page).await;
-    assert_eq!(second_task_page["data"].as_array().unwrap().len(), 1);
-    assert!(second_task_page.get("cursor").is_none());
+    assert_eq!(second_task_page["data"].as_array().unwrap().len(), 2);
+    let second_task_cursor = second_task_page["cursor"].as_str().unwrap();
+    let third_task_page = app
+        .clone()
+        .oneshot(
+            authorized_platform_api_request(
+                "GET",
+                format!(
+                    "/v2/api/hypothesis-graphs/{graph_id}/tasks?page_size=2&cursor={second_task_cursor}"
+                ),
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(third_task_page.status(), StatusCode::OK);
+    let third_task_page: Value = parse_json(third_task_page).await;
+    assert_eq!(third_task_page["data"].as_array().unwrap().len(), 1);
+    assert!(third_task_page.get("cursor").is_none());
 
     let memory = app
         .clone()
@@ -4021,21 +4057,25 @@ async fn platform_hypothesis_graph_endpoints_surface_durable_state() {
         )
         .unwrap();
     assert_eq!(second_completion.memory_records_projected, 1);
-    let second_challenge = weaver
-        .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
-            created_at_ms + 12,
-        ))
-        .unwrap()
-        .unwrap();
-    assert_eq!(second_challenge.hunt_id, second_hunt_id);
-    assert!(
-        weaver
-            .complete_challenge(
-                &second_challenge.task_id,
-                swarm_core::hypothesis_graph::GraphLogicalTime::new(created_at_ms + 13),
-            )
+    for offset in 0..3 {
+        let challenge = weaver
+            .next_challenge_context(swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                created_at_ms + 12 + offset * 2,
+            ))
             .unwrap()
-    );
+            .unwrap();
+        assert_eq!(challenge.hunt_id, second_hunt_id);
+        assert!(
+            weaver
+                .complete_challenge(
+                    &challenge.task_id,
+                    swarm_core::hypothesis_graph::GraphLogicalTime::new(
+                        created_at_ms + 13 + offset * 2,
+                    ),
+                )
+                .unwrap()
+        );
+    }
 
     let first_memory_page = app
         .clone()

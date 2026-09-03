@@ -42,7 +42,9 @@ use swarm_spine::{
 };
 
 use super::clock::FixedGraphClock;
-use super::hypotheses::{HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput};
+use super::hypotheses::{
+    HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput, coordination_task_targets,
+};
 use super::inference::{InferredCausalRelation, infer_causal_relations};
 use super::memory::{MemoryPriorityProjection, MemoryProjectionReport, StrategyMemoryProjector};
 use super::normalize::{
@@ -1331,7 +1333,41 @@ impl CollectiveHypothesisService {
         let worker_claimants = state.worker_claimants.clone();
         let mut campaign = self.active_campaign()?;
         let mut initial = campaign.store.snapshot()?;
-        if campaign_requires_rotation(&initial, &evidence_records, &scope_node_ids, &edges)? {
+        let initial_logical_time = replay_seed_logical_time(
+            replay.audit.created_at_ms,
+            initial.state().logical_time_high_water,
+            minimum_logical_time,
+        )?;
+        let initial_seed = replay_hypothesis_seed(
+            campaign.graph_id.clone(),
+            &malicious,
+            &benign,
+            &evidence_ids,
+            &evidence_id,
+            initial_logical_time,
+        )?;
+        let candidate_edge_ids = edges
+            .iter()
+            .map(|edge| edge.edge_id.clone())
+            .collect::<BTreeSet<_>>();
+        let task_target_count =
+            coordination_task_targets(&initial_seed, &candidate_edge_ids)?.len();
+        let max_seed_work_units =
+            usize::try_from(self.config.max_work_units_per_tick).unwrap_or(usize::MAX);
+        if task_target_count > max_seed_work_units {
+            return Err(GraphAdmissionError::ResourceLimitExceeded {
+                resource: "replay.task_targets".to_string(),
+                limit: max_seed_work_units,
+            }
+            .into());
+        }
+        if campaign_requires_rotation(
+            &initial,
+            &evidence_records,
+            &scope_node_ids,
+            &edges,
+            task_target_count,
+        )? {
             let outstanding_tasks = initial
                 .tasks()
                 .filter(|task| !task_is_terminal(task.task.state))
@@ -1349,32 +1385,17 @@ impl CollectiveHypothesisService {
         let scope = EvidenceScope::new(source_families, evidence_ids.clone(), scope_node_ids)?;
         let mut retried_persisted_capacity = false;
         let result = loop {
-            let logical_time = GraphLogicalTime::new(
-                replay
-                    .audit
-                    .created_at_ms
-                    .max(initial.state().logical_time_high_water.as_millis())
-                    .max(minimum_logical_time.map_or(i64::MIN, GraphLogicalTime::as_millis)),
-            );
-            logical_time.validate()?;
-            let assessments = vec![
-                HypothesisSeedAssessment {
-                    hypothesis_id: malicious.clone(),
-                    evidence_ids: evidence_ids.iter().cloned().collect(),
-                    disposition: HypothesisDisposition::Unresolved,
-                    provenance: evidence_id.clone(),
-                },
-                HypothesisSeedAssessment {
-                    hypothesis_id: benign.clone(),
-                    evidence_ids: evidence_ids.iter().cloned().collect(),
-                    disposition: HypothesisDisposition::Contradicts,
-                    provenance: evidence_id.clone(),
-                },
-            ];
-            let seed = HypothesisSeedInput::new(
+            let logical_time = replay_seed_logical_time(
+                replay.audit.created_at_ms,
+                initial.state().logical_time_high_water,
+                minimum_logical_time,
+            )?;
+            let seed = replay_hypothesis_seed(
                 campaign.graph_id.clone(),
-                vec![malicious.clone(), benign.clone()],
-                assessments,
+                &malicious,
+                &benign,
+                &evidence_ids,
+                &evidence_id,
                 logical_time,
             )?;
             match state.coordinator.coordinate_graph_seed_for_claimants(
@@ -3427,11 +3448,56 @@ fn persisted_threat_intel_matches(
     Ok(matches.into_iter().collect())
 }
 
+fn replay_seed_logical_time(
+    replay_created_at_ms: i64,
+    logical_time_high_water: GraphLogicalTime,
+    minimum_logical_time: Option<GraphLogicalTime>,
+) -> Result<GraphLogicalTime, GraphAdmissionError> {
+    let logical_time = GraphLogicalTime::new(
+        replay_created_at_ms
+            .max(logical_time_high_water.as_millis())
+            .max(minimum_logical_time.map_or(i64::MIN, GraphLogicalTime::as_millis)),
+    );
+    logical_time.validate()?;
+    Ok(logical_time)
+}
+
+fn replay_hypothesis_seed(
+    graph_id: GraphId,
+    malicious: &HypothesisId,
+    benign: &HypothesisId,
+    evidence_ids: &BTreeSet<EvidenceId>,
+    provenance: &EvidenceId,
+    logical_time: GraphLogicalTime,
+) -> Result<HypothesisSeedInput, GraphAdmissionError> {
+    let assessments = vec![
+        HypothesisSeedAssessment {
+            hypothesis_id: malicious.clone(),
+            evidence_ids: evidence_ids.iter().cloned().collect(),
+            disposition: HypothesisDisposition::Unresolved,
+            provenance: provenance.clone(),
+        },
+        HypothesisSeedAssessment {
+            hypothesis_id: benign.clone(),
+            evidence_ids: evidence_ids.iter().cloned().collect(),
+            disposition: HypothesisDisposition::Contradicts,
+            provenance: provenance.clone(),
+        },
+    ];
+    HypothesisSeedInput::new(
+        graph_id,
+        vec![malicious.clone(), benign.clone()],
+        assessments,
+        logical_time,
+    )
+}
+
 fn campaign_requires_rotation(
     snapshot: &GraphStoreSnapshot,
     evidence: &[swarm_core::hypothesis_graph::EvidenceEnvelope],
     candidate_node_ids: &BTreeSet<GraphNodeId>,
     candidate_edges: &[CausalEdge],
+    task_target_count: usize,
 ) -> Result<bool, GraphServiceError> {
     let state = snapshot.state();
     let has_retained_work =
@@ -3491,7 +3557,7 @@ fn campaign_requires_rotation(
             || retained_evidence_bytes.saturating_add(added_evidence_bytes)
                 > limits.max_evidence_bytes
             || state.hypotheses.len().saturating_add(2) > limits.max_hypotheses
-            || state.tasks.len().saturating_add(3) > limits.max_tasks
+            || state.tasks.len().saturating_add(task_target_count) > limits.max_tasks
             || committed_memory_records
                 .saturating_add(pending_memory_reservations)
                 .saturating_add(1)

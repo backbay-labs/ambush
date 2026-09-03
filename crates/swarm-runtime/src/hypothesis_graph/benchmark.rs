@@ -103,6 +103,26 @@ enum StageStatus {
     MissingEvidence,
 }
 
+/// Raw production semantics supplied to the normalizers. This is deliberately
+/// independent from the fixture's `supports`/`refutes` scoring oracle so a
+/// mislabeled row cannot manufacture the signal that the benchmark is meant
+/// to evaluate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FixtureTelemetryProfile {
+    UnsignedExecution,
+    SignedExecution,
+    SuccessfulAuthentication,
+    FailedAuthentication,
+    WorkloadCreate,
+    WorkloadUpdate,
+    AssumeRole,
+    CreateAccessKey,
+    NetworkContact,
+    HighConfidenceIndicator,
+    LowConfidenceIndicator,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BenchmarkDenominators {
@@ -264,6 +284,7 @@ struct FixtureEvent {
     source_family: SourceFamily,
     logical_time_ms: i64,
     signal_kind: String,
+    telemetry_profile: FixtureTelemetryProfile,
     supports: Vec<String>,
     refutes: Vec<String>,
     entity_ids: Vec<String>,
@@ -578,35 +599,46 @@ fn execute_task_lane(
 
 fn normalize_fixture_event(
     event: &FixtureEvent,
-    selected_hypothesis_id: &str,
     signer: &Keypair,
 ) -> Result<NormalizedGraphEvidence, CollectiveBenchmarkError> {
     let observed_at = GraphLogicalTime::new(event.logical_time_ms);
     let clock = FixedGraphClock::new(observed_at);
-    let supports_selected = event.supports.iter().any(|id| id == selected_hypothesis_id);
     let source = "collective-benchmark".to_string();
     let host_id = Some("benchmark-host-a".to_string());
-    let payload = match event.source_family {
-        SourceFamily::Process => TelemetryPayload::ProcessStart(ProcessStartEvent {
+    let payload = match (event.source_family, event.telemetry_profile) {
+        (
+            SourceFamily::Process,
+            profile @ (FixtureTelemetryProfile::UnsignedExecution
+            | FixtureTelemetryProfile::SignedExecution),
+        ) => TelemetryPayload::ProcessStart(ProcessStartEvent {
             parent_process: "<none>".to_string(),
             process_name: "runner-a".to_string(),
             command_line: event.signal_kind.clone(),
             user: Some("process-user-a".to_string()),
             executable_path: Some("/opt/benchmark/runner-a".to_string()),
-            signer: supports_selected.then(|| "untrusted".to_string()),
-            signature_valid: Some(!supports_selected),
+            signer: (profile == FixtureTelemetryProfile::SignedExecution)
+                .then(|| "approved-vendor".to_string()),
+            signature_valid: Some(profile == FixtureTelemetryProfile::SignedExecution),
         }),
-        SourceFamily::Identity => TelemetryPayload::AuthenticationEvent(AuthenticationEventData {
+        (
+            SourceFamily::Identity,
+            profile @ (FixtureTelemetryProfile::SuccessfulAuthentication
+            | FixtureTelemetryProfile::FailedAuthentication),
+        ) => TelemetryPayload::AuthenticationEvent(AuthenticationEventData {
             auth_type: "service_role".to_string(),
             source_host: host_id.clone(),
             target_host: Some("workload-a".to_string()),
             target_service: Some("role-a".to_string()),
             process_name: Some("runner-a".to_string()),
-            success: supports_selected,
+            success: profile == FixtureTelemetryProfile::SuccessfulAuthentication,
             user: Some("identity-principal-a".to_string()),
         }),
-        SourceFamily::Kubernetes => TelemetryPayload::KubernetesAudit(KubernetesAuditEvent {
-            verb: if supports_selected {
+        (
+            SourceFamily::Kubernetes,
+            profile @ (FixtureTelemetryProfile::WorkloadCreate
+            | FixtureTelemetryProfile::WorkloadUpdate),
+        ) => TelemetryPayload::KubernetesAudit(KubernetesAuditEvent {
+            verb: if profile == FixtureTelemetryProfile::WorkloadCreate {
                 "create"
             } else {
                 "update"
@@ -627,8 +659,12 @@ fn normalize_fixture_event(
             request_object: serde_json::json!({"metadata": {"name": "workload-a"}}),
             impersonated_username: None,
         }),
-        SourceFamily::Cloudtrail => TelemetryPayload::CloudTrail(CloudTrailEvent {
-            event_name: if supports_selected {
+        (
+            SourceFamily::Cloudtrail,
+            profile @ (FixtureTelemetryProfile::AssumeRole
+            | FixtureTelemetryProfile::CreateAccessKey),
+        ) => TelemetryPayload::CloudTrail(CloudTrailEvent {
+            event_name: if profile == FixtureTelemetryProfile::AssumeRole {
                 "AssumeRole"
             } else {
                 "CreateAccessKey"
@@ -649,13 +685,19 @@ fn normalize_fixture_event(
             error_code: None,
             error_message: None,
         }),
-        SourceFamily::Network => TelemetryPayload::NetworkConnect(NetworkConnectEvent {
-            process_name: "runner-a".to_string(),
-            destination_ip: "203.0.113.77".to_string(),
-            destination_port: 443,
-            protocol: "tcp".to_string(),
-        }),
-        SourceFamily::ThreatIntelligence => {
+        (SourceFamily::Network, FixtureTelemetryProfile::NetworkContact) => {
+            TelemetryPayload::NetworkConnect(NetworkConnectEvent {
+                process_name: "runner-a".to_string(),
+                destination_ip: "203.0.113.77".to_string(),
+                destination_port: 443,
+                protocol: "tcp".to_string(),
+            })
+        }
+        (
+            SourceFamily::ThreatIntelligence,
+            profile @ (FixtureTelemetryProfile::HighConfidenceIndicator
+            | FixtureTelemetryProfile::LowConfidenceIndicator),
+        ) => {
             let expires_at = event.logical_time_ms.checked_add(60_000).ok_or_else(|| {
                 CollectiveBenchmarkError::Contract(
                     "benchmark threat-intelligence expiry overflowed".to_string(),
@@ -666,7 +708,11 @@ fn normalize_fixture_event(
                 value: "203.0.113.77".to_string(),
                 source: "benchmark-taxii".to_string(),
                 indicator_id: Some(format!("indicator:{}", event.event_id)),
-                confidence: if supports_selected { 0.95 } else { 0.1 },
+                confidence: if profile == FixtureTelemetryProfile::HighConfidenceIndicator {
+                    0.95
+                } else {
+                    0.1
+                },
                 expires_at,
             };
             return normalize_threat_intel_entry_for_graph(
@@ -683,6 +729,11 @@ fn normalize_fixture_event(
                     "production threat-intelligence normalization failed: {error}"
                 ))
             });
+        }
+        (family, profile) => {
+            return Err(CollectiveBenchmarkError::Contract(format!(
+                "telemetry profile `{profile:?}` is incompatible with source family `{family:?}`"
+            )));
         }
     };
     normalize_telemetry_event_for_graph(
@@ -873,8 +924,7 @@ fn execute_reasoning_lane(
             {
                 continue;
             }
-            let normalized =
-                normalize_fixture_event(event, &manifest.truth.selected_hypothesis_id, &signer)?;
+            let normalized = normalize_fixture_event(event, &signer)?;
             let evidence = normalized.evidence;
             if evidence.source_family != event.source_family.graph_family() {
                 return Err(CollectiveBenchmarkError::Contract(format!(
@@ -1782,10 +1832,12 @@ mod tests {
         .unwrap();
         assert_eq!(mismatched_stage_oracle.observed_stages, 5);
 
-        for event in mutated_training
+        let mut swapped_training = mutated_training.clone();
+        let mut swapped_withheld = mutated_withheld.clone();
+        for event in swapped_training
             .events
             .iter_mut()
-            .chain(mutated_withheld.events.iter_mut())
+            .chain(swapped_withheld.events.iter_mut())
         {
             event.source_family = match event.source_family {
                 SourceFamily::Identity => SourceFamily::Cloudtrail,
@@ -1793,17 +1845,15 @@ mod tests {
                 family => family,
             };
         }
-        // Changing the adapter changes the production payload type and hence
-        // the inferred kill-chain stage. The previously swapped oracle now
-        // matches only because both identity and CloudTrail events traversed
-        // the opposite production normalizer.
-        let with_swapped_source_families = execute_reasoning_lane(
-            &manifest,
-            [&mutated_training, &mutated_withheld],
-            ReasoningLaneMode::Collective,
-        )
-        .unwrap();
-        assert_eq!(with_swapped_source_families.observed_stages, 9);
+        assert!(
+            execute_reasoning_lane(
+                &manifest,
+                [&swapped_training, &swapped_withheld],
+                ReasoningLaneMode::Collective,
+            )
+            .is_err(),
+            "a source-family mutation must not reinterpret an independently declared telemetry profile"
+        );
 
         for event in mutated_training
             .events
@@ -1821,6 +1871,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn scoring_labels_cannot_manufacture_production_telemetry() {
+        let (manifest, training, _) = inputs();
+        let signer = Keypair::from_seed(&[91_u8; 32]);
+        let mut event = training.events[0].clone();
+        let before = normalize_fixture_event(&event, &signer)
+            .unwrap()
+            .evidence
+            .canonical_bytes()
+            .unwrap();
+
+        event.supports = vec!["hypothesis:authorized-automation".to_string()];
+        event.refutes = vec![manifest.truth.selected_hypothesis_id];
+        let after = normalize_fixture_event(&event, &signer)
+            .unwrap()
+            .evidence
+            .canonical_bytes()
+            .unwrap();
+
+        assert_eq!(before, after);
     }
 
     #[test]

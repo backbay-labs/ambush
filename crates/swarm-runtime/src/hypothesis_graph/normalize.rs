@@ -15,8 +15,8 @@ use swarm_core::hypothesis_graph::{
 };
 use swarm_core::{
     AuthenticationEventData, CloudTrailEvent, DnsQueryEvent, KubernetesAuditEvent,
-    NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent, TelemetryEvent,
-    TelemetryPayload, ThreatIntelEntry, ThreatIntelIndicatorType,
+    MAX_TELEMETRY_FUTURE_SKEW_MS, NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent,
+    TelemetryEvent, TelemetryPayload, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
 use swarm_crypto::{Keypair, canonical_json_bytes, sha256_hex};
 
@@ -371,7 +371,8 @@ fn normalize_threat_intel_graph_at<C: GraphClock + ?Sized>(
         });
     }
     let source_id = bounded_text("threat_intel.source", &entry.source, 256)?;
-    let indicator_value = bounded_text("threat_intel.value", &entry.value, 4 * 1024)?;
+    let indicator_value =
+        normalized_indicator_value("threat_intel.value", &entry.indicator_type, &entry.value)?;
     if !entry.confidence.is_finite() || !(0.0..=1.0).contains(&entry.confidence) {
         return Err(GraphAdmissionError::InvalidField {
             field: "threat_intel.confidence".to_string(),
@@ -462,16 +463,22 @@ pub fn normalize_threat_intel_entry<C: GraphClock + ?Sized>(
 fn clock_for<C: GraphClock + ?Sized>(
     observed_at: GraphLogicalTime,
     precision: ClockPrecision,
-    uncertainty_ms: u64,
+    source_uncertainty_ms: u64,
     clock: &C,
 ) -> Result<EvidenceClock, GraphAdmissionError> {
     let ingested_at = GraphLogicalTime::new(clock.now_ms());
     ingested_at.validate()?;
+    let accepted_future_skew_ms = observed_at
+        .as_millis()
+        .checked_sub(ingested_at.as_millis())
+        .filter(|skew| *skew > 0 && *skew <= MAX_TELEMETRY_FUTURE_SKEW_MS)
+        .and_then(|skew| u64::try_from(skew).ok())
+        .unwrap_or(0);
     let evidence_clock = EvidenceClock {
         observed_at,
         ingested_at: Some(ingested_at),
         precision,
-        uncertainty_ms,
+        uncertainty_ms: source_uncertainty_ms.max(accepted_future_skew_ms),
     };
     evidence_clock.validate()?;
     Ok(evidence_clock)
@@ -1224,7 +1231,11 @@ fn network_payload(
 ) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text("network.process_name", &network.process_name, 4 * 1024)?;
     let host_id = optional_text("network.host_id", host_id, 4 * 1024)?;
-    let destination_ip = bounded_text("network.destination_ip", &network.destination_ip, 256)?;
+    let destination_ip = normalized_indicator_value(
+        "network.destination_ip",
+        &ThreatIntelIndicatorType::IpAddress,
+        &network.destination_ip,
+    )?;
     let protocol = bounded_text("network.protocol", &network.protocol, 256)?;
     let origin_scope_digest =
         digest_projection(&("process_origin", source_id, host_id.as_deref()))?;
@@ -1272,15 +1283,19 @@ fn dns_payload(
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
 ) -> Result<NormalizedPayload, GraphAdmissionError> {
-    let query_name = bounded_text("dns.query_name", &dns.query_name, 4 * 1024)?;
+    let query_name = normalized_indicator_value(
+        "dns.query_name",
+        &ThreatIntelIndicatorType::Domain,
+        &dns.query_name,
+    )?;
     let query_type = bounded_text("dns.query_type", &dns.query_type, 256)?;
     let source_ip = optional_text("dns.source_ip", dns.source_ip.as_deref(), 256)?;
     let process_name = optional_text("dns.process_name", dns.process_name.as_deref(), 4 * 1024)?;
     let response_code = optional_text("dns.response_code", dns.response_code.as_deref(), 256)?;
     let source_digest = digest_projection(&("dns_source", &source_ip, &process_name))?;
-    let destination_digest = digest_projection(&("dns_query", &query_name))?;
+    let destination_digest = digest_projection(&("indicator", "domain", &query_name))?;
     let source_node = AssetNode::new(source_digest.clone(), "dns_source")?;
-    let destination_node = AssetNode::new(destination_digest.clone(), "dns_name")?;
+    let destination_node = AssetNode::new(destination_digest.clone(), "domain")?;
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event_node = EventNode::new("dns_query", event_node_source_record_id, observed_at)?;
     let content_digest = digest_projection(&(
@@ -1469,6 +1484,22 @@ fn optional_text(
     value
         .map(|value| bounded_text(field, value, max_bytes))
         .transpose()
+}
+
+fn normalized_indicator_value(
+    field: &str,
+    indicator_type: &ThreatIntelIndicatorType,
+    value: &str,
+) -> Result<String, GraphAdmissionError> {
+    let value = bounded_text(field, value, 4 * 1024)?;
+    let normalized = match indicator_type {
+        ThreatIntelIndicatorType::Domain => value.trim_end_matches('.').to_ascii_lowercase(),
+        ThreatIntelIndicatorType::IpAddress | ThreatIntelIndicatorType::FileHash => {
+            value.to_ascii_lowercase()
+        }
+        ThreatIntelIndicatorType::Url => value,
+    };
+    bounded_text(field, &normalized, 4 * 1024)
 }
 
 fn confidence_basis_points(confidence: f64) -> u16 {

@@ -480,7 +480,9 @@ mod tests {
                 timestamp: 1_700_000_000,
                 host_id: Some("host-1".to_string()),
                 payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
-                    parent_process: "winword".to_string(),
+                    // Keep the agent lifecycle fixture to one challenge;
+                    // parent/correlation fan-out has dedicated runtime tests.
+                    parent_process: "<none>".to_string(),
                     process_name: "powershell".to_string(),
                     command_line: "powershell.exe -enc AAA=".to_string(),
                     user: Some("alice".to_string()),

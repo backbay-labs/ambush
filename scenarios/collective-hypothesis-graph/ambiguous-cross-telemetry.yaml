@@ -11,6 +11,7 @@ events:
     source_family: process
     logical_time_ms: 1700000000100
     signal_kind: unsigned_parent_child_execution
+    telemetry_profile: unsigned_execution
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
     entity_ids: [node:process:runner-a, node:event:process:support, node:actor:process-user-a]
@@ -20,6 +21,7 @@ events:
     source_family: process
     logical_time_ms: 1700000000200
     signal_kind: approved_automation_signature
+    telemetry_profile: signed_execution
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
     entity_ids: [node:process:runner-a, node:event:process:refute, node:actor:process-user-a]
@@ -29,6 +31,7 @@ events:
     source_family: identity
     logical_time_ms: 1700000000300
     signal_kind: anomalous_role_assumption
+    telemetry_profile: successful_authentication
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
     entity_ids: [node:actor:identity-principal-a, node:credential:identity-role-a, node:event:identity:support]
@@ -38,6 +41,7 @@ events:
     source_family: identity
     logical_time_ms: 1700000000400
     signal_kind: approved_change_window
+    telemetry_profile: failed_authentication
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
     entity_ids: [node:actor:identity-principal-a, node:credential:identity-role-a, node:event:identity:refute]
@@ -47,6 +51,7 @@ events:
     source_family: kubernetes
     logical_time_ms: 1700000000500
     signal_kind: privileged_workload_creation
+    telemetry_profile: workload_create
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
     entity_ids: [node:actor:kubernetes-principal-a, node:asset:workload-a, node:event:kubernetes:support]
@@ -56,6 +61,7 @@ events:
     source_family: kubernetes
     logical_time_ms: 1700000000600
     signal_kind: deployment_controller_annotation
+    telemetry_profile: workload_update
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
     entity_ids: [node:actor:kubernetes-principal-a, node:asset:workload-a, node:event:kubernetes:refute]
@@ -65,6 +71,7 @@ events:
     source_family: cloudtrail
     logical_time_ms: 1700000000700
     signal_kind: role_used_from_new_source
+    telemetry_profile: assume_role
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
     entity_ids: [node:actor:cloudtrail-principal-a, node:asset:aws-account-a, node:event:cloudtrail:support]
@@ -74,6 +81,7 @@ events:
     source_family: cloudtrail
     logical_time_ms: 1700000000800
     signal_kind: change_ticket_tag_present
+    telemetry_profile: create_access_key
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
     entity_ids: [node:actor:cloudtrail-principal-a, node:asset:aws-account-a, node:event:cloudtrail:refute]
@@ -83,6 +91,7 @@ events:
     source_family: network
     logical_time_ms: 1700000000900
     signal_kind: rare_egress_destination
+    telemetry_profile: network_contact
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
     entity_ids: [node:process:runner-a, node:asset:destination-a, node:event:network:support]
@@ -92,6 +101,7 @@ events:
     source_family: network
     logical_time_ms: 1700000001000
     signal_kind: documented_vendor_endpoint
+    telemetry_profile: network_contact
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
     entity_ids: [node:process:runner-a, node:asset:destination-a, node:event:network:refute]
@@ -101,6 +111,7 @@ events:
     source_family: threat_intelligence
     logical_time_ms: 1700000001100
     signal_kind: active_campaign_indicator_match
+    telemetry_profile: high_confidence_indicator
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
     entity_ids: [node:event:threat-intelligence:support, node:asset:destination-a]
@@ -110,6 +121,7 @@ events:
     source_family: threat_intelligence
     logical_time_ms: 1700000001200
     signal_kind: indicator_revoked_as_false_positive
+    telemetry_profile: low_confidence_indicator
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
     entity_ids: [node:event:threat-intelligence:refute, node:asset:destination-a]

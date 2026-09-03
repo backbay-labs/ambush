@@ -48,6 +48,22 @@ enum StageStatus {
     MissingEvidence,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FixtureTelemetryProfile {
+    UnsignedExecution,
+    SignedExecution,
+    SuccessfulAuthentication,
+    FailedAuthentication,
+    WorkloadCreate,
+    WorkloadUpdate,
+    AssumeRole,
+    CreateAccessKey,
+    NetworkContact,
+    HighConfidenceIndicator,
+    LowConfidenceIndicator,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LogicalClock {
@@ -164,6 +180,7 @@ struct FixtureEvent {
     source_family: SourceFamily,
     logical_time_ms: i64,
     signal_kind: String,
+    telemetry_profile: FixtureTelemetryProfile,
     supports: Vec<String>,
     refutes: Vec<String>,
     entity_ids: Vec<String>,
@@ -315,6 +332,37 @@ fn validate_fixture(
         }
         if event.logical_time_ms <= prior_time || event.logical_time_ms > max_time {
             return Err(format!("event {} has invalid logical time", event.event_id));
+        }
+        let profile_matches_family = matches!(
+            (event.source_family, event.telemetry_profile),
+            (
+                SourceFamily::Process,
+                FixtureTelemetryProfile::UnsignedExecution
+                    | FixtureTelemetryProfile::SignedExecution
+            ) | (
+                SourceFamily::Identity,
+                FixtureTelemetryProfile::SuccessfulAuthentication
+                    | FixtureTelemetryProfile::FailedAuthentication
+            ) | (
+                SourceFamily::Kubernetes,
+                FixtureTelemetryProfile::WorkloadCreate | FixtureTelemetryProfile::WorkloadUpdate
+            ) | (
+                SourceFamily::Cloudtrail,
+                FixtureTelemetryProfile::AssumeRole | FixtureTelemetryProfile::CreateAccessKey
+            ) | (
+                SourceFamily::Network,
+                FixtureTelemetryProfile::NetworkContact
+            ) | (
+                SourceFamily::ThreatIntelligence,
+                FixtureTelemetryProfile::HighConfidenceIndicator
+                    | FixtureTelemetryProfile::LowConfidenceIndicator
+            )
+        );
+        if !profile_matches_family {
+            return Err(format!(
+                "event {} has a telemetry profile incompatible with its source family",
+                event.event_id
+            ));
         }
         prior_time = event.logical_time_ms;
         if event

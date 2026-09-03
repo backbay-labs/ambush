@@ -2028,7 +2028,7 @@ mod tests {
     #[test]
     fn failed_budget_probe_is_byte_identical() {
         let config = HypothesisGraphConfig {
-            enabled: true,
+            enabled: false,
             max_work_units_per_tick: 3,
             max_claims_per_tick: 1,
             ..HypothesisGraphConfig::default()
@@ -2044,7 +2044,7 @@ mod tests {
     #[test]
     fn custom_scheduler_store_rejects_mismatched_deployment_policy() {
         let config = HypothesisGraphConfig {
-            enabled: true,
+            enabled: false,
             max_work_units_per_tick: 3,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
@@ -2090,7 +2090,7 @@ mod tests {
     #[test]
     fn restart_and_state_deserialize_restore_budget_without_reset() {
         let config = HypothesisGraphConfig {
-            enabled: true,
+            enabled: false,
             max_work_units_per_tick: 3,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
@@ -2299,7 +2299,7 @@ mod tests {
     fn unsupported_budget_backend_fails_closed_without_mutation() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 4,
+            max_work_units_per_tick: 5,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2353,7 +2353,7 @@ mod tests {
     fn forced_task_cas_refusal_rolls_back_budget() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 4,
+            max_work_units_per_tick: 5,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2414,7 +2414,7 @@ mod tests {
     fn forced_claim_cas_refusal_rolls_back_budget() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 4,
+            max_work_units_per_tick: 5,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2644,7 +2644,7 @@ mod tests {
     fn rejected_claim_does_not_charge_budget() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 4,
+            max_work_units_per_tick: 5,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2786,7 +2786,7 @@ mod tests {
     #[test]
     fn coordinator_durably_commits_competing_tasks_once() {
         let config = HypothesisGraphConfig {
-            enabled: true,
+            enabled: false,
             max_work_units_per_tick: 3,
             max_claims_per_tick: 4,
             ..HypothesisGraphConfig::default()

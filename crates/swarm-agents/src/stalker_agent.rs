@@ -672,7 +672,10 @@ mod tests {
             timestamp: 1_700_000_000,
             host_id: Some("host-1".to_string()),
             payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
-                parent_process: "winword".to_string(),
+                // Agent-loop tests exercise one graph challenge at a time.
+                // Parent/correlation fan-out is covered by the runtime's
+                // production-adapter integration tests.
+                parent_process: "<none>".to_string(),
                 process_name: "powershell".to_string(),
                 command_line: "powershell.exe -enc AAA=".to_string(),
                 user: Some("alice".to_string()),
@@ -1469,7 +1472,7 @@ mod tests {
         replay_store.persist(&blocked_replay).unwrap();
         let graph_config = HypothesisGraphConfig {
             enabled: true,
-            max_tasks: 3,
+            max_tasks: 5,
             max_work_units_per_tick: 32,
             max_claims_per_tick: 16,
             ..HypothesisGraphConfig::default()

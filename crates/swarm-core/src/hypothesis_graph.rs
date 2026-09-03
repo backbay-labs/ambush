@@ -138,7 +138,7 @@ impl Default for GraphResourceLimits {
             max_hypotheses: 16,
             max_contradictions: 64,
             max_decisions_per_hypothesis: 64,
-            max_tasks: 128,
+            max_tasks: 256,
             max_task_lease_ms: 300_000,
             max_task_retries: 3,
             max_memory_ttl_ticks: MAX_STRATEGY_MEMORY_TTL_TICKS,

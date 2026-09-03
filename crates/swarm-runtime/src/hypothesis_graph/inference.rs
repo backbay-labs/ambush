@@ -103,6 +103,17 @@ pub fn infer_causal_relations(
         }
         _ => None,
     };
+    let expected_process_correlation_node_id = match payload {
+        TypedEvidencePayload::Process {
+            signal_kind,
+            process_digest,
+            parent_process_digest: Some(_),
+            ..
+        } if signal_kind == "process_start" => {
+            Some(ProcessNode::new(process_digest, process_digest)?.node_id)
+        }
+        _ => None,
+    };
 
     let candidates = match payload {
         TypedEvidencePayload::Signal { .. } => match signal_kind {
@@ -161,13 +172,36 @@ pub fn infer_causal_relations(
         } if signal_kind == "process_start"
             && entity_ids.get(2) == expected_parent_node_id.as_ref() =>
         {
-            vec![inferred(
+            let mut relations = vec![inferred(
                 entity_ids,
                 2,
                 0,
                 CausalRelation::Spawns,
                 signal_kind,
-            )?]
+            )?];
+            if entity_ids.get(3) == expected_process_correlation_node_id.as_ref() {
+                // The parent-bound process instance preserves exact lineage;
+                // the correlation node is the stable source/host/process
+                // identity used by less expressive network telemetry. This
+                // explicit bridge keeps spawn-to-contact paths connected.
+                relations.push(inferred(
+                    entity_ids,
+                    0,
+                    3,
+                    CausalRelation::DependsOn,
+                    signal_kind,
+                )?);
+                if entity_ids.len() >= 5 {
+                    relations.push(inferred(
+                        entity_ids,
+                        4,
+                        0,
+                        CausalRelation::Uses,
+                        signal_kind,
+                    )?);
+                }
+            }
+            relations
         }
         TypedEvidencePayload::Process { .. }
             if signal_kind == "process_start" && entity_ids.len() >= 3 =>
@@ -322,26 +356,40 @@ mod tests {
             content_digest: "0".repeat(64),
         };
 
+        let correlation_node_id = ProcessNode::new("child", "child")
+            .expect("fixture correlation process should be valid")
+            .node_id;
         let without_actor = infer_causal_relations(&payload(vec![
             GraphNodeId::new("child"),
             GraphNodeId::new("event"),
             parent_node_id.clone(),
+            correlation_node_id.clone(),
         ]))
         .expect("parented process should infer");
-        assert_eq!(without_actor.len(), 1);
+        assert_eq!(without_actor.len(), 2);
         assert_eq!(without_actor[0].from, parent_node_id);
         assert_eq!(without_actor[0].to, GraphNodeId::new("child"));
         assert_eq!(without_actor[0].relation, CausalRelation::Spawns);
+        assert_eq!(without_actor[1].from, GraphNodeId::new("child"));
+        assert_eq!(without_actor[1].to, correlation_node_id);
+        assert_eq!(without_actor[1].relation, CausalRelation::DependsOn);
 
         let with_actor = infer_causal_relations(&payload(vec![
             GraphNodeId::new("child"),
             GraphNodeId::new("event"),
             parent_node_id,
+            ProcessNode::new("child", "child")
+                .expect("fixture correlation process should be valid")
+                .node_id,
             GraphNodeId::new("actor"),
         ]))
         .expect("parented process with actor should infer");
-        assert_eq!(with_actor.len(), 1);
+        assert_eq!(with_actor.len(), 3);
         assert_eq!(with_actor[0].relation, CausalRelation::Spawns);
+        assert_eq!(with_actor[1].relation, CausalRelation::DependsOn);
+        assert_eq!(with_actor[2].from, GraphNodeId::new("actor"));
+        assert_eq!(with_actor[2].to, GraphNodeId::new("child"));
+        assert_eq!(with_actor[2].relation, CausalRelation::Uses);
 
         let legacy_with_actor = infer_causal_relations(&payload(vec![
             GraphNodeId::new("legacy-child"),

@@ -1429,7 +1429,7 @@ fn config_bound_runtime_budget_gates_logical_pop_and_admission() {
     let signer = key(85);
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 3,
+        max_work_units_per_tick: 5,
         max_claims_per_tick: 1,
         ..HypothesisGraphConfig::default()
     };
@@ -1484,12 +1484,12 @@ fn config_bound_runtime_budget_gates_logical_pop_and_admission() {
         .unwrap();
     assert!(
         runtime
-            .pop_ready_budgeted(GraphLogicalTime::new(100), 3, 1)
+            .pop_ready_budgeted(GraphLogicalTime::new(100), 5, 1)
             .unwrap()
             .is_some()
     );
     let used_budget = runtime.budget.as_ref().unwrap();
-    assert_eq!(used_budget.work_units_used(), 3);
+    assert_eq!(used_budget.work_units_used(), 5);
     assert_eq!(used_budget.claims_used(), 1);
 
     let second_task = TaskId::new("task:budget-ready-second");
@@ -1530,7 +1530,7 @@ fn serde_mutated_budget_above_active_config_is_rejected_without_pop() {
     let signer = key(86);
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 3,
+        max_work_units_per_tick: 5,
         max_claims_per_tick: 1,
         ..HypothesisGraphConfig::default()
     };
@@ -1554,7 +1554,7 @@ fn serde_mutated_budget_above_active_config_is_rejected_without_pop() {
         .unwrap();
 
     let mut tampered_wire = serde_json::to_value(runtime.budget.as_ref().unwrap()).unwrap();
-    tampered_wire["max_work_units"] = serde_json::json!(4);
+    tampered_wire["max_work_units"] = serde_json::json!(6);
     let tampered_budget: SchedulerBudget = serde_json::from_value(tampered_wire).unwrap();
     runtime.budget = Some(tampered_budget);
     let before_tasks = json_bytes(&runtime.scheduler.ordered());
@@ -2954,7 +2954,7 @@ fn production_complete_task_enforces_signed_lineage() {
 #[test]
 fn coordinator_uses_config_bound_budget_per_logical_tick() {
     let config = HypothesisGraphConfig {
-        enabled: true,
+        enabled: false,
         max_work_units_per_tick: 3,
         max_claims_per_tick: 1,
         ..HypothesisGraphConfig::default()
@@ -4069,10 +4069,10 @@ fn memory_replay_changes_priority_deterministically() {
 fn failed_coordination_does_not_publish_partial_graph() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        // One replay deterministically creates three distinct reasoning
+        // One parented process replay creates five distinct reasoning
         // tasks. Admit exactly one replay, then prove the service fails closed
         // when the next replay requires rotation while work is outstanding.
-        max_tasks: 3,
+        max_tasks: 5,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
     };
@@ -4095,7 +4095,7 @@ fn failed_coordination_does_not_publish_partial_graph() {
             &rejection,
             Err(
                 swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
-                    outstanding_tasks: 3,
+                    outstanding_tasks: 5,
                     ..
                 }
             )
@@ -4158,16 +4158,20 @@ fn seed_signal_converges_through_real_runtime() {
     assert_eq!(first.evidence_id, duplicate.evidence_id);
     assert!(duplicate.idempotent);
 
-    let challenge = weaver
+    let mut completed_challenges = 0;
+    while let Some(challenge) = weaver
         .next_challenge_context(GraphLogicalTime::new(1_700_000_010_001))
         .unwrap()
-        .unwrap();
-    assert_eq!(challenge.hunt_id, replay.audit.hunt_id);
-    assert!(
-        weaver
-            .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_010_001),)
-            .unwrap()
-    );
+    {
+        assert_eq!(challenge.hunt_id, replay.audit.hunt_id);
+        assert!(
+            weaver
+                .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_010_001),)
+                .unwrap()
+        );
+        completed_challenges += 1;
+    }
+    assert_eq!(completed_challenges, 3);
 
     let completion = stalker
         .complete_stalker_hunt(
@@ -4192,21 +4196,32 @@ fn seed_signal_converges_through_real_runtime() {
             "normalized evidence entity {entity_id} must be navigable"
         );
     }
-    assert_eq!(projection.graph.edges.len(), 1);
-    let inferred_edge = projection.graph.edges.values().next().unwrap();
-    assert_eq!(inferred_edge.relation, CausalRelation::Spawns);
+    assert_eq!(projection.graph.edges.len(), 3);
+    for relation in [
+        CausalRelation::DependsOn,
+        CausalRelation::Spawns,
+        CausalRelation::Uses,
+    ] {
+        assert!(
+            projection
+                .graph
+                .edges
+                .values()
+                .any(|edge| edge.relation == relation)
+        );
+    }
     assert!(projection.graph.edges.values().all(|edge| {
         projection.graph.nodes.contains_key(&edge.from)
             && projection.graph.nodes.contains_key(&edge.to)
     }));
-    assert_eq!(projection.tasks.len(), 3);
+    assert_eq!(projection.tasks.len(), 5);
     assert!(
         projection
             .tasks
             .iter()
             .all(|task| task.state == swarm_core::hypothesis_graph::TaskState::Completed)
     );
-    assert_eq!(projection.terminal_publications, 3);
+    assert_eq!(projection.terminal_publications, 5);
     assert_eq!(projection.memory.len(), 1);
     assert_eq!(projection.hypotheses.len(), 2);
     assert!(projection.hypotheses.values().all(|hypothesis| {
@@ -4231,7 +4246,7 @@ fn seed_signal_converges_through_real_runtime() {
         swarm_core::hypothesis_graph::HypothesisStatus::Falsified
     );
     assert_eq!(projection.metrics.completed_acquisitions, 1);
-    assert_eq!(projection.metrics.completed_challenges, 1);
+    assert_eq!(projection.metrics.completed_challenges, 3);
     assert_eq!(projection.metrics.completed_falsifications, 1);
     assert_eq!(projection.metrics.falsification_no_findings, 0);
     for task in &projection.tasks {
@@ -4275,17 +4290,17 @@ fn seed_signal_converges_through_real_runtime() {
     assert_eq!(replay_after_completion.task_ids, first.task_ids);
     let after_retry = service.operator_projection().unwrap();
     assert_eq!(after_retry.graph.evidence.len(), 1);
-    assert_eq!(after_retry.graph.edges.len(), 1);
-    assert_eq!(after_retry.tasks.len(), 3);
-    assert_eq!(after_retry.terminal_publications, 3);
+    assert_eq!(after_retry.graph.edges.len(), 3);
+    assert_eq!(after_retry.tasks.len(), 5);
+    assert_eq!(after_retry.terminal_publications, 5);
     assert_eq!(after_retry.memory.len(), 1);
 }
 
 #[test]
-fn enabled_minimum_node_limit_admits_parented_process_without_user() {
+fn enabled_minimum_node_limit_admits_parented_process_with_user() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_nodes: 4,
+        max_nodes: 5,
         max_work_units_per_tick: 32,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
@@ -4299,32 +4314,33 @@ fn enabled_minimum_node_limit_admits_parented_process_without_user() {
         .unwrap();
     service.worker([TaskKind::ChallengeEdge], key(140)).unwrap();
 
-    let mut replay = production_replay_bundle(
-        "hunt:phase286:parented-process-without-user",
+    let replay = production_replay_bundle(
+        "hunt:phase286:parented-process-with-user",
         1_700_000_090_000,
     );
-    replay.event.payload = match replay.event.payload {
-        TelemetryPayload::ProcessStart(mut process) => {
-            assert_ne!(process.parent_process, "<none>");
-            process.user = None;
-            TelemetryPayload::ProcessStart(process)
-        }
-        _ => unreachable!(),
-    };
+    assert!(matches!(
+        &replay.event.payload,
+        TelemetryPayload::ProcessStart(process)
+            if process.parent_process != "<none>" && process.user.is_some()
+    ));
 
     let submission = service.submit_replay(&replay).unwrap();
     let projection = service.operator_projection().unwrap();
-    assert_eq!(projection.graph.nodes.len(), 4);
+    assert_eq!(projection.graph.nodes.len(), 5);
     let evidence = &projection.graph.evidence[&submission.evidence_id];
-    assert_eq!(evidence.entity_ids().len(), 4);
+    assert_eq!(evidence.entity_ids().len(), 5);
     assert!(
         evidence
             .entity_ids()
             .iter()
             .all(|node_id| projection.graph.nodes.contains_key(node_id))
     );
-    let edge = projection.graph.edges.values().next().unwrap();
-    assert_eq!(edge.relation, CausalRelation::Spawns);
+    let edge = projection
+        .graph
+        .edges
+        .values()
+        .find(|edge| edge.relation == CausalRelation::Spawns)
+        .unwrap();
     assert!(evidence.entity_ids().contains(&edge.from));
     assert!(evidence.entity_ids().contains(&edge.to));
     assert!(matches!(
@@ -4339,6 +4355,107 @@ fn enabled_minimum_node_limit_admits_parented_process_without_user() {
         unreachable!()
     };
     assert_eq!(child.parent_node_id.as_ref(), Some(&edge.from));
+}
+
+#[test]
+fn parent_bound_process_path_connects_to_network_correlation_identity() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(197), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(198),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(199)).unwrap();
+
+    let process = production_replay_bundle("hunt:phase286:process-network-path", 1_700_000_090_050);
+    let mut network = production_replay_bundle(
+        "hunt:phase286:process-network-path:network",
+        1_700_000_090_051,
+    );
+    network.event = network_event("process-network-path:network", "203.0.113.78");
+    network.event.source = process.event.source.clone();
+    network.event.host_id = process.event.host_id.clone();
+    network.findings[0].event_id = network.event.event_id.clone();
+    network.audit.detection = network.findings[0].clone();
+
+    service.submit_replay(&process).unwrap();
+    service.submit_replay(&network).unwrap();
+    let projection = service.operator_projection().unwrap();
+    let spawned = projection
+        .graph
+        .edges
+        .values()
+        .find(|edge| edge.relation == CausalRelation::Spawns)
+        .unwrap();
+    let correlation = projection
+        .graph
+        .edges
+        .values()
+        .find(|edge| edge.relation == CausalRelation::DependsOn)
+        .unwrap();
+    let contact = projection
+        .graph
+        .edges
+        .values()
+        .find(|edge| edge.relation == CausalRelation::Contacts)
+        .unwrap();
+    assert_eq!(spawned.to, correlation.from);
+    assert_eq!(correlation.to, contact.from);
+}
+
+#[test]
+fn accepted_future_ingest_skew_remains_valid_graph_evidence() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(200), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(201),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(202)).unwrap();
+    let created_at_ms = 1_700_000_090_075;
+    let mut replay = production_replay_bundle("hunt:phase286:accepted-future-skew", created_at_ms);
+    replay.event.timestamp = created_at_ms + swarm_core::MAX_TELEMETRY_FUTURE_SKEW_MS;
+
+    let submission = service.submit_replay(&replay).unwrap();
+    let projection = service.operator_projection().unwrap();
+    let evidence = &projection.graph.evidence[&submission.evidence_id];
+    assert_eq!(
+        evidence.clock.ingested_at,
+        Some(GraphLogicalTime::new(created_at_ms))
+    );
+    assert_eq!(
+        evidence.clock.uncertainty_ms,
+        u64::try_from(swarm_core::MAX_TELEMETRY_FUTURE_SKEW_MS).unwrap()
+    );
+
+    let invalid_service =
+        Arc::new(CollectiveHypothesisService::new(&config, key(212), None).unwrap());
+    invalid_service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(213),
+        )
+        .unwrap();
+    invalid_service
+        .worker([TaskKind::ChallengeEdge], key(214))
+        .unwrap();
+    let mut beyond_allowance =
+        production_replay_bundle("hunt:phase286:rejected-future-skew", created_at_ms);
+    beyond_allowance.event.timestamp = created_at_ms + swarm_core::MAX_TELEMETRY_FUTURE_SKEW_MS + 1;
+    assert!(invalid_service.submit_replay(&beyond_allowance).is_err());
+    assert_eq!(invalid_service.summary().unwrap().evidence_count, 0);
 }
 
 #[test]
@@ -4430,6 +4547,7 @@ fn persisted_threat_intel_match_is_admitted_atomically_with_network_evidence() {
         .find(|edge| edge.relation == CausalRelation::MatchesIndicator)
         .unwrap();
     assert_eq!(contacts.to, indicator_match.to);
+    assert_eq!(projection.tasks.len(), 5);
     assert!(
         projection
             .tasks
@@ -4458,6 +4576,183 @@ fn persisted_threat_intel_match_is_admitted_atomically_with_network_evidence() {
         0,
         "telemetry must not commit when its matched enrichment is invalid"
     );
+}
+
+#[test]
+fn shipped_defaults_admit_the_maximum_bounded_replay_task_seed() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(215), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(216),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(217)).unwrap();
+    let mut replay = production_replay_bundle("hunt:phase286:maximum-task-seed", 1_700_000_090_225);
+    let matches = (0..64)
+        .map(|index| ThreatIntelEntry {
+            indicator_type: ThreatIntelIndicatorType::Domain,
+            value: format!("indicator-{index}.example"),
+            source: "taxii-production".to_string(),
+            indicator_id: Some(format!("indicator:maximum:{index}")),
+            confidence: 0.98,
+            expires_at: 1_800_000_000_000,
+        })
+        .collect::<Vec<_>>();
+    replay.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": matches,
+    });
+    replay.audit.detection = replay.findings[0].clone();
+
+    let submission = service.submit_replay(&replay).unwrap();
+    assert_eq!(submission.task_ids.len(), 133);
+    assert!(submission.task_ids.len() <= config.max_tasks);
+}
+
+#[test]
+fn persisted_domain_match_converges_with_normalized_dns_destination() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(203), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(204),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(205)).unwrap();
+    let mut replay = production_replay_bundle("hunt:phase286:dns-threat-intel", 1_700_000_090_250);
+    replay.event = dns_event("dns-threat-intel", "Evil.Example.");
+    replay.findings[0].event_id = replay.event.event_id.clone();
+    replay.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": [threat_entry("EVIL.EXAMPLE.")],
+    });
+    replay.audit.detection = replay.findings[0].clone();
+
+    service.submit_replay(&replay).unwrap();
+    let projection = service.operator_projection().unwrap();
+    let contacts = projection
+        .graph
+        .edges
+        .values()
+        .find(|edge| edge.relation == CausalRelation::Contacts)
+        .unwrap();
+    let indicator_match = projection
+        .graph
+        .edges
+        .values()
+        .find(|edge| edge.relation == CausalRelation::MatchesIndicator)
+        .unwrap();
+    assert_eq!(contacts.to, indicator_match.to);
+}
+
+#[test]
+fn replay_rotation_uses_generated_task_target_count() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_tasks: 7,
+        max_work_units_per_tick: 5,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(206), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(207),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(208)).unwrap();
+
+    let mut first =
+        production_replay_bundle("hunt:phase286:task-preflight:first", 1_700_000_090_300);
+    first.event = network_event("task-preflight:first", "203.0.113.80");
+    first.findings[0].event_id = first.event.event_id.clone();
+    first.audit.detection = first.findings[0].clone();
+    service.submit_replay(&first).unwrap();
+
+    let mut second =
+        production_replay_bundle("hunt:phase286:task-preflight:second", 1_700_000_090_301);
+    second.event = network_event("task-preflight:second", "203.0.113.81");
+    second.findings[0].event_id = second.event.event_id.clone();
+    second.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": [{
+            "indicator_type": "ip_address",
+            "value": "203.0.113.81",
+            "source": "taxii-production",
+            "indicator_id": "indicator:203.0.113.81",
+            "confidence": 0.98,
+            "expires_at": 1_800_000_000_000i64
+        }],
+    });
+    second.audit.detection = second.findings[0].clone();
+
+    assert!(matches!(
+        service.submit_replay(&second),
+        Err(
+            swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
+                outstanding_tasks: 3,
+                ..
+            }
+        )
+    ));
+    assert_eq!(service.operator_projection().unwrap().tasks.len(), 3);
+}
+
+#[test]
+fn oversized_replay_task_seed_is_rejected_without_retry_or_partial_graph() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 5,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(209), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(210),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(211)).unwrap();
+    let mut replay =
+        production_replay_bundle("hunt:phase286:oversized-task-seed", 1_700_000_090_350);
+    replay.event = network_event("oversized-task-seed", "203.0.113.82");
+    replay.findings[0].event_id = replay.event.event_id.clone();
+    replay.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": [
+            {
+                "indicator_type": "ip_address",
+                "value": "203.0.113.82",
+                "source": "taxii-production",
+                "indicator_id": "indicator:203.0.113.82",
+                "confidence": 0.98,
+                "expires_at": 1_800_000_000_000i64
+            },
+            {
+                "indicator_type": "ip_address",
+                "value": "203.0.113.83",
+                "source": "taxii-production",
+                "indicator_id": "indicator:203.0.113.83",
+                "confidence": 0.97,
+                "expires_at": 1_800_000_000_000i64
+            }
+        ],
+    });
+    replay.audit.detection = replay.findings[0].clone();
+
+    assert!(matches!(
+        service.submit_replay(&replay),
+        Err(swarm_runtime::hypothesis_graph::GraphServiceError::Admission(
+            GraphAdmissionError::ResourceLimitExceeded { resource, limit: 5 }
+        )) if resource == "replay.task_targets"
+    ));
+    assert_eq!(service.summary().unwrap().evidence_count, 0);
 }
 
 #[test]
@@ -4532,7 +4827,7 @@ fn benign_or_ambiguous_investigation_closes_falsification_without_false_memory()
 fn stalker_recovery_is_bounded_and_acknowledgement_advances_the_durable_page() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 3,
+        max_work_units_per_tick: 5,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
     };
@@ -4546,7 +4841,7 @@ fn stalker_recovery_is_bounded_and_acknowledgement_advances_the_durable_page() {
     service.worker([TaskKind::ChallengeEdge], key(164)).unwrap();
 
     let mut hunt_ids = Vec::new();
-    for index in 0..5_i64 {
+    for index in 0..7_i64 {
         let hunt_id = format!("hunt:phase286:bounded-recovery:{index}");
         let created_at = 1_700_000_110_000 + index * 100;
         let replay = production_replay_bundle(&hunt_id, created_at);
@@ -4566,21 +4861,21 @@ fn stalker_recovery_is_bounded_and_acknowledgement_advances_the_durable_page() {
     let first_page = stalker
         .outstanding_stalker_hunts_at(GraphLogicalTime::new(1_700_000_111_000))
         .unwrap();
-    assert_eq!(first_page, hunt_ids[..3]);
+    assert_eq!(first_page, hunt_ids[..5]);
     for hunt_id in &first_page {
         stalker.acknowledge_stalker_publication(hunt_id).unwrap();
     }
     let second_page = stalker
         .outstanding_stalker_hunts_at(GraphLogicalTime::new(1_700_000_111_000))
         .unwrap();
-    assert_eq!(second_page, hunt_ids[3..]);
+    assert_eq!(second_page, hunt_ids[5..]);
 }
 
 #[test]
 fn stalker_recovery_respects_capability_scope_without_republishing_acknowledged_work() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 3,
+        max_work_units_per_tick: 5,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()
     };
@@ -4765,7 +5060,7 @@ fn enabled_service_restores_graph_tasks_and_memory_after_restart() {
         .unwrap();
     assert_eq!(completion.memory_records_projected, 1);
     let before = service.operator_projection().unwrap();
-    assert_eq!(before.tasks.len(), 3);
+    assert_eq!(before.tasks.len(), 5);
     assert_eq!(before.memory.len(), 1);
     drop(stalker);
     drop(weaver);
@@ -4861,11 +5156,15 @@ fn restart_rebinds_an_elapsed_claim_to_a_replacement_worker() {
         )
         .unwrap();
     initial.submit_replay(&replay).unwrap();
-    let abandoned = prior
-        .claim_next(GraphLogicalTime::new(1_700_000_032_001))
-        .unwrap()
-        .unwrap();
-    assert_eq!(abandoned.request.kind, TaskKind::ChallengeEdge);
+    let mut abandoned = Vec::new();
+    for _ in 0..3 {
+        let claim = prior
+            .claim_next(GraphLogicalTime::new(1_700_000_032_001))
+            .unwrap()
+            .unwrap();
+        assert_eq!(claim.request.kind, TaskKind::ChallengeEdge);
+        abandoned.push(claim);
+    }
     drop(prior);
     drop(initial);
 
@@ -4874,10 +5173,19 @@ fn restart_rebinds_an_elapsed_claim_to_a_replacement_worker() {
         .worker_at([TaskKind::ChallengeEdge], replacement_key, expired_at)
         .unwrap();
     let reclaimed = replacement.claim_next(expired_at).unwrap().unwrap();
-    assert_eq!(reclaimed.claim.task_id, abandoned.claim.task_id);
-    assert_ne!(reclaimed.request.claimant, abandoned.request.claimant);
+    assert!(
+        abandoned
+            .iter()
+            .any(|claim| claim.claim.task_id == reclaimed.claim.task_id)
+    );
+    assert_ne!(reclaimed.request.claimant, abandoned[0].request.claimant);
     assert_eq!(&reclaimed.request.claimant, replacement.claimant());
-    assert!(reclaimed.claim.fencing_token > abandoned.claim.fencing_token);
+    let prior_fence = abandoned
+        .iter()
+        .find(|claim| claim.claim.task_id == reclaimed.claim.task_id)
+        .map(|claim| claim.claim.fencing_token)
+        .unwrap();
+    assert!(reclaimed.claim.fencing_token > prior_fence);
 
     drop(replacement);
     drop(restarted);
@@ -4906,13 +5214,13 @@ fn expired_worker_lease_is_fenced_and_reclaimed() {
     service.worker([TaskKind::ChallengeEdge], key(128)).unwrap();
     let replay = production_replay_bundle("hunt:phase286:lease-recovery", 1_700_000_040_000);
     service.submit_replay(&replay).unwrap();
-    assert!(encode_metrics(&metrics).contains("swarm_hypothesis_graph_pending_tasks 3"));
+    assert!(encode_metrics(&metrics).contains("swarm_hypothesis_graph_pending_tasks 5"));
 
     let first = stalker
         .claim_next(GraphLogicalTime::new(1_700_000_040_001))
         .unwrap()
         .unwrap();
-    assert!(encode_metrics(&metrics).contains("swarm_hypothesis_graph_pending_tasks 2"));
+    assert!(encode_metrics(&metrics).contains("swarm_hypothesis_graph_pending_tasks 4"));
     let reclaimed = stalker
         .claim_next(GraphLogicalTime::new(1_700_000_040_011))
         .unwrap()
@@ -5086,12 +5394,11 @@ fn retry_exhausted_weaver_terminal_replays_until_durably_acknowledged() {
         .unwrap()
         .unwrap();
     assert_eq!(first.claim.task_id, second.claim.task_id);
-    assert!(
-        weaver
-            .claim_next(GraphLogicalTime::new(1_700_000_120_021))
-            .unwrap()
-            .is_none()
-    );
+    let next = weaver
+        .claim_next(GraphLogicalTime::new(1_700_000_120_021))
+        .unwrap()
+        .unwrap();
+    assert_ne!(next.claim.task_id, first.claim.task_id);
     let pending = weaver.outstanding_weaver_publications().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].task_id, first.claim.task_id);
@@ -5105,6 +5412,7 @@ fn retry_exhausted_weaver_terminal_replays_until_durably_acknowledged() {
         service.operator_projection().unwrap().terminal_publications,
         1
     );
+    drop(next);
     drop(weaver);
     drop(service);
 
@@ -5290,21 +5598,24 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
     assert!(matches!(
         blocked,
         swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
-            outstanding_tasks: 3,
+            outstanding_tasks: 5,
             ..
         }
     ));
 
-    let challenge = weaver
+    let mut challenge_graph_id = None;
+    while let Some(challenge) = weaver
         .next_challenge_context(GraphLogicalTime::new(1_700_000_100_001))
         .unwrap()
-        .unwrap();
-    assert_eq!(challenge.graph_id, first.graph_id);
-    assert!(
-        weaver
-            .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_100_001))
-            .unwrap()
-    );
+    {
+        assert_eq!(challenge.graph_id, first.graph_id);
+        challenge_graph_id = Some(challenge.graph_id.clone());
+        assert!(
+            weaver
+                .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_100_001),)
+                .unwrap()
+        );
+    }
     let completion = stalker
         .complete_stalker_hunt(
             &first_replay.audit.hunt_id,
@@ -5319,7 +5630,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
 
     let second = service.submit_replay(&second_replay).unwrap();
     assert_ne!(second.graph_id, first.graph_id);
-    assert_eq!(challenge.graph_id, first.graph_id);
+    assert_eq!(challenge_graph_id.as_ref(), Some(&first.graph_id));
     assert_eq!(service.graph_id(), second.graph_id);
     assert_eq!(service.replay_consumer_graph_id(), replay_consumer_graph_id);
     assert_eq!(service.summary().unwrap().metrics.campaign_rotations, 1);
@@ -5331,7 +5642,7 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
     assert_eq!(summaries[1].evidence_count, 1);
     let archived = service.operator_projection_for(&first.graph_id).unwrap();
     assert_eq!(archived.graph.evidence.len(), 1);
-    assert_eq!(archived.tasks.len(), 3);
+    assert_eq!(archived.tasks.len(), 5);
     assert!(archived.tasks.iter().all(|task| matches!(
         task.state,
         swarm_core::hypothesis_graph::TaskState::Completed
@@ -5352,15 +5663,28 @@ fn full_campaign_rotates_after_terminal_work_and_preserves_archived_queries() {
             2,
         )
         .unwrap();
-    assert_eq!(second_task_page.len(), 1);
+    assert_eq!(second_task_page.len(), 2);
+    let task_cursor = second_task_page.last().unwrap();
+    let third_task_page = service
+        .operator_task_page_for(
+            &first.graph_id,
+            Some((
+                task_cursor.request.requested_at,
+                task_cursor.request.task_id.as_str(),
+            )),
+            2,
+        )
+        .unwrap();
+    assert_eq!(third_task_page.len(), 1);
     assert!(
         first_task_page
             .iter()
             .chain(&second_task_page)
+            .chain(&third_task_page)
             .map(|task| task.request.task_id.clone())
             .collect::<BTreeSet<_>>()
             .len()
-            == 3
+            == 5
     );
     assert_eq!(
         service
@@ -5473,7 +5797,7 @@ fn campaign_admission_reserves_memory_for_each_outstanding_falsification() {
     assert!(matches!(
         blocked,
         swarm_runtime::hypothesis_graph::GraphServiceError::CampaignRotationBlocked {
-            outstanding_tasks: 3,
+            outstanding_tasks: 5,
             ..
         }
     ));
