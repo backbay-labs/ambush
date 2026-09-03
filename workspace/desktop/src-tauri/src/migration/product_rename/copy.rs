@@ -109,18 +109,11 @@ fn validate_regular_roots(src: &Path, dst: &Path) -> Result<(), String> {
     let destination_parent = dst
         .parent()
         .ok_or_else(|| format!("destination {} has no parent", dst.display()))?;
-    let parent_metadata = std::fs::symlink_metadata(destination_parent).map_err(|error| {
-        format!(
-            "inspect destination parent {}: {error}",
-            destination_parent.display()
-        )
-    })?;
-    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
-        return Err(format!(
-            "destination parent {} is not a regular directory",
-            destination_parent.display()
-        ));
-    }
+    // Knowledge-only nest migration can be the first writer of the current
+    // nest. Create exactly that missing parent while retaining the no-symlink
+    // check; recursive creation would make unvalidated ancestors part of the
+    // migration boundary.
+    ensure_directory(destination_parent)?;
     match std::fs::symlink_metadata(dst) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
         Ok(_) => {
