@@ -1,0 +1,20 @@
+{
+  "kind": 26002,
+  "schema": "ambush.perch.frame.agent_health.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 3,
+  "emitted_at_ms": 1773738873100,
+  "agents": [
+    {
+      "agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+      "role": "whisker",
+      "from": "healthy",
+      "to": "healthy",
+      "changed_at_ms": 1773734400000,
+      "actions": {
+        "detect": 2,
+        "deposit": 3
+      }
+    }
+  ]
+}

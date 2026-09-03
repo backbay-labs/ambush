@@ -1,0 +1,955 @@
+@layer base {
+  :root {
+    /* Quiet — Ambush Day: a stone-grey room and a tinted card-stock plate. */
+    --radius: 2px;
+    --ambush-index: #943106;
+    --ambush-night: #bcb5ad;
+    --ambush-steel: #c7c0b8;
+    --ambush-rule: #9c9893;
+    --ambush-grad: #7a7672;
+    --ambush-plate: #eccfb9;
+    --ambush-plate-hi: #f4d7c4;
+    --ambush-ink-dim: #51443a;
+    --ambush-ink-mid: #3e332a;
+    --ambush-ink: #292019;
+    --background: 32 10.07% 70.8%;
+    --foreground: 26.2 24.24% 12.9%;
+    --card: 25.9 57.3% 82.5%;
+    --card-foreground: 26.2 24.24% 12.9%;
+    --popover: 25.9 57.3% 82.5%;
+    --popover-foreground: 26.2 24.24% 12.9%;
+    --primary: 26.2 24.24% 12.9%;
+    --primary-foreground: 32 10.07% 70.8%;
+    --secondary: 32 11.81% 75.1%;
+    --secondary-foreground: 27 19.23% 20.4%;
+    --muted: 32 11.81% 75.1%;
+    --muted-foreground: 26.1 16.55% 27.3%;
+    --huddle-drawer-surface: 32 10.07% 70.8%;
+    --huddle-control-surface: 32 11.81% 75.1%;
+    --huddle-control-hover-surface: 33.3 4.35% 59.4%;
+    --huddle-control-chevron-surface: 32 10.07% 70.8%;
+    --huddle-control-chevron-hover-surface: 32 11.81% 75.1%;
+    --huddle-control-foreground: 26.2 24.24% 12.9%;
+    --huddle-popover-surface: 32 11.81% 75.1%;
+    --huddle-popover-border: 33.3 4.35% 59.4%;
+    --huddle-tooltip-surface: 32 11.81% 75.1%;
+    --huddle-tooltip-foreground: 26.2 24.24% 12.9%;
+    --accent: 23.7 68.57% 86.3%;
+    --accent-foreground: 26.2 24.24% 12.9%;
+    --destructive: 26.2 24.24% 12.9%;
+    --destructive-foreground: 32 10.07% 70.8%;
+    --border: 33.3 4.35% 59.4%;
+    --input: 33.3 4.35% 59.4%;
+    --ring: 26.2 24.24% 12.9%;
+    --chart-1: 26.2 24.24% 12.9%;
+    --chart-2: 27 19.23% 20.4%;
+    --chart-3: 26.1 16.55% 27.3%;
+    --chart-4: 30 3.39% 46.3%;
+    --chart-5: 33.3 4.35% 59.4%;
+    --sidebar: 32 11.81% 75.1%;
+    --sidebar-background: 32 11.81% 75.1%;
+    --sidebar-foreground: 27 19.23% 20.4%;
+    --sidebar-primary: 26.2 24.24% 12.9%;
+    --sidebar-primary-foreground: 32 10.07% 70.8%;
+    --sidebar-active: var(--sidebar-primary);
+    --sidebar-active-foreground: var(--sidebar-primary-foreground);
+    --sidebar-accent: 25.9 57.3% 82.5%;
+    --sidebar-accent-foreground: 26.2 24.24% 12.9%;
+    --sidebar-border: 33.3 4.35% 59.4%;
+    --sidebar-ring: 33.3 4.35% 59.4%;
+    /* Add asserts, remove is spent; a warning is ink on the lit surface. */
+    --status-added: var(--ambush-ink);
+    --status-deleted: var(--ambush-ink-dim);
+    --status-modified: var(--ambush-ink-mid);
+    --ui-warning: var(--ambush-ink);
+    --ui-warning-bg: var(--ambush-plate);
+    /* The app canvas is one flat instrument surface in either mode. */
+    --ambush-gradient-light-top: #c7c0b8;
+    --ambush-gradient-light-bottom: #c7c0b8;
+    --ambush-gradient-dark-top: #1f1f1f;
+    --ambush-gradient-dark-bottom: #1f1f1f;
+    --ambush-content-dark: 0 0% 9%;
+    /* The hosted-community sign-in modal intentionally keeps this light palette
+       in both app themes; semantic tokens keep component code color-agnostic. */
+    --ambush-hosted-community-modal-action-fg: 236 207 185;
+    --ambush-hosted-community-modal-overlay-bg: 23 23 23;
+    --ambush-hosted-community-identity-bg: 244 215 196;
+  }
+
+  .dark {
+    /* Quiet — Ambush Night: an achromatic room and one warm lamplit plate. */
+    --radius: 2px;
+    --ambush-index: #e05e28;
+    --ambush-night: #171717;
+    --ambush-steel: #1f1f1f;
+    --ambush-rule: #3e3e3e;
+    --ambush-grad: #727272;
+    --ambush-plate: #33281e;
+    --ambush-plate-hi: #3d3025;
+    --ambush-ink-dim: #a49b90;
+    --ambush-ink-mid: #bab2a8;
+    --ambush-ink: #c9c1b7;
+    --background: 0 0% 9.0%;
+    --foreground: 33.3 14.29% 75.3%;
+    --card: 28.6 25.93% 15.9%;
+    --card-foreground: 33.3 14.29% 75.3%;
+    --popover: 28.6 25.93% 15.9%;
+    --popover-foreground: 33.3 14.29% 75.3%;
+    --primary: 33.3 14.29% 75.3%;
+    --primary-foreground: 0 0% 9.0%;
+    --secondary: 0 0% 12.2%;
+    --secondary-foreground: 33.3 11.54% 69.4%;
+    --muted: 0 0% 12.2%;
+    --muted-foreground: 33 9.9% 60.4%;
+    --huddle-drawer-surface: 0 0% 9.0%;
+    --huddle-control-surface: 0 0% 12.2%;
+    --huddle-control-hover-surface: 0 0% 24.3%;
+    --huddle-control-chevron-surface: 0 0% 9.0%;
+    --huddle-control-chevron-hover-surface: 0 0% 12.2%;
+    --huddle-control-foreground: 33.3 14.29% 75.3%;
+    --huddle-popover-surface: 0 0% 12.2%;
+    --huddle-popover-border: 0 0% 24.3%;
+    --huddle-tooltip-surface: 0 0% 12.2%;
+    --huddle-tooltip-foreground: 33.3 14.29% 75.3%;
+    --accent: 27.5 24.49% 19.2%;
+    --accent-foreground: 33.3 14.29% 75.3%;
+    --destructive: 33.3 14.29% 75.3%;
+    --destructive-foreground: 0 0% 9.0%;
+    --border: 0 0% 24.3%;
+    --input: 0 0% 24.3%;
+    --ring: 33.3 14.29% 75.3%;
+    --chart-1: 33.3 14.29% 75.3%;
+    --chart-2: 33.3 11.54% 69.4%;
+    --chart-3: 33 9.9% 60.4%;
+    --chart-4: 0 0% 44.7%;
+    --chart-5: 0 0% 24.3%;
+    --sidebar: 0 0% 12.2%;
+    --sidebar-background: 0 0% 12.2%;
+    --sidebar-foreground: 33.3 11.54% 69.4%;
+    --sidebar-primary: 33.3 14.29% 75.3%;
+    --sidebar-primary-foreground: 0 0% 9.0%;
+    --sidebar-active: var(--sidebar-primary);
+    --sidebar-active-foreground: var(--sidebar-primary-foreground);
+    --sidebar-accent: 28.6 25.93% 15.9%;
+    --sidebar-accent-foreground: 33.3 14.29% 75.3%;
+    --sidebar-border: 0 0% 24.3%;
+    --sidebar-ring: 0 0% 24.3%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    min-height: 100%;
+    width: 100%;
+  }
+
+  /*
+   * The app is a fixed-height shell — the document itself must never scroll
+   * or rubber-band. `overscroll-behavior: none` stops scroll chaining from
+   * inner containers reaching the viewport on both axes (the Magic Mouse
+   * horizontal pan escaped through here), and `overflow: hidden` removes any
+   * document-level scrollability. useWebviewScrollBoundaryLock handles the
+   * wheel-event side; this is the CSS backstop.
+   */
+  html,
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  mark {
+    background-color: transparent;
+    color: inherit;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family:
+      "IBM Plex Sans Variable", "IBM Plex Sans", "Helvetica Neue", Helvetica,
+      Arial, sans-serif;
+  }
+
+  /*
+   * Tailwind v4's preflight no longer sets `cursor: pointer` on buttons.
+   * Restore it for clearly actionable elements so hover affordance is
+   * consistent across the app. Disabled / aria-disabled elements keep
+   * the default cursor; explicit `cursor-*` utility classes still win
+   * because utilities are in a later layer than base.
+   */
+  button:not(:disabled),
+  a[href],
+  summary,
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([aria-disabled="true"]),
+  [role="menuitemcheckbox"]:not([aria-disabled="true"]),
+  [role="menuitemradio"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="link"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: default;
+  }
+}
+
+/*
+ * Lamplight marks attention: the row you have open sits on the plate, and the
+ * optional prominent treatment raises it to the plate's own head.
+ */
+:root {
+  --sidebar-row-subtle-active-surface: var(--ambush-plate);
+  --sidebar-row-active-surface: var(--ambush-plate-hi);
+}
+
+/*
+ * Ambush theme - the app canvas.
+ *
+ * One flat instrument surface carries the whole shell. ThemeProvider toggles
+ * the `data-ambush-sidebar` attribute on <html> when an Ambush theme is
+ * active.
+ *
+ * These rules are intentionally UNLAYERED: the `bg-sidebar` background-color
+ * lives in Tailwind's `utilities` layer, and unlayered declarations win over
+ * any layered ones, so this reliably overrides it without an `!important`.
+ *
+ * The canvas is painted once on the full app surface. Child chrome canvases
+ * stay transparent so the sidebar, rail, top chrome, inset margin, and Settings
+ * all reveal the same field. Keeping one non-fixed background avoids
+ * WKWebView's stale fixed-background raster when the app changes appearance
+ * without a page reload. The portaled mobile sidebar is the sole separate
+ * paint because it lives outside the app surface.
+ *
+ * Small transient `bg-sidebar` chips inside the shell that are NOT canvas
+ * surfaces (the drag-overlay pills) opt out via `[data-ambush-flat]` - a
+ * floating chip should retain its own fill rather than becoming transparent
+ * over the full-app canvas.
+ *
+ * Shared row state colors are applied below so Ambush and flat themes use the
+ * same hover/selection hierarchy.
+ */
+:root[data-ambush-sidebar] {
+  --ambush-gradient-top: var(--ambush-gradient-light-top);
+  --ambush-gradient-bottom: var(--ambush-gradient-light-bottom);
+  --ambush-muted-foreground: var(--ambush-ink-dim);
+  --ambush-search-surface: var(--ambush-night);
+  --ambush-chrome-foreground: var(--ambush-ink-dim);
+  --ambush-channel-fg: inherit;
+  --ambush-dm-fg: inherit;
+  --ambush-nav-fg: inherit;
+  --ambush-hover-surface: var(--ambush-plate);
+  --ambush-sidebar-scrollbar-thumb: var(--ambush-rule);
+  --ambush-active-fill: var(--sidebar-accent);
+  --ambush-active-foreground: var(--sidebar-accent-foreground);
+}
+
+/*
+ * Dark variant. Every downstream rule (canvas fill, hover, search box, muted
+ * labels, active row) reads the Quiet tokens, which the `.dark` class has
+ * already swapped, so only the canvas stops change here.
+ */
+:root[data-ambush-sidebar].dark {
+  --ambush-gradient-top: var(--ambush-gradient-dark-top);
+  --ambush-gradient-bottom: var(--ambush-gradient-dark-bottom);
+}
+
+/*
+ * Use the Ambush primary color for the floating selection-formatting tray.
+ * Other themes retain the standard popover treatment.
+ */
+:root[data-ambush-sidebar] [data-ambush-selection-formatting-tray] {
+  border-color: hsl(var(--primary-foreground) / 0.18);
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+:root[data-ambush-sidebar] [data-ambush-selection-formatting-tray] button {
+  color: hsl(var(--primary-foreground));
+}
+
+:root[data-ambush-sidebar] [data-ambush-selection-formatting-tray] button:hover,
+:root[data-ambush-sidebar]
+  [data-ambush-selection-formatting-tray]
+  button[aria-pressed="true"] {
+  background-color: hsl(var(--primary-foreground) / 0.16);
+  color: hsl(var(--primary-foreground));
+}
+
+/* A hairline, not a lift: the content card is bounded, never floated. */
+:root[data-ambush-sidebar]
+  [data-ambush-content-surface]:not([data-ambush-content-unframed]) {
+  box-shadow: -1px -1px 0 0 hsl(var(--border));
+}
+
+/*
+ * The inset main/settings canvas is the room itself, one step below the
+ * surrounding chrome. Override `--background` locally as well as the surface
+ * fill so descendant headers and panes using `bg-background` stay continuous.
+ */
+:root[data-ambush-sidebar].dark [data-ambush-content-surface] {
+  --background: var(--ambush-content-dark);
+  background-color: hsl(var(--background));
+}
+
+:root[data-ambush-sidebar] .ambush-huddle-app-surface {
+  background-color: transparent;
+  background-image: none;
+  isolation: isolate;
+}
+
+/* The canvas is a translucent wash under glass. Back it with an opaque copy by
+ * default so its color remains stable over every app surface, including a
+ * lifted huddle. */
+:root[data-ambush-sidebar] .ambush-theme-gradient-underlay {
+  background-image: linear-gradient(
+    to bottom,
+    var(--ambush-gradient-top),
+    var(--ambush-gradient-bottom)
+  );
+  background-repeat: no-repeat;
+  background-size: 100vw 100vh;
+}
+
+/*
+ * Keep both Ambush canvases painted and switch only which layer is visible.
+ * WKWebView can retain the old raster when `background-image` is replaced on
+ * a translucent surface. The center content already follows `.dark`, so using
+ * that same state for layer visibility keeps both surfaces in lockstep.
+ */
+:root[data-ambush-sidebar] .ambush-theme-gradient-layer-light {
+  background-image: linear-gradient(
+    to bottom,
+    var(--ambush-gradient-light-top),
+    var(--ambush-gradient-light-bottom)
+  );
+  background-size: 100vw 100vh;
+  background-repeat: no-repeat;
+}
+
+:root[data-ambush-sidebar] .ambush-theme-gradient-layer-dark {
+  background-image: linear-gradient(
+    to bottom,
+    var(--ambush-gradient-dark-top),
+    var(--ambush-gradient-dark-bottom)
+  );
+  background-size: 100vw 100vh;
+  background-repeat: no-repeat;
+}
+
+:root[data-ambush-sidebar]:not(.dark) .ambush-theme-gradient-layer-light,
+:root[data-ambush-sidebar].dark .ambush-theme-gradient-layer-dark {
+  opacity: 1;
+}
+
+/* The mobile sidebar is portaled outside the app surface. */
+:root[data-ambush-sidebar]:not(.dark)
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-color: transparent;
+  background-image: linear-gradient(
+    to bottom,
+    var(--ambush-gradient-light-top),
+    var(--ambush-gradient-light-bottom)
+  );
+  background-size: 100vw 100vh;
+  background-repeat: no-repeat;
+}
+
+:root[data-ambush-sidebar].dark
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-color: transparent;
+  background-image: linear-gradient(
+    to bottom,
+    var(--ambush-gradient-dark-top),
+    var(--ambush-gradient-dark-bottom)
+  );
+  background-size: 100vw 100vh;
+  background-repeat: no-repeat;
+}
+
+/* All in-shell chrome reveals the single canvas painted above. */
+:root[data-ambush-sidebar] .group\/sidebar-wrapper,
+:root[data-ambush-sidebar] [data-testid="app-sidebar"],
+:root[data-ambush-sidebar] [data-ambush-glass-inset],
+:root[data-ambush-sidebar] [data-ambush-glass-footer-wrap],
+:root[data-ambush-sidebar]
+  .group\/sidebar-wrapper
+  .bg-sidebar:not([data-ambush-flat]),
+:root[data-ambush-sidebar] [data-testid="community-rail"].bg-sidebar,
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="sidebar-pinned-header"],
+:root[data-ambush-sidebar] [data-testid="app-sidebar"] [data-sidebar="footer"] {
+  background-color: transparent;
+  background-image: none;
+}
+
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="sidebar-pinned-header"]::before,
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-sidebar="footer"]::before {
+  background: none;
+}
+
+/*
+ * Active nav item. The accent system (`applyAccentColor` in ThemeProvider)
+ * sets `--sidebar-active` to the theme foreground as an INLINE style on
+ * :root, which renders the selected page as a solid ink pill. For the Ambush
+ * themes the selected row is lamplit instead. Override the two active tokens
+ * on the sidebar element itself; element-local custom properties win over the
+ * inherited inline values from :root, and the derived
+ * `bg-sidebar-active-foreground/20` badge follows automatically.
+ *
+ * SCOPED to the app sidebar container, NOT :root - the `bg-sidebar-active` /
+ * `text-sidebar-active-foreground` tokens are also consumed by non-sidebar
+ * controls (avatar edit buttons in ProfileSettingsCard / AgentCreationPreview,
+ * the selected row in CommunityCatalogDialog). A root-level override
+ * turned those white (white-on-white under Ambush Dark); scoping keeps them on
+ * the normal accent-driven active colors.
+ */
+:root[data-ambush-sidebar] [data-testid="app-sidebar"],
+:root[data-ambush-sidebar] [data-testid="settings-sidebar"] {
+  --sidebar-active: var(--ambush-active-fill);
+  --sidebar-active-foreground: var(--ambush-active-foreground);
+}
+
+/* Dark variant: the same two tokens, read from the dark Quiet palette. */
+:root[data-ambush-sidebar].dark [data-testid="app-sidebar"],
+:root[data-ambush-sidebar].dark [data-testid="settings-sidebar"] {
+  --sidebar-active: var(--ambush-active-fill);
+  --sidebar-active-foreground: var(--ambush-active-foreground);
+}
+
+/*
+ * Selected navigation sits on the plate; the optional prominent preference
+ * raises that same row to the plate's own head.
+ */
+:root[data-ambush-sidebar] [data-testid="app-sidebar"] [data-active="true"],
+:root[data-ambush-sidebar]
+  [data-testid="settings-sidebar"]
+  [data-active="true"] {
+  background-color: var(--sidebar-row-subtle-active-surface);
+  box-shadow: none;
+}
+
+:root[data-ambush-sidebar][data-prominent-active-tab]
+  [data-testid="app-sidebar"]
+  [data-active="true"],
+:root[data-ambush-sidebar][data-prominent-active-tab]
+  [data-testid="settings-sidebar"]
+  [data-active="true"] {
+  background-color: var(--sidebar-row-active-surface);
+  box-shadow: none;
+}
+
+/*
+ * Hover on non-active Ambush nav items lights the row. Active items are
+ * excluded so they retain the selected surface. Covers both top-level menu
+ * buttons and channel sub-buttons in app and Settings nav.
+ */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-sidebar="menu-button"]:not([data-active="true"]):hover,
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-sidebar="menu-sub-button"]:not([data-active="true"]):hover,
+:root[data-ambush-sidebar]
+  [data-testid="settings-sidebar"]
+  [data-sidebar="menu-button"]:not([data-active="true"]):hover,
+:root[data-ambush-sidebar]
+  [data-testid="settings-sidebar"]
+  [data-sidebar="menu-sub-button"]:not([data-active="true"]):hover {
+  background-color: var(--ambush-hover-surface);
+}
+
+/*
+ * Row actions such as the DM close button are siblings of the menu button.
+ * Hovering them still activates the row's Tailwind `group-hover` treatment,
+ * so cover the whole menu item to keep that sibling-hover path on the same
+ * neutral surface instead of falling back to the legacy accent.
+ */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  :where([data-sidebar="menu-item"]:hover)
+  > [data-sidebar="menu-button"]:not([data-active="true"]) {
+  background-color: var(--ambush-hover-surface);
+}
+
+/*
+ * Navigation clicks stay spatially still. The subtle compression begins only
+ * after the sidebar's drag sensor crosses its reorder threshold and is removed
+ * entirely when the user prefers reduced motion.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  :where([data-sidebar-drag-state="dragging"], [data-sidebar-drag-overlay]) {
+    transform: scale(0.985);
+  }
+}
+
+/*
+ * Search box: a well recessed into the chrome. Its label, shortcut, and
+ * magnifying glass share the muted foreground at rest and on hover/focus.
+ */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="open-search"],
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="open-search"]:hover,
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="open-search"]:focus-visible {
+  background-color: var(--ambush-search-surface);
+  color: var(--ambush-muted-foreground);
+}
+
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="open-search"]
+  > * {
+  color: var(--ambush-muted-foreground);
+}
+
+/* Match the hover treatment used by inactive channel rows. */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="sidebar-profile-card"]:hover {
+  background-color: var(--ambush-hover-surface);
+}
+
+/*
+ * App and settings sidebar section headings plus secondary footer text use the
+ * same tint. Navigation rows keep their normal foreground in both sidebars.
+ */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-sidebar="group-label"],
+:root[data-ambush-sidebar]
+  [data-testid="settings-sidebar"]
+  [data-sidebar="group-label"],
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-ambush-sidebar-secondary],
+:root[data-ambush-sidebar]
+  [data-testid="settings-sidebar"]
+  [data-ambush-sidebar-secondary] {
+  color: var(--ambush-muted-foreground);
+}
+
+/* Sidebar toggle plus back/forward navigation controls in the top chrome. */
+:root[data-ambush-sidebar]
+  [data-testid="app-top-chrome"]
+  :is(
+    [data-sidebar="trigger"],
+    [data-testid="global-back"],
+    [data-testid="global-forward"]
+  ) {
+  color: var(--ambush-chrome-foreground);
+}
+
+/*
+ * Section action buttons (the "+" and "..." at the right edge of each sidebar
+ * section header): light on hover/focus like the rows they sit beside.
+ * Unlayered + `[data-ambush-sidebar]` prefix beats the Tailwind utility so it
+ * only applies under the Ambush themes.
+ */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  .sidebar-section-action:hover,
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  .sidebar-section-action:focus-visible {
+  background-color: var(--ambush-hover-surface);
+}
+
+/*
+ * Per-row-type text colors (Ambush themes).
+ *
+ * By default the whole sidebar inherits a single `--sidebar-foreground`, so
+ * channels, direct messages, and the Inbox/Agents nav rows all share one text
+ * color. These variables let each row type carry its own foreground while
+ * keeping the default value unchanged.
+ *
+ * Each var defaults to `inherit`, so with nothing set every row type shares
+ * the sidebar foreground. Scoped to the Ambush sidebar container so other
+ * themes are untouched.
+ */
+/* Channels: rows live inside the `stream-list` / `starred-list` menus. */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="stream-list"]
+  [data-sidebar="menu-button"]:not([data-active="true"]),
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="stream-list"]
+  [data-sidebar="menu-sub-button"]:not([data-active="true"]),
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="starred-list"]
+  [data-sidebar="menu-button"]:not([data-active="true"]),
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="starred-list"]
+  [data-sidebar="menu-sub-button"]:not([data-active="true"]) {
+  color: var(--ambush-channel-fg);
+}
+
+/* Direct messages: rows live inside the `dm-list` menu. */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="dm-list"]
+  [data-sidebar="menu-button"]:not([data-active="true"]),
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="dm-list"]
+  [data-sidebar="menu-sub-button"]:not([data-active="true"]) {
+  color: var(--ambush-dm-fg);
+}
+
+/*
+ * Inbox + Agents nav rows: the primary app nav buttons (Inbox, Pulse,
+ * Projects, Agents, Workflows). Excludes the active row so the active-pill
+ * foreground still wins.
+ */
+:root[data-ambush-sidebar]
+  [data-testid="app-sidebar"]
+  [data-testid="sidebar-primary-menu"]
+  [data-sidebar="menu-button"]:not([data-active="true"]) {
+  color: var(--ambush-nav-fg);
+}
+
+/* Follow the selected appearance, independent of the OS color scheme. */
+.dark .sidebar-muted-content {
+  opacity: 0.45;
+}
+
+/*
+ * Glass background.
+ *
+ * ThemeProvider installs native macOS vibrancy before toggling
+ * `data-glass-background`. Keep the frosted layer on the outer canvases only;
+ * nested sidebar/header/footer surfaces pass through so the navigation reads
+ * as one continuous pane while the center content surface remains opaque.
+ */
+:root[data-glass-background] {
+  --glass-sidebar-surface: hsl(
+    var(--sidebar-background) /
+    var(--glass-background-opacity, 65%)
+  );
+  --ambush-translucency-gradient-alpha: var(--glass-background-opacity, 65%);
+  --ambush-translucency-wash-alpha: 2.4%;
+}
+
+/* The regular Ambush theme keeps an opaque copy of the gradient beneath its
+ * color layers. Remove that backing while glass is enabled so the translucent
+ * wash can reveal the native macOS vibrancy view. */
+:root[data-glass-background] .ambush-theme-gradient-underlay {
+  background: transparent;
+}
+
+/* Non-Ambush themes use their own sidebar color as the glass tint. */
+:root[data-glass-background]:not([data-ambush-sidebar])
+  .ambush-theme-gradient-layer {
+  background-color: var(--glass-sidebar-surface);
+}
+
+:root[data-glass-background] .ambush-theme-gradient-layer-light {
+  /* Ambush color wash above a neutral frost wash. */
+  background-image:
+    linear-gradient(
+      to bottom,
+      color-mix(
+        in srgb,
+        var(--ambush-gradient-light-top)
+          var(--ambush-translucency-gradient-alpha, 70%),
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        var(--ambush-gradient-light-bottom)
+          var(--ambush-translucency-gradient-alpha, 70%),
+        transparent
+      )
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(
+        in srgb,
+        #c7c0b8 var(--ambush-translucency-wash-alpha, 2.4%),
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        #c7c0b8 var(--ambush-translucency-wash-alpha, 2.4%),
+        transparent
+      )
+    );
+  background-size:
+    100vw 100vh,
+    100vw 100vh;
+  background-repeat: no-repeat, no-repeat;
+}
+
+:root[data-glass-background] .ambush-theme-gradient-layer-dark {
+  background-image:
+    linear-gradient(
+      to bottom,
+      color-mix(
+        in srgb,
+        var(--ambush-gradient-dark-top)
+          var(--ambush-translucency-gradient-alpha, 70%),
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        var(--ambush-gradient-dark-bottom)
+          var(--ambush-translucency-gradient-alpha, 70%),
+        transparent
+      )
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(
+        in srgb,
+        #171717 var(--ambush-translucency-wash-alpha, 2.4%),
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        #171717 var(--ambush-translucency-wash-alpha, 2.4%),
+        transparent
+      )
+    );
+  background-size:
+    100vw 100vh,
+    100vw 100vh;
+  background-repeat: no-repeat, no-repeat;
+}
+
+:root[data-glass-background][data-ambush-sidebar]:not(.dark)
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-color: transparent;
+  background-image:
+    linear-gradient(
+      to bottom,
+      color-mix(
+        in srgb,
+        var(--ambush-gradient-light-top)
+          var(--ambush-translucency-gradient-alpha, 70%),
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        var(--ambush-gradient-light-bottom)
+          var(--ambush-translucency-gradient-alpha, 70%),
+        transparent
+      )
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(
+        in srgb,
+        #c7c0b8 var(--ambush-translucency-wash-alpha, 2.4%),
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        #c7c0b8 var(--ambush-translucency-wash-alpha, 2.4%),
+        transparent
+      )
+    );
+  background-size:
+    100vw 100vh,
+    100vw 100vh;
+  background-repeat: no-repeat, no-repeat;
+}
+
+:root[data-glass-background][data-ambush-sidebar].dark
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-color: transparent;
+  background-image:
+    linear-gradient(
+      to bottom,
+      color-mix(
+        in srgb,
+        var(--ambush-gradient-dark-top)
+          var(--ambush-translucency-gradient-alpha, 70%),
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        var(--ambush-gradient-dark-bottom)
+          var(--ambush-translucency-gradient-alpha, 70%),
+        transparent
+      )
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(
+        in srgb,
+        #171717 var(--ambush-translucency-wash-alpha, 2.4%),
+        transparent
+      ),
+      color-mix(
+        in srgb,
+        #171717 var(--ambush-translucency-wash-alpha, 2.4%),
+        transparent
+      )
+    );
+  background-size:
+    100vw 100vh,
+    100vw 100vh;
+  background-repeat: no-repeat, no-repeat;
+}
+
+:root[data-glass-background]:not([data-ambush-sidebar])
+  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+  background-color: var(--glass-sidebar-surface);
+  background-image: none;
+}
+
+:root[data-glass-background] .group\/sidebar-wrapper,
+:root[data-glass-background] [data-testid="app-sidebar"],
+:root[data-glass-background] [data-testid="settings-sidebar"],
+:root[data-glass-background] [data-ambush-glass-inset],
+:root[data-glass-background] [data-ambush-glass-footer-wrap],
+:root[data-glass-background]
+  .group\/sidebar-wrapper
+  .bg-sidebar:not([data-ambush-flat]),
+:root[data-glass-background]
+  [data-testid="app-sidebar"]
+  [data-testid="sidebar-pinned-header"],
+:root[data-glass-background]
+  [data-testid="app-sidebar"]
+  [data-sidebar="footer"] {
+  background-color: transparent;
+  background-image: none;
+}
+
+:root[data-glass-background]
+  [data-testid="settings-sidebar"]
+  [data-sidebar="sidebar"] {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* Remove edge fades and stacking contexts that made header/footer look separate. */
+:root[data-glass-background]
+  [data-testid="app-sidebar"]
+  [data-testid="sidebar-pinned-header"],
+:root[data-glass-background] [data-ambush-glass-inset],
+:root[data-glass-background]
+  [data-testid="app-sidebar"]
+  [data-ambush-glass-footer-wrap],
+:root[data-glass-background]
+  [data-testid="app-sidebar"]
+  [data-sidebar="footer"] {
+  isolation: auto;
+  z-index: auto;
+}
+
+:root[data-glass-background]
+  [data-testid="app-sidebar"]
+  [data-testid="sidebar-pinned-header"]::before,
+:root[data-glass-background]
+  [data-testid="app-sidebar"]
+  [data-sidebar="footer"]::before {
+  background: none;
+}
+
+/* Let the native transparent window show through behind the sidebar glass. */
+:root[data-glass-background],
+:root[data-glass-background] body,
+:root[data-glass-background] #root {
+  /* WebKit otherwise paints an opaque page canvas above native vibrancy. */
+  background: transparent;
+}
+
+/* The outer shell stays clear; the app surface owns the translucent tint. */
+:root[data-glass-background] .ambush-huddle-shell {
+  background: transparent;
+}
+
+:root[data-glass-background] .ambush-huddle-app-surface {
+  background-color: transparent;
+  background-image: none;
+  isolation: isolate;
+}
+
+:root[data-glass-background] .ambush-huddle-app-surface::after {
+  background: transparent;
+}
+
+:root[data-glass-background]
+  .ambush-huddle-shell[data-huddle-window="true"]
+  .ambush-huddle-app-surface-open::after {
+  background: hsl(var(--ambush-huddle-drawer-surface));
+}
+
+/* Keep the Ambush canvas in the lifted app surface. The shell beneath it is
+ * strictly the huddle drawer, so its dark surface is revealed at the rounded
+ * lower corners instead of the canvas bleeding through there. */
+:root[data-ambush-sidebar] .ambush-huddle-shell[data-huddle-open="true"] {
+  background-color: hsl(var(--ambush-huddle-drawer-surface));
+  background-image: none;
+}
+
+:root[data-ambush-sidebar][data-glass-background]
+  .ambush-huddle-shell[data-huddle-window="false"][data-huddle-open="true"] {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* Keep an explicit drawer base at z-0 while the lifted app surface (and its
+ * two canvas layers) sits above it. This prevents the default canvas backing
+ * from ever replacing the huddle drawer at the exposed corners. */
+:root[data-ambush-sidebar]
+  .ambush-huddle-shell[data-huddle-open="true"]::before {
+  background: hsl(var(--ambush-huddle-drawer-surface));
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 0;
+}
+
+/* In the main glass window, let vibrancy continue around the Huddle controls
+ * and present the tray as an inset four-corner surface. The dedicated Huddle
+ * window keeps the full-width dark control dock above. */
+:root[data-glass-background]
+  .ambush-huddle-shell[data-huddle-window="false"]
+  .ambush-huddle-drawer-backdrop {
+  background: transparent;
+}
+
+:root[data-ambush-sidebar][data-glass-background]
+  .ambush-huddle-shell[data-huddle-window="false"][data-huddle-open="true"]::before {
+  content: none;
+}
+
+:root[data-glass-background]
+  .ambush-huddle-shell[data-huddle-window="false"]
+  .ambush-huddle-drawer-slot {
+  padding: var(--ambush-huddle-drawer-inset);
+}
+
+:root[data-glass-background]
+  .ambush-huddle-shell[data-huddle-window="false"]
+  .ambush-huddle-drawer-slot
+  > .ambush-huddle-drawer {
+  border-radius: var(--ambush-huddle-drawer-radius);
+  height: 100%;
+  padding-block: var(--ambush-huddle-drawer-inset);
+  padding-inline: var(--ambush-huddle-drawer-inset);
+}

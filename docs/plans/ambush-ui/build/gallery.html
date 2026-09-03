@@ -1,0 +1,1372 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Perch — the drawn work</title>
+<style>
+/* ===========================================================================
+   PERCH GALLERY — wave 2's drawn work, presented.
+
+   Self-contained. No network, no CDN, no external font, no build step. Opens by
+   double-click. Every colour below is read out of build/tokens/perch-tokens.css
+   and every contrast number is recomputed by build/viz/contrast.mjs from that
+   same file — this page is itself an instance of the token contract it presents,
+   which is why its custom properties are `--perch-*` and never a bare Buzz
+   shadcn name. See the "Why --perch-*" note in the palette section.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------- 1. LIGHT */
+:root {
+  color-scheme: light;
+  --perch-surface-chrome: 140 15.8% 92.5%;
+  --perch-background:     135 18.2% 95.7%;
+  --perch-card:           0 0% 100%;
+  --perch-popover:        0 0% 100%;
+  --perch-surface-raised: 142.5 16% 90.2%;
+  --perch-border:         145 15.8% 85.1%;
+  --perch-border-strong:  144.7 13.2% 74.7%;
+  --perch-ring:           152.7 14.7% 29.4%;
+  --perch-foreground:           161.5 30.2% 8.4%;
+  --perch-foreground-secondary: 152.7 14.7% 29.4%;
+  --perch-foreground-muted:     150 10.5% 37.3%;
+  --perch-foreground-faint:     148.6 8.9% 46.1%;
+  --perch-pillar-substrate-ink:  142.8 64.2% 24.1%;
+  --perch-pillar-substrate-mark: 142.4 71.8% 29.2%;
+  --perch-pillar-authority-ink:  22.7 82.5% 31.4%;
+  --perch-pillar-authority-mark: 26 90.5% 37.1%;
+  --perch-pillar-evidence-ink:   194.4 69.6% 27.1%;
+  --perch-pillar-evidence-mark:  192.9 82.3% 31%;
+  --perch-border-pillar-substrate: 141.4 26.4% 79.2%;
+  --perch-border-pillar-authority: 41.8 47.5% 76.9%;
+  --perch-border-pillar-evidence:  194.3 38.2% 78.4%;
+  --perch-sev-low:      150 10.5% 37.3%;
+  --perch-sev-medium:   30.9 79.5% 25.7%;
+  --perch-sev-high:     22.7 82.5% 31.4%;
+  --perch-sev-critical: 0 62.5% 38.4%;
+  --perch-danger-mark:  0 62.5% 38.4%;
+  --perch-viz-series-1: 142.4 71.8% 29.2%;
+  --perch-viz-series-2: 192.9 82.3% 31%;
+  --perch-viz-series-3: 26 90.5% 37.1%;
+  --perch-viz-series-4: 262.1 47.5% 47.8%;
+  --perch-viz-series-5: 333.3 62.1% 40.8%;
+  --perch-viz-series-6: 40.3 96.1% 30.2%;
+  --perch-viz-grid:     145 15.8% 85.1%;
+  --perch-chart-rule:   26 90.5% 37.1%;
+}
+/* ----------------------------------------------------------------- 2. DARK */
+:root.dark, :root[data-theme="dark"], .dark {
+  color-scheme: dark;
+  --perch-surface-chrome: 160 17.6% 3.3%;
+  --perch-background:     165 28.6% 5.5%;
+  --perch-card:           162 29.4% 6.7%;
+  --perch-popover:        161.3 33.3% 9.4%;
+  --perch-surface-raised: 159.2 37.1% 13.7%;
+  --perch-border:         154.3 31.8% 17.3%;
+  --perch-border-strong:  157.5 29.6% 21.2%;
+  --perch-ring:           151.2 20.2% 46.7%;
+  --perch-foreground:           146.7 27.3% 93.5%;
+  --perch-foreground-secondary: 150 12.6% 65.9%;
+  --perch-foreground-muted:     149 12.8% 55.5%;
+  --perch-foreground-faint:     151.4 8.7% 52.7%;
+  --perch-pillar-substrate-ink:  141.9 69.2% 58%;
+  --perch-pillar-substrate-mark: 141.9 69.2% 58%;
+  --perch-pillar-authority-ink:  37.7 92.1% 50.2%;
+  --perch-pillar-authority-mark: 37.7 92.1% 50.2%;
+  --perch-pillar-evidence-ink:   187.9 85.7% 53.3%;
+  --perch-pillar-evidence-mark:  187.9 85.7% 53.3%;
+  --perch-border-pillar-substrate: 154.3 31.8% 17.3%;
+  --perch-border-pillar-authority: 36.9 28.9% 17.6%;
+  --perch-border-pillar-evidence:  195.4 37.6% 18.2%;
+  --perch-sev-low:      155.2 13.2% 57.1%;
+  --perch-sev-medium:   38.6 63.5% 59.2%;
+  --perch-sev-high:     37.7 92.1% 50.2%;
+  --perch-sev-critical: 0 80.9% 69.2%;
+  --perch-danger-mark:  0 69.6% 60%;
+  --perch-viz-series-1: 141.9 69.2% 58%;
+  --perch-viz-series-2: 187.9 85.7% 53.3%;
+  --perch-viz-series-3: 37.7 92.1% 50.2%;
+  --perch-viz-series-4: 255.1 91.7% 76.3%;
+  --perch-viz-series-5: 328.6 85.5% 70.2%;
+  --perch-viz-series-6: 47.9 95.8% 53.1%;
+  --perch-viz-grid:     156 30.6% 19.2%;
+  --perch-chart-rule:   37.7 92.1% 50.2%;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not([data-theme="light"]) {
+    color-scheme: dark;
+    --perch-surface-chrome: 160 17.6% 3.3%;
+    --perch-background:     165 28.6% 5.5%;
+    --perch-card:           162 29.4% 6.7%;
+    --perch-popover:        161.3 33.3% 9.4%;
+    --perch-surface-raised: 159.2 37.1% 13.7%;
+    --perch-border:         154.3 31.8% 17.3%;
+    --perch-border-strong:  157.5 29.6% 21.2%;
+    --perch-ring:           151.2 20.2% 46.7%;
+    --perch-foreground:           146.7 27.3% 93.5%;
+    --perch-foreground-secondary: 150 12.6% 65.9%;
+    --perch-foreground-muted:     149 12.8% 55.5%;
+    --perch-foreground-faint:     151.4 8.7% 52.7%;
+    --perch-pillar-substrate-ink:  141.9 69.2% 58%;
+    --perch-pillar-substrate-mark: 141.9 69.2% 58%;
+    --perch-pillar-authority-ink:  37.7 92.1% 50.2%;
+    --perch-pillar-authority-mark: 37.7 92.1% 50.2%;
+    --perch-pillar-evidence-ink:   187.9 85.7% 53.3%;
+    --perch-pillar-evidence-mark:  187.9 85.7% 53.3%;
+    --perch-border-pillar-substrate: 154.3 31.8% 17.3%;
+    --perch-border-pillar-authority: 36.9 28.9% 17.6%;
+    --perch-border-pillar-evidence:  195.4 37.6% 18.2%;
+    --perch-sev-low:      155.2 13.2% 57.1%;
+    --perch-sev-medium:   38.6 63.5% 59.2%;
+    --perch-sev-high:     37.7 92.1% 50.2%;
+    --perch-sev-critical: 0 80.9% 69.2%;
+    --perch-danger-mark:  0 69.6% 60%;
+    --perch-viz-series-1: 141.9 69.2% 58%;
+    --perch-viz-series-2: 187.9 85.7% 53.3%;
+    --perch-viz-series-3: 37.7 92.1% 50.2%;
+    --perch-viz-series-4: 255.1 91.7% 76.3%;
+    --perch-viz-series-5: 328.6 85.5% 70.2%;
+    --perch-viz-series-6: 47.9 95.8% 53.1%;
+    --perch-viz-grid:     156 30.6% 19.2%;
+    --perch-chart-rule:   37.7 92.1% 50.2%;
+  }
+}
+:root {
+  --perch-text-3xs: .5rem;  --perch-text-badge: .625rem; --perch-text-2xs: .6875rem;
+  --perch-text-xs: .75rem;  --perch-text-eyebrow: .75rem; --perch-text-sm: .875rem;
+  --perch-text-base: 1rem;  --perch-text-lg: 1.125rem;   --perch-text-xl: 1.25rem;
+  --perch-eyebrow-tracking: .34em; --perch-eyebrow-weight: 600;
+  --perch-font-sans: "Inter Variable", Inter, "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --perch-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --perch-rail-pillar-thickness: 2.5px;
+  --g-max: 1180px;
+}
+</style>
+</head>
+<body>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0; background:hsl(var(--perch-background)); color:hsl(var(--perch-foreground));
+  font-family:var(--perch-font-sans); font-size:var(--perch-text-sm); line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:hsl(var(--perch-pillar-evidence-ink))}
+code,.mono{font-family:var(--perch-font-mono)}
+.wrap{max-width:var(--g-max); margin:0 auto; padding:0 1.75rem}
+.eyebrow{
+  font-size:var(--perch-text-eyebrow); letter-spacing:var(--perch-eyebrow-tracking);
+  font-weight:var(--perch-eyebrow-weight); text-transform:uppercase;
+  color:hsl(var(--perch-foreground-muted));
+}
+
+/* ── chrome ─────────────────────────────────────────────────────────────── */
+.topbar{
+  position:sticky; top:0; z-index:20; background:hsl(var(--perch-surface-chrome));
+  border-bottom:1px solid hsl(var(--perch-border));
+  backdrop-filter:saturate(140%) blur(6px);
+}
+.topbar .wrap{display:flex; align-items:center; gap:1.25rem; height:48px}
+.brand{font-weight:650; letter-spacing:-.01em; font-size:var(--perch-text-base)}
+.brand .dot{
+  display:inline-block; width:8px; height:8px; border-radius:50%;
+  background:hsl(var(--perch-pillar-substrate-mark)); margin-right:.5rem; vertical-align:.06em;
+}
+.navlinks{display:flex; gap:1rem; margin-left:auto; flex-wrap:wrap}
+.navlinks a{
+  color:hsl(var(--perch-foreground-muted)); text-decoration:none;
+  font-size:var(--perch-text-xs); padding:.2rem 0; border-bottom:1px solid transparent;
+}
+.navlinks a:hover{color:hsl(var(--perch-foreground)); border-bottom-color:hsl(var(--perch-border-strong))}
+.themebtn{
+  font:inherit; font-size:var(--perch-text-xs); cursor:pointer;
+  background:hsl(var(--perch-card)); color:hsl(var(--perch-foreground-secondary));
+  border:1px solid hsl(var(--perch-border-strong)); border-radius:6px; padding:.25rem .6rem;
+}
+.themebtn:focus-visible{outline:2px solid hsl(var(--perch-ring)); outline-offset:2px}
+
+/* ── hero ───────────────────────────────────────────────────────────────── */
+.hero{padding:4.5rem 0 3rem; border-bottom:1px solid hsl(var(--perch-border))}
+.hero h1{
+  margin:.75rem 0 0; font-size:clamp(2.1rem,5.2vw,3.5rem); line-height:1.03;
+  letter-spacing:-.033em; font-weight:640; max-width:19ch;
+}
+.hero .lede{
+  margin:1.5rem 0 0; max-width:62ch; font-size:var(--perch-text-base);
+  color:hsl(var(--perch-foreground-secondary)); line-height:1.62;
+}
+.statline{
+  display:flex; flex-wrap:wrap; gap:0 2.25rem; margin-top:2.5rem;
+  padding-top:1.5rem; border-top:1px solid hsl(var(--perch-border));
+}
+.stat{padding:.35rem 0}
+.stat b{display:block; font-size:var(--perch-text-xl); font-weight:600; letter-spacing:-.02em;
+  font-family:var(--perch-font-mono)}
+.stat span{display:block; font-size:var(--perch-text-2xs); color:hsl(var(--perch-foreground-muted));
+  letter-spacing:.04em; text-transform:uppercase}
+
+/* ── sections ───────────────────────────────────────────────────────────── */
+section{padding:4rem 0; border-bottom:1px solid hsl(var(--perch-border))}
+section > .wrap > h2{
+  margin:.6rem 0 .4rem; font-size:clamp(1.35rem,2.6vw,1.9rem); letter-spacing:-.022em;
+  font-weight:620;
+}
+section > .wrap > .sublede{
+  margin:0 0 2.25rem; max-width:66ch; color:hsl(var(--perch-foreground-secondary));
+}
+
+/* ── surface cards ──────────────────────────────────────────────────────── */
+.cards{display:grid; gap:1.5rem; grid-template-columns:repeat(auto-fit,minmax(430px,1fr))}
+/* Two up rather than three: the posters carry 5-7px SVG labels, which at a 330px
+   card render as texture rather than text. At 430px minimum each poster gets ~560px
+   and the labels resolve. The wide plate stays full width. */
+.card{
+  background:hsl(var(--perch-card)); border:1px solid hsl(var(--perch-border));
+  border-radius:12px; overflow:hidden; display:flex; flex-direction:column;
+  transition:border-color 180ms cubic-bezier(.25,1,.5,1);
+}
+.card:hover{border-color:hsl(var(--perch-border-strong))}
+.card.wide{grid-column:1/-1}
+.thumb{
+  display:block; width:100%; height:auto; background:hsl(var(--perch-surface-chrome));
+  border-bottom:1px solid hsl(var(--perch-border));
+}
+.card-body{padding:1.15rem 1.25rem 1.35rem; display:flex; flex-direction:column; gap:.6rem; flex:1}
+.card-head{display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap}
+.card h3{margin:0; font-size:var(--perch-text-base); font-weight:620; letter-spacing:-.012em}
+.route{
+  font-family:var(--perch-font-mono); font-size:var(--perch-text-2xs);
+  color:hsl(var(--perch-pillar-evidence-ink));
+  background:hsl(var(--perch-pillar-evidence-mark) / .10);
+  border:1px solid hsl(var(--perch-pillar-evidence-mark) / .34);
+  border-radius:5px; padding:.06rem .38rem;
+}
+.card p{margin:0; color:hsl(var(--perch-foreground-secondary)); font-size:var(--perch-text-sm)}
+.lookfor{margin:.25rem 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:.3rem}
+.lookfor li{
+  position:relative; padding-left:1rem; font-size:var(--perch-text-xs);
+  color:hsl(var(--perch-foreground-muted));
+}
+.lookfor li::before{
+  content:""; position:absolute; left:0; top:.52em; width:5px; height:5px; border-radius:1px;
+  background:hsl(var(--perch-pillar-substrate-mark));
+}
+.card-foot{
+  margin-top:auto; padding-top:.9rem; display:flex; align-items:center; gap:.75rem;
+  border-top:1px solid hsl(var(--perch-border)); flex-wrap:wrap;
+}
+.open{
+  font-size:var(--perch-text-xs); font-weight:560; text-decoration:none;
+  color:hsl(var(--perch-foreground)); border:1px solid hsl(var(--perch-border-strong));
+  background:hsl(var(--perch-surface-raised)); border-radius:6px; padding:.32rem .7rem;
+}
+.open:hover{border-color:hsl(var(--perch-ring))}
+.open:focus-visible{outline:2px solid hsl(var(--perch-ring)); outline-offset:2px}
+.meta{font-size:var(--perch-text-2xs); color:hsl(var(--perch-foreground-muted));
+  font-family:var(--perch-font-mono)}
+
+/* ── swatches ───────────────────────────────────────────────────────────── */
+.themepair{display:grid; gap:1.5rem; grid-template-columns:repeat(auto-fit,minmax(400px,1fr))}
+.pane{border:1px solid hsl(var(--perch-border)); border-radius:12px; overflow:hidden}
+.pane > h4{
+  margin:0; padding:.6rem 1rem; font-size:var(--perch-text-eyebrow);
+  letter-spacing:var(--perch-eyebrow-tracking); font-weight:var(--perch-eyebrow-weight);
+  text-transform:uppercase; color:hsl(var(--perch-foreground-muted));
+  background:hsl(var(--perch-surface-chrome)); border-bottom:1px solid hsl(var(--perch-border));
+}
+.swatchrow{display:flex; border-bottom:1px solid hsl(var(--perch-border))}
+.swatchrow:last-child{border-bottom:0}
+.sw{flex:1; min-width:0; padding:.85rem .7rem .7rem; border-right:1px solid hsl(var(--perch-border))}
+.sw:last-child{border-right:0}
+.sw .name{
+  display:block; font-size:var(--perch-text-3xs); letter-spacing:.05em; text-transform:uppercase;
+  opacity:.72; margin-bottom:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.sw .hex{display:block; font-family:var(--perch-font-mono); font-size:var(--perch-text-2xs); opacity:.85}
+/* An INK swatch shows the colour as a bar and sets its own label in a readable ink.
+   Painting the label in the token it names fails AA for exactly the two tokens whose
+   whole point is that they are below the bar — which is the defect this page exists to
+   catch elsewhere, so it may not commit it here. */
+.sw.ink{position:relative}
+.sw.ink .name, .sw.ink .hex{color:inherit}
+.sw.ink .chipbar{
+  display:block; height:10px; border-radius:2px; margin:.15rem 0 .5rem;
+  border:1px solid hsl(var(--perch-border-strong));
+}
+.inkrow{
+  display:grid; grid-template-columns:minmax(0,1.9fr) repeat(5,minmax(0,1fr));
+  border-bottom:1px solid hsl(var(--perch-border)); align-items:stretch;
+}
+.inkrow:last-child{border-bottom:0}
+.inkrow > *{padding:.42rem .55rem; border-right:1px solid hsl(var(--perch-border)); min-width:0}
+.inkrow > *:last-child{border-right:0}
+.inkrow.head > *{
+  font-size:var(--perch-text-3xs); letter-spacing:.05em; text-transform:uppercase;
+  color:hsl(var(--perch-foreground-muted)); background:hsl(var(--perch-surface-chrome));
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.inkname{font-family:var(--perch-font-mono); font-size:var(--perch-text-2xs);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.cell{font-family:var(--perch-font-mono); font-size:var(--perch-text-2xs); text-align:right}
+.cell.fail{color:hsl(var(--perch-sev-critical)); font-weight:640}
+.cell .bar{
+  display:block; height:2px; margin-top:.3rem; border-radius:1px;
+  background:hsl(var(--perch-pillar-substrate-mark));
+}
+.cell.low .bar{background:hsl(var(--perch-foreground-faint))}
+.cell.fail .bar{background:hsl(var(--perch-sev-critical))}
+
+/* ── ramps ──────────────────────────────────────────────────────────────── */
+.ramps{display:grid; gap:1.25rem; grid-template-columns:repeat(auto-fit,minmax(252px,1fr))}
+.ramp{border:1px solid hsl(var(--perch-border)); border-radius:10px; padding:1.05rem 1.1rem 1.15rem;
+  background:hsl(var(--perch-card))}
+.ramp h4{margin:0 0 .2rem; font-size:var(--perch-text-sm); font-weight:600}
+.ramp .why{margin:0 0 1rem; font-size:var(--perch-text-xs); color:hsl(var(--perch-foreground-muted))}
+.steps{display:flex; flex-direction:column; gap:.75rem}
+.step{display:flex; flex-direction:column; align-items:flex-start; gap:.26rem;
+  font-size:var(--perch-text-xs); min-width:0}
+.step .chip{
+  display:inline-flex; align-items:center; gap:.4rem; padding:.14rem .5rem; border-radius:5px;
+  font-family:var(--perch-font-mono); font-size:var(--perch-text-2xs); font-weight:600;
+  letter-spacing:.04em; max-width:100%; overflow-wrap:anywhere;
+}
+.step .note{color:hsl(var(--perch-foreground-muted)); font-size:var(--perch-text-2xs);
+  overflow-wrap:anywhere; max-width:100%}
+.sevrail{width:var(--perch-rail-severity-width,4px); height:1.15rem; border-radius:1.2px; flex:none}
+.tick{width:9px; height:9px; border-radius:50%; flex:none}
+
+/* ── viz plates ─────────────────────────────────────────────────────────── */
+.plates{display:grid; gap:1.25rem; grid-template-columns:repeat(auto-fit,minmax(310px,1fr))}
+.plate{border:1px solid hsl(var(--perch-border)); border-radius:10px; overflow:hidden;
+  background:hsl(var(--perch-card)); border-top:var(--perch-rail-pillar-thickness) solid
+  hsl(var(--perch-pillar-substrate-mark))}
+.plate.evidence{border-top-color:hsl(var(--perch-pillar-evidence-mark))}
+.plate.authority{border-top-color:hsl(var(--perch-pillar-authority-mark))}
+.plate figcaption{padding:.75rem 1rem 1rem}
+.plate h4{margin:0 0 .18rem; font-size:var(--perch-text-sm); font-weight:600}
+.plate p{margin:0; font-size:var(--perch-text-xs); color:hsl(var(--perch-foreground-muted))}
+.plate svg{display:block; width:100%; height:auto; background:hsl(var(--perch-card))}
+.chartlabel{font-family:var(--perch-font-mono); fill:hsl(var(--perch-foreground-muted))}
+.chartink{fill:hsl(var(--perch-foreground-secondary)); font-family:var(--perch-font-sans)}
+.gridline{stroke:hsl(var(--perch-viz-grid)); stroke-width:1}
+.rule{stroke:hsl(var(--perch-chart-rule)); stroke-width:1; stroke-dasharray:3 3}
+.s1{stroke:hsl(var(--perch-viz-series-1)); fill:none; stroke-width:1.75}
+.s2{stroke:hsl(var(--perch-viz-series-2)); fill:none; stroke-width:1.75}
+.s3{stroke:hsl(var(--perch-viz-series-3)); fill:none; stroke-width:1.75}
+.f1{fill:hsl(var(--perch-viz-series-1))}
+.f2{fill:hsl(var(--perch-viz-series-2))}
+.f3{fill:hsl(var(--perch-viz-series-3))}
+.f4{fill:hsl(var(--perch-viz-series-4))}
+.f5{fill:hsl(var(--perch-viz-series-5))}
+.f6{fill:hsl(var(--perch-viz-series-6))}
+.fmute{fill:hsl(var(--perch-viz-grid))}
+.ffaint{fill:hsl(var(--perch-foreground-faint))}
+.fcrit{fill:hsl(var(--perch-sev-critical))}
+.fhigh{fill:hsl(var(--perch-sev-high))}
+.fmed{fill:hsl(var(--perch-sev-medium))}
+.flow{fill:hsl(var(--perch-sev-low))}
+.fbg{fill:hsl(var(--perch-card))}
+.fchrome{fill:hsl(var(--perch-surface-chrome))}
+.fraised{fill:hsl(var(--perch-surface-raised))}
+.fpop{fill:hsl(var(--perch-popover))}
+.fsub{fill:hsl(var(--perch-pillar-substrate-mark))}
+.fauth{fill:hsl(var(--perch-pillar-authority-mark))}
+.fevid{fill:hsl(var(--perch-pillar-evidence-mark))}
+.ffg{fill:hsl(var(--perch-foreground))}
+.fsec{fill:hsl(var(--perch-foreground-secondary))}
+.fmuted{fill:hsl(var(--perch-foreground-muted))}
+.stroke-b{stroke:hsl(var(--perch-border)); fill:none; stroke-width:1}
+.stroke-bs{stroke:hsl(var(--perch-border-strong)); fill:none; stroke-width:1}
+.stroke-ring{stroke:hsl(var(--perch-ring)); fill:none; stroke-width:1.5}
+
+/* ── tables ─────────────────────────────────────────────────────────────── */
+.tablewrap{overflow-x:auto; border:1px solid hsl(var(--perch-border)); border-radius:10px}
+table{border-collapse:collapse; width:100%; font-size:var(--perch-text-xs); min-width:640px}
+th,td{text-align:left; padding:.55rem .8rem; border-bottom:1px solid hsl(var(--perch-border));
+  vertical-align:top}
+th{
+  font-size:var(--perch-text-3xs); letter-spacing:.05em; text-transform:uppercase;
+  color:hsl(var(--perch-foreground-muted)); background:hsl(var(--perch-surface-chrome));
+  position:sticky; top:0;
+}
+tbody tr:last-child td{border-bottom:0}
+td.num{font-family:var(--perch-font-mono); text-align:right; white-space:nowrap}
+.tag{
+  display:inline-block; font-family:var(--perch-font-mono); font-size:var(--perch-text-3xs);
+  letter-spacing:.05em; padding:.08rem .34rem; border-radius:4px; white-space:nowrap;
+}
+.tag.v{color:hsl(var(--perch-pillar-substrate-ink));
+  background:hsl(var(--perch-pillar-substrate-mark) / .12);
+  border:1px solid hsl(var(--perch-pillar-substrate-mark) / .35)}
+.tag.p{color:hsl(var(--perch-pillar-authority-ink));
+  background:hsl(var(--perch-pillar-authority-mark) / .12);
+  border:1px solid hsl(var(--perch-pillar-authority-mark) / .35)}
+.tag.n{color:hsl(var(--perch-foreground-muted)); background:hsl(var(--perch-surface-raised));
+  border:1px solid hsl(var(--perch-border-strong))}
+
+/* ── type specimen ──────────────────────────────────────────────────────── */
+.typerow{
+  display:grid; grid-template-columns:9rem 5.5rem 1fr; gap:1rem; align-items:baseline;
+  padding:.55rem 0; border-bottom:1px solid hsl(var(--perch-border));
+}
+.typerow:last-child{border-bottom:0}
+.typerow .tok{font-family:var(--perch-font-mono); font-size:var(--perch-text-2xs);
+  color:hsl(var(--perch-foreground-muted))}
+.typerow .px{font-family:var(--perch-font-mono); font-size:var(--perch-text-2xs);
+  color:hsl(var(--perch-foreground-muted)); text-align:right}
+
+p.note{
+  margin-top:1.5rem; padding:.95rem 1.1rem; border-radius:9px;
+  border:1px solid hsl(var(--perch-border));
+  border-left:var(--perch-rail-pillar-thickness) solid hsl(var(--perch-pillar-authority-mark));
+  background:hsl(var(--perch-pillar-authority-mark) / .055);
+  font-size:var(--perch-text-xs); color:hsl(var(--perch-foreground-secondary));
+}
+p.note b{color:hsl(var(--perch-foreground))}
+footer{padding:3rem 0 4rem; font-size:var(--perch-text-xs); color:hsl(var(--perch-foreground-muted))}
+@media (max-width:640px){
+  .inkrow{grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(0,1fr))}
+  .inkrow > *:nth-child(n+4){display:none}
+  .typerow{grid-template-columns:1fr auto; }
+  .typerow .px{grid-column:2}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none !important; animation:none !important}}
+</style>
+
+<header class="topbar"><div class="wrap">
+  <span class="brand"><span class="dot"></span>Perch</span>
+  <nav class="navlinks">
+    <a href="#surfaces">Surfaces</a>
+    <a href="#palette">Palette</a>
+    <a href="#ramps">Ramps</a>
+    <a href="#viz">Data viz</a>
+    <a href="#type">Type</a>
+    <a href="#measured">What is measured</a>
+    <a href="README.md">README</a>
+  </nav>
+  <button class="themebtn" id="themetoggle" type="button" aria-live="polite">Light</button>
+</div></header>
+
+<div class="hero"><div class="wrap">
+  <p class="eyebrow">Wave&nbsp;2 &middot; the drawn work</p>
+  <h1>A shift-shaped queue where a human decision is typed, signed and recorded.</h1>
+  <p class="lede">
+    Perch is Ambush&rsquo;s operator console: the Buzz desktop app, re-skinned and cut by a third.
+    Five surfaces were drawn as standalone HTML you can open by double-clicking &mdash; not
+    wireframes with a dark background, but working pages on the shipping token file, carrying the
+    canonical demo fixture&rsquo;s real numbers. This page presents them, renders the palette as
+    swatches with its measured contrast, and shows the ramps and chart primitives the surfaces are
+    built from.
+  </p>
+  <p class="lede" style="margin-top:1rem">
+    The one thing to understand before looking: <b>Perch never authorizes.</b> A decision is two
+    legs &mdash; a signed intent card published to the relay, and a separate POST to the daemon,
+    which re-derives authority from scratch. Everything drawn here is downstream of that, and every
+    badge on every card says what it can actually prove.
+  </p>
+  <div class="statline">
+    <div class="stat"><b>5</b><span>drawn surfaces</span></div>
+    <div class="stat"><b>15&nbsp;000</b><span>lines of prototype</span></div>
+    <div class="stat"><b>180</b><span>contrast pairs measured</span></div>
+    <div class="stat"><b>0</b><span>below their bar</span></div>
+    <div class="stat"><b>0</b><span>network requests</span></div>
+  </div>
+</div></div>
+
+<section id="surfaces"><div class="wrap">
+  <p class="eyebrow">One</p>
+  <h2>The five drawn surfaces</h2>
+  <p class="sublede">
+    Each opens by double-clicking &mdash; no build step, no network, no CDN, no external font. Each
+    carries its own spec-notes panel with the citations behind every decision, and each draws
+    its empty, degraded and adversarial states rather than only its happy one.
+  </p>
+  <div class="cards">
+
+  <figure class="card">
+    <svg class="thumb" viewBox="0 0 440 268" role="img" aria-label="Miniature of The Watch: a colony rail, a sidebar of four queues, a 365px inbox of hold and finding rows each carrying a severity rail, and the verdict pane open on the selected hold.">
+  <rect width="440" height="268" class="fchrome"/>
+  <!-- governance strip -->
+  <rect x="0" y="0" width="440" height="14" class="fbg"/>
+  <line x1="0" y1="14" x2="440" y2="14" class="stroke-b"/>
+  <circle cx="9" cy="7" r="2.6" class="fsub"/>
+  <rect x="16" y="4.4" width="42" height="5" rx="1.4" class="fmuted" opacity=".62"/>
+  <rect x="64" y="4.4" width="30" height="5" rx="1.4" class="fmuted" opacity=".4"/>
+  <rect x="100" y="4.4" width="52" height="5" rx="1.4" class="fmuted" opacity=".4"/>
+  <rect x="366" y="4.4" width="64" height="5" rx="1.4" class="fmuted" opacity=".34"/>
+  <!-- colony rail -->
+  <rect x="0" y="14" width="15" height="254" class="fchrome"/>
+  <line x1="15" y1="14" x2="15" y2="268" class="stroke-b"/>
+  <rect x="3.5" y="22" width="8" height="8" rx="2" class="fsub"/>
+  <rect x="3.5" y="36" width="8" height="8" rx="2" class="fmute"/>
+  <rect x="3.5" y="50" width="8" height="8" rx="2" class="fmute"/>
+  <!-- sidebar -->
+  <rect x="15" y="14" width="78" height="254" class="fchrome"/>
+  <line x1="93" y1="14" x2="93" y2="268" class="stroke-b"/>
+  <text x="22" y="30" font-size="5.2" letter-spacing="1.1" class="chartlabel">THE WATCH</text>
+  <g>
+    <rect x="19" y="38" width="70" height="12" rx="3" class="fraised"/>
+    <rect x="23" y="42.5" width="3" height="3" rx=".8" class="fcrit"/>
+    <rect x="30" y="42" width="34" height="4" rx="1.2" class="fsec" opacity=".9"/>
+    <text x="80" y="46.6" font-size="5" class="chartlabel">2</text>
+  </g>
+  <g opacity=".8">
+    <rect x="23" y="58" width="3" height="3" rx=".8" class="fhigh"/>
+    <rect x="30" y="57.5" width="40" height="4" rx="1.2" class="fmuted"/>
+    <text x="80" y="62" font-size="5" class="chartlabel">7</text>
+  </g>
+  <g opacity=".8">
+    <rect x="23" y="72" width="3" height="3" rx=".8" class="fmed"/>
+    <rect x="30" y="71.5" width="30" height="4" rx="1.2" class="fmuted"/>
+    <text x="80" y="76" font-size="5" class="chartlabel">3</text>
+  </g>
+  <g opacity=".8">
+    <rect x="23" y="86" width="3" height="3" rx=".8" class="flow"/>
+    <rect x="30" y="85.5" width="36" height="4" rx="1.2" class="fmuted"/>
+    <text x="80" y="90" font-size="5" class="chartlabel">0</text>
+  </g>
+  <line x1="19" y1="100" x2="89" y2="100" class="stroke-b"/>
+  <text x="22" y="114" font-size="5.2" letter-spacing="1.1" class="chartlabel">LANES 12</text>
+  <g opacity=".55">
+    <rect x="22" y="122" width="52" height="3.4" rx="1" class="fmuted"/>
+    <rect x="22" y="132" width="44" height="3.4" rx="1" class="fmuted"/>
+    <rect x="22" y="142" width="58" height="3.4" rx="1" class="fmuted"/>
+    <rect x="22" y="152" width="38" height="3.4" rx="1" class="fmuted"/>
+  </g>
+  <line x1="19" y1="238" x2="89" y2="238" class="stroke-b"/>
+  <text x="22" y="252" font-size="5" class="chartlabel">C9 · 4 / 6</text>
+  <!-- inbox -->
+  <rect x="93" y="14" width="140" height="254" class="fbg"/>
+  <line x1="233" y1="14" x2="233" y2="268" class="stroke-b"/>
+  <text x="101" y="30" font-size="5.2" letter-spacing="1.1" class="chartlabel">NEEDS A DECISION · 2</text>
+  <!-- selected hold row -->
+  <rect x="99" y="36" width="128" height="42" rx="6" class="fraised"/>
+  <rect x="99" y="36" width="128" height="42" rx="6" class="stroke-ring"/>
+  <rect x="99" y="40" width="4" height="34" rx="1.2" class="fcrit"/>
+  <text x="110" y="48" font-size="6.4" font-weight="600" class="ffg">isolate_host</text>
+  <text x="110" y="58" font-size="5.4" class="fmuted">web-04.corp.example · CRITICAL</text>
+  <text x="110" y="67" font-size="5.4" class="fmuted">2 sources / 1 agent · expires 47m 12s</text>
+  <rect x="110" y="70.5" width="30" height="4.6" rx="1.4" class="fauth" opacity=".26"/>
+  <text x="113" y="74.4" font-size="4.4" class="fauth">G then Enter</text>
+  <!-- second hold -->
+  <rect x="99" y="84" width="128" height="42" rx="6" class="fbg"/>
+  <rect x="99" y="84" width="128" height="42" rx="6" class="stroke-b"/>
+  <rect x="99" y="88" width="4" height="34" rx="1.2" class="fhigh"/>
+  <text x="110" y="96" font-size="6.4" font-weight="600" class="fsec">revoke_credential</text>
+  <text x="110" y="106" font-size="5.4" class="fmuted">svc-billing-writer@corp · HIGH</text>
+  <text x="110" y="115" font-size="5.4" class="fmuted">2 sources / 1 agent · expires 58m 04s</text>
+  <text x="101" y="142" font-size="5.2" letter-spacing="1.1" class="chartlabel">NEEDS REVIEW · 7</text>
+  <g opacity=".72">
+    <rect x="99" y="148" width="128" height="26" rx="6" class="stroke-b"/>
+    <rect x="99" y="152" width="4" height="18" rx="1.2" class="fmed"/>
+    <text x="110" y="159" font-size="5.6" class="fsec">suspicious_process_tree</text>
+    <text x="110" y="168" font-size="5" class="fmuted">2 sources / 1 agent · host-ops-1</text>
+    <rect x="99" y="180" width="128" height="26" rx="6" class="stroke-b"/>
+    <rect x="99" y="184" width="4" height="18" rx="1.2" class="fmed"/>
+    <text x="110" y="191" font-size="5.6" class="fsec">suspicious_scripting</text>
+    <text x="110" y="200" font-size="5" class="fmuted">1 source / 1 agent · host-ops-1</text>
+    <rect x="99" y="212" width="128" height="26" rx="6" class="stroke-b"/>
+    <rect x="99" y="216" width="4" height="18" rx="1.2" class="flow"/>
+    <text x="110" y="223" font-size="5.6" class="fsec">dns_exfiltration</text>
+    <text x="110" y="232" font-size="5" class="fmuted">1 source / 1 agent · «no host_id»</text>
+  </g>
+  <!-- verdict pane -->
+  <rect x="233" y="14" width="207" height="254" class="fbg"/>
+  <rect x="239" y="22" width="195" height="240" rx="8" class="fpop"/>
+  <rect x="239" y="22" width="195" height="240" rx="8" class="stroke-bs"/>
+  <text x="248" y="36" font-size="6" letter-spacing="1.1" class="chartlabel">THE DECISION</text>
+  <!-- five-slot spine -->
+  <line x1="252" y1="46" x2="252" y2="186" class="stroke-b"/>
+  <g>
+    <circle cx="252" cy="50" r="3.4" class="fsub"/>
+    <text x="262" y="48" font-size="4.8" letter-spacing=".9" class="chartlabel">ACTION</text>
+    <text x="262" y="57" font-size="6" font-weight="600" class="ffg">isolate_host · web-04.corp.example</text>
+  </g>
+  <g>
+    <circle cx="252" cy="76" r="3.4" class="fbg"/><circle cx="252" cy="76" r="3.4" class="stroke-bs"/>
+    <text x="262" y="74" font-size="4.8" letter-spacing=".9" class="chartlabel">BLAST RADIUS</text>
+    <text x="262" y="83" font-size="5.6" class="fsec">1 host · 42 sessions · egress cut</text>
+    <text x="262" y="91" font-size="5.6" class="fsec">Containment lease 15m, minted on decision</text>
+  </g>
+  <g>
+    <circle cx="252" cy="108" r="3.4" class="fbg"/><circle cx="252" cy="108" r="3.4" class="stroke-bs"/>
+    <text x="262" y="106" font-size="4.8" letter-spacing=".9" class="chartlabel">IF YOU UNDO</text>
+    <text x="262" y="115" font-size="5.6" class="fsec">release_isolation · rollback receipt</text>
+  </g>
+  <g>
+    <circle cx="252" cy="132" r="3.4" class="fbg"/><circle cx="252" cy="132" r="3.4" class="stroke-bs"/>
+    <text x="262" y="130" font-size="4.8" letter-spacing=".9" class="chartlabel">WHY WE ARE ASKING</text>
+    <text x="262" y="139" font-size="5.6" class="fsec">"authorized but held for human approval"</text>
+    <text x="262" y="147" font-size="5.2" class="fmuted">— the daemon's own words, verbatim</text>
+  </g>
+  <g>
+    <circle cx="252" cy="164" r="3.4" class="fbg"/><circle cx="252" cy="164" r="3.4" class="stroke-bs"/>
+    <text x="262" y="162" font-size="4.8" letter-spacing=".9" class="chartlabel">WHAT GRANTING OPENS</text>
+    <text x="262" y="171" font-size="5.6" class="fsec">4 further actions on this scope, 60s window</text>
+  </g>
+  <!-- adversary rail -->
+  <rect x="246" y="192" width="181" height="20" rx="4" class="fauth" opacity=".07"/>
+  <rect x="246" y="192" width="2.5" height="20" rx="1" class="fauth"/>
+  <text x="254" y="200" font-size="4.8" letter-spacing=".9" class="chartlabel">ATTACKER-CONTROLLED</text>
+  <text x="254" y="208.5" font-size="5.4" class="fsec">process name · command line · file path</text>
+  <!-- dwell gate -->
+  <rect x="246" y="218" width="181" height="36" rx="5" class="fraised"/>
+  <rect x="252" y="224" width="6" height="6" rx="1.4" class="fsub"/>
+  <text x="263" y="229" font-size="5.2" class="fsec">I have read the blast radius</text>
+  <rect x="252" y="234" width="6" height="6" rx="1.4" class="stroke-bs"/>
+  <text x="263" y="239" font-size="5.2" class="fmuted">I accept there is no undo for 1 of 3 effects</text>
+  <rect x="252" y="244" width="102" height="6" rx="3" class="fbg"/>
+  <rect x="252" y="244" width="71" height="6" rx="3" class="fauth" opacity=".8"/>
+  <text x="360" y="249" font-size="5" class="chartlabel">1500 ms · 70%</text>
+</svg>
+
+    <div class="card-body">
+      <div class="card-head"><h3>The Watch</h3><span class="route">/</span></div>
+      <p>The shift queue and its detail pane. Four queues in a 365&nbsp;px inbox, a hold selected, the verdict pane open beside it. This is the surface an operator lives in for eight hours, so it is the one drawn most carefully: nine states, including the daemon-unreachable state where the queue may be stale and says so at full width.</p>
+      <ul class="lookfor"><li>Every row carries <em>N sources / M agents</em> &mdash; never a bare count</li><li>The severity rail is a 4&nbsp;px bar, not a coloured word, so the row still reads at a glance</li><li><code>G</code> arms the grant; <code>Enter</code> records it. One keypress can Refuse, never grant</li><li>Snooze is disabled on holds &mdash; and says why, rather than vanishing</li></ul>
+      <div class="card-foot">
+        <a class="open" href="prototypes/watch.html">Open the prototype &rarr;</a>
+        <span class="meta">2 906 lines &middot; 9 states</span>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="card">
+    <svg class="thumb" viewBox="0 0 440 268" role="img" aria-label="Miniature of the Verdict Row: the five-slot spine with hollow ticks, an explicit-absence slot, the adversary rail, the visible dwell gate and the two-stroke grant control beside a one-keypress Refuse.">
+  <rect width="440" height="268" class="fchrome"/>
+  <rect x="14" y="12" width="412" height="244" rx="9" class="fbg"/>
+  <rect x="14" y="12" width="412" height="244" rx="9" class="stroke-bs"/>
+  <rect x="14" y="12" width="412" height="2.5" class="fcrit"/>
+  <text x="28" y="32" font-size="7.6" font-weight="620" class="ffg">revoke_credential</text>
+  <rect x="140" y="24" width="34" height="10" rx="3" class="fcrit" opacity=".15"/>
+  <text x="145" y="31.4" font-size="5.6" font-weight="650" class="fcrit">CRITICAL</text>
+  <text x="360" y="31" font-size="6" class="fmuted">expires in 47m 12s</text>
+  <text x="28" y="43" font-size="6" class="fmuted">svc-billing-writer@corp.example — the full principal, never truncated</text>
+  <line x1="28" y1="50" x2="412" y2="50" class="stroke-b"/>
+  <!-- spine -->
+  <line x1="34" y1="60" x2="34" y2="196" class="stroke-b"/>
+  <g>
+    <circle cx="34" cy="64" r="4" class="fsub"/>
+    <text x="48" y="62" font-size="5.4" letter-spacing="1" class="chartlabel">ACTION</text>
+    <text x="48" y="72" font-size="7" font-weight="600" class="ffg">revoke_credential · svc-billing-writer@corp.example</text>
+  </g>
+  <g>
+    <circle cx="34" cy="90" r="4" class="fbg"/><circle cx="34" cy="90" r="4" class="stroke-bs"/>
+    <text x="48" y="88" font-size="5.4" letter-spacing="1" class="chartlabel">BLAST RADIUS</text>
+    <text x="48" y="98" font-size="6.2" class="fsec">1 principal · 3 active sessions · 11 scheduled jobs stop</text>
+  </g>
+  <g>
+    <circle cx="34" cy="114" r="4" class="fbg"/><circle cx="34" cy="114" r="4" class="stroke-bs"/>
+    <text x="48" y="112" font-size="5.4" letter-spacing="1" class="chartlabel">IF YOU UNDO</text>
+    <rect x="48" y="117" width="228" height="14" rx="3" class="fauth" opacity=".08"/>
+    <rect x="48" y="117" width="2.5" height="14" rx="1" class="fauth"/>
+    <text x="56" y="126.5" font-size="6.2" class="fauth">No executable inverse. This action is irreversible.</text>
+    <text x="284" y="126.5" font-size="5.4" class="fmuted">an explicit absence; the slot never collapses</text>
+  </g>
+  <g>
+    <circle cx="34" cy="146" r="4" class="fbg"/><circle cx="34" cy="146" r="4" class="stroke-bs"/>
+    <text x="48" y="144" font-size="5.4" letter-spacing="1" class="chartlabel">WHY WE ARE ASKING</text>
+    <text x="48" y="154" font-size="6.2" class="fsec">"authorized but held for human approval"</text>
+    <text x="48" y="163" font-size="5.6" class="fmuted">static_gate.rs — quoted verbatim, not paraphrased</text>
+  </g>
+  <g>
+    <circle cx="34" cy="180" r="4" class="fbg"/><circle cx="34" cy="180" r="4" class="stroke-bs"/>
+    <text x="48" y="178" font-size="5.4" letter-spacing="1" class="chartlabel">WHAT GRANTING OPENS</text>
+    <text x="48" y="188" font-size="6.2" class="fsec">a 60s capability lease · up to 5 actions on this scope</text>
+  </g>
+  <!-- provenance -->
+  <line x1="28" y1="204" x2="412" y2="204" class="stroke-b"/>
+  <text x="28" y="216" font-size="5.4" letter-spacing="1" class="chartlabel">VERIFICATION</text>
+  <rect x="98" y="209" width="76" height="10" rx="3" class="fraised"/>
+  <text x="103" y="216.4" font-size="5.4" class="fsec">tier 0 · UNATTESTED</text>
+  <text x="184" y="216.4" font-size="5.4" class="fmuted">a hold card carries no Ed25519 signature under any condition today</text>
+  <!-- dwell gate + controls -->
+  <rect x="28" y="224" width="230" height="24" rx="5" class="fraised"/>
+  <rect x="36" y="230" width="6.5" height="6.5" rx="1.5" class="fsub"/>
+  <text x="48" y="235.4" font-size="5.6" class="fsec">I have read the blast radius</text>
+  <rect x="36" y="239" width="6.5" height="6.5" rx="1.5" class="stroke-bs"/>
+  <text x="48" y="244.4" font-size="5.6" class="fmuted">I accept this cannot be undone</text>
+  <rect x="150" y="238" width="76" height="6" rx="3" class="fbg"/>
+  <rect x="150" y="238" width="76" height="6" rx="3" class="fauth" opacity=".85"/>
+  <text x="230" y="243.2" font-size="5.2" class="chartlabel">100%</text>
+  <rect x="266" y="226" width="60" height="20" rx="5" class="fbg"/>
+  <rect x="266" y="226" width="60" height="20" rx="5" class="stroke-bs"/>
+  <text x="273" y="236" font-size="5.6" class="fsec">Refuse</text>
+  <text x="273" y="243.4" font-size="4.8" class="fmuted">R · one keypress</text>
+  <rect x="332" y="226" width="80" height="20" rx="5" class="fbg"/>
+  <rect x="332" y="226" width="80" height="20" rx="5" class="stroke-ring"/>
+  <text x="338" y="235" font-size="5.4" font-weight="600" class="ffg">Record my decision and</text>
+  <text x="338" y="242.4" font-size="5.4" font-weight="600" class="ffg">send it to the daemon</text>
+</svg>
+
+    <div class="card-body">
+      <div class="card-head"><h3>The Verdict Row</h3><span class="route">detail pane of /</span></div>
+      <p>The five-slot spine, in fixed order, never varying by action type. Drawn here on <code>revoke_credential</code> &mdash; one of the eight destructive actions with no
+  containment lease, no countdown and no executable inverse &mdash; because that is the case where an unfillable slot has to render an explicit absence instead of collapsing.</p>
+      <ul class="lookfor"><li>The <em>IF YOU UNDO</em> slot renders its absence on an amber rail; it never disappears</li><li>The dwell gate is visible: two checkboxes and a 1&nbsp;500&nbsp;ms bar, not a hidden timer</li><li>The grant control says <em>record my decision and send it to the daemon</em>, and cannot be styled as primary</li><li>The target principal is never truncated. The strategy slug is what gets cut.</li></ul>
+      <div class="card-foot">
+        <a class="open" href="prototypes/verdict-hold.html">Open the prototype &rarr;</a>
+        <span class="meta">3 629 lines &middot; 11 states</span>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="card">
+    <svg class="thumb" viewBox="0 0 440 268" role="img" aria-label="Miniature of the Case surface: a timeline of the shift's events down the centre, a provenance block naming each chain and tier, and a members panel listing the fact issuers seen in this case.">
+  <rect width="440" height="268" class="fchrome"/>
+  <rect x="0" y="0" width="440" height="14" class="fbg"/>
+  <line x1="0" y1="14" x2="440" y2="14" class="stroke-b"/>
+  <circle cx="9" cy="7" r="2.6" class="fsub"/>
+  <rect x="16" y="4.4" width="42" height="5" rx="1.4" class="fmuted" opacity=".62"/>
+  <text x="330" y="9.6" font-size="5" class="chartlabel">case 27799e23 · TTL 13d</text>
+  <!-- rail + sidebar -->
+  <rect x="0" y="14" width="15" height="254" class="fchrome"/>
+  <line x1="15" y1="14" x2="15" y2="268" class="stroke-b"/>
+  <rect x="3.5" y="22" width="8" height="8" rx="2" class="fsub"/>
+  <rect x="15" y="14" width="70" height="254" class="fchrome"/>
+  <line x1="85" y1="14" x2="85" y2="268" class="stroke-b"/>
+  <text x="21" y="30" font-size="5" letter-spacing="1" class="chartlabel">CASES</text>
+  <rect x="19" y="36" width="62" height="11" rx="3" class="fraised"/>
+  <text x="23" y="43.6" font-size="5.4" class="fsec">hellcat-office</text>
+  <g opacity=".55">
+    <rect x="23" y="54" width="46" height="3.4" rx="1" class="fmuted"/>
+    <rect x="23" y="64" width="38" height="3.4" rx="1" class="fmuted"/>
+  </g>
+  <line x1="19" y1="78" x2="81" y2="78" class="stroke-b"/>
+  <text x="21" y="92" font-size="5" letter-spacing="1" class="chartlabel">TABS</text>
+  <text x="23" y="103" font-size="5.4" class="ffg">Timeline</text>
+  <text x="23" y="113" font-size="5.4" class="fmuted">Canvas</text>
+  <text x="23" y="123" font-size="5.4" class="fmuted">Terminal ⌘J</text>
+  <!-- timeline -->
+  <rect x="85" y="14" width="228" height="254" class="fbg"/>
+  <line x1="313" y1="14" x2="313" y2="268" class="stroke-b"/>
+  <line x1="122" y1="30" x2="122" y2="250" class="stroke-b"/>
+  <g>
+    <text x="93" y="34" font-size="5" class="chartlabel">09:14:32</text>
+    <circle cx="122" cy="31" r="3.2" class="fevid"/>
+    <text x="132" y="30" font-size="5.8" class="fsec">finding · suspicious_process_tree</text>
+    <text x="132" y="38" font-size="5" class="fmuted">2 sources / 1 agent · strength 1.799653</text>
+  </g>
+  <g>
+    <text x="93" y="56" font-size="5" class="chartlabel">09:14:41</text>
+    <circle cx="122" cy="53" r="3.2" class="fauth"/>
+    <text x="132" y="52" font-size="5.8" font-weight="600" class="ffg">escalation · execution crosses 2.00</text>
+    <text x="132" y="60" font-size="5" class="fmuted">total_strength 2.696884 · 2 sources / 1 agent</text>
+    <text x="132" y="68" font-size="5" class="fmuted">ids not carried by the runtime event</text>
+  </g>
+  <g>
+    <text x="93" y="88" font-size="5" class="chartlabel">09:14:42</text>
+    <circle cx="122" cy="85" r="3.2" class="fcrit"/>
+    <text x="132" y="84" font-size="5.8" font-weight="600" class="ffg">hold · isolate_host web-04</text>
+    <text x="132" y="92" font-size="5" class="fmuted">h_a07aeacf · CRITICAL · expires 10:14:42</text>
+  </g>
+  <g>
+    <text x="93" y="112" font-size="5" class="chartlabel">09:16:19</text>
+    <rect x="118.6" y="105" width="7" height="7" rx="1.6" class="fsub"/>
+    <text x="132" y="108" font-size="5.8" font-weight="600" class="ffg">verdict · granted by perch-operator-1</text>
+    <text x="132" y="116" font-size="5" class="fmuted">leg 1 · signed kind:9 intent card on the relay</text>
+    <text x="132" y="124" font-size="5" class="fmuted">leg 2 · POST /v1/response/holds/…/decide → 200</text>
+  </g>
+  <g>
+    <text x="93" y="144" font-size="5" class="chartlabel">09:16:19</text>
+    <circle cx="122" cy="141" r="3.2" class="fsub"/>
+    <text x="132" y="140" font-size="5.8" class="fsec">receipt · rcpt_9f2 · executed</text>
+    <text x="132" y="148" font-size="5" class="fmuted">containment lease cl_1f56ce4e · 15m</text>
+  </g>
+  <g>
+    <text x="93" y="168" font-size="5" class="chartlabel">09:18:44</text>
+    <circle cx="122" cy="165" r="3.2" class="fmute"/>
+    <text x="132" y="164" font-size="5.8" class="fsec">dismiss · suspicious_scripting</text>
+    <rect x="132" y="169" width="164" height="13" rx="3" class="fauth" opacity=".08"/>
+    <rect x="132" y="169" width="2.5" height="13" rx="1" class="fauth"/>
+    <text x="140" y="178" font-size="5.2" class="fauth">removed 3 deposits · 2.573610 → 0.858696</text>
+  </g>
+  <!-- provenance block -->
+  <rect x="93" y="192" width="212" height="62" rx="6" class="fpop"/>
+  <rect x="93" y="192" width="212" height="62" rx="6" class="stroke-b"/>
+  <text x="101" y="204" font-size="5" letter-spacing="1" class="chartlabel">PROVENANCE · WHAT EACH CARD CAN CLAIM</text>
+  <text x="101" y="216" font-size="5.4" class="fmuted">finding</text>
+  <text x="152" y="216" font-size="5.4" class="fsec">tier 0 · UNATTESTED</text>
+  <text x="101" y="227" font-size="5.4" class="fmuted">hold</text>
+  <text x="152" y="227" font-size="5.4" class="fsec">tier 0 · UNATTESTED</text>
+  <text x="101" y="238" font-size="5.4" class="fmuted">receipt</text>
+  <text x="152" y="238" font-size="5.4" class="fsec">tier 0 · attests a proposal, not this body</text>
+  <text x="101" y="249" font-size="5.4" class="fmuted">rollback</text>
+  <text x="152" y="249" font-size="5.4" class="fsub">tier 1 · Ed25519, subject-bound · decision rendered, not checked</text>
+  <!-- members -->
+  <rect x="313" y="14" width="127" height="254" class="fchrome"/>
+  <text x="321" y="30" font-size="5" letter-spacing="1" class="chartlabel">FACT ISSUERS IN THIS CASE</text>
+  <g>
+    <rect x="319" y="36" width="7" height="7" rx="2" class="fsub"/>
+    <text x="331" y="42" font-size="5.4" class="fsec">whisker-2c19</text>
+    <text x="331" y="50" font-size="4.8" class="fmuted">Whisker · swarm:ed25519:70c83c…</text>
+    <rect x="319" y="58" width="7" height="7" rx="2" class="fevid"/>
+    <text x="331" y="64" font-size="5.4" class="fsec">concentration-monitor</text>
+    <text x="331" y="72" font-size="4.8" class="fmuted">role could not be named · renders the absence</text>
+    <rect x="319" y="82" width="7" height="7" rx="2" class="fauth"/>
+    <text x="331" y="88" font-size="5.4" class="fsec">perch-alarm (bridge)</text>
+    <text x="331" y="96" font-size="4.8" class="fmuted">publisher, not producer — never conflated</text>
+    <rect x="319" y="106" width="7" height="7" rx="2" class="ffg"/>
+    <text x="331" y="112" font-size="5.4" class="fsec">perch-operator-1</text>
+    <text x="331" y="120" font-size="4.8" class="fmuted">a person · role is null by construction</text>
+  </g>
+  <line x1="321" y1="132" x2="432" y2="132" class="stroke-b"/>
+  <text x="321" y="146" font-size="5" letter-spacing="1" class="chartlabel">TWO CHAINS, NEVER CONFLATED</text>
+  <text x="321" y="158" font-size="5" class="fmuted">Ed25519 swarm identity</text>
+  <text x="321" y="167" font-size="5" class="fmuted">secp256k1 Nostr key</text>
+  <text x="321" y="176" font-size="5" class="fmuted">the mapping is configured, not signed</text>
+</svg>
+
+    <div class="card-body">
+      <div class="card-head"><h3>Case</h3><span class="route">/cases/$caseId</span></div>
+      <p>A case is a private, TTL-bearing Buzz channel whose UUID <em>is</em> the case id. The timeline is the shift&rsquo;s record: findings, the concentration crossing, the hold, the verdict, the receipt, the dismissal and the arithmetic it retroactively changed.</p>
+      <ul class="lookfor"><li>The provenance block names the chain each card checked and the tier it earned</li><li>Tier&nbsp;1 is reserved for rollback. A response receipt attests a proposal, not this body</li><li>The members panel separates who <em>produced</em> a fact from who <em>published</em> it</li><li>A dismissal previews the arithmetic before it happens, then renders the suppression as a row</li></ul>
+      <div class="card-foot">
+        <a class="open" href="prototypes/case.html">Open the prototype &rarr;</a>
+        <span class="meta">2 901 lines &middot; canvas + terminal tabs</span>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="card">
+    <svg class="thumb" viewBox="0 0 440 268" role="img" aria-label="Miniature of the Watchfloor wall screen: twelve lane concentration curves against their alert threshold, a containment board where remaining time and expired are two separate facts, and a colony panel of agent liveness.">
+  <rect width="440" height="268" class="fchrome"/>
+  <rect x="0" y="0" width="440" height="14" class="fbg"/>
+  <line x1="0" y1="14" x2="440" y2="14" class="stroke-b"/>
+  <circle cx="9" cy="7" r="2.6" class="fsub"/>
+  <text x="18" y="9.6" font-size="5" class="chartlabel">GOVERNANCE · committee of 1 (solo transport) · Healthy · recv 2s ago</text>
+  <text x="352" y="9.6" font-size="5" class="chartlabel">0 promotions — correct by design</text>
+  <!-- col 1: lane curves -->
+  <text x="12" y="28" font-size="5.2" letter-spacing="1.1" class="chartlabel">CONCENTRATION · 12 LANES · 1 Hz</text>
+  <g>
+    <rect x="10" y="34" width="230" height="60" rx="5" class="fbg"/>
+    <rect x="10" y="34" width="230" height="60" rx="5" class="stroke-b"/>
+    <line x1="18" y1="86" x2="232" y2="86" class="gridline"/>
+    <line x1="18" y1="70" x2="232" y2="70" class="gridline"/>
+    <line x1="18" y1="54" x2="232" y2="54" class="rule"/>
+    <text x="196" y="52" font-size="4.6" class="chartlabel">alert_threshold 2.00</text>
+    <path d="M18 86 L52 84 L86 79 L110 72 L134 61 L150 47 L176 44 L204 45 L232 46" class="s1"/>
+    <circle cx="150" cy="47" r="3" class="f1"/>
+    <text x="20" y="44" font-size="5.4" font-weight="600" class="ffg">execution</text>
+    <text x="20" y="52" font-size="4.8" class="fmuted">2.696884 · 2 sources / 1 agent</text>
+    <text x="20" y="92" font-size="4.4" class="chartlabel">ids: not carried by the runtime event</text>
+  </g>
+  <g opacity=".85">
+    <rect x="10" y="98" width="112" height="46" rx="5" class="stroke-b"/>
+    <line x1="16" y1="122" x2="116" y2="122" class="rule"/>
+    <path d="M16 138 L40 136 L64 133 L88 131 L116 130" class="s2"/>
+    <text x="18" y="108" font-size="5" class="fsec">lateral_movement</text>
+    <text x="18" y="116" font-size="4.6" class="fmuted">0.48 · below</text>
+    <rect x="128" y="98" width="112" height="46" rx="5" class="stroke-b"/>
+    <line x1="134" y1="122" x2="234" y2="122" class="rule"/>
+    <path d="M134 137 L158 134 L182 129 L206 127 L234 126" class="s3"/>
+    <text x="136" y="108" font-size="5" class="fsec">credential_access</text>
+    <text x="136" y="116" font-size="4.6" class="fmuted">1.06 · below</text>
+  </g>
+  <g opacity=".6">
+    <rect x="10" y="148" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="69" y="148" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="128" y="148" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="187" y="148" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="10" y="182" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="69" y="182" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="128" y="182" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="187" y="182" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="10" y="216" width="53" height="30" rx="4" class="stroke-b"/>
+    <rect x="69" y="216" width="53" height="30" rx="4" class="stroke-b"/>
+  </g>
+  <text x="12" y="258" font-size="4.8" class="chartlabel">12 of 12 lanes shown · none suppressed</text>
+  <!-- col 2: containment board -->
+  <text x="252" y="28" font-size="5.2" letter-spacing="1.1" class="chartlabel">CONTAINMENTS · 3</text>
+  <rect x="250" y="34" width="118" height="118" rx="5" class="fbg"/>
+  <rect x="250" y="34" width="118" height="118" rx="5" class="stroke-b"/>
+  <g>
+    <text x="256" y="45" font-size="4.4" letter-spacing=".8" class="chartlabel">SCOPE</text>
+    <text x="316" y="45" font-size="4.4" letter-spacing=".8" class="chartlabel">REMAINING</text>
+    <text x="352" y="45" font-size="4.4" letter-spacing=".8" class="chartlabel">STATE</text>
+    <line x1="256" y1="48" x2="362" y2="48" class="stroke-b"/>
+    <text x="256" y="59" font-size="5" class="fsec">host-ops-2</text>
+    <text x="316" y="59" font-size="5" class="fsec">04m 12s</text>
+    <text x="352" y="59" font-size="5" class="fsub">open</text>
+    <rect x="256" y="62" width="106" height="2" rx="1" class="fmute"/>
+    <rect x="256" y="62" width="30" height="2" rx="1" class="fsub"/>
+
+    <text x="256" y="79" font-size="5" class="fsec">host-ops-3</text>
+    <text x="316" y="79" font-size="5" class="fhigh">00m 00s</text>
+    <text x="352" y="79" font-size="5" class="fcrit">expired: true</text>
+    <rect x="256" y="82" width="106" height="2" rx="1" class="fmute"/>
+    <text x="256" y="91" font-size="4.4" class="fmuted">still listed by the daemon — two facts, both rendered</text>
+
+    <text x="256" y="106" font-size="5" class="fsec">host-ops-4</text>
+    <text x="316" y="106" font-size="5" class="fsec">12m 48s</text>
+    <text x="352" y="106" font-size="5" class="fsub">open</text>
+    <rect x="256" y="109" width="106" height="2" rx="1" class="fmute"/>
+    <rect x="256" y="109" width="88" height="2" rx="1" class="fsub"/>
+    <text x="256" y="118" font-size="4.4" class="fauth">terminate_user_session — no executable inverse</text>
+    <line x1="256" y1="126" x2="362" y2="126" class="stroke-b"/>
+    <text x="256" y="136" font-size="4.6" class="chartlabel">12 destructive → 4 leased → 3 reversible</text>
+    <text x="256" y="145" font-size="4.6" class="chartlabel">containment lease 15m · not the 60s capability lease</text>
+  </g>
+  <!-- ledger strip -->
+  <text x="252" y="168" font-size="5.2" letter-spacing="1.1" class="chartlabel">LEDGER · LAST 5</text>
+  <rect x="250" y="174" width="118" height="72" rx="5" class="fbg"/>
+  <rect x="250" y="174" width="118" height="72" rx="5" class="stroke-b"/>
+  <g>
+    <text x="256" y="186" font-size="4.8" class="fsec">verdict · grant</text>
+    <text x="330" y="186" font-size="4.4" class="fmuted">tier 0</text>
+    <text x="256" y="198" font-size="4.8" class="fsec">receipt · executed</text>
+    <text x="330" y="198" font-size="4.4" class="fmuted">tier 0</text>
+    <text x="256" y="210" font-size="4.8" class="fsec">containment · opened</text>
+    <text x="330" y="210" font-size="4.4" class="fmuted">tier 0</text>
+    <text x="256" y="222" font-size="4.8" class="fsec">rollback · restored</text>
+    <text x="330" y="222" font-size="4.4" class="fsub">tier 1</text>
+    <text x="256" y="234" font-size="4.8" class="fsec">dismiss · 3 deposits</text>
+    <text x="330" y="234" font-size="4.4" class="fmuted">tier 0</text>
+    <text x="256" y="243" font-size="4.2" class="chartlabel">tier 1 is reserved for rollback. Nothing else earns it.</text>
+  </g>
+  <!-- col 3: colony -->
+  <text x="380" y="28" font-size="5.2" letter-spacing="1.1" class="chartlabel">COLONY</text>
+  <rect x="378" y="34" width="54" height="118" rx="5" class="fbg"/>
+  <rect x="378" y="34" width="54" height="118" rx="5" class="stroke-b"/>
+  <g>
+    <rect x="384" y="42" width="4" height="4" rx="1" class="fsub"/>
+    <text x="392" y="46" font-size="4.6" class="fsec">Whisker 4</text>
+    <rect x="384" y="54" width="4" height="4" rx="1" class="fsub"/>
+    <text x="392" y="58" font-size="4.6" class="fsec">Calico 1</text>
+    <rect x="384" y="66" width="4" height="4" rx="1" class="fevid"/>
+    <text x="392" y="70" font-size="4.6" class="fsec">Stalker 2</text>
+    <rect x="384" y="78" width="4" height="4" rx="1" class="fevid"/>
+    <text x="392" y="82" font-size="4.6" class="fsec">Weaver 1</text>
+    <rect x="384" y="90" width="4" height="4" rx="1" class="fevid"/>
+    <text x="392" y="94" font-size="4.6" class="fsec">Sphinx 1</text>
+    <rect x="384" y="102" width="4" height="4" rx="1" class="fevid"/>
+    <text x="392" y="106" font-size="4.6" class="fsec">Kitten 1</text>
+    <rect x="384" y="114" width="4" height="4" rx="1" class="fauth"/>
+    <text x="392" y="118" font-size="4.6" class="fsec">Tom 1</text>
+    <rect x="384" y="126" width="4" height="4" rx="1" class="fauth"/>
+    <text x="392" y="130" font-size="4.6" class="fsec">Pouncer 1</text>
+    <text x="384" y="144" font-size="4.2" class="chartlabel">liveness reads 26002,</text>
+    <text x="384" y="150" font-size="4.2" class="chartlabel">never NIP presence</text>
+  </g>
+  <rect x="378" y="174" width="54" height="72" rx="5" class="fbg"/>
+  <rect x="378" y="174" width="54" height="72" rx="5" class="stroke-b"/>
+  <text x="384" y="186" font-size="4.6" letter-spacing=".8" class="chartlabel">INGEST</text>
+  <path d="M384 214 L390 210 L396 212 L402 205 L408 208 L414 200 L420 203 L426 198" class="s1"/>
+  <text x="384" y="226" font-size="4.6" class="fsec">1 042 acc / 3 rej</text>
+  <text x="384" y="236" font-size="4.4" class="fmuted">26000 at 1 Hz</text>
+  <text x="384" y="244" font-size="4.2" class="chartlabel">coalesced in the bridge</text>
+</svg>
+
+    <div class="card-body">
+      <div class="card-head"><h3>Watchfloor and Ledger</h3><span class="route">/watch-floor &middot; /ledger</span></div>
+      <p>The wall screen and the export. Twelve lane curves against their alert threshold, a containment board where <code>remaining_ms</code> and <code>expired</code> are two separate facts, and the colony&rsquo;s liveness read from telemetry rather than from presence.</p>
+      <ul class="lookfor"><li>Fits 1440&times;900 without scroll in either axis, with breakpoints at 1240 and 860</li><li><em>expired: true</em> on a containment the daemon still lists &mdash; the state that must not be hidden</li><li>The governance strip says <em>committee of 1 (solo transport)</em>, never a quorum fraction</li><li>0 promotions is correct by design, and the surface says so instead of showing an empty chart</li></ul>
+      <div class="card-foot">
+        <a class="open" href="prototypes/watchfloor-ledger.html">Open the prototype &rarr;</a>
+        <span class="meta">3 256 lines &middot; two surfaces</span>
+      </div>
+    </div>
+  </figure>
+
+  <figure class="card wide">
+    <svg class="thumb" viewBox="0 0 440 268" role="img" aria-label="Miniature of the data-visualization plates: a concentration curve crossing its alert threshold, a host heat strip, a kill-chain graph, an incident timeline, a containment lease timer and a rate sparkline.">
+  <rect width="440" height="268" class="fchrome"/>
+  <g>
+    <rect x="10" y="10" width="200" height="76" rx="6" class="fbg"/>
+    <rect x="10" y="10" width="200" height="76" rx="6" class="stroke-b"/>
+    <rect x="10" y="10" width="200" height="2.5" class="fevid"/>
+    <text x="18" y="24" font-size="5.4" font-weight="600" class="ffg">VIZ-1 ConcentrationCurve</text>
+    <line x1="18" y1="76" x2="202" y2="76" class="gridline"/>
+    <line x1="18" y1="62" x2="202" y2="62" class="gridline"/>
+    <line x1="18" y1="44" x2="202" y2="44" class="rule"/>
+    <text x="160" y="42" font-size="4.4" class="chartlabel">alert 2.00</text>
+    <path d="M18 76 L46 74 L74 70 L98 64 L118 54 L130 38 L152 36 L178 37 L202 38" class="s1"/>
+    <circle cx="130" cy="38" r="3" class="f1"/>
+    <text x="18" y="34" font-size="4.6" class="fmuted">2.696884 · exact to one ULP · ε = evaporation_threshold</text>
+    <text x="18" y="84" font-size="4.2" class="chartlabel">never a count without its agents</text>
+  </g>
+  <g>
+    <rect x="220" y="10" width="210" height="76" rx="6" class="fbg"/>
+    <rect x="220" y="10" width="210" height="76" rx="6" class="stroke-b"/>
+    <rect x="220" y="10" width="210" height="2.5" class="fsub"/>
+    <text x="228" y="24" font-size="5.4" font-weight="600" class="ffg">VIZ-2 HostHeat</text>
+    <g>
+      <text x="228" y="38" font-size="4.6" class="fmuted">host-ops-1</text>
+      <rect x="272" y="33" width="150" height="6" rx="1.5" class="fmute"/>
+      <rect x="272" y="33" width="112" height="6" rx="1.5" class="fcrit"/>
+      <text x="228" y="50" font-size="4.6" class="fmuted">host-ops-2</text>
+      <rect x="272" y="45" width="150" height="6" rx="1.5" class="fmute"/>
+      <rect x="272" y="45" width="68" height="6" rx="1.5" class="fhigh"/>
+      <text x="228" y="62" font-size="4.6" class="fmuted">host-ops-3</text>
+      <rect x="272" y="57" width="150" height="6" rx="1.5" class="fmute"/>
+      <rect x="272" y="57" width="41" height="6" rx="1.5" class="fmed"/>
+      <text x="228" y="74" font-size="4.6" class="fmuted">«no host_id»</text>
+      <rect x="272" y="69" width="150" height="6" rx="1.5" class="fmute"/>
+      <rect x="272" y="69" width="19" height="6" rx="1.5" class="flow"/>
+    </g>
+    <text x="228" y="84" font-size="4.2" class="chartlabel">a missing host renders as a named row, never dropped</text>
+  </g>
+  <g>
+    <rect x="10" y="96" width="140" height="76" rx="6" class="fbg"/>
+    <rect x="10" y="96" width="140" height="76" rx="6" class="stroke-b"/>
+    <rect x="10" y="96" width="140" height="2.5" class="fevid"/>
+    <text x="18" y="110" font-size="5.4" font-weight="600" class="ffg">VIZ-3 KillChainGraph</text>
+    <line x1="34" y1="130" x2="76" y2="130" class="stroke-bs"/>
+    <line x1="76" y1="130" x2="118" y2="130" class="stroke-bs"/>
+    <line x1="76" y1="130" x2="100" y2="152" class="stroke-bs"/>
+    <circle cx="34" cy="130" r="6" class="fevid"/>
+    <circle cx="76" cy="130" r="6" class="fauth"/>
+    <circle cx="118" cy="130" r="6" class="fcrit"/>
+    <circle cx="100" cy="152" r="5" class="fmed"/>
+    <text x="26" y="146" font-size="4.2" class="fmuted">exec</text>
+    <text x="66" y="146" font-size="4.2" class="fmuted">persist</text>
+    <text x="108" y="146" font-size="4.2" class="fmuted">exfil</text>
+    <text x="18" y="166" font-size="4.2" class="chartlabel">a derived edge carries the fn that derived it</text>
+  </g>
+  <g>
+    <rect x="160" y="96" width="140" height="76" rx="6" class="fbg"/>
+    <rect x="160" y="96" width="140" height="76" rx="6" class="stroke-b"/>
+    <rect x="160" y="96" width="140" height="2.5" class="fauth"/>
+    <text x="168" y="110" font-size="5.4" font-weight="600" class="ffg">VIZ-4 IncidentTimeline</text>
+    <line x1="168" y1="132" x2="292" y2="132" class="stroke-b"/>
+    <circle cx="176" cy="132" r="3" class="fevid"/>
+    <circle cx="206" cy="132" r="3" class="fauth"/>
+    <circle cx="236" cy="132" r="3" class="fcrit"/>
+    <rect x="262" y="129" width="6" height="6" rx="1.4" class="fsub"/>
+    <circle cx="288" cy="132" r="3" class="fmute"/>
+    <text x="168" y="148" font-size="4.4" class="fmuted">finding</text>
+    <text x="196" y="148" font-size="4.4" class="fmuted">alert</text>
+    <text x="226" y="148" font-size="4.4" class="fmuted">hold</text>
+    <text x="252" y="148" font-size="4.4" class="fsub">verdict</text>
+    <text x="278" y="148" font-size="4.4" class="fmuted">receipt</text>
+    <text x="168" y="164" font-size="4.2" class="chartlabel">a square is a human decision; a circle is the swarm</text>
+  </g>
+  <g>
+    <rect x="310" y="96" width="120" height="76" rx="6" class="fbg"/>
+    <rect x="310" y="96" width="120" height="76" rx="6" class="stroke-b"/>
+    <rect x="310" y="96" width="120" height="2.5" class="fauth"/>
+    <text x="318" y="110" font-size="5.4" font-weight="600" class="ffg">VIZ-5 LeaseTimer</text>
+    <circle cx="352" cy="140" r="18" class="fmute"/>
+    <path d="M352 122 A18 18 0 0 1 366 148" class="stroke-ring" stroke-width="3.4"/>
+    <text x="342" y="143" font-size="6" class="fsec">04:12</text>
+    <text x="378" y="132" font-size="4.6" class="fmuted">remaining_ms</text>
+    <text x="378" y="142" font-size="4.6" class="fsec">expired: false</text>
+    <text x="378" y="152" font-size="4.4" class="fmuted">two facts</text>
+    <text x="318" y="166" font-size="4.2" class="chartlabel">saturating, never negative</text>
+  </g>
+  <g>
+    <rect x="10" y="182" width="200" height="76" rx="6" class="fbg"/>
+    <rect x="10" y="182" width="200" height="76" rx="6" class="stroke-b"/>
+    <rect x="10" y="182" width="200" height="2.5" class="fsub"/>
+    <text x="18" y="196" font-size="5.4" font-weight="600" class="ffg">VIZ-6 RateSparkline</text>
+    <path d="M18 240 L40 236 L62 238 L84 228 L106 232 L128 218 L150 224 L172 212 L202 216" class="s1"/>
+    <path d="M18 250 L40 250 L62 249 L84 250 L106 248 L128 250 L150 249 L172 250 L202 249" class="s3"/>
+    <text x="18" y="208" font-size="4.6" class="fmuted">accepted 1 042 · rejected 3 · 60 s window</text>
+    <text x="18" y="264" font-size="4.2" class="chartlabel">26000 at 1 Hz, coalesced in the bridge before IPC</text>
+  </g>
+  <g>
+    <rect x="220" y="182" width="210" height="76" rx="6" class="fbg"/>
+    <rect x="220" y="182" width="210" height="76" rx="6" class="stroke-b"/>
+    <rect x="220" y="182" width="210" height="2.5" class="fevid"/>
+    <text x="228" y="196" font-size="5.4" font-weight="600" class="ffg">The mandatory table path</text>
+    <text x="228" y="208" font-size="4.6" class="fmuted">every chart ships a &lt;table&gt; twin. Toggle, not a caption.</text>
+    <line x1="228" y1="214" x2="422" y2="214" class="stroke-b"/>
+    <text x="228" y="224" font-size="4.6" class="fmuted">t</text>
+    <text x="262" y="224" font-size="4.6" class="fmuted">total_strength</text>
+    <text x="336" y="224" font-size="4.6" class="fmuted">sources / agents</text>
+    <text x="228" y="234" font-size="4.6" class="fsec">09:14:33</text>
+    <text x="262" y="234" font-size="4.6" class="fsec">1.799653</text>
+    <text x="336" y="234" font-size="4.6" class="fsec">2 / 1</text>
+    <text x="228" y="244" font-size="4.6" class="fsec">09:14:41</text>
+    <text x="262" y="244" font-size="4.6" class="fsub">2.696884</text>
+    <text x="336" y="244" font-size="4.6" class="fsec">2 / 1</text>
+    <text x="228" y="254" font-size="4.6" class="fsec">09:18:45</text>
+    <text x="262" y="254" font-size="4.6" class="fsec">0.858696</text>
+    <text x="336" y="254" font-size="4.6" class="fsec">1 / 1</text>
+  </g>
+</svg>
+
+    <div class="card-body">
+      <div class="card-head"><h3>Data-visualization plates</h3><span class="route">specimen</span></div>
+      <p>Six chart primitives, hand-authored SVG with no library and no canvas, drawn from the canonical demo fixture &mdash; the same numbers the wire vectors and the HTTP snapshots carry. Every chart ships a real <code>&lt;table&gt;</code> twin behind a toggle.</p>
+      <ul class="lookfor"><li>Colour reaches SVG through a class, never a <code>fill=</code> attribute &mdash; a guard proves it</li><li>Chart text is rem-based, so it rides &#8984;+/&minus; zoom like everything else</li><li>The concentration curve is exact to one ULP; &epsilon; is the evaporation threshold, not a guess</li><li>A missing <code>host_id</code> is a named row, never a dropped one</li></ul>
+      <div class="card-foot">
+        <a class="open" href="prototypes/dataviz.html">Open the prototype &rarr;</a>
+        <span class="meta">2 300 lines &middot; 36 render combinations audited</span>
+      </div>
+    </div>
+  </figure>
+  </div>
+  <p class="note">
+    <b>Reading the miniatures.</b> The posters above are drawn for this page in the same tokens as
+    the prototypes &mdash; they are honest about layout and colour and deliberately simplified about
+    density. The real pages carry roughly ten times the content. Open them.
+  </p>
+</div></section>
+
+<section id="palette"><div class="wrap">
+  <p class="eyebrow">Two</p>
+  <h2>The palette, and what it measures</h2>
+  <p class="sublede">
+    Every colour below is parsed out of <code>tokens/perch-tokens.css</code> &mdash; the file that
+    ships &mdash; and every ratio is recomputed from it by <code>viz/contrast.mjs</code>, delivered
+    beside this page. Both themes are measured against the same bars: 4.5:1 for anything that
+    carries a readable string, 3:1 for a mark or a focus ring, and no bar at all for the two tokens
+    that are never allowed to carry text.
+  </p>
+  <div class="themepair"><div class="pane"><h4>Dark — the default</h4><div class="swatchrow"><div class="sw" style="background:#070a09;color:#eaf3ee"><span class="name">surface-chrome</span><span class="hex">#070a09</span></div><div class="sw" style="background:#0a1210;color:#eaf3ee"><span class="name">background</span><span class="hex">#0a1210</span></div><div class="sw" style="background:#0c1613;color:#eaf3ee"><span class="name">card</span><span class="hex">#0c1613</span></div><div class="sw" style="background:#10201b;color:#eaf3ee"><span class="name">popover</span><span class="hex">#10201b</span></div><div class="sw" style="background:#163027;color:#eaf3ee"><span class="name">surface-raised</span><span class="hex">#163027</span></div></div><div class="swatchrow"><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">fg</span><span class="chipbar" style="background:#eaf3ee"></span><span class="hex">#eaf3ee</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">fg-secondary</span><span class="chipbar" style="background:#9db3a8"></span><span class="hex">#9db3a8</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">fg-muted</span><span class="chipbar" style="background:#7f9c8d"></span><span class="hex">#7f9c8d</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">fg-faint</span><span class="chipbar" style="background:#7c9187"></span><span class="hex">#7c9187</span></div></div><div class="swatchrow"><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">sev-low</span><span class="chipbar" style="background:#83a094"></span><span class="hex">#83a094</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">sev-medium</span><span class="chipbar" style="background:#d9aa55"></span><span class="hex">#d9aa55</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">sev-high</span><span class="chipbar" style="background:#f59e0b"></span><span class="hex">#f59e0b</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">sev-critical</span><span class="chipbar" style="background:#f07171"></span><span class="hex">#f07171</span></div></div><div class="swatchrow"><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">substrate-ink</span><span class="chipbar" style="background:#4ade80"></span><span class="hex">#4ade80</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">authority-ink</span><span class="chipbar" style="background:#f59e0b"></span><span class="hex">#f59e0b</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">evidence-ink</span><span class="chipbar" style="background:#22d3ee"></span><span class="hex">#22d3ee</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">ring</span><span class="chipbar" style="background:#5f8f78"></span><span class="hex">#5f8f78</span></div></div><div class="swatchrow"><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">series 1</span><span class="chipbar" style="background:#4ade80"></span><span class="hex">#4ade80</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">series 2</span><span class="chipbar" style="background:#22d3ee"></span><span class="hex">#22d3ee</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">series 3</span><span class="chipbar" style="background:#f59e0b"></span><span class="hex">#f59e0b</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">series 4</span><span class="chipbar" style="background:#a78bfa"></span><span class="hex">#a78bfa</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">series 5</span><span class="chipbar" style="background:#f472b6"></span><span class="hex">#f472b6</span></div><div class="sw ink" style="background:#0c1613;color:#eaf3ee"><span class="name">series 6</span><span class="chipbar" style="background:#facc15"></span><span class="hex">#facc15</span></div></div></div><div class="pane"><h4>Light — measured to the same bar</h4><div class="swatchrow"><div class="sw" style="background:#e9efeb;color:#0f1c18"><span class="name">surface-chrome</span><span class="hex">#e9efeb</span></div><div class="sw" style="background:#f2f6f3;color:#0f1c18"><span class="name">background</span><span class="hex">#f2f6f3</span></div><div class="sw" style="background:#ffffff;color:#0f1c18"><span class="name">card</span><span class="hex">#ffffff</span></div><div class="sw" style="background:#ffffff;color:#0f1c18"><span class="name">popover</span><span class="hex">#ffffff</span></div><div class="sw" style="background:#e2eae5;color:#0f1c18"><span class="name">surface-raised</span><span class="hex">#e2eae5</span></div></div><div class="swatchrow"><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">fg</span><span class="chipbar" style="background:#0f1c18"></span><span class="hex">#0f1c18</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">fg-secondary</span><span class="chipbar" style="background:#40564c"></span><span class="hex">#40564c</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">fg-muted</span><span class="chipbar" style="background:#55695f"></span><span class="hex">#55695f</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">fg-faint</span><span class="chipbar" style="background:#6b8075"></span><span class="hex">#6b8075</span></div></div><div class="swatchrow"><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">sev-low</span><span class="chipbar" style="background:#4f6b5e"></span><span class="hex">#4f6b5e</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">sev-medium</span><span class="chipbar" style="background:#825b12"></span><span class="hex">#825b12</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">sev-high</span><span class="chipbar" style="background:#9d4807"></span><span class="hex">#9d4807</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">sev-critical</span><span class="chipbar" style="background:#b3261e"></span><span class="hex">#b3261e</span></div></div><div class="swatchrow"><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">substrate-ink</span><span class="chipbar" style="background:#166534"></span><span class="hex">#166534</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">authority-ink</span><span class="chipbar" style="background:#92400e"></span><span class="hex">#92400e</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">evidence-ink</span><span class="chipbar" style="background:#155e75"></span><span class="hex">#155e75</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">ring</span><span class="chipbar" style="background:#40564c"></span><span class="hex">#40564c</span></div></div><div class="swatchrow"><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">series 1</span><span class="chipbar" style="background:#15803d"></span><span class="hex">#15803d</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">series 2</span><span class="chipbar" style="background:#0e7490"></span><span class="hex">#0e7490</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">series 3</span><span class="chipbar" style="background:#b45309"></span><span class="hex">#b45309</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">series 4</span><span class="chipbar" style="background:#6d28d9"></span><span class="hex">#6d28d9</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">series 5</span><span class="chipbar" style="background:#be185d"></span><span class="hex">#be185d</span></div><div class="sw ink" style="background:#ffffff;color:#0f1c18"><span class="name">series 6</span><span class="chipbar" style="background:#a16207"></span><span class="hex">#a16207</span></div></div></div></div>
+  <div style="height:1.5rem"></div><div class="themepair"><div class="pane"><h4>dark — measured contrast, every ink on every surface</h4><div class="inkrow head"><div>ink · bar</div><div>chrome</div><div>bg</div><div>card</div><div>popover</div><div>raised</div></div><div class="inkrow"><div class="inkname" title="body text">foreground · 4.5</div><div class="cell">17.56<span class="bar" style="width:100%"></span></div><div class="cell">16.76<span class="bar" style="width:100%"></span></div><div class="cell">16.28<span class="bar" style="width:100%"></span></div><div class="cell">14.91<span class="bar" style="width:100%"></span></div><div class="cell">12.48<span class="bar" style="width:100%"></span></div></div><div class="inkrow"><div class="inkname" title="secondary text">foreground-secondary · 4.5</div><div class="cell">8.94<span class="bar" style="width:74%"></span></div><div class="cell">8.53<span class="bar" style="width:71%"></span></div><div class="cell">8.29<span class="bar" style="width:69%"></span></div><div class="cell">7.59<span class="bar" style="width:63%"></span></div><div class="cell">6.36<span class="bar" style="width:53%"></span></div></div><div class="inkrow"><div class="inkname" title="meta text — the most-rendered pair">foreground-muted · 4.5</div><div class="cell">6.67<span class="bar" style="width:56%"></span></div><div class="cell">6.36<span class="bar" style="width:53%"></span></div><div class="cell">6.18<span class="bar" style="width:52%"></span></div><div class="cell">5.66<span class="bar" style="width:47%"></span></div><div class="cell">4.74<span class="bar" style="width:40%"></span></div></div><div class="inkrow"><div class="inkname" title="NEVER TEXT — disabled controls only">foreground-faint · —</div><div class="cell low">5.92<span class="bar" style="width:49%"></span></div><div class="cell low">5.65<span class="bar" style="width:47%"></span></div><div class="cell low">5.49<span class="bar" style="width:46%"></span></div><div class="cell low">5.03<span class="bar" style="width:42%"></span></div><div class="cell low">4.21<span class="bar" style="width:35%"></span></div></div><div class="inkrow"><div class="inkname" title="pillar text">pillar-substrate-ink · 4.5</div><div class="cell">11.41<span class="bar" style="width:95%"></span></div><div class="cell">10.89<span class="bar" style="width:91%"></span></div><div class="cell">10.57<span class="bar" style="width:88%"></span></div><div class="cell">9.68<span class="bar" style="width:81%"></span></div><div class="cell">8.11<span class="bar" style="width:68%"></span></div></div><div class="inkrow"><div class="inkname" title="pillar text">pillar-authority-ink · 4.5</div><div class="cell">9.26<span class="bar" style="width:77%"></span></div><div class="cell">8.83<span class="bar" style="width:74%"></span></div><div class="cell">8.58<span class="bar" style="width:72%"></span></div><div class="cell">7.86<span class="bar" style="width:66%"></span></div><div class="cell">6.58<span class="bar" style="width:55%"></span></div></div><div class="inkrow"><div class="inkname" title="pillar text">pillar-evidence-ink · 4.5</div><div class="cell">11.00<span class="bar" style="width:92%"></span></div><div class="cell">10.50<span class="bar" style="width:88%"></span></div><div class="cell">10.20<span class="bar" style="width:85%"></span></div><div class="cell">9.34<span class="bar" style="width:78%"></span></div><div class="cell">7.82<span class="bar" style="width:65%"></span></div></div><div class="inkrow"><div class="inkname" title="non-text mark">pillar-substrate-mark · 3.0</div><div class="cell">11.41<span class="bar" style="width:95%"></span></div><div class="cell">10.89<span class="bar" style="width:91%"></span></div><div class="cell">10.57<span class="bar" style="width:88%"></span></div><div class="cell">9.68<span class="bar" style="width:81%"></span></div><div class="cell">8.11<span class="bar" style="width:68%"></span></div></div><div class="inkrow"><div class="inkname" title="non-text mark">pillar-authority-mark · 3.0</div><div class="cell">9.26<span class="bar" style="width:77%"></span></div><div class="cell">8.83<span class="bar" style="width:74%"></span></div><div class="cell">8.58<span class="bar" style="width:72%"></span></div><div class="cell">7.86<span class="bar" style="width:66%"></span></div><div class="cell">6.58<span class="bar" style="width:55%"></span></div></div><div class="inkrow"><div class="inkname" title="non-text mark">pillar-evidence-mark · 3.0</div><div class="cell">11.00<span class="bar" style="width:92%"></span></div><div class="cell">10.50<span class="bar" style="width:88%"></span></div><div class="cell">10.20<span class="bar" style="width:85%"></span></div><div class="cell">9.34<span class="bar" style="width:78%"></span></div><div class="cell">7.82<span class="bar" style="width:65%"></span></div></div><div class="inkrow"><div class="inkname" title="severity word">sev-low · 4.5</div><div class="cell">7.02<span class="bar" style="width:58%"></span></div><div class="cell">6.70<span class="bar" style="width:56%"></span></div><div class="cell">6.51<span class="bar" style="width:54%"></span></div><div class="cell">5.96<span class="bar" style="width:50%"></span></div><div class="cell">4.99<span class="bar" style="width:42%"></span></div></div><div class="inkrow"><div class="inkname" title="severity word">sev-medium · 4.5</div><div class="cell">9.31<span class="bar" style="width:78%"></span></div><div class="cell">8.88<span class="bar" style="width:74%"></span></div><div class="cell">8.63<span class="bar" style="width:72%"></span></div><div class="cell">7.90<span class="bar" style="width:66%"></span></div><div class="cell">6.62<span class="bar" style="width:55%"></span></div></div><div class="inkrow"><div class="inkname" title="severity word">sev-high · 4.5</div><div class="cell">9.26<span class="bar" style="width:77%"></span></div><div class="cell">8.83<span class="bar" style="width:74%"></span></div><div class="cell">8.58<span class="bar" style="width:72%"></span></div><div class="cell">7.86<span class="bar" style="width:66%"></span></div><div class="cell">6.58<span class="bar" style="width:55%"></span></div></div><div class="inkrow"><div class="inkname" title="severity word">sev-critical · 4.5</div><div class="cell">6.92<span class="bar" style="width:58%"></span></div><div class="cell">6.60<span class="bar" style="width:55%"></span></div><div class="cell">6.41<span class="bar" style="width:53%"></span></div><div class="cell">5.87<span class="bar" style="width:49%"></span></div><div class="cell">4.92<span class="bar" style="width:41%"></span></div></div><div class="inkrow"><div class="inkname" title="non-text mark">danger-mark · 3.0</div><div class="cell">5.20<span class="bar" style="width:43%"></span></div><div class="cell">4.97<span class="bar" style="width:41%"></span></div><div class="cell">4.82<span class="bar" style="width:40%"></span></div><div class="cell">4.42<span class="bar" style="width:37%"></span></div><div class="cell">3.70<span class="bar" style="width:31%"></span></div></div><div class="inkrow"><div class="inkname" title="focus ring — WCAG 2.2 SC 1.4.11">ring · 3.0</div><div class="cell">5.38<span class="bar" style="width:45%"></span></div><div class="cell">5.14<span class="bar" style="width:43%"></span></div><div class="cell">4.99<span class="bar" style="width:42%"></span></div><div class="cell">4.57<span class="bar" style="width:38%"></span></div><div class="cell">3.83<span class="bar" style="width:32%"></span></div></div><div class="inkrow"><div class="inkname" title="decoration">border-strong · —</div><div class="cell low">1.91<span class="bar" style="width:16%"></span></div><div class="cell low">1.82<span class="bar" style="width:15%"></span></div><div class="cell low">1.77<span class="bar" style="width:15%"></span></div><div class="cell low">1.62<span class="bar" style="width:14%"></span></div><div class="cell low">1.36<span class="bar" style="width:11%"></span></div></div><div class="inkrow"><div class="inkname" title="decoration">border · —</div><div class="cell low">1.61<span class="bar" style="width:13%"></span></div><div class="cell low">1.54<span class="bar" style="width:13%"></span></div><div class="cell low">1.49<span class="bar" style="width:12%"></span></div><div class="cell low">1.37<span class="bar" style="width:11%"></span></div><div class="cell low">1.14<span class="bar" style="width:9%"></span></div></div></div><div class="pane"><h4>light — measured contrast, every ink on every surface</h4><div class="inkrow head"><div>ink · bar</div><div>chrome</div><div>bg</div><div>card</div><div>popover</div><div>raised</div></div><div class="inkrow"><div class="inkname" title="body text">foreground · 4.5</div><div class="cell">15.01<span class="bar" style="width:100%"></span></div><div class="cell">16.05<span class="bar" style="width:100%"></span></div><div class="cell">17.51<span class="bar" style="width:100%"></span></div><div class="cell">17.51<span class="bar" style="width:100%"></span></div><div class="cell">14.28<span class="bar" style="width:100%"></span></div></div><div class="inkrow"><div class="inkname" title="secondary text">foreground-secondary · 4.5</div><div class="cell">6.79<span class="bar" style="width:57%"></span></div><div class="cell">7.26<span class="bar" style="width:60%"></span></div><div class="cell">7.91<span class="bar" style="width:66%"></span></div><div class="cell">7.91<span class="bar" style="width:66%"></span></div><div class="cell">6.46<span class="bar" style="width:54%"></span></div></div><div class="inkrow"><div class="inkname" title="meta text — the most-rendered pair">foreground-muted · 4.5</div><div class="cell">5.04<span class="bar" style="width:42%"></span></div><div class="cell">5.39<span class="bar" style="width:45%"></span></div><div class="cell">5.88<span class="bar" style="width:49%"></span></div><div class="cell">5.88<span class="bar" style="width:49%"></span></div><div class="cell">4.80<span class="bar" style="width:40%"></span></div></div><div class="inkrow"><div class="inkname" title="NEVER TEXT — disabled controls only">foreground-faint · —</div><div class="cell low">3.62<span class="bar" style="width:30%"></span></div><div class="cell low">3.87<span class="bar" style="width:32%"></span></div><div class="cell low">4.23<span class="bar" style="width:35%"></span></div><div class="cell low">4.23<span class="bar" style="width:35%"></span></div><div class="cell low">3.45<span class="bar" style="width:29%"></span></div></div><div class="inkrow"><div class="inkname" title="pillar text">pillar-substrate-ink · 4.5</div><div class="cell">6.12<span class="bar" style="width:51%"></span></div><div class="cell">6.54<span class="bar" style="width:55%"></span></div><div class="cell">7.13<span class="bar" style="width:59%"></span></div><div class="cell">7.13<span class="bar" style="width:59%"></span></div><div class="cell">5.82<span class="bar" style="width:49%"></span></div></div><div class="inkrow"><div class="inkname" title="pillar text">pillar-authority-ink · 4.5</div><div class="cell">6.08<span class="bar" style="width:51%"></span></div><div class="cell">6.50<span class="bar" style="width:54%"></span></div><div class="cell">7.09<span class="bar" style="width:59%"></span></div><div class="cell">7.09<span class="bar" style="width:59%"></span></div><div class="cell">5.78<span class="bar" style="width:48%"></span></div></div><div class="inkrow"><div class="inkname" title="pillar text">pillar-evidence-ink · 4.5</div><div class="cell">6.23<span class="bar" style="width:52%"></span></div><div class="cell">6.66<span class="bar" style="width:56%"></span></div><div class="cell">7.27<span class="bar" style="width:61%"></span></div><div class="cell">7.27<span class="bar" style="width:61%"></span></div><div class="cell">5.93<span class="bar" style="width:49%"></span></div></div><div class="inkrow"><div class="inkname" title="non-text mark">pillar-substrate-mark · 3.0</div><div class="cell">4.30<span class="bar" style="width:36%"></span></div><div class="cell">4.60<span class="bar" style="width:38%"></span></div><div class="cell">5.02<span class="bar" style="width:42%"></span></div><div class="cell">5.02<span class="bar" style="width:42%"></span></div><div class="cell">4.09<span class="bar" style="width:34%"></span></div></div><div class="inkrow"><div class="inkname" title="non-text mark">pillar-authority-mark · 3.0</div><div class="cell">4.31<span class="bar" style="width:36%"></span></div><div class="cell">4.60<span class="bar" style="width:38%"></span></div><div class="cell">5.02<span class="bar" style="width:42%"></span></div><div class="cell">5.02<span class="bar" style="width:42%"></span></div><div class="cell">4.10<span class="bar" style="width:34%"></span></div></div><div class="inkrow"><div class="inkname" title="non-text mark">pillar-evidence-mark · 3.0</div><div class="cell">4.60<span class="bar" style="width:38%"></span></div><div class="cell">4.91<span class="bar" style="width:41%"></span></div><div class="cell">5.36<span class="bar" style="width:45%"></span></div><div class="cell">5.36<span class="bar" style="width:45%"></span></div><div class="cell">4.37<span class="bar" style="width:36%"></span></div></div><div class="inkrow"><div class="inkname" title="severity word">sev-low · 4.5</div><div class="cell">5.01<span class="bar" style="width:42%"></span></div><div class="cell">5.35<span class="bar" style="width:45%"></span></div><div class="cell">5.84<span class="bar" style="width:49%"></span></div><div class="cell">5.84<span class="bar" style="width:49%"></span></div><div class="cell">4.76<span class="bar" style="width:40%"></span></div></div><div class="inkrow"><div class="inkname" title="severity word">sev-medium · 4.5</div><div class="cell">5.21<span class="bar" style="width:43%"></span></div><div class="cell">5.57<span class="bar" style="width:46%"></span></div><div class="cell">6.08<span class="bar" style="width:51%"></span></div><div class="cell">6.08<span class="bar" style="width:51%"></span></div><div class="cell">4.96<span class="bar" style="width:41%"></span></div></div><div class="inkrow"><div class="inkname" title="severity word">sev-high · 4.5</div><div class="cell">5.35<span class="bar" style="width:45%"></span></div><div class="cell">5.72<span class="bar" style="width:48%"></span></div><div class="cell">6.24<span class="bar" style="width:52%"></span></div><div class="cell">6.24<span class="bar" style="width:52%"></span></div><div class="cell">5.09<span class="bar" style="width:42%"></span></div></div><div class="inkrow"><div class="inkname" title="severity word">sev-critical · 4.5</div><div class="cell">5.61<span class="bar" style="width:47%"></span></div><div class="cell">5.99<span class="bar" style="width:50%"></span></div><div class="cell">6.54<span class="bar" style="width:55%"></span></div><div class="cell">6.54<span class="bar" style="width:55%"></span></div><div class="cell">5.33<span class="bar" style="width:44%"></span></div></div><div class="inkrow"><div class="inkname" title="non-text mark">danger-mark · 3.0</div><div class="cell">5.61<span class="bar" style="width:47%"></span></div><div class="cell">5.99<span class="bar" style="width:50%"></span></div><div class="cell">6.54<span class="bar" style="width:55%"></span></div><div class="cell">6.54<span class="bar" style="width:55%"></span></div><div class="cell">5.33<span class="bar" style="width:44%"></span></div></div><div class="inkrow"><div class="inkname" title="focus ring — WCAG 2.2 SC 1.4.11">ring · 3.0</div><div class="cell">6.79<span class="bar" style="width:57%"></span></div><div class="cell">7.26<span class="bar" style="width:60%"></span></div><div class="cell">7.91<span class="bar" style="width:66%"></span></div><div class="cell">7.91<span class="bar" style="width:66%"></span></div><div class="cell">6.46<span class="bar" style="width:54%"></span></div></div><div class="inkrow"><div class="inkname" title="decoration">border-strong · —</div><div class="cell low">1.51<span class="bar" style="width:13%"></span></div><div class="cell low">1.62<span class="bar" style="width:14%"></span></div><div class="cell low">1.77<span class="bar" style="width:15%"></span></div><div class="cell low">1.77<span class="bar" style="width:15%"></span></div><div class="cell low">1.44<span class="bar" style="width:12%"></span></div></div><div class="inkrow"><div class="inkname" title="decoration">border · —</div><div class="cell low">1.18<span class="bar" style="width:10%"></span></div><div class="cell low">1.26<span class="bar" style="width:10%"></span></div><div class="cell low">1.37<span class="bar" style="width:11%"></span></div><div class="cell low">1.37<span class="bar" style="width:11%"></span></div><div class="cell low">1.12<span class="bar" style="width:9%"></span></div></div></div></div>
+  <p class="note">
+    <b>Why every name is <code>--perch-*</code>.</b> Buzz&rsquo;s <code>ThemeProvider</code> writes
+    38 shadcn variables &mdash; <code>--background</code>, <code>--card</code>,
+    <code>--foreground</code>, <code>--muted-foreground</code>, <code>--popover</code>,
+    <code>--ring</code>, <code>--border</code> among them &mdash; <em>inline on the root element</em>
+    on every theme change and again on the cached-boot path before first paint. An inline
+    declaration outranks every normal-priority stylesheet rule, so a surface authored against those
+    names repaints with whichever Buzz syntax theme the operator last picked. The namespace is not
+    hygiene; it is the difference between the palette shipping and the palette silently not
+    existing. <code>tokens/perch-tokens.test.mjs</code> now asserts both halves of that contract:
+    that every bare name in the drawings has a translation row, and that the translation was
+    actually applied.
+  </p>
+</div></section>
+
+<section id="ramps"><div class="wrap">
+  <p class="eyebrow">Three</p>
+  <h2>The four ramps</h2>
+  <p class="sublede">
+    Every ramp is closed &mdash; a fixed set of values with no “other”. That is deliberate: an open
+    ramp is how a console ends up inventing a state the runtime does not have, and then rendering
+    it as if the runtime said so.
+  </p>
+  <div class="ramps"><div class="ramp"><h4>Severity</h4><p class="why">Four steps. The rail carries the signal; the word is confirmation, not the channel. Both themes clear 4.5:1 on all five surfaces.</p><div class="steps"><div class="step"><span class="chip" style="color:hsl(var(--perch-sev-low));background:hsl(var(--perch-sev-low) / .11);border:1px solid hsl(var(--perch-sev-low) / .4)"><span class="sevrail" style="background:hsl(var(--perch-sev-low))"></span>LOW</span><span class="note">informational; never pages</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-sev-medium));background:hsl(var(--perch-sev-medium) / .11);border:1px solid hsl(var(--perch-sev-medium) / .4)"><span class="sevrail" style="background:hsl(var(--perch-sev-medium))"></span>MEDIUM</span><span class="note">enters queue 2, reviewed on shift</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-sev-high));background:hsl(var(--perch-sev-high) / .11);border:1px solid hsl(var(--perch-sev-high) / .4)"><span class="sevrail" style="background:hsl(var(--perch-sev-high))"></span>HIGH</span><span class="note">human_gate_severity — the gate opens here</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-sev-critical));background:hsl(var(--perch-sev-critical) / .11);border:1px solid hsl(var(--perch-sev-critical) / .4)"><span class="sevrail" style="background:hsl(var(--perch-sev-critical))"></span>CRITICAL</span><span class="note">wake class 1; the phone rings</span></div></div></div><div class="ramp"><h4>Verification tier</h4><p class="why">A tier and the chain it checked — never a checkmark, never the word “verified”. Four of the seven card types can never rise above 0.</p><div class="steps"><div class="step"><span class="chip" style="color:hsl(var(--perch-foreground-muted));background:hsl(var(--perch-surface-raised));border:1px solid hsl(var(--perch-border-strong))">tier 0 · UNATTESTED</span><span class="note">finding, escalation, hold and containment — no signature exists</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-foreground-muted));background:hsl(var(--perch-surface-raised));border:1px solid hsl(var(--perch-border-strong))">tier 0 · BY DESIGN</span><span class="note">under a partition contingency; the absence is the correct state</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-pillar-substrate-ink));background:hsl(var(--perch-pillar-substrate-mark) / .12);border:1px solid hsl(var(--perch-pillar-substrate-mark) / .4)">tier 1 · Ed25519</span><span class="note">rollback only — signed and bound to this subject</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-foreground-muted));background:transparent;border:1px dashed hsl(var(--perch-border-strong))">tier 2 · not reachable</span><span class="note">needs a configured signing identity and a per-issuer seq store</span></div></div></div><div class="ramp"><h4>Governance posture</h4><p class="why">Exactly four values, closed. It is a partition state, not a health score, and the strip renders how stale the reading is beside it.</p><div class="steps"><div class="step"><span class="chip" style="color:hsl(var(--perch-pillar-substrate-ink));background:hsl(var(--perch-pillar-substrate-mark) / .12);border:1px solid hsl(var(--perch-pillar-substrate-mark) / .4)">Healthy</span><span class="note">committee reachable, quorum intact</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-sev-medium));background:hsl(var(--perch-sev-medium) / .12);border:1px solid hsl(var(--perch-sev-medium) / .4)">Degraded</span><span class="note">reachable, below preferred quorum</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-sev-critical));background:hsl(var(--perch-sev-critical) / .12);border:1px solid hsl(var(--perch-sev-critical) / .4)">Partitioned</span><span class="note">contingency leases, 5 min, not 60 s</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-pillar-evidence-ink));background:hsl(var(--perch-pillar-evidence-mark) / .12);border:1px solid hsl(var(--perch-pillar-evidence-mark) / .4)">Healing</span><span class="note">rejoining; receipts still carry the gap</span></div></div></div><div class="ramp"><h4>Confidence</h4><p class="why">Five hollow ticks, filled to the detector’s own number. Never a percentage on its own, and never rounded up into a claim the detector did not make.</p><div class="steps"><div class="step"><span class="chip" style="color:hsl(var(--perch-foreground-secondary));background:transparent;border:1px solid hsl(var(--perch-border-strong))"><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span>&nbsp;0.90</span><span class="note">peak_confidence on the crossing deposit</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-foreground-secondary));background:transparent;border:1px solid hsl(var(--perch-border-strong))"><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span>&nbsp;0.55</span><span class="note">a single command_and_control finding</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-foreground-secondary));background:transparent;border:1px solid hsl(var(--perch-border-strong))"><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-pillar-substrate-mark))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span>&nbsp;0.31</span><span class="note">below what any threat-class lane escalates on alone</span></div><div class="step"><span class="chip" style="color:hsl(var(--perch-foreground-secondary));background:transparent;border:1px solid hsl(var(--perch-border-strong))"><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span><span class="tick" style="background:hsl(var(--perch-viz-grid))"></span>&nbsp;—</span><span class="note">no confidence carried; the absence is rendered</span></div></div></div></div>
+  <p class="note">
+    <b>The three hues are decoration, not classification.</b> The pillar borders
+    (<code>substrate</code>, <code>authority</code>, <code>evidence</code>) measure 1.31&ndash;1.58:1
+    against a card. They were kept because they are the reference artwork&rsquo;s own values, and
+    reclassified: the 2.5&nbsp;px top rail at 8.6&ndash;10.6:1 is the classification channel, and no
+    card&rsquo;s meaning may depend on its border.
+  </p>
+</div></section>
+
+<section id="viz"><div class="wrap">
+  <p class="eyebrow">Four</p>
+  <h2>The chart primitives</h2>
+  <p class="sublede">
+    Six components, hand-authored SVG, no charting library in the dependency tree. They exist
+    because the console must never disagree with <code>swarmctl</code> about a number: the runtime
+    snapshot is authoritative, anything the console computes carries a marker naming the function
+    that computed it, and a disagreement snaps visibly with a reason row rather than resolving
+    quietly in the console&rsquo;s favour.
+  </p>
+  <div class="plates">
+    <figure class="plate evidence"><figcaption>
+      <h4>VIZ-1 &middot; ConcentrationCurve</h4>
+      <p>Exponential decay against <code>alert_threshold</code>. Interpolation is exact to one ULP,
+      so &epsilon; is the evaporation floor rather than an error budget. Crossing is a marked event,
+      not an inferred one.</p></figcaption></figure>
+    <figure class="plate"><figcaption>
+      <h4>VIZ-2 &middot; HostHeat</h4>
+      <p>Deposits per host, post-suppression and post-evaporation. A deposit with no
+      <code>host_id</code> gets its own labelled row &mdash; the alternative is a chart that quietly
+      undercounts.</p></figcaption></figure>
+    <figure class="plate evidence"><figcaption>
+      <h4>VIZ-3 &middot; KillChainGraph</h4>
+      <p>Threat classes and the edges between them. Every derived edge is marked as derived and
+      names the function; the runtime asserts none of them.</p></figcaption></figure>
+    <figure class="plate authority"><figcaption>
+      <h4>VIZ-4 &middot; IncidentTimeline</h4>
+      <p>The case record. A square is a human decision and a circle is the swarm &mdash; the one
+      distinction that must survive a black-and-white print of the export.</p></figcaption></figure>
+    <figure class="plate authority"><figcaption>
+      <h4>VIZ-5 &middot; ContainmentLeaseTimer</h4>
+      <p>15 minutes, not 60 seconds. <code>remaining_ms</code> saturates at zero and
+      <code>expired</code> is a separate fact; a containment lease can read <em>expired: true</em> while the
+      daemon still lists it, and that state is the one that matters.</p></figcaption></figure>
+    <figure class="plate"><figcaption>
+      <h4>VIZ-6 &middot; RateSparkline</h4>
+      <p>Accepted against rejected, from the 1&nbsp;Hz ingest frame. Coalesced in the bridge before
+      it crosses IPC, because a 10&nbsp;Hz stream would consume the relay&rsquo;s whole
+      50-frames-per-5-seconds admission budget on its own.</p></figcaption></figure>
+  </div>
+</div></section>
+
+<section id="type"><div class="wrap">
+  <p class="eyebrow">Five</p>
+  <h2>The type ramp</h2>
+  <p class="sublede">
+    Nine steps, all rem-derived from Buzz&rsquo;s virtual typography rem, so every one of them rides
+    the user&rsquo;s font-size preference and &#8984;+/&minus; zoom. Sizes below are at the default
+    16&nbsp;px rem. A CI guard fails the build on any arbitrary text-size literal &mdash; px
+    <em>or</em> rem.
+  </p>
+  <div class="pane" style="padding:.5rem 1.25rem 1rem">
+    <div class="typerow"><span class="tok">--perch-text-xl</span><span class="px">20px</span>
+      <span style="font-size:var(--perch-text-xl);font-weight:600;letter-spacing:-.02em">Surface titles</span></div>
+    <div class="typerow"><span class="tok">--perch-text-lg</span><span class="px">18px</span>
+      <span style="font-size:var(--perch-text-lg);font-weight:600">Section headings</span></div>
+    <div class="typerow"><span class="tok">--perch-text-base</span><span class="px">16px</span>
+      <span style="font-size:var(--perch-text-base)">The action line of a hold &mdash; the one string that must read across a room</span></div>
+    <div class="typerow"><span class="tok">--perch-text-sm</span><span class="px">14px</span>
+      <span style="font-size:var(--perch-text-sm)">Conversation and queue-row body. 43.4% of rendered nodes sit at or above this.</span></div>
+    <div class="typerow"><span class="tok">--perch-text-xs</span><span class="px">12px</span>
+      <span style="font-size:var(--perch-text-xs);color:hsl(var(--perch-foreground-secondary))">Secondary rows: scope, host, expiry</span></div>
+    <div class="typerow"><span class="tok">--perch-text-eyebrow</span><span class="px">12px</span>
+      <span style="font-size:var(--perch-text-eyebrow);letter-spacing:var(--perch-eyebrow-tracking);font-weight:var(--perch-eyebrow-weight);text-transform:uppercase;color:hsl(var(--perch-foreground-muted))">Slot labels</span></div>
+    <div class="typerow"><span class="tok">--perch-text-2xs</span><span class="px">11px</span>
+      <span style="font-size:var(--perch-text-2xs);color:hsl(var(--perch-foreground-muted))">Meta text, count badges, key hints &mdash; and nothing a decision depends on</span></div>
+    <div class="typerow"><span class="tok">--perch-text-badge</span><span class="px">10px</span>
+      <span style="font-size:var(--perch-text-badge);font-family:var(--perch-font-mono);color:hsl(var(--perch-foreground-muted))">TIER 0 · UNATTESTED</span></div>
+    <div class="typerow"><span class="tok">--perch-text-3xs</span><span class="px">8px</span>
+      <span style="font-size:var(--perch-text-3xs);color:hsl(var(--perch-foreground-muted))">Chart tick labels only. Zero product strings render at this size.</span></div>
+  </div>
+  <p class="note">
+    <b>The type census, measured.</b> A headless pass over the drawn surfaces in both themes counted
+    594 visible text nodes: 27.6% at 11&nbsp;px, 29.0% at 12&nbsp;px, 40.4% at 14&nbsp;px, 3.0% at
+    16&nbsp;px or above &mdash; and <b>zero at 8&nbsp;px</b>. The first revision of this set put up
+    to 39% of a wall screen at 8&nbsp;px; that is the single largest change between revisions, and
+    it is the one worth checking first when you open the pages.
+  </p>
+</div></section>
+<section id="measured"><div class="wrap">
+  <p class="eyebrow">Six</p>
+  <h2>What is measured, and what is proposed</h2>
+  <p class="sublede">
+    Every row below was re-run from its committed path during the integration pass, on a clean
+    <code>block/buzz@eed74bde2</code> tree. A claim measured against a file that is not in the tree
+    is the failure this table exists to prevent, so where something could not be run it says so
+    instead of reporting a number.
+  </p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Artifact</th><th>Run</th><th>Result</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td><code>patches/relay-46010.patch</code></td>
+          <td class="num">git apply --check</td>
+          <td>applies clean at <code>eed74bde2</code>, working tree clean</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>patches/relay-26006-pgate.patch</code></td>
+          <td class="num">git apply --check</td>
+          <td>applies clean at the same SHA</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>fixtures/validate.mjs</code></td>
+          <td class="num">node</td>
+          <td>0 failures; 14 envelope hashes recomputed and matched; 3 issuer chains intact</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>fixtures/SHA256SUMS</code></td>
+          <td class="num">shasum -c</td>
+          <td>all OK</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>skeleton/perch-wire/golden/GOLDEN.sha256</code></td>
+          <td class="num">recomputed</td>
+          <td><code>94ccea0d…f3eb4</code> reproduces exactly (16 vectors, sorted, manifest excluded)</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>skeleton/perch-wire/parity-gate.sh</code></td>
+          <td class="num">bash, no env</td>
+          <td>311 declared fields across 17 schemas, present on both the Rust and zod sides; exit 0</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>tokens/perch-tokens.test.mjs</code></td>
+          <td class="num">node --test</td>
+          <td>20/20 pass, including the new T-M2 that asserts the token rename was <em>applied</em></td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>viz/contrast.mjs</code></td>
+          <td class="num">node</td>
+          <td>180 pairs from the shipping CSS; 0 below bar in either theme; lowest readable 4.74:1</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>viz/render-audit.mjs</code></td>
+          <td class="num">node</td>
+          <td>36 render combinations clean; type census 594 nodes, 43.4% &ge;14px, 0 at 8px</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>viz/dataviz-fixture.mjs</code></td>
+          <td class="num">node</td>
+          <td>5 canonical checkpoints reproduced to six decimals; the extension perturbs none</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>openapi/render-perch-openapi.py --check</code></td>
+          <td class="num">python3</td>
+          <td>self-test round-trips byte-identically; JSON matches the authoring YAML</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>skeleton/tests/node/perchKeymapRegistry.test.mjs</code></td>
+          <td class="num">node --test</td>
+          <td>8/8 pass against the ratified key map</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>skeleton/tests/node/perchResetterRegistry.test.mjs</code></td>
+          <td class="num">node --test</td>
+          <td>3 pass, 1 skipped (needs the Buzz tree)</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>refactor/line-ledger.mjs</code></td>
+          <td class="num">node</td>
+          <td>every anchor matched against the real Buzz files; the split arithmetic reproduces</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>skeleton/scripts/check-copy-banned-terms.mjs</code></td>
+          <td class="num">node, shared corpus</td>
+          <td>parity corpus 19 (file, row) pairs, exact match with the Ambush-side rule set</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>skeleton/tools/check-copy-banned-terms.sh</code></td>
+          <td class="num">bash, real assets</td>
+          <td>29 violations across 12 of 20 assets, exit 1 &mdash; but <b>7 min 08 s</b> for 20 files</td>
+          <td><span class="tag p">too slow for CI</span></td></tr>
+      <tr><td>The four <code>check-perch-*.sh</code> guards</td>
+          <td class="num">bash, no root</td>
+          <td>all four refuse to pass silently and print the CI wiring; none reports a false green</td>
+          <td><span class="tag v">verified</span></td></tr>
+      <tr><td><code>skeleton/perch-wire/ts/golden.test.mjs</code></td>
+          <td class="num">node --test</td>
+          <td>cannot run from <code>build/</code>: needs Buzz&rsquo;s TS test loader and an installed <code>zod</code></td>
+          <td><span class="tag n">not demonstrated</span></td></tr>
+      <tr><td><code>skeleton/perch-wire/rust/</code>, <code>skeleton/tests/rust/</code></td>
+          <td class="num">&mdash;</td>
+          <td>no crate exists to compile them into; they are drop-in files, not a built target</td>
+          <td><span class="tag p">proposed</span></td></tr>
+      <tr><td>Every <code>tools/check-perch-*</code> path in the plan set</td>
+          <td class="num">&mdash;</td>
+          <td>Buzz has no <code>tools/</code> directory; Ambush&rsquo;s holds 14 other <code>check-*.sh</code></td>
+          <td><span class="tag p">proposed</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">
+    <b>The honest summary.</b> The wire contract, the fixture, the token package, the relay patches
+    and the refactor arithmetic are verified &mdash; they run, from the paths they are committed at,
+    and reproduce their numbers. The Rust crates, the CI gates&rsquo; wiring and every route the
+    backend bill adds are <em>proposed</em>: they are specified to the file level and priced, and
+    none of them exists yet. Nothing in this set has been compiled into either repository.
+  </p>
+</div></section>
+
+<footer><div class="wrap">
+  <p>
+    Perch &mdash; wave 2, the drawn work. Every file referenced on this page is a sibling of it in
+    <code>docs/plans/ambush-ui/build/</code>. Start with
+    <a href="README.md">README.md</a> for the build order and the reading paths, or
+    <a href="00-REGISTRY.md">00-REGISTRY.md</a> for the values that more than one artifact tried to
+    decide.
+  </p>
+  <p style="margin-top:1rem;color:hsl(var(--perch-foreground-muted))">
+    This page makes no network requests. Its palette is parsed from
+    <code>tokens/perch-tokens.css</code> and its contrast numbers are recomputed by
+    <code>viz/contrast.mjs</code>; re-run that file to check them.
+  </p>
+</div></footer>
+
+<script>
+(function () {
+  var btn = document.getElementById("themetoggle");
+  var root = document.documentElement;
+  function label() {
+    var dark = root.getAttribute("data-theme") === "dark";
+    btn.textContent = dark ? "Light" : "Dark";
+    btn.setAttribute("aria-label", dark ? "Switch to the light palette" : "Switch to the dark palette");
+  }
+  // Honour the reviewer's OS setting on first paint unless they choose otherwise.
+  try {
+    if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+      root.setAttribute("data-theme", "light");
+    }
+  } catch (e) { /* a browser with no matchMedia keeps the dark default */ }
+  label();
+  btn.addEventListener("click", function () {
+    root.setAttribute("data-theme", root.getAttribute("data-theme") === "dark" ? "light" : "dark");
+    label();
+  });
+})();
+</script>
+</body>
+</html>

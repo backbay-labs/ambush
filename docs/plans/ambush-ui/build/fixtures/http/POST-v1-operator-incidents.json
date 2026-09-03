@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "incident_id": "incident:hunt-evt-1:1773738882400",
+  "created": true,
+  "degraded": [],
+  "record": {
+    "incident_id": "incident:hunt-evt-1:1773738882400",
+    "summary": "Two Office-spawned PowerShell chains on host-ops-1",
+    "created_at_ms": 1773738882400,
+    "window_start_ms": 1773738872000,
+    "window_end_ms": 1773738881000,
+    "trigger_event_id": "hunt-evt-1",
+    "trigger_finding_id": "suspicious_process_tree:hunt-evt-1",
+    "trigger_strategy_id": "suspicious_process_tree",
+    "threat_class": "execution",
+    "severity": "CRITICAL",
+    "correlation_keys": [
+      "host:host-ops-1",
+      "user:alice",
+      "parent:winword",
+      "parent:outlook"
+    ],
+    "included_hunt_ids": [
+      "hunt-evt-1",
+      "hunt-evt-2"
+    ],
+    "included_members": [
+      {
+        "investigation_id": "inv:hunt-evt-1",
+        "hunt_id": "hunt-evt-1",
+        "finding_id": "suspicious_process_tree:hunt-evt-1",
+        "reason": "seed investigation",
+        "shared_keys": [
+          "host:host-ops-1"
+        ],
+        "evidence_links": [],
+        "confidence_score": 1
+      },
+      {
+        "investigation_id": "inv:hunt-evt-1b",
+        "hunt_id": "hunt-evt-1",
+        "finding_id": "suspicious_scripting:hunt-evt-1",
+        "reason": "same telemetry event",
+        "shared_keys": [
+          "host:host-ops-1"
+        ],
+        "evidence_links": [],
+        "confidence_score": 1
+      },
+      {
+        "investigation_id": "inv:hunt-evt-2",
+        "hunt_id": "hunt-evt-2",
+        "finding_id": "suspicious_process_tree:hunt-evt-2",
+        "reason": "shared host and threat class inside the correlation window",
+        "shared_keys": [
+          "host:host-ops-1",
+          "user:alice"
+        ],
+        "evidence_links": [],
+        "confidence_score": 0.78
+      }
+    ],
+    "rejected_members": [],
+    "related_receipt_ids": [],
+    "false_positive_measurements": []
+  }
+}

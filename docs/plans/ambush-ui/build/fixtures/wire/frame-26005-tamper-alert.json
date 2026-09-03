@@ -1,0 +1,12 @@
+{
+  "kind": 26005,
+  "schema": "ambush.perch.frame.tamper_alert.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 1,
+  "emitted_at_ms": 1773738882050,
+  "debugger_attached": false,
+  "tracer_pid": null,
+  "fail_closed": false,
+  "unexpected_library_count": 0,
+  "unexpected_library_sha256": "0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

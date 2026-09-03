@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "now_seconds": 1773738965,
+  "threat_class": "execution",
+  "policy": {
+    "half_life_secs": 3600,
+    "evaporation_threshold": 0.01,
+    "min_sources_for_escalation": 2,
+    "alert_threshold": 2,
+    "incident_threshold": 5
+  },
+  "concentration": {
+    "threat_class": "execution",
+    "total_strength": 2.653617,
+    "distinct_sources": 2,
+    "peak_confidence": 0.9
+  },
+  "deposits": [
+    {
+      "event_id": "hunt-evt-1",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "timestamp": 1773738872,
+      "decay_half_life": 3600,
+      "agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470:suspicious_process_tree",
+      "agent_role": null,
+      "agent_identity": "",
+      "host_id": "host-ops-1",
+      "strategy_id": "suspicious_process_tree",
+      "strength_at_now": 0.884028
+    },
+    {
+      "event_id": "hunt-evt-1",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "timestamp": 1773738872,
+      "decay_half_life": 3600,
+      "agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470:suspicious_scripting",
+      "agent_role": null,
+      "agent_identity": "",
+      "host_id": "host-ops-1",
+      "strategy_id": "suspicious_scripting",
+      "strength_at_now": 0.884028
+    },
+    {
+      "event_id": "hunt-evt-2",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "timestamp": 1773738881,
+      "decay_half_life": 3600,
+      "agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470:suspicious_process_tree",
+      "agent_role": null,
+      "agent_identity": "",
+      "host_id": "host-ops-1",
+      "strategy_id": "suspicious_process_tree",
+      "strength_at_now": 0.885561
+    }
+  ],
+  "suppressed": [],
+  "truncated": false
+}

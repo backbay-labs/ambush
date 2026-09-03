@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "error": "hold_already_decided",
+  "hold_id": "h_1c28ae79",
+  "state": "executed",
+  "decided_at_ms": 1773739201200,
+  "decided_by_operator_id": "perch-operator-2",
+  "decided_nostr_intent_event_id": "7de5e9f40a1dd2d54866d6ca627d0a4d71dccda0ccb186f2ebb424252563efcf",
+  "message": "another operator's decision was recorded first; this decision did not run"
+}

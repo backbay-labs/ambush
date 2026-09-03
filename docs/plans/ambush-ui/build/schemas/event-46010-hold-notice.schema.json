@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/event-46010-hold-notice.schema.json",
+  "title": "kind:46010 \u2014 hold notice (the needs-action queue record)",
+  "description": "The ONE stored kind the relay fork admits. It is a QUEUE RECORD, not a timeline row: 10-RELAY-FORK.md decision RF-D3 establishes that Perch pays zero of the four client registration points and that the rendered row is the kind:9 ambush:hold:v1 card. This schema is therefore a schema over an EVENT (tags plus a content grammar), not over a JSON body \u2014 46010 carries no JSON at all.\n\nWHY NO JSON. Three reasons, each verified. (1) Nothing parses it: the desktop's needs-action queue is a hand-built {\"kinds\":[46010,46011,46012],\"#p\":[me],\"limit\":20} POSTed to /query from the Tauri process (desktop/src-tauri/src/commands/messages.rs:97-101), and the only TypeScript that knows the number is a headline switch at desktop/src/features/home/lib/inbox.ts:165 and an empty-content substitution at :186. (2) Its content IS FTS-indexed \u2014 schema.sql:223-227's privacy CASE nulls search_tsv for kinds {1059, 30179, 30300, 30350, 30622, 44100, 44101, 44200} and 46010 is not among them \u2014 so a human sentence here is what makes a hold findable in the Ledger, and a JSON blob is what makes an FTS snippet unreadable. (3) Buzz's shipped mobile app renders this content raw: mobile/lib/features/activity/feed_item.dart:83-88's displayContent returns content.trim() and substitutes 'A workflow is waiting for approval.' when it is empty \u2014 a false sentence containing a banned control label, shown to a Perch operator on a phone. An empty content is therefore not an option either.",
+  "type": "object",
+  "required": [
+    "kind",
+    "content",
+    "tags"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "kind": {
+      "const": 46010
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^hold [A-Za-z0-9][A-Za-z0-9_-]{7,63} \u00b7 ",
+      "description": "ONE LINE. The same human fallback line the ambush:hold:v1 card carries, verbatim, so the two never drift: `hold {hold_id} \u00b7 {action_kind} \u00b7 {SEVERITY} \u00b7 {scope_kind} {scope_value} \u00b7 expires {ISO-8601 with offset}`. No marker, no JSON, no newline. Separator is U+00B7 with a space either side. The leading hold_id segment is pinned to the same character class as common.schema.json#/$defs/HoldId, so a `hold:`-prefixed derived id fails the content pattern as well as the tag."
+    },
+    "tags": {
+      "type": "array",
+      "description": "A CLOSED SET OF EXACTLY FOUR TAG NAMES, and this schema now ENFORCES that rather than asserting it in prose. Before this revision the description said 'exactly the four tag names below' while `items` was an open `array of string`, so a fixture carrying t/l/k validated silently and the artifact set shipped three different answers to the same question. `items.prefixItems[0].enum` is what makes an extra tag a validation error.\n\nRF-D1 (binding, 10-RELAY-FORK.md section 4.2) fixes the single-letter set at {h, p}. `hold` and `card` are multi-letter, therefore outside RF-D1's scope by its own wording, are never used in a filter, and are read only off an event the client already holds.\n\nWHY t / l / k COST SOMETHING RATHER THAN NOTHING. All three are single-letter, so the relay writes each into the tag index on insert and each one widens the surface that APPENDIX-NORMATIVE.md section 3's closed index budget (h/p/e/d) exists to bound. They buy nothing in return: filter_fully_pushable (crates/buzz-relay/src/handlers/req.rs:851-895) sends #t, #l and #k to its default arm at :885-890 \u2014 NOT pushed to SQL \u2014 so a filter naming one of them cannot use the fast COUNT path and post-filters a diluted page anyway, and nothing in the desktop or mobile needs-action query selects 46010 by tag (both are kinds + #p only: desktop/src-tauri/src/commands/messages.rs:97-101, mobile/lib/features/activity/activity_provider.dart:476). Index cost with no query benefit is the definition of a tag that should not ship.",
+      "minItems": 3,
+      "maxItems": 67,
+      "prefixItems": [
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "h"
+            },
+            {
+              "$ref": "common.schema.json#/$defs/Uuid"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        }
+      ],
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "prefixItems": [
+          {
+            "enum": [
+              "h",
+              "p",
+              "hold",
+              "card"
+            ]
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "description": "Every tag beyond the leading `h` must be one of the four closed names. An `e`, `t`, `l`, `k` or any other tag fails HERE, which is the whole point of the revision."
+      },
+      "allOf": [
+        {
+          "title": "exactly one h",
+          "contains": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "const": "h"
+              },
+              {
+                "$ref": "common.schema.json#/$defs/Uuid"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "title": "at least one p, one per Approve-scoped principal",
+          "contains": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "const": "p"
+              },
+              {
+                "$ref": "common.schema.json#/$defs/Hex64Lower"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minContains": 1
+        },
+        {
+          "title": "exactly one hold",
+          "contains": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "const": "hold"
+              },
+              {
+                "$ref": "common.schema.json#/$defs/HoldId"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "title": "at most one card",
+          "contains": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "const": "card"
+              },
+              {
+                "$ref": "common.schema.json#/$defs/Hex64Lower"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "maxContains": 1
+        }
+      ]
+    }
+  },
+  "x-tag-contract": {
+    "h": {
+      "cardinality": "exactly 1",
+      "value": "case channel UUID",
+      "sql_pushed": true,
+      "why": "extract_channel_id parses the FIRST h tag as a Uuid and ignores the rest (crates/buzz-relay/src/handlers/ingest.rs:549-561), so a second h tag is silently dead weight."
+    },
+    "p": {
+      "cardinality": "one per operator principal holding OperatorScope::Approve; at least 1, capped at 64 by maxItems 67 (h + hold + card + 64 p). The cap bounds insert_mentions' per-event work and the event_mentions rows one hold creates; a colony with more than 64 Approve-scoped principals is a governance question, not a wire question.",
+      "value": "lowercase 64-hex Nostr pubkey",
+      "sql_pushed": "a SINGLE #p is pushed via the event_mentions join; two or more disqualify the fast COUNT path (crates/buzz-relay/src/handlers/req.rs:869-874)",
+      "why": "query_needs_action INNER JOINs event_mentions (crates/buzz-db/src/store/feed.rs:183) AND scopes to visible channels (:61-73). Satisfy one and not the other and the hold reaches nobody, silently. The mapping from an Ambush operator_id to a Nostr pubkey does not exist in Ambush config \u2014 OperatorPrincipalConfig is {operator_id, token_env, token_expires_at_ms?, scopes} with deny_unknown_fields (crates/swarm-core/src/config/operator.rs:116-129) \u2014 so the bridge holds it and it is an unsigned trust root; see 13-WIRE-SCHEMAS.md section 3.4."
+    },
+    "hold": {
+      "cardinality": "exactly 1",
+      "value": "the opaque hold_id, $ref'd to common.schema.json#/$defs/HoldId",
+      "sql_pushed": false,
+      "why": "The reconciliation key. Layer 3 of the hold path requires matching each relay row against GET /v1/response/holds, and INV-35 requires rendering a 46010 present on the relay and absent from the daemon as FORGED. Both need the hold_id off the event. FeedItemInfo carries tags and pubkey across the Tauri boundary (desktop/src-tauri/src/models.rs:198-210) \u2014 but not sig, so the client cannot re-verify the Nostr signature and relies on the relay's ingest check."
+    },
+    "card": {
+      "cardinality": "0 or 1",
+      "value": "the 64-hex Nostr event id of the sibling ambush:hold:v1 card",
+      "sql_pushed": false,
+      "why": "Builds the buzz://message?channel={case}&id={card} deep link straight to the timeline row. Its presence forces a publish ORDER \u2014 the kind:9 card first, then the 46010 \u2014 which is the order we want anyway: the row exists before the queue points at it. Absent only if the card publish failed, which the console renders as a degraded queue row rather than dropping."
+    },
+    "e": {
+      "cardinality": "FORBIDDEN",
+      "why": "RF-D1. requires_h_channel_scope also gates resolve_nip10_thread_meta (crates/buzz-relay/src/handlers/ingest.rs:2987-2997), so an e-tagged 46010 becomes a NIP-10 reply, mutates reply_count/descendant_count on its root inside the insert transaction, and emits a relay-signed kind:39005 thread summary (ingest.rs:3219-3226). Threading is the kind:9 card's job."
+    },
+    "t / l / k": {
+      "cardinality": "FORBIDDEN, and now enforced by items.prefixItems[0].enum",
+      "why": "RF-D1 fixes the single-letter set at {h, p}. All three are single-letter and therefore indexed on insert, widening APPENDIX-NORMATIVE.md section 3's closed index budget; and all three land in filter_fully_pushable's default arm (crates/buzz-relay/src/handlers/req.rs:885-890), so a filter naming one is not pushed to SQL and loses the fast COUNT path. Nothing selects a 46010 by tag: the desktop and mobile needs-action queries are kinds + #p only. Index cost, no query benefit. Fixtures carrying t/l/k on a 46010 now FAIL validation instead of passing silently."
+    }
+  },
+  "examples": [
+    {
+      "kind": 46010,
+      "content": "hold h_a07aeacf \u00b7 isolate_host \u00b7 CRITICAL \u00b7 host host-ops-1 \u00b7 expires 2026-03-17T10:14:42+00:00",
+      "tags": [
+        [
+          "h",
+          "27799e23-ab25-4659-b381-3de47ea7ca4d"
+        ],
+        [
+          "p",
+          "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5"
+        ],
+        [
+          "hold",
+          "h_a07aeacf"
+        ],
+        [
+          "card",
+          "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c"
+        ]
+      ]
+    }
+  ],
+  "x-not-a-body": true,
+  "x-not-a-body-note": "This schema describes a NOSTR EVENT -- `kind`, `content` and `tags` are NIP-01 fields, not wire-struct fields -- and the 46010 carries no JSON body at all. tools/check-perch-wire-parity.sh skips it on both sides; what holds it is the tag-order and content-grammar assertions in tests/golden.rs and golden.test.mjs, plus TagSet::assert_publishable in the Rust wire crate."
+}

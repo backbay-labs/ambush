@@ -1,0 +1,67 @@
+# SKELETON. Lands as AMBUSH `crates/swarm-perch-wire/Cargo.toml` and is added to
+# the workspace members list at `Cargo.toml:3-24` (20 members today, 21 after).
+#
+# LAYERING. `tools/check-workspace-layering.sh` (881 lines, run in CI over
+# `cargo metadata`) applies five rules and this crate trips none of them:
+#   RULE 1 `tcb-declared-transport` (:405-414) is scoped to the three TCB crates
+#          (swarm-crypto, swarm-policy, swarm-spine at :181) — this is not one.
+#   RULE 2 `tcb-declared-downstream` (:416-492) forbids a TCB crate NAMING a
+#          non-allow-listed workspace crate. Nothing here is named by a TCB
+#          manifest, so it is satisfied by construction; it becomes a violation
+#          the moment someone adds `swarm-perch-wire` to swarm-spine's manifest.
+#   RULE 3 `tcb-resolved-transport-*` (:494-519) pins the TCB's resolved-normal
+#          reachability to {(swarm-spine,hyper),(swarm-spine,reqwest)} EXACTLY —
+#          a stale entry is also a violation. This crate declares none of the
+#          four TRANSPORTS (axum, clap, hyper, reqwest at :194), so it cannot
+#          widen the closure.
+#   RULE 4 `advisory-*` (:521-545) is about swarm-policy/swarm-response reaching
+#          swarm-runtime. Not applicable.
+#   RULE 5 `missing-owns-section` (:547-567) requires the exact whole lines
+#          `//! ## Owns` and `//! ## Does not own` in every TRUST_SENSITIVE
+#          crate's lib.rs. This crate is not on that list, but src/lib.rs carries
+#          both headings anyway — see the note there.
+#
+# `swarm-spine` is a NORMAL dependency and that is deliberate: the envelope
+# shape, its canonicalization and its hash are swarm-spine's, not ours. Taking
+# the dependency is what stops this crate reinventing an envelope.
+
+[package]
+name = "swarm-perch-wire"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Wire types for the Perch operator console: seven kind:9 marker cards, the kind:46010 hold notice, and the 26000-26006 ephemeral frames."
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# Domain types carried verbatim on the wire. Every one of these is READ, never
+# constructed, by this crate: Ambush produces the facts and Perch reads them.
+swarm-core = { path = "../swarm-core" }
+swarm-policy = { path = "../swarm-policy" }
+swarm-response = { path = "../swarm-response" }
+swarm-spine = { path = "../swarm-spine" }
+swarm-whisker = { path = "../swarm-whisker" }
+swarm-crypto = { path = "../swarm-crypto" }
+
+# `swarm-runtime` is needed ONLY for RuntimeEvent, and only by the `narrowing`
+# module. It is behind a feature so the bridge can depend on the full crate while
+# the desktop-side fixture generator does not drag the runtime in.
+swarm-runtime = { path = "../swarm-runtime", optional = true }
+
+[features]
+default = ["narrowing"]
+narrowing = ["dep:swarm-runtime"]
+
+[dev-dependencies]
+# The golden-vector test reads ../golden/*.json with include_str!, so there is no
+# fixture-generation step and no filesystem access at test time.
+#
+# `sha2` is the ONE dev-dependency, for `the_golden_corpus_matches_its_pinned_hash`.
+# It is already a workspace dependency (`Cargo.toml`'s `[workspace.dependencies]`),
+# so this adds nothing to the resolved graph and cannot widen
+# `tools/check-supply-chain.sh`'s surface.
+sha2 = { workspace = true }

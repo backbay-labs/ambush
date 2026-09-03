@@ -1,0 +1,24 @@
+[package]
+name = "ambush-audit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Hash-chain audit log for Ambush"
+
+[dependencies]
+ambush-core = { workspace = true }
+ambush-datastore-tracing = { workspace = true }
+sqlx        = { workspace = true }
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+tracing     = { workspace = true }
+metrics     = { workspace = true }
+thiserror   = { workspace = true }
+sha2         = { workspace = true }
+hex          = { workspace = true }
+futures-util = { workspace = true }

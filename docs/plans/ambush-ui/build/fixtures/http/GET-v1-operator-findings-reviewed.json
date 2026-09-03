@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "observed_at_ms": 1773739200000,
+  "reviewed": [
+    {
+      "finding_id": "suspicious_scripting:hunt-evt-1",
+      "reviewed_at_ms": 1773739124200,
+      "action": "dismiss",
+      "analyst_id": "perch-operator-1",
+      "false_positive": true,
+      "incident_id": "incident:hunt-evt-1:1773738882400",
+      "strategy_id": "suspicious_scripting",
+      "host_id": "host-ops-1"
+    }
+  ],
+  "window_incident_count": 1,
+  "window_is_truncated": false,
+  "window_oldest_incident_at_ms": 1773738882400,
+  "store_durable": false
+}

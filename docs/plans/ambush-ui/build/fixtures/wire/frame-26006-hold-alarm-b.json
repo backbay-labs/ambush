@@ -1,0 +1,12 @@
+{
+  "kind": 26006,
+  "schema": "ambush.perch.frame.hold_alarm.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 2,
+  "emitted_at_ms": 1773738882710,
+  "hold_id": "h_1c28ae79",
+  "action_kind": "block_egress",
+  "severity": "CRITICAL",
+  "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+  "expires_at_ms": 1773742482700
+}

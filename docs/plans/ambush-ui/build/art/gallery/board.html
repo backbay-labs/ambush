@@ -1,0 +1,1985 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<!--
+  PERCH — art direction board, direction "GALLERY".
+  World: the live control room. Rack metal, black-glass under-monitor displays,
+  and one lamp assembly.
+
+  Self-contained. No network requests of any kind: no <link>, no @import, no CDN,
+  no external font, no image. Fonts are named families with real fallback stacks
+  and the board is designed so the fallback rendering is the one that must look
+  right. Type is rem-derived from a single --rem; there is no px or arbitrary-rem
+  text size in this file.
+
+  DARK IS THE DEFAULT AND IT IS DECLARED ON <html>, not left to the OS.
+
+  Content is the canonical fixture:
+    build/fixtures/perch-demo-fixture.json  (scenario "hellcat-office")
+  Every value printed on a product surface names its fixture path in the right
+  cell of the UMD strip above it. Structure and copy are taken from
+    build/prototypes/verdict-hold.html  and  build/prototypes/watch.html
+  — except where the prototype disagrees with the fixture, in which case the
+  fixture wins (see the blast radius capability list).
+
+  Both product screens are drawn at ONE instant:
+    clock.timestamps.open_row_ms = 1773738965000 = 2026-03-17 09:16:05 UTC
+  the moment the operator opened the row, before any decision exists.
+-->
+<meta charset="utf-8">
+<title>Perch — Gallery</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   1. TOKENS — derived from material, not from a distance to a banned list.
+
+   ONE CHROMATIC VALUE:  --lens-pgm  #A50002
+     A 2900 K tungsten filament seen through a 620 nm signal-red lens, computed
+     at xy(0.6382, 0.3292) Y 0.0800 — a real lamp, not a hue that was nudged.
+     dE2000 to the nearest banned value (Tailwind red-600) = 12.92.
+     It means: an irreversible action is running in production RIGHT NOW.
+
+   THE OTHER LAMP IS NOT A COLOUR.  --lens-hot  #FFEEE3 is the clipped core of
+   the same filament with no lens in front of it. C*ab 8.4 — a luminance, not a
+   hue. A lit lamp in a dark gallery is white-hot; that is what a photograph of
+   one looks like, and luminance is the one channel that survives colour
+   blindness, a bad monitor and a greyscale print absolutely.
+
+   THE NEUTRAL RAMP is one paint under two lights. Black-anodised rack metal at
+   hue_ab 62 deg; C*ab 5.5 in the dark (the only light is a dimmed tungsten) and
+   C*ab 3.4 with the work lights up (a neutral illuminant, so the same paint
+   reads cooler). The monitor wells are achromatic because a grade-1 monitor is
+   calibrated. Every neutral prints its own C*ab in the footer.
+
+   THE LAMP ASSEMBLY AND THE UMD GLASS DO NOT CHANGE WITH THE THEME. A lamp is
+   a lamp and black glass is black glass, whatever colour the panel behind them
+   is painted. They are the only theme-invariant objects in the system.
+
+   DARK IS THE DEFAULT and lives on bare :root, so no value exists only inside a
+   media query.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  /* the room at 3am — dimmed tungsten on the metal, calibrated black in the wells */
+  --room:#1D150F;        /* L* 7.5  C 5.6 — the field the equipment stands in     */
+  --rack:#241D18;        /* L* 11.4 C 5.3 — console body, screen bodies           */
+  --panel:#2C241F;       /* L* 14.9 C 5.5 — a raised panel face                   */
+  --edge:#372F29;        /* L* 20.1 C 5.7 — machined hairline                     */
+  --edge-lit:#49403B;    /* L* 27.8 C 5.3 — the lit edge of a machined lip        */
+  --glass:#141414;       /* L* 6.3  C 0.0 — monitor well, where content is read   */
+  --ink:#E8DAD1;         /* L* 87.9 C 7.0                                          */
+  --ink-mid:#B7ACA4;     /* L* 71.0 C 6.1                                          */
+  --ink-dim:#998F88;     /* L* 60.1 C 5.6 — the floor; 4.81:1 on --panel           */
+  --bevel-hi:rgba(255,238,227,.055);
+  --bevel-lo:rgba(0,0,0,.55);
+  --eng-hi:rgba(255,238,227,.05);
+  --eng-lo:rgba(0,0,0,.85);
+  --wash:rgba(232,218,209,.035);
+  --sel:rgba(232,218,209,.06);
+  --hatch:rgba(153,143,136,.34);
+  --hole:#0C0A09;
+  color-scheme:dark;
+}
+/* the equipment. Theme-invariant, in both blocks below, on purpose. */
+:root,:root[data-theme="light"]{
+  --housing:#13100E;     /* black-anodised lamp bezel                              */
+  --lens-off:#242221;    /* an unlit lens: grey plastic in a dark recess            */
+  --lens-hot:#FFEEE3;    /* the filament core, no lens                             */
+  --lens-pgm:#A50002;    /* the filament through a 620 nm signal-red lens          */
+  --on-hot:#1D150F;
+  --umd:#191919;         /* under-monitor display glass                            */
+  --umd-ink:#CABFB8;
+  --umd-dim:#948A83;
+  /* not a palette value: the specular reflection off a lens, an alpha of light */
+  --spec:rgba(255,255,255,.62);
+}
+:root[data-theme="light"]{
+  /* the work lights are up. Same paint, neutral illuminant, smaller ink range. */
+  --room:#C1BAB6;        /* L* 76.0 C 3.4 */
+  --rack:#CCC5C1;        /* L* 80.0 C 3.3 */
+  --panel:#D7D0CC;       /* L* 83.9 C 3.3 */
+  --edge:#A69F9B;        /* L* 66.0 C 3.5 */
+  --edge-lit:#86807C;    /* L* 54.0 C 3.3 */
+  --glass:#E8E8E8;       /* L* 92.0 C 0.0 */
+  --ink:#25211D;         /* L* 13.0 C 3.5 */
+  --ink-mid:#403A37;     /* L* 24.9 C 3.4 */
+  --ink-dim:#504A47;     /* L* 31.9 C 3.3 — 4.55:1 on --room                       */
+  --bevel-hi:rgba(255,255,255,.55);
+  --bevel-lo:rgba(0,0,0,.13);
+  --eng-hi:rgba(255,255,255,.7);
+  --eng-lo:rgba(0,0,0,.16);
+  --wash:rgba(37,33,29,.04);
+  --sel:rgba(37,33,29,.07);
+  --hatch:rgba(80,74,71,.36);
+  --hole:#8E8884;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]):not([data-theme="light"]){
+    --room:#C1BAB6; --rack:#CCC5C1; --panel:#D7D0CC; --edge:#A69F9B;
+    --edge-lit:#86807C; --glass:#E8E8E8; --ink:#25211D; --ink-mid:#403A37;
+    --ink-dim:#504A47;
+    --bevel-hi:rgba(255,255,255,.55); --bevel-lo:rgba(0,0,0,.13);
+    --eng-hi:rgba(255,255,255,.7);    --eng-lo:rgba(0,0,0,.16);
+    --wash:rgba(37,33,29,.04); --sel:rgba(37,33,29,.07);
+    --hatch:rgba(80,74,71,.36); --hole:#8E8884;
+    color-scheme:light;
+  }
+}
+
+:root{
+  /* type — one rem, every step derived from it. No px, no arbitrary rem. */
+  --rem:1rem;
+  --t-3xs:calc(var(--rem)*.625);
+  --t-2xs:calc(var(--rem)*.6875);
+  --t-xs:calc(var(--rem)*.75);
+  --t-sm:calc(var(--rem)*.8125);
+  --t-md:calc(var(--rem)*.875);
+  --t-base:var(--rem);
+  --t-lg:calc(var(--rem)*1.125);
+  --t-xl:calc(var(--rem)*1.375);
+  --t-2xl:calc(var(--rem)*1.75);
+  --t-3xl:calc(var(--rem)*2.75);
+  --t-code:calc(var(--rem)*.9375);
+
+  /* THREE FACES, ONE LAW. Anything ENGRAVED is permanent and cannot be wrong.
+     Anything DISPLAYED arrived from somewhere and can be.                     */
+  --engraved:"Archivo Narrow","Arial Narrow","Helvetica Neue",Arial,sans-serif;
+  --said:"Archivo","Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+  --shown:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+
+  --r:2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2. RESET
+   ═══════════════════════════════════════════════════════════════════════════ */
+*,*::before,*::after{box-sizing:border-box}
+body{
+  margin:0;background:var(--room);color:var(--ink);
+  font-family:var(--said);font-size:var(--t-md);line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4,h5,p,dl,dd,figure{margin:0}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;text-align:left}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+.shown{font-family:var(--shown);font-variant-numeric:tabular-nums;letter-spacing:-.012em}
+
+/* ENGRAVED — panel lettering. Cut into the metal, so it carries a lip. */
+.eng{
+  font-family:var(--engraved);text-transform:uppercase;font-weight:700;
+  letter-spacing:.2em;line-height:1;font-size:var(--t-2xs);
+  text-shadow:0 -1px 0 var(--eng-lo),0 1px 0 var(--eng-hi);
+}
+.eng-sm{font-size:var(--t-3xs);letter-spacing:.24em}
+.eng-lg{font-size:var(--t-xs);letter-spacing:.17em}
+
+/* machined lip: a lit top edge and a shadowed bottom edge. */
+.bev{box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
+/* a recess: the opposite. */
+.rec{box-shadow:inset 0 1px 2px var(--bevel-lo),inset 0 -1px 0 var(--bevel-hi)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3. THE UMD — under-monitor display. Black glass in both themes, because it
+   is a display and not a painted surface. Left cell: what this bay IS.
+   Right cell: WHERE THE VALUE CAME FROM — in Perch, a fixture/wire path.
+   Every bay on both screens has one. There is no second system.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.umd{
+  display:flex;align-items:stretch;background:var(--umd);
+  border-bottom:1px solid var(--edge-lit);min-height:1.75rem;
+  box-shadow:inset 0 1px 0 rgba(0,0,0,.7),inset 0 -1px 0 rgba(255,238,227,.045);
+}
+.umd>*{display:flex;align-items:center;padding:0 .625rem}
+.umd .ord{
+  font-family:var(--shown);font-size:var(--t-2xs);color:var(--umd-dim);
+  border-right:1px solid #000;box-shadow:1px 0 0 rgba(255,238,227,.05);
+  background:rgba(0,0,0,.35);justify-content:flex-start;letter-spacing:.02em;
+  padding:0 .625rem 0 .9375rem;
+}
+.umd .lab{color:var(--umd-ink);flex:0 0 auto;padding-left:.9375rem}
+.umd .ord + .lab{padding-left:.625rem}
+.umd .fill{flex:1 1 auto;padding:0}
+.umd .src{
+  font-family:var(--shown);font-size:var(--t-3xs);color:var(--umd-dim);
+  border-left:1px solid #000;box-shadow:1px 0 0 rgba(255,238,227,.05) inset;
+  white-space:nowrap;flex:0 0 auto;letter-spacing:0;
+}
+.umd .cnt{
+  font-family:var(--shown);font-size:var(--t-2xs);color:var(--umd-ink);
+  border-left:1px solid #000;flex:0 0 auto;
+}
+
+.bay{background:var(--glass);border:1px solid var(--edge);border-radius:var(--r);
+     overflow:hidden;box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.bay-b{padding:.875rem .9375rem 1rem}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4. THE LAMP ASSEMBLY — the signature.
+   A black-anodised housing bolted to the panel, carrying two lenses over two
+   ENGRAVED legends. The legend never changes; only the lamp does.
+   A lit lens has a white-hot core, because a filament clips.
+   PGM's lit state is identified by that core (14.02:1 against an unlit lens),
+   not by the red field (1.96:1) — which is why the core is not decoration.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.tallybox{
+  display:inline-flex;gap:.25rem;padding:.3125rem;background:var(--housing);
+  border:1px solid var(--edge-lit);border-radius:var(--r);
+  box-shadow:inset 0 1px 0 rgba(255,238,227,.08),0 1px 3px rgba(0,0,0,.55);
+  flex:0 0 auto;
+}
+.unit{display:flex;flex-direction:column;align-items:center;gap:.3125rem;
+      padding:.375rem .5rem .3125rem}
+.lens{
+  display:block;width:2.75rem;height:.875rem;border-radius:1px;
+  background:var(--lens-off);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.9),inset 0 -1px 0 rgba(255,238,227,.06);
+}
+.unit[data-lit="hot"] .lens{
+  background:radial-gradient(ellipse at 50% 32%,var(--spec) 0 20%,var(--lens-hot) 58%);
+  box-shadow:0 0 0 1px rgba(255,238,227,.4),0 0 9px 1px rgba(255,238,227,.3);
+}
+.unit[data-lit="pgm"] .lens{
+  background:radial-gradient(ellipse at 50% 32%,var(--lens-hot) 0 9%,var(--lens-pgm) 54%);
+  box-shadow:0 0 0 1px rgba(165,0,2,.65),0 0 9px 1px rgba(165,0,2,.5);
+}
+.unit .leg{
+  font-family:var(--engraved);text-transform:uppercase;font-weight:700;
+  letter-spacing:.26em;font-size:var(--t-3xs);line-height:1;color:var(--umd-ink);
+  text-shadow:0 -1px 0 #000,0 1px 0 rgba(255,238,227,.07);text-indent:.26em;
+}
+/* row scale: same object, same two positions, same two words */
+.tallybox.sm{padding:.1875rem;gap:.125rem}
+.tallybox.sm .unit{padding:.1875rem .3125rem .1875rem;gap:.1875rem}
+.tallybox.sm .lens{width:1.5rem;height:.375rem}
+.tallybox.sm .unit .leg{letter-spacing:.16em;text-indent:.16em}
+/* study scale */
+.tallybox.lg .lens{width:3.5rem;height:1.125rem}
+.tallybox.lg .unit .leg{font-size:var(--t-2xs)}
+
+/* hatching means exactly one thing everywhere: absent, or forbidden. */
+.hatched{background-image:repeating-linear-gradient(135deg,transparent 0 5px,var(--hatch) 5px 6px)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5. METERS — magnitude is read off a peak meter, never off a hue.
+   Severity: 4 segments + the word.  Confidence: 5 segments + the numeral.
+   Segments sit in a recessed trough, which is what makes them read as an
+   instrument rather than as a progress bar.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.meter{
+  display:inline-flex;gap:1px;align-items:stretch;padding:1px;
+  background:var(--glass);border:1px solid var(--edge);
+  box-shadow:inset 0 1px 1px var(--bevel-lo);vertical-align:-.125rem;
+}
+.meter i{display:block;width:3px;height:.625rem;background:var(--edge-lit)}
+.meter i[data-on="1"]{background:var(--ink)}
+.meter--tall i{height:.875rem;width:4px}
+.sev{display:inline-flex;align-items:center;gap:.4375rem;
+     font-family:var(--engraved);text-transform:uppercase;font-weight:700;
+     letter-spacing:.14em;font-size:var(--t-2xs);color:var(--ink-mid)}
+.sev .n{font-family:var(--shown);letter-spacing:0;color:var(--ink-dim);font-size:var(--t-3xs);
+  white-space:nowrap}
+.conf{display:inline-flex;align-items:center;gap:.375rem}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6. BOARD CHROME
+   ═══════════════════════════════════════════════════════════════════════════ */
+.board{max-width:1440px;margin:0 auto;padding:2.75rem 2rem 4rem}
+.head{border:1px solid var(--edge);border-radius:var(--r);background:var(--rack);overflow:hidden}
+.head-b{padding:2rem 1.75rem 1.75rem;display:grid;grid-template-columns:minmax(0,1fr) auto;
+        gap:2.5rem;align-items:start}
+.wordmark{font-family:var(--engraved);font-weight:700;text-transform:uppercase;
+  font-size:var(--t-3xl);line-height:.9;letter-spacing:.015em;color:var(--ink);
+  text-shadow:0 -1px 0 var(--eng-lo),0 2px 0 var(--eng-hi)}
+.wordmark span{color:var(--ink-dim)}
+.head-sub{margin-top:1rem;max-width:53rem;color:var(--ink-mid);font-size:var(--t-md);line-height:1.62}
+.head-sub b{color:var(--ink);font-weight:600}
+.law{
+  margin-top:1.25rem;max-width:53rem;border-left:3px solid var(--ink-dim);padding-left:.9375rem;
+  font-size:var(--t-sm);line-height:1.6;color:var(--ink);
+}
+.law b{font-family:var(--engraved);text-transform:uppercase;letter-spacing:.16em;
+       font-size:var(--t-2xs);color:var(--ink-dim);display:block;margin-bottom:.3125rem;
+       text-shadow:0 -1px 0 var(--eng-lo),0 1px 0 var(--eng-hi)}
+.toggle{
+  border:1px solid var(--edge-lit);padding:.5rem .6875rem;cursor:pointer;background:var(--panel);
+  font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.16em;
+  font-size:var(--t-2xs);color:var(--ink-mid);
+  box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo);
+}
+.toggle:hover{color:var(--ink)}
+
+.plate{margin-top:3rem}
+.plate-head{display:grid;grid-template-columns:auto minmax(0,21rem) minmax(0,1fr);
+            gap:1.25rem 1.5rem;align-items:baseline;margin-bottom:1rem}
+.plate-num{font-family:var(--engraved);font-weight:700;font-size:var(--t-2xl);line-height:1;
+  color:var(--ink-dim);letter-spacing:.02em;
+  text-shadow:0 -1px 0 var(--eng-lo),0 1px 0 var(--eng-hi)}
+.plate-title{font-family:var(--engraved);font-weight:700;text-transform:uppercase;
+  font-size:var(--t-xl);letter-spacing:.1em;line-height:1.05;color:var(--ink);
+  text-shadow:0 -1px 0 var(--eng-lo),0 1px 0 var(--eng-hi)}
+.plate-note{color:var(--ink-mid);font-size:var(--t-xs);line-height:1.65}
+.plate-note b{color:var(--ink);font-weight:600}
+.plate-note .shown{color:var(--ink)}
+.plate-note + .plate-note{margin-top:.5rem}
+
+/* THE RACK FRAME — the screen is a unit bolted into a rack, with ears. */
+.rackframe{
+  position:relative;background:var(--rack);border:1px solid var(--edge);
+  border-radius:var(--r);padding:.8125rem 1.375rem;
+  box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo);
+}
+.rackframe::before,.rackframe::after{
+  content:"";position:absolute;top:.8125rem;bottom:.8125rem;width:.5rem;
+  background-image:radial-gradient(circle at 50% .375rem,var(--hole) 0 .1875rem,transparent .21875rem);
+  background-size:100% 2.75rem;background-repeat:repeat-y;
+  filter:drop-shadow(0 1px 0 var(--bevel-hi));
+}
+.rackframe::before{left:.4375rem}
+.rackframe::after{right:.4375rem}
+.screen{
+  border:1px solid var(--edge-lit);border-radius:var(--r);background:var(--rack);
+  overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.28);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7. APP CHROME
+   ═══════════════════════════════════════════════════════════════════════════ */
+.chrome{display:flex;align-items:center;gap:1rem;padding:0 .875rem;height:2.125rem;
+  background:var(--panel);border-bottom:1px solid var(--edge);
+  box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.chrome .mk{font-family:var(--engraved);font-weight:700;text-transform:uppercase;
+  letter-spacing:.28em;font-size:var(--t-2xs);color:var(--ink);
+  text-shadow:0 -1px 0 var(--eng-lo),0 1px 0 var(--eng-hi)}
+.chrome .crumb{display:flex;align-items:center;gap:.5rem;min-width:0;
+  font-family:var(--shown);font-size:var(--t-2xs);color:var(--ink-dim)}
+.chrome .crumb b{color:var(--ink-mid);font-weight:400}
+.chrome .right{margin-left:auto;display:flex;align-items:center;gap:1.125rem;flex:0 0 auto}
+.chrome .stat{display:flex;align-items:baseline;gap:.4375rem}
+.chrome .stat .k{font-family:var(--engraved);text-transform:uppercase;font-weight:700;
+  letter-spacing:.16em;font-size:var(--t-3xs);color:var(--ink-dim)}
+.chrome .stat .v{font-family:var(--shown);font-size:var(--t-2xs);color:var(--ink-mid)}
+.sep{color:var(--ink-dim)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8. SCREEN A — the tally bar
+   ═══════════════════════════════════════════════════════════════════════════ */
+.tally{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:1.5rem;align-items:center;
+  padding:1rem 1.125rem;background:var(--glass);border-bottom:1px solid var(--edge-lit)}
+.tally-mid{min-width:0}
+.tally-kind{font-family:var(--shown);font-size:var(--t-xl);line-height:1.15;color:var(--ink);
+  letter-spacing:-.022em}
+.tally-state{margin-top:.1875rem;font-family:var(--engraved);text-transform:uppercase;
+  font-weight:700;letter-spacing:.2em;font-size:var(--t-2xs);color:var(--ink-mid)}
+.tally-sub{margin-top:.5rem;display:flex;align-items:center;gap:.5rem .8125rem;flex-wrap:wrap;
+  font-size:var(--t-xs);color:var(--ink-dim)}
+.tally-sub .shown{color:var(--ink-mid)}
+.clockplate{border:1px solid var(--edge-lit);background:var(--panel);padding:.5625rem .9375rem .625rem;
+  text-align:right;min-width:9.25rem;box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
+.clockplate .k{display:block;margin-bottom:.4375rem;color:var(--ink-dim)}
+.clockplate .v{font-family:var(--shown);font-size:var(--t-xl);line-height:1;color:var(--ink);
+  font-variant-numeric:tabular-nums}
+.clockplate .d{display:block;margin-top:.4375rem;font-size:var(--t-3xs);color:var(--ink-dim);
+  font-family:var(--shown);letter-spacing:0}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   9. SCREEN A — body: five slots + the instrument rail.
+   RULE: a column either carries content for its full height or it does not
+   exist. The rail's last bay grows to the floor, mechanically.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.a-body{display:grid;grid-template-columns:minmax(0,1fr) 21.5rem;gap:1px;background:var(--edge);
+  align-items:stretch}
+.a-main{background:var(--rack);padding:1rem 1.125rem 1.25rem;min-width:0}
+.a-rail{background:var(--rack);padding:1rem 1rem 1.25rem;display:flex;flex-direction:column;
+  gap:.75rem;min-width:0}
+.a-rail .bay{flex:0 0 auto}
+
+.slot{border:1px solid var(--edge);border-radius:var(--r);background:var(--glass);overflow:hidden;
+  box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.slot + .slot{margin-top:.6875rem}
+.slot-b{padding:.875rem .9375rem 1rem}
+.lead{font-size:var(--t-base);line-height:1.5;color:var(--ink)}
+.lead .shown{font-size:var(--t-code)}
+.note{margin-top:.625rem;font-size:var(--t-sm);line-height:1.6;color:var(--ink-dim);max-width:50rem}
+.note b{color:var(--ink-mid);font-weight:600}
+.note .shown{color:var(--ink-mid)}
+
+.kv{display:grid;grid-template-columns:11rem minmax(0,1fr);gap:.3125rem 1rem;margin-top:.8125rem;
+  font-size:var(--t-sm)}
+.kv dt{font-family:var(--shown);font-size:var(--t-xs);color:var(--ink-dim)}
+.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;color:var(--ink-mid)}
+.kv dd.shown{color:var(--ink)}
+
+/* adversary-controlled values: a double machined rule and one label per slot. */
+.adv{display:inline-block;border-left:4px double var(--edge-lit);padding-left:.5625rem;
+  font-family:var(--shown);color:var(--ink)}
+.advtag{display:inline-block;margin-left:.4375rem;font-family:var(--engraved);text-transform:uppercase;
+  font-weight:700;letter-spacing:.16em;font-size:var(--t-3xs);color:var(--ink-dim);
+  border:1px solid var(--edge);padding:.125rem .3125rem;vertical-align:.0625rem}
+.srcline{display:inline-flex;align-items:center;gap:.4375rem;font-family:var(--engraved);
+  text-transform:uppercase;font-weight:700;letter-spacing:.16em;font-size:var(--t-3xs);
+  color:var(--ink-dim)}
+.srcline::before{content:"";width:1rem;height:0;border-top:4px double var(--edge-lit);flex:0 0 auto}
+
+/* an absence never collapses: it renders under its own number as NO SIGNAL. */
+.absent{margin-top:.8125rem;border:1px solid var(--edge-lit);padding:.6875rem .75rem;
+  background:var(--panel);display:grid;grid-template-columns:auto minmax(0,1fr);gap:.8125rem;
+  align-items:start;box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.nosig{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.14em;
+  font-size:var(--t-3xs);color:var(--ink-mid);border:1px solid var(--edge-lit);
+  padding:.5rem .375rem;text-align:center;width:4rem;line-height:1.35;background:var(--glass);
+  flex:0 0 auto}
+.absent h4{font-family:var(--said);font-size:var(--t-sm);font-weight:600;color:var(--ink)}
+.absent p{margin-top:.3125rem;font-size:var(--t-xs);line-height:1.6;color:var(--ink-dim)}
+
+.chips{display:flex;flex-wrap:wrap;gap:.3125rem;margin-top:.5625rem}
+.chip{font-family:var(--shown);font-size:var(--t-xs);color:var(--ink);background:var(--panel);
+  border:1px solid var(--edge);padding:.25rem .4375rem;box-shadow:inset 0 1px 0 var(--bevel-hi)}
+
+/* PREROLL — the dwell gate, in the world's own word. */
+.preroll{margin-top:.9375rem;border-top:1px solid var(--edge);padding-top:.75rem}
+.preroll-bar{height:5px;background:var(--glass);border:1px solid var(--edge);
+  box-shadow:inset 0 1px 1px var(--bevel-lo);overflow:hidden}
+.preroll-bar i{display:block;height:100%;background:var(--ink-mid)}
+.preroll-rows{margin-top:.625rem;display:flex;flex-wrap:wrap;gap:.375rem 1.125rem;align-items:center;
+  font-size:var(--t-xs);color:var(--ink-dim)}
+.ck{display:inline-flex;align-items:center;gap:.5rem;color:var(--ink-mid)}
+.ck::before{content:"";width:9px;height:9px;border:1px solid var(--edge-lit);flex:0 0 auto;
+  background:var(--ink);box-shadow:inset 0 0 0 2px var(--glass)}
+.preroll-pct{margin-left:auto;font-family:var(--shown);color:var(--ink-mid);font-size:var(--t-xs)}
+
+/* instrument bays */
+.inst{font-size:var(--t-xs);line-height:1.62;color:var(--ink-dim)}
+.inst p + p{margin-top:.5rem}
+.inst .state{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.14em;
+  font-size:var(--t-2xs);color:var(--ink-mid);display:block;margin-bottom:.4375rem}
+.npub{font-family:var(--shown);font-size:var(--t-3xs);color:var(--ink-mid);word-break:break-all;
+  background:var(--panel);border:1px solid var(--edge);padding:.375rem .4375rem;display:block;
+  margin:.4375rem 0;line-height:1.55;box-shadow:inset 0 1px 1px var(--bevel-lo)}
+.instbtn{margin-top:.625rem;display:block;width:100%;border:1px solid var(--edge-lit);
+  padding:.5rem .5625rem;font-size:var(--t-xs);color:var(--ink-mid);cursor:pointer;
+  background:var(--panel);box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
+.instbtn:hover{color:var(--ink)}
+
+/* the lane instrument */
+.lane{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.25rem .625rem;align-items:center}
+.lane + .lane{margin-top:.625rem;padding-top:.625rem;border-top:1px solid var(--edge)}
+.lane .nm{font-family:var(--shown);font-size:var(--t-xs);color:var(--ink)}
+.lane .val{font-family:var(--shown);font-size:var(--t-xs);color:var(--ink);text-align:right}
+.lane .sub{grid-column:1/-1;font-size:var(--t-3xs);color:var(--ink-dim);line-height:1.5}
+.trough{grid-column:1/-1;height:.5rem;background:var(--glass);border:1px solid var(--edge);
+  box-shadow:inset 0 1px 1px var(--bevel-lo);position:relative;margin:.1875rem 0 .0625rem}
+.trough i{display:block;height:100%;background:var(--ink-dim)}
+.trough[data-over="1"] i{background:var(--ink)}
+.trough u{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--ink-mid)}
+
+/* BLANKING PANELS. A rack with nothing left to say bolts in blank 1U plates;
+   it does not leave a hole. Screw marks, a machined lip, no content. */
+.blank{flex:1 1 auto;min-height:3rem;background-color:var(--panel);
+  border:1px solid var(--edge);border-radius:var(--r);
+  background-image:
+    radial-gradient(circle at .9375rem 1.5rem,var(--hole) 0 .1875rem,transparent .22rem),
+    radial-gradient(circle at calc(100% - .9375rem) 1.5rem,var(--hole) 0 .1875rem,transparent .22rem),
+    repeating-linear-gradient(to bottom,transparent 0 calc(3rem - 1px),var(--edge) calc(3rem - 1px) 3rem);
+  background-size:100% 3rem,100% 3rem,100% 100%;
+  background-repeat:repeat-y,repeat-y,no-repeat;
+  box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
+
+/* THE LADDER */
+.ladder{display:flex;flex-direction:column;gap:.6875rem}
+.lrow-h{display:flex;align-items:baseline;gap:.5rem;color:var(--ink-mid)}
+.lrow-h .n{margin-left:auto;font-family:var(--shown);font-size:var(--t-2xs);color:var(--ink)}
+.lcap{margin-top:.375rem;font-size:var(--t-3xs);color:var(--ink-dim);line-height:1.55}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   10. THE DESK — controls live below the picture, never in it.
+   AND: A CONTROL NEVER CARRIES A LAMP. In a gallery the tally lamps are on the
+   monitors; the take bar is a bare machined lever on the desk. That rule is why
+   this direction's destructive control has no chromatic fill anywhere in it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.desk{border-top:1px solid var(--edge-lit);background:var(--panel);padding:.9375rem 1.125rem 1.125rem;
+  display:grid;grid-template-columns:minmax(0,1fr) 25rem;gap:1.5rem;align-items:start;
+  box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.desk-l{display:flex;flex-direction:column;min-width:0}
+.acts{display:flex;flex-wrap:wrap;gap:.5rem}
+.act{display:inline-flex;align-items:center;gap:.5rem;border:1px solid var(--edge-lit);
+  background:var(--glass);padding:.5rem .6875rem;cursor:pointer;font-family:var(--engraved);
+  text-transform:uppercase;font-weight:700;letter-spacing:.14em;font-size:var(--t-2xs);
+  color:var(--ink-mid);box-shadow:inset 0 1px 0 var(--bevel-hi),inset 0 -1px 0 var(--bevel-lo)}
+.act:hover{color:var(--ink)}
+.act[data-off="1"]{cursor:default;color:var(--ink-dim);border-style:dashed;box-shadow:none}
+kbd{font-family:var(--shown);font-size:var(--t-3xs);color:var(--ink);background:var(--panel);
+  border:1px solid var(--edge-lit);padding:.1875rem .3125rem;min-width:1.125rem;display:inline-block;
+  text-align:center;line-height:1.35;
+  box-shadow:inset 0 1px 0 var(--bevel-hi),0 1px 0 var(--bevel-lo)}
+.act kbd{background:var(--rack)}
+.desknote{margin-top:.75rem;font-size:var(--t-xs);color:var(--ink-dim);line-height:1.62}
+.legs{margin-top:1rem;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:1px;background:var(--edge);border:1px solid var(--edge)}
+.leg-cell{background:var(--glass);padding:.5625rem .625rem .6875rem}
+.leg-cell .n{font-family:var(--shown);font-size:var(--t-2xs);color:var(--ink-dim);display:block}
+.leg-cell h5{margin:.3125rem 0 .3125rem;font-family:var(--engraved);text-transform:uppercase;
+  font-weight:700;letter-spacing:.13em;font-size:var(--t-2xs);color:var(--ink-mid)}
+.leg-cell p{font-size:var(--t-3xs);color:var(--ink-dim);line-height:1.6}
+
+/* THE TAKE BAR. No fill, no lamp, no colour. Its state is a POSITION. */
+.take{display:flex;flex-direction:column;border:1px solid var(--edge-lit);background:var(--glass);
+  box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.take-top{display:flex;align-items:stretch;cursor:pointer}
+.take-hz{flex:0 0 1.75rem;border-right:1px solid var(--edge-lit)}
+.take-main{flex:1 1 auto;min-width:0;padding:.6875rem .875rem}
+.take-title{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.2em;
+  font-size:var(--t-base);color:var(--ink);line-height:1;
+  text-shadow:0 -1px 0 var(--eng-lo),0 1px 0 var(--eng-hi)}
+.take-say{margin-top:.375rem;font-size:var(--t-xs);color:var(--ink-mid);line-height:1.45}
+.take-keys{flex:0 0 auto;display:flex;align-items:center;gap:.375rem;padding:.6875rem .875rem;
+  border-left:1px solid var(--edge)}
+.take-keys .x{font-size:var(--t-3xs);color:var(--ink-dim);font-family:var(--engraved);
+  text-transform:uppercase;letter-spacing:.14em;font-weight:700}
+/* the throw: a machined block in a slot. Left = at rest, right = thrown. */
+.throw{display:flex;align-items:center;gap:.75rem;border-top:1px solid var(--edge);
+  padding:.5625rem .875rem .625rem}
+.slotrail{position:relative;flex:1 1 auto;height:1.125rem;background:var(--glass);
+  border:1px solid var(--edge);box-shadow:inset 0 1px 2px var(--bevel-lo)}
+.slotrail b{position:absolute;top:1px;bottom:1px;width:2.25rem;background:var(--edge-lit);
+  border:1px solid var(--ink-dim);box-shadow:inset 0 1px 0 var(--bevel-hi);
+  transition:none}
+.slotrail[data-pos="rest"] b{left:1px}
+.slotrail[data-pos="mid"] b{left:calc(50% - 1.125rem)}
+.slotrail[data-pos="thrown"] b{right:1px}
+.slotrail u{position:absolute;width:.625rem;
+  background-image:repeating-linear-gradient(135deg,transparent 0 4px,var(--hatch) 4px 5px);
+  border:1px solid var(--edge-lit);left:calc(50% - .3125rem)}
+.slotrail[data-interlock="down"] u{top:-2px;bottom:-2px}
+.slotrail[data-interlock="up"] u{top:-.9375rem;height:.6875rem;box-shadow:0 .3125rem 0 -.28125rem var(--edge)}
+.slotrail[data-interlock="none"] u{display:none}
+.throw .st{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.16em;
+  font-size:var(--t-2xs);color:var(--ink-mid);white-space:nowrap;flex:0 0 auto}
+.take-foot{border-top:1px solid var(--edge);padding:.5625rem .875rem .625rem;font-size:var(--t-xs);
+  color:var(--ink-dim);line-height:1.6}
+.take-foot .shown{color:var(--ink-mid)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   11. THE STATE STUDY — three takes of the same object.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.study{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--edge);
+  border:1px solid var(--edge)}
+.study section{background:var(--rack);padding:1rem 1.0625rem 1.125rem;display:flex;
+  flex-direction:column;gap:.875rem}
+.study .cap{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.18em;
+  font-size:var(--t-2xs);color:var(--ink-mid)}
+.study .cap i{display:block;font-style:normal;font-family:var(--shown);text-transform:none;
+  letter-spacing:0;font-size:var(--t-3xs);color:var(--ink-dim);margin-top:.3125rem}
+.study .why{font-size:var(--t-xs);color:var(--ink-dim);line-height:1.62;margin-top:auto}
+.study .why b{color:var(--ink-mid);font-weight:600}
+.study .take{background:var(--glass)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   12. SCREEN B — the monitor wall
+   ═══════════════════════════════════════════════════════════════════════════ */
+.pgmstrip{display:flex;align-items:center;gap:1rem;padding:.625rem 1rem;background:var(--glass);
+  border-bottom:1px solid var(--edge-lit)}
+.pgmstrip p{font-size:var(--t-xs);color:var(--ink-mid);line-height:1.5}
+.pgmstrip p .shown{color:var(--ink)}
+.pgmstrip .right{margin-left:auto;font-family:var(--shown);font-size:var(--t-3xs);color:var(--ink-dim);
+  white-space:nowrap;text-align:right}
+
+.b-body{display:grid;grid-template-columns:14rem minmax(0,1fr) 22.5rem;gap:1px;background:var(--edge);
+  align-items:stretch}
+.sidebar{background:var(--rack);padding:.75rem .6875rem 1rem;display:flex;flex-direction:column;gap:.9375rem}
+.sbg-h{display:flex;align-items:center;gap:.5rem;padding-bottom:.4375rem;
+  border-bottom:1px solid var(--edge);margin-bottom:.3125rem;color:var(--ink-dim)}
+.sbg-h .c{margin-left:auto;font-family:var(--shown);font-size:var(--t-2xs);color:var(--ink-mid)}
+.sbr{display:flex;align-items:center;gap:.5rem;padding:.25rem .375rem;font-size:var(--t-sm);
+  color:var(--ink-mid)}
+.sbr .r{margin-left:auto;font-family:var(--shown);font-size:var(--t-xs);color:var(--ink-dim)}
+.sbr[data-active="1"]{background:var(--sel);color:var(--ink);box-shadow:inset 3px 0 0 var(--ink)}
+.sbr .tag{font-family:var(--shown);font-size:var(--t-xs);color:var(--ink-dim)}
+.sblinks .sbr{font-size:var(--t-xs);color:var(--ink-dim);padding:.1875rem .375rem}
+.sbmeter{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:.4375rem;align-items:center;
+  padding:.25rem .375rem;font-size:var(--t-xs);color:var(--ink-mid)}
+.sbmeter .v{font-family:var(--shown);font-size:var(--t-2xs);color:var(--ink-dim)}
+.sbmeter .nm{font-family:var(--shown);font-size:var(--t-xs);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+
+.inbox{background:var(--rack);min-width:0;display:flex;flex-direction:column}
+.inbox-scroll{flex:1 1 auto}
+.stripnote{margin:0;padding:.5rem .875rem;background:var(--panel);border-bottom:1px solid var(--edge);
+  font-size:var(--t-2xs);color:var(--ink-dim);line-height:1.55}
+.stripnote b{font-family:var(--shown);color:var(--ink-mid);font-weight:400}
+.stripnote .un{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.14em;
+  color:var(--ink-mid)}
+
+.row{display:grid;grid-template-columns:4.25rem minmax(0,1fr);gap:.75rem;width:100%;
+  padding:.625rem .875rem .6875rem;border-top:1px solid var(--edge);cursor:pointer;align-items:start}
+.row:first-of-type{border-top:0}
+.row:hover{background:var(--wash)}
+.row[data-sel="1"]{background:var(--sel);box-shadow:inset 4px 0 0 var(--ink)}
+.row-gut{display:flex;justify-content:center;padding-top:.0625rem}
+/* Only an ACTION carries lamps: a finding is an observation and cannot go to
+   air at all. A finding gets a review mark in the same gutter. */
+.mark{display:flex;align-items:center;gap:.4375rem;padding-top:.25rem;color:var(--ink-dim);
+  font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.12em;
+  font-size:var(--t-3xs)}
+.mark i{width:9px;height:9px;border:1px solid var(--ink-dim);display:block;flex:0 0 auto}
+.mark[data-r="reviewed"] i{background:var(--ink);border-color:var(--ink)}
+.mark[data-r="none"] i{border:0;width:11px;height:1px;background:var(--ink-dim)}
+.row-l1{display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap}
+.row-verb{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.16em;
+  font-size:var(--t-2xs);color:var(--ink)}
+.row-kind{font-family:var(--shown);font-size:var(--t-sm);color:var(--ink)}
+.sp{flex:1 1 auto}
+.row-l2{margin-top:.1875rem;font-family:var(--shown);font-size:var(--t-sm);color:var(--ink-mid)}
+.row-l2 .adv{color:var(--ink-mid)}
+.row-l3{margin-top:.3125rem;display:flex;align-items:center;gap:.4375rem;flex-wrap:wrap;
+  font-size:var(--t-xs);color:var(--ink-dim)}
+.row-l3 .shown{color:var(--ink-dim)}
+.row-l4{margin-top:.25rem;font-size:var(--t-2xs);color:var(--ink-dim);line-height:1.5}
+.row-l4 b{color:var(--ink-mid);font-weight:600}
+.row-keys{margin-top:.5rem;display:flex;gap:.25rem;align-items:center}
+.row-keys kbd[data-off="1"]{color:var(--ink-dim);border-style:dashed;text-decoration:line-through}
+.row-keys .hint{font-size:var(--t-3xs);color:var(--ink-dim);margin-left:.375rem;
+  font-family:var(--engraved);text-transform:uppercase;letter-spacing:.14em;font-weight:700}
+.rev{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.14em;
+  font-size:var(--t-3xs);color:var(--ink-mid);border:1px solid var(--edge);padding:.125rem .3125rem}
+.rev[data-r="unreviewed"]{border-style:dashed;color:var(--ink-dim)}
+.absent-q{margin:0;border-top:1px solid var(--edge);padding:.6875rem .875rem;background:var(--panel);
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:.75rem;align-items:center}
+.absent-q p{font-size:var(--t-xs);color:var(--ink-dim);line-height:1.55}
+.absent-q b{color:var(--ink-mid);font-weight:600}
+
+.preview{background:var(--rack);display:flex;flex-direction:column;min-width:0}
+.pv-b{padding:.875rem 1rem 1.125rem;flex:0 0 auto}
+.pv-slot{border-top:1px solid var(--edge);padding-top:.625rem;margin-top:.625rem}
+.pv-lab{display:flex;align-items:baseline;gap:.5rem;margin-bottom:.3125rem}
+.pv-lab .n{font-family:var(--shown);font-size:var(--t-2xs);color:var(--ink-dim)}
+.pv-lab .eng{color:var(--ink-mid)}
+.pv-v{font-size:var(--t-sm);color:var(--ink-mid);line-height:1.5}
+.pv-v .shown{color:var(--ink)}
+.pv-foot{border-top:1px solid var(--edge-lit);background:var(--panel);padding:.625rem 1rem;
+  display:flex;align-items:center;gap:.625rem;font-family:var(--engraved);text-transform:uppercase;
+  font-weight:700;letter-spacing:.14em;font-size:var(--t-2xs);color:var(--ink-mid);
+  box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.keystrip{border-top:1px solid var(--edge-lit);background:var(--panel);padding:.5rem 1rem;
+  display:flex;flex-wrap:wrap;gap:.375rem .875rem;align-items:center;font-size:var(--t-2xs);
+  color:var(--ink-dim);box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.keystrip span{display:inline-flex;align-items:center;gap:.3125rem}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   13. PLATE C — the specimens
+   ═══════════════════════════════════════════════════════════════════════════ */
+.spec{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:1px;background:var(--edge);
+  border:1px solid var(--edge);align-items:stretch}
+.spec > div{background:var(--rack);display:flex;flex-direction:column}
+.spec-b{padding:.875rem 1rem 1.125rem;flex:1 1 auto}
+.lanetable{width:100%;border-collapse:collapse;font-size:var(--t-xs)}
+.lanetable th{text-align:left;font-family:var(--engraved);text-transform:uppercase;font-weight:700;
+  letter-spacing:.14em;font-size:var(--t-3xs);color:var(--ink-dim);padding:0 .625rem .375rem 0;
+  border-bottom:1px solid var(--edge)}
+.lanetable th:last-child,.lanetable td:last-child{text-align:right;padding-right:0}
+.lanetable td{padding:.3125rem .625rem .3125rem 0;border-bottom:1px solid var(--edge);
+  color:var(--ink-mid);vertical-align:middle}
+.lanetable td.nm{font-family:var(--shown);color:var(--ink);white-space:nowrap}
+.lanetable td.v{font-family:var(--shown);color:var(--ink);white-space:nowrap;font-size:var(--t-2xs)}
+.lanetable tr[data-empty="1"] td{color:var(--ink-dim)}
+.bar{display:block;height:.5rem;background:var(--glass);border:1px solid var(--edge);
+  box-shadow:inset 0 1px 1px var(--bevel-lo);position:relative;min-width:5rem}
+.bar i{display:block;height:100%;background:var(--ink-dim)}
+.bar[data-over="1"] i{background:var(--ink)}
+.bar u{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--ink-mid)}
+.sr{display:grid;grid-template-columns:9.25rem minmax(0,1fr);gap:.625rem;align-items:center;
+  padding:.4375rem 0;border-bottom:1px solid var(--edge);font-size:var(--t-xs);color:var(--ink-dim)}
+.grey{filter:grayscale(1)}
+.warn{border:1px solid var(--edge-lit);background:var(--panel);padding:.6875rem .75rem;
+  font-size:var(--t-xs);line-height:1.62;color:var(--ink-mid);margin-bottom:.875rem;
+  box-shadow:inset 0 1px 0 var(--bevel-hi)}
+.warn b{color:var(--ink);font-weight:600}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   14. FOOTER
+   ═══════════════════════════════════════════════════════════════════════════ */
+.foot{margin-top:3rem;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;
+  background:var(--edge);border:1px solid var(--edge);border-radius:var(--r);overflow:hidden}
+.foot section{background:var(--rack);padding:1rem 1.125rem 1.25rem}
+.foot h3{margin-bottom:.8125rem;color:var(--ink-mid)}
+.sw{display:grid;grid-template-columns:2.5rem 1fr;gap:.75rem;align-items:start}
+.sw + .sw{margin-top:.625rem;padding-top:.625rem;border-top:1px solid var(--edge)}
+.sw .box{height:2.5rem;border:1px solid var(--edge-lit)}
+.sw .nm{font-family:var(--engraved);text-transform:uppercase;font-weight:700;letter-spacing:.14em;
+  font-size:var(--t-3xs);color:var(--ink-mid)}
+.sw .hx{display:inline}
+.sw .hx{font-family:var(--shown);font-size:var(--t-3xs);color:var(--ink-dim);letter-spacing:0}
+.sw .ds{display:block;font-size:var(--t-xs);color:var(--ink-dim);line-height:1.55;margin-top:.3125rem}
+table.rep{width:100%;border-collapse:collapse;font-size:var(--t-2xs)}
+table.rep td{padding:.21875rem 0;border-bottom:1px solid var(--edge);color:var(--ink-dim);
+  vertical-align:top}
+table.rep td:first-child{font-family:var(--shown);color:var(--ink-mid);padding-right:.5rem;
+  letter-spacing:0}
+table.rep td:last-child{font-family:var(--shown);text-align:right;color:var(--ink);white-space:nowrap;
+  letter-spacing:0}
+.foot p{font-size:var(--t-xs);color:var(--ink-dim);line-height:1.65}
+.foot p + p{margin-top:.625rem}
+.foot b{color:var(--ink-mid);font-weight:600}
+.foot .shown{color:var(--ink-mid)}
+
+@media (max-width:1180px){
+  .a-body,.b-body,.spec{grid-template-columns:minmax(0,1fr)}
+  .desk,.head-b,.foot{grid-template-columns:minmax(0,1fr)}
+  .study{grid-template-columns:minmax(0,1fr)}
+  .plate-head{grid-template-columns:minmax(0,1fr)}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<body>
+<div class="board">
+
+<!-- ══════════════════════════════ TITLE BLOCK ══════════════════════════════ -->
+<header class="head">
+  <div class="umd">
+    <span class="lab eng">Perch &mdash; art direction</span>
+    <span class="fill"></span>
+    <span class="src">fixtures/perch-demo-fixture.json &middot; hellcat-office</span>
+  </div>
+  <div class="head-b">
+    <div>
+      <h1 class="wordmark">Perch<span> / gallery</span></h1>
+      <p class="head-sub">
+        Drawn from <b>the live control room</b>. That world solved Perch&rsquo;s hardest problem
+        a century ago: many simultaneous states, one operator, a hard hierarchy, and an
+        unambiguous signal for what is happening <b>right now</b>. It also owns the exact
+        distinction the two-stroke grant turns on. A source on <b>preview</b> is cued and waiting
+        for the take. A source on <b>program</b> is going out to everyone.
+      </p>
+      <div class="law">
+        <b>The law of this direction</b>
+        There is exactly one colour in Perch, and it is a lens over a lamp. If you can see any
+        colour on the screen, an irreversible action is running in production right now.
+        Everything else &mdash; every panel, every rule, every severity, every meter &mdash; is
+        metal, black glass and light.
+      </div>
+    </div>
+    <button class="toggle" id="tog" type="button">Toggle light / dark</button>
+  </div>
+</header>
+
+<!-- ═════════════════════════════ SCREEN A ═════════════════════════════════ -->
+<section class="plate">
+  <div class="plate-head">
+    <span class="plate-num">A</span>
+    <h2 class="plate-title">The verdict pane</h2>
+    <div>
+      <p class="plate-note">
+        A hold on <span class="shown">isolate_host</span> awaiting a human, at
+        <span class="shown">09:16:05 UTC</span> &mdash; <span class="shown">clock.timestamps.open_row_ms</span>,
+        the moment the row was opened. Drawn <b>armed</b>: preroll complete, one keystroke from
+        recording. Nothing is running, so there is no colour on this screen at all.
+      </p>
+      <p class="plate-note">
+        Every bay names its own source in the right cell of its under-monitor display. A string
+        printed inside a slot that cannot name a fixture path does not belong on the screen
+        &mdash; which is how the prototype&rsquo;s <span class="shown">network_connectivity</span>
+        and <span class="shown">remote_management</span> were caught: they appear nowhere in the
+        fixture. The fixture says <span class="shown">network.egress</span> and
+        <span class="shown">network.ingress</span>, and that is what slot 02 prints.
+      </p>
+      <p class="plate-note">
+        <b>What the take bar does, kept out of the take bar.</b> Perch does not authorize.
+        Recording publishes a human intent record to the relay under your own key, carrying your
+        Ed25519 signature over <span class="shown">{decided_at_ms, decision, hold_id}</span>, and
+        separately posts your decision to the daemon, which re-derives authority from scratch
+        &mdash; partition, governance, policy, rate limit &mdash; and mints the capability lease.
+        The two legs cross a process boundary, which is what makes this guaranteed rather than
+        conventional. That paragraph is a specification, so it lives out here in the margin: on a
+        3am bench every sentence between the operator and the blast radius is a cost.
+      </p>
+    </div>
+  </div>
+
+  <div class="rackframe">
+  <div class="screen">
+
+    <div class="chrome">
+      <span class="mk">Perch</span>
+      <span class="crumb">
+        <span>watchfloor</span><span class="sep">/</span>
+        <b>case-2026-03-17-host-ops-1</b><span class="sep">/</span>
+        <span>h_a07aeacf</span>
+      </span>
+      <span class="right">
+        <span class="stat"><span class="k">On watch</span><span class="v">perch-operator-1</span></span>
+        <span class="stat"><span class="k">Shift</span><span class="v">01:16:05</span></span>
+        <span class="stat"><span class="k">Relay</span><span class="v">live</span></span>
+        <span class="stat"><span class="k">Daemon</span><span class="v">127.0.0.1:9090</span></span>
+      </span>
+    </div>
+
+    <!-- ─────────── THE TALLY — the signature ─────────── -->
+    <div class="tally">
+      <span class="tallybox lg">
+        <span class="unit" data-lit="hot"><span class="lens"></span><span class="leg">Pvw</span></span>
+        <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+      </span>
+      <div class="tally-mid">
+        <div class="tally-kind">isolate_host</div>
+        <div class="tally-state">Cued &mdash; waiting on your take</div>
+        <div class="tally-sub">
+          <span class="sev">Critical
+            <span class="meter meter--tall" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i></span>
+            <span class="n">4 of 4</span>
+          </span>
+          <span class="sep">|</span>
+          <span>held <span class="shown">09:14:42 UTC</span></span>
+          <span class="sep">|</span>
+          <span>by <span class="shown">ed25519:18085f16&hellip;ce470</span></span>
+          <span class="sep">|</span>
+          <span class="shown">hunt-evt-1 &middot; execution</span>
+        </div>
+      </div>
+      <div class="clockplate">
+        <span class="eng eng-sm k">Expires in</span>
+        <span class="v">58m 37s</span>
+        <span class="d">expires_at &minus; now</span>
+      </div>
+    </div>
+
+    <div class="a-body">
+      <div class="a-main">
+
+        <!-- 01 ACTION -->
+        <article class="slot">
+          <div class="umd">
+            <span class="ord">01</span>
+            <span class="lab eng eng-lg">Action</span>
+            <span class="fill"></span>
+            <span class="src">holds.a.action_request</span>
+          </div>
+          <div class="slot-b">
+            <p class="lead"><span class="shown">isolate_host</span> &mdash; cut
+              <span class="adv">host-ops-1</span> off from the network.</p>
+            <p class="note"><span class="srcline">Adversary-controlled</span><br>
+              Every double-ruled value in this slot is attacker-written. It renders as a plain
+              text node: no markdown, no autolinking, no mention resolution, and control,
+              zero-width and bidi codepoints are escaped to a visible form before they reach the
+              DOM. Nothing here is ever passed to an agent as instruction.</p>
+            <dl class="kv">
+              <dt>host_id</dt><dd><span class="adv">host-ops-1</span></dd>
+              <dt>parent_process</dt><dd><span class="adv">WINWORD</span></dd>
+              <dt>process_name</dt><dd><span class="adv">powershell</span></dd>
+              <dt>command_line</dt><dd><span class="adv">powershell.exe -enc AAA=</span></dd>
+              <dt>user</dt><dd><span class="adv">alice</span></dd>
+              <dt>evidence.source</dt><dd class="shown">synthetic</dd>
+              <dt>heuristics</dt><dd class="shown">encoded_flag: true &middot; download_hint: false</dd>
+            </dl>
+            <div class="absent">
+              <span class="nosig hatched">No<br>signal</span>
+              <div>
+                <h4><span class="shown">decoded_command_segments</span> &mdash; empty</h4>
+                <p>The encoded payload was not decoded, and
+                  <span class="shown">command_line_transforms</span> is empty too. You are looking
+                  at the base64 exactly as it arrived. An unfillable slot renders its absence; it
+                  never collapses out of the order.</p>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- 02 BLAST RADIUS -->
+        <article class="slot">
+          <div class="umd">
+            <span class="ord">02</span>
+            <span class="lab eng eng-lg">Blast radius</span>
+            <span class="fill"></span>
+            <span class="src">holds.a.rehearsal.blast_radius</span>
+          </div>
+          <div class="slot-b">
+            <p class="lead">One host loses network connectivity. The scoped host
+              <span class="adv">host-ops-1</span> is cut off from normal network communication.</p>
+            <dl class="kv">
+              <dt>scope_kind</dt><dd class="shown">host</dd>
+              <dt>scope_value</dt><dd><span class="adv">host-ops-1</span></dd>
+              <dt>impact</dt><dd class="shown">host_connectivity_isolated</dd>
+              <dt>max_affected_scopes</dt><dd class="shown">1</dd>
+            </dl>
+            <div class="eng eng-sm" style="margin-top:.875rem;color:var(--ink-dim)">
+              affected_capabilities &mdash; 2 of 2</div>
+            <div class="chips">
+              <span class="chip">network.egress</span>
+              <span class="chip">network.ingress</span>
+            </div>
+            <p class="note">Both render. There is no <span class="shown">+N more</span> affordance
+              in this slot: the capability list is the real cost of the action, and truncating it
+              hides the half an operator is deciding on.</p>
+
+            <div class="preroll">
+              <div style="display:flex;align-items:center;gap:.75rem;padding-bottom:.4375rem">
+                <span class="eng eng-sm" style="color:var(--ink-dim)">Preroll</span>
+                <span style="flex:1 1 auto;height:1px;background:var(--edge)"></span>
+                <span class="shown" style="font-size:var(--t-3xs);color:var(--ink-dim)">1.5 s &middot; complete</span>
+              </div>
+              <div class="preroll-bar" aria-hidden="true"><i style="width:100%"></i></div>
+              <div class="preroll-rows">
+                <span class="ck">blast radius fully visible, in front of you</span>
+                <span class="ck">read for <span class="shown">1.5</span> of <span class="shown">1.5</span> s</span>
+                <span class="preroll-pct">100%</span>
+              </div>
+              <p class="note" style="margin-top:.5625rem">The gate freezes when this window is not
+                in front. A source cannot be taken before it has prerolled, and this one has.</p>
+            </div>
+          </div>
+        </article>
+
+        <!-- 03 IF YOU UNDO -->
+        <article class="slot">
+          <div class="umd">
+            <span class="ord">03</span>
+            <span class="lab eng eng-lg">If you undo</span>
+            <span class="fill"></span>
+            <span class="src">holds.a.rehearsal.rollback &middot; inverse_resolution</span>
+          </div>
+          <div class="slot-b">
+            <p class="lead"><span class="shown">restore_host_connectivity</span>
+              <span class="advtag">Verdict &mdash; executable</span></p>
+            <p style="margin-top:.4375rem;font-size:var(--t-sm);color:var(--ink-mid)">
+              &rarr; re-enable <span class="adv">host-ops-1</span> network interfaces.</p>
+            <p class="note">Reversible. A release runs the planned step, and the receipt reports
+              what actually happened: read from <span class="shown">lease_closed</span> and
+              <span class="shown">fully_reversed</span> in the response body, never from the HTTP
+              status. <span class="shown">restore_host_connectivity</span> is one of the three
+              variants of <span class="shown">ContainmentInverse</span>; this hold clears all
+              three rungs of the ladder in the rail.</p>
+          </div>
+        </article>
+
+        <!-- 04 WHY WE ARE ASKING -->
+        <article class="slot">
+          <div class="umd">
+            <span class="ord">04</span>
+            <span class="lab eng eng-lg">Why we are asking</span>
+            <span class="fill"></span>
+            <span class="src">holds.a.policy_decision &middot; holds.a.rationale</span>
+          </div>
+          <div class="slot-b">
+            <p class="lead">No policy rule matched. The static gate asks a human for any
+              destructive action at <span class="shown">human_gate_severity</span> or above, which
+              is <span class="shown">HIGH</span>. This request is
+              <span class="shown">CRITICAL</span>.</p>
+            <dl class="kv">
+              <dt>rule_name</dt><dd class="shown">static.human_gate</dd>
+              <dt>reason</dt><dd class="shown">authorized but held for human approval</dd>
+              <dt>threat_class</dt><dd class="shown">execution <span class="advtag">request-carried</span></dd>
+              <dt>severity</dt><dd class="shown">CRITICAL <span class="advtag">request-carried</span></dd>
+              <dt>escalation_level</dt><dd class="shown">alert</dd>
+              <dt>concentration_at_hold</dt><dd class="shown">2.696884 <span style="color:var(--ink-dim)">&middot; execution &middot; 2 sources &middot; peak 0.90</span></dd>
+            </dl>
+            <p class="note">The reason string renders verbatim rather than paraphrased. Two
+              detector-scoped sources on one agent; the lane instrument in the rail carries the
+              same quantity measured now, and the two figures are not the same number because
+              the substrate decays.</p>
+            <div class="absent">
+              <span class="nosig hatched">No<br>signal</span>
+              <div>
+                <h4><span class="shown">governance_receipt_present</span> &mdash; false</h4>
+                <p>No governance receipt is attached to this hold. The field renders its absence
+                  under its own number rather than disappearing, because a missing receipt and a
+                  receipt nobody displayed look identical to a tired reader.</p>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- 05 WHAT GRANTING OPENS -->
+        <article class="slot">
+          <div class="umd">
+            <span class="ord">05</span>
+            <span class="lab eng eng-lg">What granting opens</span>
+            <span class="fill"></span>
+            <span class="src">constants.*_lease_ttl_ms</span>
+          </div>
+          <div class="slot-b">
+            <p class="lead"><b style="font-weight:600">Capability lease</b> &middot;
+              <span class="shown">isolate_host</span> &middot; scope
+              <span class="adv">host-ops-1</span> &middot; <span class="shown">60 s</span></p>
+            <p class="note">Not minted yet. It is minted <b>when you decide</b>, not when this
+              hold opened, and it expires <span class="shown">60</span> s after your decision
+              whether or not the action has dispatched.</p>
+            <p class="lead" style="margin-top:1rem"><b style="font-weight:600">Containment lease</b>
+              &middot; opens on dispatch &middot; <span class="shown">900 s</span> &middot;
+              <span class="shown">cl_9b3645fc</span></p>
+            <p class="note">A second, unrelated object with its own clock, <span class="shown">15&times;</span>
+              the capability window above. When it expires the sweep runs the inverse; on the
+              containment board <span class="shown">remaining_ms</span> and
+              <span class="shown">expired</span> are two facts and never one progress bar.
+              <b>This is the object that lights PGM.</b></p>
+          </div>
+        </article>
+
+      </div>
+
+      <!-- ─────────── the instrument rail ─────────── -->
+      <aside class="a-rail">
+
+        <div class="bay">
+          <div class="umd">
+            <span class="lab eng">Threat lane</span>
+            <span class="fill"></span>
+            <span class="src">concentration.at_open_row</span>
+          </div>
+          <div class="bay-b">
+            <div class="lane">
+              <span class="nm">execution</span><span class="val">2.653617</span>
+              <span class="trough" data-over="1" aria-hidden="true">
+                <i style="width:88.4%"></i><u style="left:66.7%"></u></span>
+              <span class="sub">measured now &middot; the marker is the alert threshold
+                <span class="shown">2.0</span> &middot; 2 sources / 1 agent</span>
+            </div>
+            <div class="lane">
+              <span class="nm">at the hold</span><span class="val">2.696884</span>
+              <span class="trough" data-over="1" aria-hidden="true">
+                <i style="width:89.9%"></i><u style="left:66.7%"></u></span>
+              <span class="sub">09:14:42, 83 s ago. The lane is decaying under a
+                <span class="shown">3600 s</span> half-life; both figures are true and neither is
+                rounded.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="bay">
+          <div class="umd">
+            <span class="lab eng">Provenance</span>
+            <span class="fill"></span>
+            <span class="src">tier 0</span>
+          </div>
+          <div class="bay-b inst">
+            <div class="absent" style="margin:0 0 .75rem">
+              <span class="nosig hatched">No<br>signal</span>
+              <div>
+                <h4>Unattested &mdash; no signature of its own</h4>
+                <p><span class="shown">ambush:hold:v1</span> carries no Ed25519 signature in
+                  Ambush today, under any condition.</p>
+              </div>
+            </div>
+            <p>This card is a copy; the daemon holds the record. Nothing here can be checked
+              offline. Tier 0 runs none of the three checks, so the control below does the only
+              honest thing available.</p>
+            <button class="instbtn" type="button">Re-read this hold from the daemon and diff the bytes</button>
+          </div>
+        </div>
+
+        <div class="bay">
+          <div class="umd">
+            <span class="lab eng">Relay envelope</span>
+            <span class="fill"></span>
+            <span class="src">cast.bridge.nostr_pubkey</span>
+          </div>
+          <div class="bay-b inst">
+            <span class="state">Transport only &middot; secp256k1</span>
+            <span class="npub">207176338a897b2379564322033e86ed7197600499ba348e6c6c898b8139b586</span>
+            <p>Shows this card reached the relay from the bridge&rsquo;s key and was not altered in
+              transit. It says nothing about whether the daemon produced it. Rendered in full,
+              never truncated: a truncated key is forgeable by vanity grinding.</p>
+          </div>
+        </div>
+
+        <div class="bay">
+          <div class="umd">
+            <span class="lab eng">Who answered</span>
+            <span class="fill"></span>
+            <span class="src">a human was asked</span>
+          </div>
+          <div class="bay-b inst">
+            <p>Perch&rsquo;s hold record and the <span class="shown">ambush:verdict:v1</span> card
+              you publish under your own key both name you. The daemon&rsquo;s receipt does not
+              &mdash; its audit block has two optional fields, a policy attribution and a
+              governance one, and the governance one names an agent. Until that lands, the
+              daemon&rsquo;s record shows that a human was asked, not which one answered.</p>
+          </div>
+        </div>
+
+        <div class="bay">
+          <div class="umd">
+            <span class="lab eng">The ladder</span>
+            <span class="fill"></span>
+            <span class="src">this action clears all three</span>
+          </div>
+          <div class="bay-b">
+            <div class="ladder">
+              <div>
+                <div class="lrow-h"><span class="eng eng-sm">Destructive</span><span class="n">12</span></div>
+                <div class="bar" aria-hidden="true"><i style="width:100%"></i></div>
+              </div>
+              <div>
+                <div class="lrow-h"><span class="eng eng-sm">Lease a containment</span><span class="n">4</span></div>
+                <div class="bar" aria-hidden="true"><i style="width:33.33%"></i></div>
+              </div>
+              <div>
+                <div class="lrow-h"><span class="eng eng-sm">Executable inverse</span><span class="n">3</span></div>
+                <div class="bar" data-over="1" aria-hidden="true"><i style="width:25%"></i></div>
+                <p class="lcap"><span class="shown">isolate_host</span> is one of the three. Twelve
+                  destructive actions narrow to four that lease a containment and then to three
+                  that have an executable inverse. Read the length, not a colour.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="blank" aria-hidden="true"></div>
+
+      </aside>
+    </div>
+
+    <!-- ─────────── THE DESK ─────────── -->
+    <div class="desk">
+      <div class="desk-l">
+        <div class="eng eng-sm" style="margin-bottom:.5625rem;color:var(--ink-dim)">Desk &mdash; acts available on this row</div>
+        <div class="acts">
+          <span class="act"><kbd>R</kbd>Refuse</span>
+          <span class="act"><kbd>E</kbd>Promote to a case</span>
+          <span class="act hatched" data-off="1"><kbd>S</kbd>Snooze &mdash; not on a hold</span>
+        </div>
+        <p class="desknote">Refuse takes one key and cannot be undone. It is recorded in
+          <span class="shown">case-2026-03-17-host-ops-1</span> as an
+          <span class="shown">ambush:verdict:v1</span> card published under your own key, and
+          posted to the daemon. Nothing dispatches. If you change your mind, request the action
+          again &mdash; that produces a new hold and a second, separately recorded decision,
+          rather than editing this one.</p>
+        <div class="legs">
+          <div class="leg-cell">
+            <span class="n">leg 1</span>
+            <h5>Your intent card</h5>
+            <p>A <span class="shown">kind:9</span> <span class="shown">ambush:verdict:v1</span>
+              published to the case channel under your own key. It records that you deliberated.
+              It authorizes nothing.</p>
+          </div>
+          <div class="leg-cell">
+            <span class="n">leg 2</span>
+            <h5>The daemon decides</h5>
+            <p>Posted separately. The daemon re-derives authority from scratch and mints the
+              capability lease at your decision. Exactly one console can be in flight on a hold.</p>
+          </div>
+          <div class="leg-cell">
+            <span class="n">leg 3</span>
+            <h5>The receipt</h5>
+            <p>What actually happened, read from the response body and never from the HTTP status.
+              <b style="color:var(--ink-mid);font-weight:600">PGM lights here, and not before.</b></p>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;min-width:0">
+        <div class="eng eng-sm" style="margin-bottom:.5625rem;color:var(--ink-dim)">The take bar &mdash; arm, then take</div>
+        <div class="take">
+          <div class="take-top">
+            <div class="take-hz hatched" aria-hidden="true"></div>
+            <div class="take-main">
+              <div class="take-title">Take</div>
+              <p class="take-say">Record my decision and send it to the daemon.</p>
+            </div>
+            <div class="take-keys"><kbd>G</kbd><span class="x">then</span><kbd>&crarr;</kbd></div>
+          </div>
+          <div class="throw">
+            <span class="slotrail" data-pos="mid" data-interlock="up" aria-hidden="true"><u></u><b></b></span>
+            <span class="st">Armed &mdash; interlock lifted</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  </div>
+</section>
+
+<!-- ══════════════════════ A' — THE TAKE, THREE STATES ═════════════════════ -->
+<section class="plate">
+  <div class="plate-head">
+    <span class="plate-num">A&prime;</span>
+    <h2 class="plate-title">The take &mdash; three states</h2>
+    <div>
+      <p class="plate-note">
+        The same hold at three instants. <b>Is this armed?</b> is the question the whole safety
+        argument rests on, so it is answered by two physical facts and never by a tint: which
+        lamp is lit, and where the throw is sitting. Both survive greyscale, colour blindness
+        and a bad monitor by construction &mdash; see the proof in plate C.
+      </p>
+      <p class="plate-note">
+        State 3 is the only drawing in this document that contains the colour, and it is the
+        only state in which something is running.
+      </p>
+    </div>
+  </div>
+
+  <div class="rackframe">
+  <div class="study">
+
+    <section>
+      <span class="cap">1 &middot; Not armed<i>09:16:05 &mdash; the row is open, nothing is cued to fire</i></span>
+      <span class="tallybox">
+        <span class="unit" data-lit="hot"><span class="lens"></span><span class="leg">Pvw</span></span>
+        <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+      </span>
+      <div class="take">
+        <div class="take-top">
+          <div class="take-hz hatched" aria-hidden="true"></div>
+          <div class="take-main"><div class="take-title">Take</div></div>
+          <div class="take-keys"><kbd>G</kbd><span class="x">to arm</span></div>
+        </div>
+        <div class="throw">
+          <span class="slotrail" data-pos="rest" data-interlock="down" aria-hidden="true"><u></u><b></b></span>
+          <span class="st">At rest</span>
+        </div>
+      </div>
+      <p class="why">The throw sits hard left and the hatched interlock stands <b>in its path</b>.
+        <span class="shown">&crarr;</span> does nothing at all from here.</p>
+    </section>
+
+    <section>
+      <span class="cap">2 &middot; Armed, gated<i>after G &mdash; preroll complete, one key from the record</i></span>
+      <span class="tallybox">
+        <span class="unit" data-lit="hot"><span class="lens"></span><span class="leg">Pvw</span></span>
+        <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+      </span>
+      <div class="take">
+        <div class="take-top">
+          <div class="take-hz hatched" aria-hidden="true"></div>
+          <div class="take-main"><div class="take-title">Take</div></div>
+          <div class="take-keys"><kbd>&crarr;</kbd><span class="x">records</span></div>
+        </div>
+        <div class="throw">
+          <span class="slotrail" data-pos="mid" data-interlock="up" aria-hidden="true"><u></u><b></b></span>
+          <span class="st">Armed</span>
+        </div>
+      </div>
+      <p class="why">The interlock has <b>lifted clear</b> and the throw has moved to mid-travel.
+        PVW is still the only lamp lit: arming changes nothing in production. Nothing has been
+        authorized and nothing has run.</p>
+    </section>
+
+    <section>
+      <span class="cap">3 &middot; Live<i>09:16:19.8 &mdash; the daemon dispatched; the receipt came back</i></span>
+      <span class="tallybox">
+        <span class="unit"><span class="lens"></span><span class="leg">Pvw</span></span>
+        <span class="unit" data-lit="pgm"><span class="lens"></span><span class="leg">Pgm</span></span>
+      </span>
+      <div class="take">
+        <div class="take-top">
+          <div class="take-hz hatched" aria-hidden="true"></div>
+          <div class="take-main"><div class="take-title">Taken</div></div>
+          <div class="take-keys"><span class="x">cl_9b3645fc</span></div>
+        </div>
+        <div class="throw">
+          <span class="slotrail" data-pos="thrown" data-interlock="none" aria-hidden="true"><u></u><b></b></span>
+          <span class="st">Thrown &middot; 900 s</span>
+        </div>
+      </div>
+      <p class="why">The light has <b>moved</b>: PVW dark, PGM lit, throw hard right. The
+        containment lease is open and <span class="shown">host-ops-1</span> is isolated. This is
+        the only screen in Perch that has colour on it.</p>
+    </section>
+
+  </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ SCREEN B ═════════════════════════════════ -->
+<section class="plate">
+  <div class="plate-head">
+    <span class="plate-num">B</span>
+    <h2 class="plate-title">The Watch</h2>
+    <div>
+      <p class="plate-note">
+        The same instant, <span class="shown">09:16:05 UTC</span>. Four inbox categories with
+        counts, holds and findings interleaved in one rack, one row selected, keyboard
+        affordances on the row and in the strip. The two lit lamps are exactly the two rows
+        waiting on you.
+      </p>
+      <p class="plate-note">
+        <b>Six rows, because the fixture has six.</b> At this instant
+        <span class="shown">queue</span> resolves to 2 holds, 3 unreviewed findings, 1 case
+        event and one category that is <b>absent rather than empty</b>. Nothing is padded to make
+        the queue look busy; plate C shows what the ramp does across a real range, using the
+        fixture&rsquo;s own lane table rather than invented rows.
+      </p>
+    </div>
+  </div>
+
+  <div class="rackframe">
+  <div class="screen">
+
+    <div class="chrome">
+      <span class="mk">Perch</span>
+      <span class="crumb"><b>the watch</b><span class="sep">/</span><span>hellcat-office</span></span>
+      <span class="right">
+        <span class="stat"><span class="k">On watch</span><span class="v">perch-operator-1</span></span>
+        <span class="stat"><span class="k">Shift</span><span class="v">01:16:05</span></span>
+        <span class="stat"><span class="k">Relay</span><span class="v">live</span></span>
+        <span class="stat"><span class="k">Daemon</span><span class="v">127.0.0.1:9090</span></span>
+      </span>
+    </div>
+
+    <!-- the program strip: what is on air across the whole colony -->
+    <div class="pgmstrip">
+      <span class="tallybox sm">
+        <span class="unit"><span class="lens"></span><span class="leg">Pvw</span></span>
+        <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+      </span>
+      <p>Nothing is on program. <span class="shown">0</span> containment leases open,
+        <span class="shown">0</span> actions running. Two holds are cued.</p>
+      <span class="right">reconciled against GET /v1/response/holds<br>0 divergences</span>
+    </div>
+
+    <div class="b-body">
+
+      <!-- ─────────── sidebar ─────────── -->
+      <nav class="sidebar">
+        <div>
+          <div class="sbg-h"><span class="eng">Watch</span><span class="c">6</span></div>
+          <div class="sbr" data-active="1"><span>Holds</span><span class="r">2</span></div>
+          <div class="sbr"><span>Findings</span><span class="r">3</span></div>
+          <div class="sbr"><span>Case activity</span><span class="r">1</span></div>
+          <div class="sbr"><span>Named you</span><span class="r" title="absent, not zero">&mdash;</span></div>
+        </div>
+
+        <div>
+          <div class="sbg-h"><span class="eng">Threat lanes</span><span class="c">12</span></div>
+          <div class="sbmeter">
+            <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i></span>
+            <span class="nm">execution</span><span class="v">2.653617</span>
+          </div>
+          <div class="sbmeter" style="padding-top:0">
+            <span></span><span class="nm" style="font-size:var(--t-3xs);color:var(--ink-dim)">over alert threshold 2.0</span><span></span>
+          </div>
+          <div class="sbmeter"><span></span>
+            <span class="nm" style="color:var(--ink-dim);white-space:normal;font-size:var(--t-2xs);line-height:1.5">11 more lanes &mdash; none above 2.0</span>
+            <span></span></div>
+        </div>
+
+        <div>
+          <div class="sbg-h"><span class="eng">Cases</span><span class="c">1 open</span></div>
+        </div>
+
+        <div style="margin-top:auto">
+          <div class="sbg-h"><span class="eng">On watch</span><span class="c">01:16:05</span></div>
+          <div class="sbr"><span class="tag">perch-operator-1</span></div>
+          <div class="sbr" style="padding-top:0"><span class="tag" style="font-size:var(--t-3xs);color:var(--ink-dim)">read &middot; rehearse &middot; approve &middot; maintenance</span></div>
+        </div>
+
+        <div class="sblinks" style="border-top:1px solid var(--edge);padding-top:.5rem">
+          <div class="sbr"><span>Containments</span></div>
+          <div class="sbr"><span>Policy</span></div>
+          <div class="sbr"><span>Tuning</span></div>
+          <div class="sbr"><span>Gaps</span></div>
+          <div class="sbr"><span>Ledger</span></div>
+          <div class="sbr"><span>Watchfloor</span></div>
+          <div class="sbr"><span>Handoff</span></div>
+          <div class="sbr"><span>Settings</span></div>
+        </div>
+      </nav>
+
+      <!-- ─────────── the inbox rack ─────────── -->
+      <div class="inbox">
+        <div class="inbox-scroll">
+
+          <!-- 1 · HOLDS -->
+          <div class="umd">
+            <span class="lab eng eng-lg">Holds</span>
+            <span class="fill"></span>
+            <span class="src">GET /v1/response/holds</span>
+            <span class="cnt">2</span>
+          </div>
+          <p class="stripnote">
+            median page-to-verdict <span class="un">unmeasured</span> &middot;
+            <b>1</b> measurement written this week &middot;
+            promotion counter <span class="un">unmeasured</span> &middot;
+            <b>0 / 3</b> findings reviewed this shift
+          </p>
+
+          <button class="row" data-sel="1" type="button">
+            <span class="row-gut">
+              <span class="tallybox sm">
+                <span class="unit" data-lit="hot"><span class="lens"></span><span class="leg">Pvw</span></span>
+                <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+              </span>
+            </span>
+            <span>
+              <span class="row-l1">
+                <span class="row-verb">Held</span><span class="sep">&middot;</span>
+                <span class="row-kind">isolate_host</span>
+                <span class="sp"></span>
+                <span class="sev">Critical
+                  <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i></span>
+                  <span class="n">4 of 4</span>
+                </span>
+              </span>
+              <span class="row-l2"><span class="adv">host-ops-1</span></span>
+              <span class="row-l3">
+                <span class="shown">ed25519:18085f16&hellip;</span><span class="sep">&middot;</span>
+                <span class="shown">09:14:42</span>
+                <span class="sp"></span>
+                <span class="shown">expires in 58m 37s</span>
+              </span>
+              <span class="row-l4">2 sources / 1 agent &middot; <span class="shown">execution</span>
+                &middot; leases a containment &middot; executable inverse &middot;
+                <span class="shown">h_a07aeacf</span></span>
+              <span class="row-keys">
+                <kbd>G</kbd><kbd>R</kbd><kbd>E</kbd><kbd data-off="1">S</kbd><kbd>M</kbd>
+                <span class="hint">G arms &middot; &crarr; takes</span>
+              </span>
+            </span>
+          </button>
+
+          <button class="row" type="button">
+            <span class="row-gut">
+              <span class="tallybox sm">
+                <span class="unit" data-lit="hot"><span class="lens"></span><span class="leg">Pvw</span></span>
+                <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+              </span>
+            </span>
+            <span>
+              <span class="row-l1">
+                <span class="row-verb">Held</span><span class="sep">&middot;</span>
+                <span class="row-kind">block_egress</span>
+                <span class="sp"></span>
+                <span class="sev">Critical
+                  <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i></span>
+                  <span class="n">4 of 4</span>
+                </span>
+              </span>
+              <span class="row-l2"><span class="adv">198.51.100.20</span></span>
+              <span class="row-l3">
+                <span class="shown">ed25519:18085f16&hellip;</span><span class="sep">&middot;</span>
+                <span class="shown">09:14:42</span>
+                <span class="sp"></span>
+                <span class="shown">expires in 58m 37s</span>
+              </span>
+              <span class="row-l4">2 sources / 1 agent &middot; <span class="shown">execution</span>
+                &middot; no containment lease &middot;
+                <b>no inverse mapped &mdash; undoing this is manual</b> &middot;
+                <span class="shown">h_1c28ae79</span></span>
+            </span>
+          </button>
+
+          <!-- 2 · NAMED YOU -->
+          <div class="umd">
+            <span class="lab eng eng-lg">Named you</span>
+            <span class="fill"></span>
+            <span class="src">queue.named_you.absent_reason</span>
+            <span class="cnt">&mdash;</span>
+          </div>
+          <div class="absent-q">
+            <span class="nosig hatched">No<br>signal</span>
+            <p><b>Absent, not zero.</b> No operator directory exists in either tree; one principal
+              is synthesised from config, so nothing in Ambush can name an operator. The header
+              renders anyway &mdash; a category that vanishes is a category nobody audits.</p>
+          </div>
+
+          <!-- 3 · FINDINGS TO REVIEW -->
+          <div class="umd">
+            <span class="lab eng eng-lg">Findings to review</span>
+            <span class="fill"></span>
+            <span class="src">findings[] &middot; review_state</span>
+            <span class="cnt">3</span>
+          </div>
+
+          <button class="row" type="button">
+            <span class="row-gut"><span class="mark" data-r="unreviewed"><i></i>New</span></span>
+            <span>
+              <span class="row-l1">
+                <span class="row-kind">suspicious_process_tree</span>
+                <span class="sp"></span>
+                <span class="sev">Critical
+                  <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i></span>
+                  <span class="n">4 of 4</span>
+                </span>
+                <span class="sep">&middot;</span>
+                <span class="shown" style="font-size:var(--t-xs);color:var(--ink-dim)">09:14:32</span>
+              </span>
+              <span class="row-l2"><span class="adv">host-ops-1</span></span>
+              <span class="row-l3">
+                <span class="shown">ed25519:18085f16&hellip;</span><span class="sep">&middot;</span>
+                <span class="conf"><span class="shown">0.90</span>
+                  <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i></i></span>
+                </span>
+                <span class="sp"></span>
+                <span class="rev" data-r="unreviewed">Not reviewed</span>
+              </span>
+              <span class="row-l4"><span class="shown">execution</span> &middot;
+                <span class="shown">hunt-evt-1</span></span>
+            </span>
+          </button>
+
+          <button class="row" type="button">
+            <span class="row-gut"><span class="mark" data-r="unreviewed"><i></i>New</span></span>
+            <span>
+              <span class="row-l1">
+                <span class="row-kind">suspicious_scripting</span>
+                <span class="sp"></span>
+                <span class="sev">Critical
+                  <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i></span>
+                  <span class="n">4 of 4</span>
+                </span>
+                <span class="sep">&middot;</span>
+                <span class="shown" style="font-size:var(--t-xs);color:var(--ink-dim)">09:14:32</span>
+              </span>
+              <span class="row-l2"><span class="adv">host-ops-1</span></span>
+              <span class="row-l3">
+                <span class="shown">ed25519:18085f16&hellip;</span><span class="sep">&middot;</span>
+                <span class="conf"><span class="shown">0.90</span>
+                  <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i></i></span>
+                </span>
+                <span class="sp"></span>
+                <span class="rev" data-r="unreviewed">Not reviewed</span>
+              </span>
+              <span class="row-l4"><span class="shown">execution</span> &middot;
+                <span class="shown">hunt-evt-1</span> &middot;
+                dismissed at <span class="shown">09:18:44</span>, which has not happened yet</span>
+            </span>
+          </button>
+
+          <button class="row" type="button">
+            <span class="row-gut"><span class="mark" data-r="unreviewed"><i></i>New</span></span>
+            <span>
+              <span class="row-l1">
+                <span class="row-kind">suspicious_process_tree</span>
+                <span class="sp"></span>
+                <span class="sev">Critical
+                  <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i></span>
+                  <span class="n">4 of 4</span>
+                </span>
+                <span class="sep">&middot;</span>
+                <span class="shown" style="font-size:var(--t-xs);color:var(--ink-dim)">09:14:41</span>
+              </span>
+              <span class="row-l2"><span class="adv">host-ops-1</span></span>
+              <span class="row-l3">
+                <span class="shown">ed25519:18085f16&hellip;</span><span class="sep">&middot;</span>
+                <span class="conf"><span class="shown">0.90</span>
+                  <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i></i></span>
+                </span>
+                <span class="sp"></span>
+                <span class="rev" data-r="unreviewed">Not reviewed</span>
+              </span>
+              <span class="row-l4"><span class="shown">execution</span> &middot;
+                <span class="shown">hunt-evt-2</span></span>
+            </span>
+          </button>
+
+          <!-- 4 · CASE ACTIVITY -->
+          <div class="umd">
+            <span class="lab eng eng-lg">Case activity</span>
+            <span class="fill"></span>
+            <span class="src">channels.case</span>
+            <span class="cnt">1</span>
+          </div>
+
+          <button class="row" type="button">
+            <span class="row-gut"><span class="mark" data-r="none"><i></i>&mdash;</span></span>
+            <span>
+              <span class="row-l1">
+                <span class="row-kind">case &middot; 27799e23</span>
+                <span class="sp"></span>
+                <span class="shown" style="font-size:var(--t-xs);color:var(--ink-dim)">09:14:42</span>
+              </span>
+              <span class="row-l2" style="font-family:var(--said);font-size:var(--t-sm)">a correlated incident now includes 3 members</span>
+              <span class="row-l4">a NIP-10 reply in a case channel you joined &middot;
+                <span class="shown">case-2026-03-17-host-ops-1</span> &middot; 6h ttl</span>
+            </span>
+          </button>
+
+        </div>
+
+        <div class="keystrip">
+          <span class="eng eng-sm" style="margin-right:.25rem;color:var(--ink-dim)">Keys</span>
+          <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> move</span>
+          <span><kbd>&crarr;</kbd> open</span>
+          <span><kbd>G</kbd> arm</span>
+          <span><kbd>R</kbd> refuse</span>
+          <span><kbd>C</kbd> confirm</span>
+          <span><kbd>D</kbd> dismiss</span>
+          <span><kbd>I</kbd> investigate</span>
+          <span><kbd>E</kbd> promote</span>
+          <span><kbd>S</kbd> snooze</span>
+          <span><kbd>M</kbd> mute</span>
+          <span><kbd>&#8984;K</kbd> commands</span>
+        </div>
+      </div>
+
+      <!-- ─────────── the preview monitor ─────────── -->
+      <aside class="preview">
+        <div class="umd">
+          <span class="lab eng">Preview</span>
+          <span class="fill"></span>
+          <span class="src">h_a07aeacf</span>
+        </div>
+        <div class="pv-b">
+          <span class="tallybox" style="margin-bottom:.875rem">
+            <span class="unit" data-lit="hot"><span class="lens"></span><span class="leg">Pvw</span></span>
+            <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+          </span>
+
+          <div class="pv-slot" style="border-top:0;padding-top:0;margin-top:0">
+            <div class="pv-lab"><span class="n">01</span><span class="eng eng-sm">Action</span></div>
+            <p class="pv-v"><span class="shown">isolate_host</span> &mdash; cut
+              <span class="adv">host-ops-1</span> off from the network.</p>
+          </div>
+          <div class="pv-slot">
+            <div class="pv-lab"><span class="n">02</span><span class="eng eng-sm">Blast radius</span></div>
+            <p class="pv-v">One host loses network connectivity.
+              <span class="shown">max_affected_scopes 1</span> &middot;
+              <span class="shown">network.egress</span>, <span class="shown">network.ingress</span>.</p>
+          </div>
+          <div class="pv-slot">
+            <div class="pv-lab"><span class="n">03</span><span class="eng eng-sm">If you undo</span></div>
+            <p class="pv-v"><span class="shown">restore_host_connectivity</span>
+              <span class="advtag">Executable</span></p>
+          </div>
+          <div class="pv-slot">
+            <div class="pv-lab"><span class="n">04</span><span class="eng eng-sm">Why we are asking</span></div>
+            <p class="pv-v"><span class="shown">static.human_gate</span> &mdash; CRITICAL is at or
+              above <span class="shown">HIGH</span>. Lane at the hold
+              <span class="shown">2.696884</span>.</p>
+          </div>
+          <div class="pv-slot">
+            <div class="pv-lab"><span class="n">05</span><span class="eng eng-sm">What granting opens</span></div>
+            <p class="pv-v">capability lease <span class="shown">60 s</span> &middot; containment
+              lease <span class="shown">900 s</span>.</p>
+          </div>
+          <div class="pv-slot">
+            <div class="pv-lab"><span class="n">&mdash;</span><span class="eng eng-sm">Provenance</span></div>
+            <p class="pv-v">Tier 0 &mdash; unattested. This card is a copy; the daemon holds the
+              record.</p>
+          </div>
+        </div>
+        <div class="blank" style="margin:0 1rem 1rem" aria-hidden="true"></div>
+        <div class="pv-foot"><kbd>&crarr;</kbd> Open the verdict pane</div>
+      </aside>
+
+    </div>
+  </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════ PLATE C — SPECIMENS ══════════════════════════ -->
+<section class="plate">
+  <div class="plate-head">
+    <span class="plate-num">C</span>
+    <h2 class="plate-title">The ramp, and the proof</h2>
+    <div>
+      <p class="plate-note">
+        The brief asks for identical fixture content <em>and</em> a dense queue. This fixture has
+        four queue rows; those two instructions are in conflict and I am not resolving it by
+        inventing rows. Instead: the left panel is the fixture&rsquo;s own twelve-lane table,
+        which spans a 17.6&times; magnitude range and contains one explicit absence &mdash; real
+        data, real ramp, every row traceable. The right panel is a labelled type specimen for the
+        severity encoding, which the fixture cannot exercise because it contains exactly one
+        severity value.
+      </p>
+    </div>
+  </div>
+
+  <div class="rackframe">
+  <div class="spec">
+
+    <div>
+      <div class="umd">
+        <span class="lab eng eng-lg">Threat lanes</span>
+        <span class="fill"></span>
+        <span class="src">lanes[] @ lanes_observed_at_seconds</span>
+        <span class="cnt">12</span>
+      </div>
+      <div class="spec-b">
+        <div class="warn"><b>A different clock, stated.</b> This is the fixture&rsquo;s only full
+          lane table and it is observed at <span class="shown">09:20:00</span> &mdash; 3 m 55 s
+          after screens A and B, and after the <span class="shown">suspicious_scripting</span>
+          dismissal took <span class="shown">execution</span> from two sources to one. That is why
+          it reads <span class="shown">0.846385</span> here and <span class="shown">2.653617</span>
+          in the rail of screen A. Both are the same measured quantity at two different instants,
+          printed at full precision so neither can be mistaken for the other.</div>
+        <table class="lanetable">
+          <thead><tr>
+            <th>Lane</th><th style="width:40%">Strength &mdash; full width is the alert threshold, 2.0</th>
+            <th>Sources</th><th>Value</th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="nm">lateral_movement</td><td><span class="bar" aria-hidden="true"><i style="width:53.81%"></i></span></td><td>2</td><td class="v">1.076102</td></tr>
+            <tr><td class="nm">command_and_control</td><td><span class="bar" aria-hidden="true"><i style="width:49.43%"></i></span></td><td>2</td><td class="v">0.988519</td></tr>
+            <tr><td class="nm">execution</td><td><span class="bar" aria-hidden="true"><i style="width:42.32%"></i></span></td><td>1</td><td class="v">0.846385</td></tr>
+            <tr><td class="nm">data_exfiltration</td><td><span class="bar" aria-hidden="true"><i style="width:41.50%"></i></span></td><td>2</td><td class="v">0.830093</td></tr>
+            <tr><td class="nm">credential_access</td><td><span class="bar" aria-hidden="true"><i style="width:29.34%"></i></span></td><td>2</td><td class="v">0.586899</td></tr>
+            <tr><td class="nm">defense_evasion</td><td><span class="bar" aria-hidden="true"><i style="width:20.94%"></i></span></td><td>1</td><td class="v">0.418722</td></tr>
+            <tr><td class="nm">persistence</td><td><span class="bar" aria-hidden="true"><i style="width:15.46%"></i></span></td><td>1</td><td class="v">0.309194</td></tr>
+            <tr><td class="nm">privilege_escalation</td><td><span class="bar" aria-hidden="true"><i style="width:12.92%"></i></span></td><td>1</td><td class="v">0.258361</td></tr>
+            <tr><td class="nm">supply_chain</td><td><span class="bar" aria-hidden="true"><i style="width:8.25%"></i></span></td><td>1</td><td class="v">0.165000</td></tr>
+            <tr><td class="nm">initial_access</td><td><span class="bar" aria-hidden="true"><i style="width:6.14%"></i></span></td><td>1</td><td class="v">0.122842</td></tr>
+            <tr><td class="nm">impact</td><td><span class="bar" aria-hidden="true"><i style="width:3.05%"></i></span></td><td>1</td><td class="v">0.060965</td></tr>
+            <tr data-empty="1"><td class="nm">discovery</td><td><span class="bar hatched" aria-hidden="true"></span></td><td>0</td><td class="v">&mdash;</td></tr>
+          </tbody>
+        </table>
+        <p class="plate-note" style="margin-top:.75rem"><span class="shown">discovery</span> is
+          hatched rather than drawn at zero: <b>no shipped detector emits this threat class</b>, so
+          the lane is absent, not quiet. A zero-length bar would be a lie about coverage.</p>
+      </div>
+    </div>
+
+    <div>
+      <div class="umd">
+        <span class="lab eng eng-lg">Specimen</span>
+        <span class="fill"></span>
+        <span class="src">not fixture data</span>
+      </div>
+      <div class="spec-b">
+        <div class="warn"><b>This strip is a specimen, not a screen.</b> The fixture contains one
+          severity value, <span class="shown">CRITICAL</span>, five times over. These four rows
+          exist so the encoding can be judged across its range. They appear on no product surface
+          in this document and no queue row was invented to pad a count.</div>
+        <div class="sr">
+          <span class="sev">Low <span class="meter" aria-hidden="true"><i data-on="1"></i><i></i><i></i><i></i></span><span class="n">1 of 4</span></span>
+          <span>no human gate</span>
+        </div>
+        <div class="sr">
+          <span class="sev">Medium <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i></i><i></i></span><span class="n">2 of 4</span></span>
+          <span>no human gate</span>
+        </div>
+        <div class="sr" style="border-top:2px solid var(--ink-dim)">
+          <span class="sev">High <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i></i></span><span class="n">3 of 4</span></span>
+          <span><span class="shown">human_gate_severity</span> &mdash; gated from here up</span>
+        </div>
+        <div class="sr">
+          <span class="sev">Critical <span class="meter" aria-hidden="true"><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i><i data-on="1"></i></span><span class="n">4 of 4</span></span>
+          <span>this hold</span>
+        </div>
+        <p class="plate-note" style="margin-top:.6875rem">The rule between MEDIUM and HIGH is the
+          policy boundary, drawn where the product actually has one. Severity is a word, a count
+          and a length &mdash; three encodings, no hue.</p>
+
+        <div class="umd" style="margin:1.25rem -1rem .875rem;border-top:1px solid var(--edge-lit)">
+          <span class="lab eng eng-lg">Greyscale proof</span>
+          <span class="fill"></span>
+          <span class="src">filter: grayscale(1)</span>
+        </div>
+        <div class="grey" style="display:flex;flex-wrap:wrap;gap:.875rem;align-items:center">
+          <span class="tallybox">
+            <span class="unit" data-lit="hot"><span class="lens"></span><span class="leg">Pvw</span></span>
+            <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+          </span>
+          <span class="tallybox">
+            <span class="unit"><span class="lens"></span><span class="leg">Pvw</span></span>
+            <span class="unit" data-lit="pgm"><span class="lens"></span><span class="leg">Pgm</span></span>
+          </span>
+          <span class="tallybox">
+            <span class="unit"><span class="lens"></span><span class="leg">Pvw</span></span>
+            <span class="unit"><span class="lens"></span><span class="leg">Pgm</span></span>
+          </span>
+          <span class="nosig hatched">No<br>signal</span>
+        </div>
+        <p class="plate-note" style="margin-top:.6875rem">Cued, live, and clear &mdash; with the
+          colour removed. The lit PGM lens is still unmistakable because a filament clips: its
+          white-hot core measures <b>14.02:1</b> against an unlit lens, where the red field alone
+          would only manage <b>1.96:1</b>. The core is the encoding; the red is the confirmation.</p>
+      </div>
+    </div>
+
+  </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════ FOOTER ══════════════════════════════════ -->
+<div class="foot">
+  <section>
+    <h3 class="eng eng-lg">The palette</h3>
+    <div id="sw"></div>
+    <p style="margin-top:.875rem"><b>One chromatic value.</b> Everything else is a tinted neutral
+      at C*ab &le; 8.4 or a pure achromatic, and each prints its own chroma above so nothing is
+      hidden in the ramp.</p>
+  </section>
+
+  <section>
+    <h3 class="eng eng-lg">Measured, live, from the tokens</h3>
+    <table class="rep" id="rep"></table>
+    <p style="margin-top:.75rem">Every figure is recomputed from the live computed styles each time
+      the theme changes, so the table cannot drift from the tokens it describes. dE2000 is against
+      all 36 banned values; contrast is WCAG 2.x on the real surface each ink actually sits on.</p>
+  </section>
+
+  <section>
+    <h3 class="eng eng-lg">Notes</h3>
+    <p><b>The floor, and where it stops.</b> The 10 dE2000 floor is applied to <b>chromatic</b>
+      tokens. There is one, and it clears by 12.92. It is not applied to low-chroma neutrals,
+      because at L* 84&ndash;92 every near-white in existence is within 10 dE2000 of
+      <span class="shown">#e2e8f0</span> &mdash; that value is itself a near-white, and the only
+      way to &ldquo;clear&rdquo; it is to add chroma the room does not have. Choosing a hue by
+      subtraction from a banned list is the failure this whole exercise is about. The evidence
+      that the warm hue was not aimed at anything: the dark ramp, where there <em>is</em> room to
+      stand, clears 14.5&ndash;15.9 without anyone trying.</p>
+    <p><b>The law, audited.</b> <span id="pgmcount"></span></p>
+    <p><b>Encoded without colour.</b> Severity is a word, a count and four segments. Confidence is
+      a two-decimal numeral and five segments. The verification tier is its number, the word
+      <span class="shown">UNATTESTED</span> and a hatched NO&nbsp;SIGNAL plate. Hatching means one
+      thing everywhere on this board: <b>absent, or forbidden</b>.</p>
+    <p><b>A control never carries a lamp.</b> In a gallery the tally lamps are on the monitors and
+      the take bar is a bare machined lever on the desk. That rule &mdash; taken from the world,
+      not from a critique &mdash; is why the destructive control has no chromatic fill anywhere in
+      it, and why its state is a <em>position</em>.</p>
+    <p><b>Type</b> is rem-derived from a single <span class="shown">--rem</span>; there is no px or
+      arbitrary-rem size in this file. Archivo, Archivo Narrow and IBM Plex Mono are all on Google
+      Fonts and Fontsource and are self-hostable; this board fetches nothing and is designed so
+      the fallback rendering is the one that must look right.</p>
+  </section>
+</div>
+
+</div>
+
+<script>
+/* No network, no dependencies. Three jobs: the theme toggle; computing dE2000
+   and WCAG contrast from the live tokens so no number here can drift from the
+   token it describes; and auditing the direction's own law. */
+(function () {
+  var root = document.documentElement;
+
+  var BANNED = ("4ade80 22c55e 16a34a 15803d 34d399 10b981 059669 f59e0b fbbf24 facc15 eab308 " +
+    "d97706 b45309 22d3ee 06b6d4 0891b2 0e7490 38bdf8 0ea5e9 ef4444 dc2626 f87171 f472b6 ec4899 " +
+    "a855f7 8b5cf6 6366f1 3b82f6 2563eb 64748b 94a3b8 cbd5e1 e2e8f0 0f172a 1e293b 334155").split(" ");
+
+  function tok(v) { return getComputedStyle(root).getPropertyValue(v).trim(); }
+  function rgb(s) {
+    var m = s.match(/^#?([0-9a-f]{6})$/i);
+    if (m) { var n = parseInt(m[1], 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+    m = s.match(/rgba?\(([^)]+)\)/);
+    if (m) { var p = m[1].split(/[\s,\/]+/).map(Number); return [p[0], p[1], p[2]]; }
+    return [0, 0, 0];
+  }
+  function hex(s) {
+    var c = rgb(s);
+    return "#" + c.map(function (v) { return ("0" + Math.round(v).toString(16)).slice(-2); }).join("").toUpperCase();
+  }
+  function lin(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+  function lum(s) { var c = rgb(s).map(lin); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
+  function cr(a, b) { var A = lum(a), B = lum(b), h = Math.max(A, B), l = Math.min(A, B); return (h + 0.05) / (l + 0.05); }
+  function lab(s) {
+    var c = rgb(s).map(lin);
+    var X = 0.4124564 * c[0] + 0.3575761 * c[1] + 0.1804375 * c[2];
+    var Y = 0.2126729 * c[0] + 0.7151522 * c[1] + 0.0721750 * c[2];
+    var Z = 0.0193339 * c[0] + 0.1191920 * c[1] + 0.9503041 * c[2];
+    var w = [0.95047, 1, 1.08883], v = [X / w[0], Y / w[1], Z / w[2]].map(function (t) {
+      return t > 216 / 24389 ? Math.cbrt(t) : (841 / 108) * t + 4 / 29;
+    });
+    return [116 * v[1] - 16, 500 * (v[0] - v[1]), 200 * (v[1] - v[2])];
+  }
+  function chroma(s) { var L = lab(s); return Math.hypot(L[1], L[2]); }
+  function de2000(s1, s2) {
+    var A = lab(s1), B = lab(s2), r = Math.PI / 180;
+    var C1 = Math.hypot(A[1], A[2]), C2 = Math.hypot(B[1], B[2]), Cb = (C1 + C2) / 2;
+    var G = 0.5 * (1 - Math.sqrt(Math.pow(Cb, 7) / (Math.pow(Cb, 7) + Math.pow(25, 7))));
+    var a1 = (1 + G) * A[1], a2 = (1 + G) * B[1];
+    var Cp1 = Math.hypot(a1, A[2]), Cp2 = Math.hypot(a2, B[2]);
+    var h1 = (Math.atan2(A[2], a1) / r + 360) % 360, h2 = (Math.atan2(B[2], a2) / r + 360) % 360;
+    var dL = B[0] - A[0], dC = Cp2 - Cp1, dh = 0;
+    if (Cp1 * Cp2 !== 0) {
+      dh = h2 - h1;
+      if (dh > 180) dh -= 360; else if (dh < -180) dh += 360;
+    }
+    var dH = 2 * Math.sqrt(Cp1 * Cp2) * Math.sin(dh * r / 2);
+    var Lb = (A[0] + B[0]) / 2, Cbp = (Cp1 + Cp2) / 2, hb;
+    if (Cp1 * Cp2 === 0) hb = h1 + h2;
+    else if (Math.abs(h1 - h2) <= 180) hb = (h1 + h2) / 2;
+    else hb = (h1 + h2 < 360) ? (h1 + h2 + 360) / 2 : (h1 + h2 - 360) / 2;
+    var T = 1 - 0.17 * Math.cos((hb - 30) * r) + 0.24 * Math.cos(2 * hb * r) +
+      0.32 * Math.cos((3 * hb + 6) * r) - 0.20 * Math.cos((4 * hb - 63) * r);
+    var dth = 30 * Math.exp(-Math.pow((hb - 275) / 25, 2));
+    var Rc = 2 * Math.sqrt(Math.pow(Cbp, 7) / (Math.pow(Cbp, 7) + Math.pow(25, 7)));
+    var Sl = 1 + (0.015 * Math.pow(Lb - 50, 2)) / Math.sqrt(20 + Math.pow(Lb - 50, 2));
+    var Sc = 1 + 0.045 * Cbp, Sh = 1 + 0.015 * Cbp * T;
+    var Rt = -Math.sin(2 * dth * r) * Rc;
+    return Math.sqrt(Math.pow(dL / Sl, 2) + Math.pow(dC / Sc, 2) + Math.pow(dH / Sh, 2) +
+      Rt * (dC / Sc) * (dH / Sh));
+  }
+  function nearestBanned(s) {
+    var best = 1e9, who = "";
+    for (var i = 0; i < BANNED.length; i++) {
+      var d = de2000(s, "#" + BANNED[i]);
+      if (d < best) { best = d; who = "#" + BANNED[i]; }
+    }
+    return [best, who];
+  }
+
+  var SWATCH = [
+    ["--lens-pgm", "PGM lens", "The one colour. A 2900 K filament through a 620 nm signal-red lens. It means an irreversible action is running in production right now."],
+    ["--lens-hot", "Hot lens", "The same filament with no lens in front of it, clipped. A luminance, not a hue — it means something is cued and waiting on your take."],
+    ["--housing", "Housing", "Black-anodised lamp bezel and the UMD glass. The only objects that do not change with the theme, because a lamp is a lamp."],
+    ["--glass", "Glass", "The monitor well where content is read. Achromatic, because a grade-1 monitor is calibrated."],
+    ["--panel", "Panel", "A raised rack panel face — the painted metal, under whichever light the room is running."],
+    ["--ink", "Ink", "Panel lettering and displayed values, at the top of a three-step ramp that never drops below 4.5:1 on any surface it lands on."]
+  ];
+
+  var PAIRS = [
+    ["ink on glass", "--ink", "--glass", 4.5],
+    ["ink on panel", "--ink", "--panel", 4.5],
+    ["ink-mid on glass", "--ink-mid", "--glass", 4.5],
+    ["ink-mid on panel", "--ink-mid", "--panel", 4.5],
+    ["ink-mid on room", "--ink-mid", "--room", 4.5],
+    ["ink-dim on glass", "--ink-dim", "--glass", 4.5],
+    ["ink-dim on panel", "--ink-dim", "--panel", 4.5],
+    ["ink-dim on rack", "--ink-dim", "--rack", 4.5],
+    ["ink-dim on room", "--ink-dim", "--room", 4.5],
+    ["slot ordinal on umd", "--umd-dim", "--umd", 4.5],
+    ["engraved legend on housing", "--umd-ink", "--housing", 4.5],
+    ["umd source cell on umd", "--umd-dim", "--umd", 4.5],
+    ["meter lit / meter dark", "--ink", "--edge-lit", 3],
+    ["hot lens / unlit lens", "--lens-hot", "--lens-off", 3],
+    ["pgm hot core / unlit lens", "--lens-hot", "--lens-off", 3],
+    ["pgm hot core / pgm field", "--lens-hot", "--lens-pgm", 3]
+  ];
+
+  function paint() {
+    var s = "";
+    for (var i = 0; i < SWATCH.length; i++) {
+      var t = SWATCH[i], v = tok(t[0]), d = nearestBanned(v);
+      s += '<div class="sw"><span class="box" style="background:' + v + '"></span><span>' +
+        '<span class="nm">' + t[1] + '</span> <span class="hx">' + hex(v) +
+        " &middot; C*ab " + chroma(v).toFixed(1) + "</span>" +
+        '<span class="ds">' + t[2] + "</span>" +
+        '<span class="hx" style="display:block;margin-top:.25rem">nearest banned ' + d[1] +
+        " &middot; dE2000 " + d[0].toFixed(2) + "</span></span></div>";
+    }
+    document.getElementById("sw").innerHTML = s;
+
+    var r = "", worstText = 1e9, worstDe = 1e9;
+    for (var j = 0; j < PAIRS.length; j++) {
+      var p = PAIRS[j], val = cr(tok(p[1]), tok(p[2]));
+      if (p[3] === 4.5 && val < worstText) worstText = val;
+      r += "<tr><td>" + p[0] + "</td><td>&ge;" + p[3] + "</td><td>" + val.toFixed(2) + ":1</td></tr>";
+    }
+    var chromatics = ["--lens-pgm"];
+    for (var k = 0; k < chromatics.length; k++) {
+      var dd = nearestBanned(tok(chromatics[k]));
+      if (dd[0] < worstDe) worstDe = dd[0];
+    }
+    r += "<tr><td>worst text pair on this board</td><td>&ge;4.5</td><td>" + worstText.toFixed(2) + ":1</td></tr>";
+    r += "<tr><td>chromatic values in the system</td><td>&le;8</td><td>1</td></tr>";
+    r += "<tr><td>worst chromatic dE2000 to banned</td><td>&ge;10</td><td>" + worstDe.toFixed(2) + "</td></tr>";
+    document.getElementById("rep").innerHTML = r;
+  }
+
+  /* audit the law: no lit PGM lens may appear inside a product screen. */
+  (function () {
+    var screens = document.querySelectorAll(".screen");
+    var lit = 0;
+    for (var i = 0; i < screens.length; i++) {
+      lit += screens[i].querySelectorAll('[data-lit="pgm"]').length;
+    }
+    document.getElementById("pgmcount").textContent =
+      "Counted at load: " + lit + " lit PGM lenses inside the " + screens.length +
+      " product screens on this board. Nothing is running at 09:16:05, so there is no colour on " +
+      "screen A or screen B at all. That is not a stylistic decision — it is the state of the world.";
+  })();
+
+  document.getElementById("tog").addEventListener("click", function () {
+    var now = root.getAttribute("data-theme");
+    if (!now) now = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    root.setAttribute("data-theme", now === "dark" ? "light" : "dark");
+    paint();
+  });
+
+  paint();
+})();
+</script>
+</body>
+</html>

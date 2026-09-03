@@ -1,0 +1,16 @@
+{
+  "kind": 26004,
+  "schema": "ambush.perch.frame.governance_status.v1",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "seq": 12,
+  "emitted_at_ms": 1773738882000,
+  "partition_state": "healthy",
+  "healthy_governors": 1,
+  "total_governors": 1,
+  "quorum_threshold": 1,
+  "active_contingency_leases": 0,
+  "contingency_lease_ttl_ms": 300000,
+  "unauthorized_partition_actions": 0,
+  "last_transition_at_ms": null,
+  "last_reconciliation_report_id": null
+}

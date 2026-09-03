@@ -1,0 +1,43 @@
+{
+  "schema": "swarm.spine.envelope.v1",
+  "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+  "seq": 2,
+  "prev_envelope_hash": "0x78c0153b56f2904153c5829df3e2ec47c1b7855516b18fa9061b8665aad51dba",
+  "issued_at": "2026-03-17T09:20:01Z",
+  "capability_token": null,
+  "fact": {
+    "schema": "ambush.perch.verdict.v1",
+    "issuer": {
+      "swarm_agent_id": "perch-operator-1",
+      "role": null,
+      "nostr_pubkey": "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5"
+    },
+    "emitted_at_ms": 1773739201900,
+    "locator": {
+      "hold_id": "h_1c28ae79",
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "hold_card_id": "b78a98c41feba52b15e5ec02a5074f51449b2e20e4a4e7fea2676e77ac8f546f"
+    },
+    "decision": {
+      "decision": "grant",
+      "hold_id": "h_1c28ae79",
+      "operator_id": "perch-operator-1",
+      "decided_at_ms": 1773739201900,
+      "rationale": "Blocking egress to 198.51.100.20 while we read the disk on host-ops-1."
+    },
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "perch-operator-1",
+      "public_key_hex": "bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+      "signature_hex": "00dced7c7ec6db83b3e74e977b4e490687b3340716a22b12aac6dbe36efa3e6a47ba3c09bf03826850ecea9defa2305ca75e86316ca745a9df9d1c5c2862faef"
+    },
+    "leg2": {
+      "state": "superseded",
+      "receipt_id": null,
+      "refusal_check": null,
+      "superseded_by": "7de5e9f40a1dd2d54866d6ca627d0a4d71dccda0ccb186f2ebb424252563efcf",
+      "superseded_at_ms": 1773739201900
+    }
+  },
+  "envelope_hash": "0xc8290784b13d5636e3058089fdf3e4344af6862a9d9dae312308c87efca3356d"
+}

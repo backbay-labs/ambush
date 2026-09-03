@@ -1,0 +1,43 @@
+{
+  "capability_token": null,
+  "envelope_hash": "0xabababababababababababababababababababababababababababababababab",
+  "fact": {
+    "decision": {
+      "decided_at_ms": 1773738979000,
+      "decision": "grant",
+      "hold_id": "h_a07aeacf",
+      "operator_id": "perch-operator-1",
+      "rationale": "Office-spawned encoded PowerShell on host-ops-1, two detectors agreeing. Isolating."
+    },
+    "emitted_at_ms": 1773738979000,
+    "issuer": {
+      "nostr_pubkey": "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5",
+      "role": null,
+      "swarm_agent_id": "perch-operator-1"
+    },
+    "leg2": {
+      "receipt_id": null,
+      "refusal_check": null,
+      "state": "sending",
+      "superseded_at_ms": null,
+      "superseded_by": null
+    },
+    "locator": {
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c",
+      "hold_id": "h_a07aeacf"
+    },
+    "schema": "ambush.perch.verdict.v1",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "perch-operator-1",
+      "public_key_hex": "bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+      "signature_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "issued_at": "2026-03-17T09:16:19Z",
+  "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+  "prev_envelope_hash": null,
+  "schema": "swarm.spine.envelope.v1",
+  "seq": 1
+}

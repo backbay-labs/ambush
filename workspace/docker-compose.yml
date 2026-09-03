@@ -1,0 +1,191 @@
+name: ambush
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: ambush-postgres
+    environment:
+      POSTGRES_USER: ambush
+      POSTGRES_PASSWORD: ambush_dev
+      POSTGRES_DB: ambush
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - ambush-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ambush"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    labels:
+      com.backbay.ambush.service: "postgres"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ambush-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - ambush-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    labels:
+      com.backbay.ambush.service: "redis"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    container_name: ambush-adminer
+    ports:
+      - "127.0.0.1:8082:8080"
+    networks:
+      - ambush-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+    labels:
+      com.backbay.ambush.service: "adminer"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: ambush-keycloak
+    command: start-dev --http-port=8080
+    environment:
+      KC_DB: dev-mem
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "127.0.0.1:8180:8080"
+    networks:
+      - ambush-net
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    labels:
+      com.backbay.ambush.service: "keycloak"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: ambush-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ambush_dev
+      MINIO_ROOT_PASSWORD: ambush_dev_secret
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - ambush-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    labels:
+      com.backbay.ambush.service: "minio"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: ambush-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - ambush-net
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 ambush_dev ambush_dev_secret &&
+        mc mb --ignore-existing local/ambush-media &&
+        mc anonymous set none local/ambush-media
+      "
+    labels:
+      com.backbay.ambush.service: "minio-init"
+      com.backbay.ambush.env: "dev"
+    restart: "no"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ambush-prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - ambush-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    labels:
+      com.backbay.ambush.service: "prometheus"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+    name: ambush-postgres-data
+    labels:
+      com.backbay.ambush.volume: "postgres"
+  minio-data:
+    name: ambush-minio-data
+    labels:
+      com.backbay.ambush.volume: "minio"
+  prometheus-data:
+    name: ambush-prometheus-data
+    labels:
+      com.backbay.ambush.volume: "prometheus"
+
+networks:
+  ambush-net:
+    name: ambush-net
+    driver: bridge
+    labels:
+      com.backbay.ambush.network: "dev"

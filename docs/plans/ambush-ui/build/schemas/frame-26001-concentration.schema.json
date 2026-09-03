@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/frame-26001-concentration.schema.json",
+  "title": "kind:26001 \u2014 concentration snapshot",
+  "description": "One ConcentrationSnapshot, twelve classes, COALESCED 10 Hz -> 1 Hz IN THE BRIDGE, BEFORE THE IPC BOUNDARY. This is a hard requirement, not an optimisation: ConcentrationMonitor::evaluate_all publishes a twelve-class snapshot unconditionally on every tick (crates/swarm-runtime/src/escalation.rs:198-199) at CONCENTRATION_MONITOR_INTERVAL_MS = 100 (crates/swarm-runtime-http/src/bin/swarm_detect.rs:40, :1004) \u2014 864,000 snapshots a day at rest \u2014 while enforce_ws_admission charges EVERY inbound EVENT, REQ and COUNT frame against a 50-frames-per-rolling-5-second budget per pubkey with no agent exemption (crates/buzz-relay/src/connection.rs:671-681, crates/buzz-relay/src/admission.rs:9,40-45, human_ws_events_per_sec=10). Seven 1 Hz streams fit in 35 of 50. A pre-coalescing 10 Hz stream consumes the whole budget by itself.\n\nLast-wins: a dropped 26001 costs one second of chart, never a fact.\n\nAGGREGATES-ONLY. This frame is community-global and reaches every member of the colony's Buzz community, including members on no case: handle_ephemeral_event's channel-less branch publishes to Redis EventTopic::Global under a Uuid::nil() routing sentinel and fans out with channel_id=None (crates/buzz-relay/src/handlers/event.rs:875-903), and filter_fanout_by_access returns every match at :177-179 for a channel-less event after applying only the receiver tenant label, AUTHOR_ONLY_KINDS and SHARED_GATED_KINDS. No host id, no indicator, no finding id, no library path and no non-opaque join key may appear here.\n\nADMITTED-ISSUER RULE. A frame renders only if the NOSTR EVENT's pubkey resolves to an admitted bridge identity; others are counted and dropped, and the count is visible. Without it, any chat-capable member of the community can publish one: the ephemeral ingest gate is a single scope test with no per-kind allowlist (`if !scopes.is_empty() && !scopes.contains(&Scope::MessagesWrite)`, crates/buzz-relay/src/handlers/event.rs:699-707). The shipped precedent for the predicate is getConfigNudgeAuthorPubkey (desktop/src/features/messages/ui/configNudgeAuthPubkey.ts:22-34), which authenticates against message.signerPubkey \u2014 the RAW EVENT SIGNER \u2014 and not message.pubkey, which may be a relay-delegated display author.",
+  "type": "object",
+  "required": [
+    "schema",
+    "kind",
+    "issuer",
+    "emitted_at_ms",
+    "seq",
+    "current_mode",
+    "concentrations",
+    "coalesced_from"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "ambush.perch.frame.concentration.v1"
+    },
+    "kind": {
+      "const": 26001
+    },
+    "issuer": {
+      "$ref": "common.schema.json#/$defs/SpineIssuer",
+      "description": "The bridge's spine identity, for display only. THE ADMITTED-ISSUER RULE MATCHES THE NOSTR EVENT'S `pubkey`, NOT THIS FIELD \u2014 this one is inside the content an adversary controls."
+    },
+    "emitted_at_ms": {
+      "$ref": "common.schema.json#/$defs/UnixMillis"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-kind monotonic counter assigned by the bridge. A gap between two frames the console actually received proves loss on a live connection; it says nothing about frames emitted while the console was disconnected, because ephemerals are never stored (crates/buzz-relay/src/handlers/event.rs:794-906 writes nothing to Postgres in either branch)."
+    },
+    "current_mode": {
+      "$ref": "common.schema.json#/$defs/SwarmMode"
+    },
+    "concentrations": {
+      "type": "array",
+      "minItems": 12,
+      "items": {
+        "$ref": "common.schema.json#/$defs/PheromoneConcentration"
+      },
+      "description": "standard_threat_classes() returns exactly twelve (crates/swarm-runtime/src/escalation.rs:315-330) and snapshot_concentrations loops it, so twelve is the floor. A ThreatClass::Custom class may appear as a thirteenth entry; it has no lane and the console renders it in an explicit overflow row rather than folding it into the nearest standard class."
+    },
+    "coalesced_from": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "How many daemon ticks this frame collapsed. Rendered as the derived marker required by render law 4: the console is showing 1 of N snapshots and says so."
+    },
+    "observed_at_seconds": {
+      "$ref": "common.schema.json#/$defs/UnixSeconds",
+      "description": "The substrate's own `now`, in SECONDS, as passed to query_concentration. Carried in its native unit and with its unit in the name because a shared millisecond helper produces a 1000x wrong decay curve silently, in the direction of 'everything looks evaporated'."
+    }
+  },
+  "examples": [
+    {
+      "schema": "ambush.perch.frame.concentration.v1",
+      "kind": 26001,
+      "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+      "emitted_at_ms": 1787754973000,
+      "seq": 4412,
+      "current_mode": "alert",
+      "coalesced_from": 10,
+      "observed_at_seconds": 1787754973,
+      "concentrations": [
+        {
+          "threat_class": "lateral_movement",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "privilege_escalation",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "command_and_control",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "initial_access",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "persistence",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "supply_chain",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "defense_evasion",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "credential_access",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "discovery",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "execution",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "impact",
+          "total_strength": 0.0,
+          "distinct_sources": 0,
+          "peak_confidence": 0.0
+        },
+        {
+          "threat_class": "data_exfiltration",
+          "total_strength": 2.41,
+          "distinct_sources": 2,
+          "peak_confidence": 0.82
+        }
+      ]
+    }
+  ],
+  "x-transport": {
+    "kind": 26001,
+    "ephemeral": true,
+    "why_no_relay_change": "handle_event short-circuits every 20000-29999 kind into handle_ephemeral_event and RETURNS at crates/buzz-relay/src/handlers/event.rs:751, before ingest_event is reached at :761, so required_scope_for_kind never sees a 26xxx. Proved in-tree by the test ephemeral_kinds_not_in_scope_allowlist at crates/buzz-relay/src/handlers/ingest.rs:3851-3854.",
+    "websocket_only": "POST /events goes straight into ingest_event (crates/buzz-relay/src/api/bridge.rs:925) with no ephemeral branch, so an HTTP-posted 26xxx is rejected 'restricted: unknown event kind'. The bridge must hold a live WebSocket.",
+    "h_tag": "none (global)",
+    "p_tags": "none"
+  }
+}

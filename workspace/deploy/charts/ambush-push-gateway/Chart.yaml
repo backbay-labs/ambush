@@ -1,0 +1,8 @@
+apiVersion: v2
+# Published to oci://ghcr.io/backbay-labs/ambush/charts via push-chart-release/<version>
+# branches (see docs/push-gateway-deployment.md, "Gateway chart release").
+name: ambush-push-gateway
+description: Public capability-gated APNs last-hop gateway for Ambush
+version: 0.1.0
+appVersion: "0.1.0"
+type: application

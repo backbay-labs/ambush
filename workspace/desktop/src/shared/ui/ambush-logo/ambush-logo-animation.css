@@ -1,0 +1,134 @@
+.ambush-logo {
+  display: grid;
+  place-items: center;
+  inline-size: fit-content;
+}
+
+.ambush-logo--compact {
+  inline-size: 1.5rem;
+}
+
+.ambush-logo__mark {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  max-inline-size: 100%;
+}
+
+/* The index inks down from the top: the live segment first, the spent segment
+   behind it, both holding for the rest of the cycle. One pair of keyframes
+   serves the SVG mark and the compositor-driven motion sprite. */
+@keyframes ambush-index-engrave-live {
+  0% {
+    transform: scaleY(0);
+  }
+  26% {
+    transform: scaleY(1);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes ambush-index-engrave-spent {
+  0%,
+  20% {
+    transform: scaleY(0);
+  }
+  44% {
+    transform: scaleY(1);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+.ambush-logo--engrave .ambush-logo__live,
+.ambush-logo--engrave .ambush-logo__spent {
+  transform-box: fill-box;
+  transform-origin: top;
+  animation-duration: var(--ambush-logo-cycle, 1.9s);
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-iteration-count: infinite;
+}
+
+.ambush-logo--engrave .ambush-logo__live {
+  animation-name: ambush-index-engrave-live;
+}
+
+.ambush-logo--engrave .ambush-logo__spent {
+  animation-name: ambush-index-engrave-spent;
+}
+
+.ambush-logo--once .ambush-logo__live,
+.ambush-logo--once .ambush-logo__spent {
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+}
+
+.ambush-logo--reverse .ambush-logo__live,
+.ambush-logo--reverse .ambush-logo__spent {
+  transform-origin: bottom;
+}
+
+@keyframes ambush-logo-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ambush-logo--pulse .ambush-logo__mark {
+  animation: ambush-logo-pulse 1.8s ease-in-out infinite;
+}
+
+/* The motion sprite. Segments are HTML-level elements so their transforms run
+   on the compositor and keep moving while boot work holds the main thread;
+   positions are percentages of the mark's 256-unit square. */
+.ambush-index {
+  position: relative;
+  aspect-ratio: 1;
+}
+
+.ambush-index__seg {
+  position: absolute;
+  display: block;
+  inline-size: 25%;
+  background-color: currentColor;
+  transform-origin: top;
+  will-change: transform;
+  animation-duration: 2.1s;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-iteration-count: infinite;
+}
+
+.ambush-index__seg--live {
+  inset-block-start: 0;
+  inset-inline-start: 25%;
+  block-size: 59.375%;
+  animation-name: ambush-index-engrave-live;
+}
+
+.ambush-index__seg--spent {
+  inset-block-start: 53.125%;
+  inset-inline-start: 50%;
+  block-size: 46.875%;
+  animation-name: ambush-index-engrave-spent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambush-logo--engrave .ambush-logo__live,
+  .ambush-logo--engrave .ambush-logo__spent,
+  .ambush-index__seg {
+    animation: none;
+    transform: none;
+  }
+
+  .ambush-logo--pulse .ambush-logo__mark {
+    animation: none;
+    opacity: 0.8;
+  }
+}

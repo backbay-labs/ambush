@@ -1,0 +1,1896 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>Night Bridge — Perch art direction</title>
+<meta name="color-scheme" content="light dark">
+<!--
+  PERCH — ART DIRECTION "NIGHT BRIDGE"   revision 2
+  World: night watchkeeping. The darkened bridge; the deck log; the guarded switch.
+
+  THE LAW THIS REVISION IS BUILT ON
+    Colour never lands on a word. Chroma exists only as LIGHT ON A SURFACE.
+    Every glyph in the system is bone, body or dim on warm graphite.
+    Two lanterns burn: 578 nm at the binnacle (a clock is running) and
+    615 nm behind the throw (the irreversible act). Nothing else is lit.
+
+  Self-contained. No network requests: no CDN, no @font-face src url(), no <img>.
+  Typefaces are named as self-hostable families (Fontsource / Google Fonts) with
+  genuine fallback stacks; the board renders correctly with nothing installed.
+
+  Content: build/fixtures/perch-demo-fixture.json, rendered at the instant
+  clock.timestamps.open_row_ms = 1773738965000 = 2026-03-17 09:16:05 UTC.
+  Structure and copy: build/prototypes/verdict-hold.html and watch.html.
+  Every string is traceable to a fixture path; §F names the path for each.
+-->
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   §1  TOKENS
+
+   The neutral ramp is the console: warm graphite, painted, unlit, and it is
+   the whole system. The ground behind it is the night outside the glass —
+   colder and darker than anything on the panel. That is the temperature
+   split, and it costs nothing from the chromatic budget because both halves
+   are neutrals.
+
+   Four chromatic values in the entire file, two per theme, two lanterns.
+   Derived, not chosen: §D shows the arithmetic.
+
+   Light lives on bare :root. Dark is a data attribute AND a guarded media
+   query, declaration-for-declaration identical. No colour is defined only
+   inside a media query.
+   ══════════════════════════════════════════════════════════════════════════ */
+:root{
+  color-scheme: light dark;
+
+  /* the console, in daylight — painted marine grey, not paper */
+  --night:#969084;  /* the deck; the ground the console sits on. carries no body text */
+  --field:#AFA89A;  /* the console face */
+  --panel:#C7C0B3;  /* a plate on the face */
+  --lit:#D2CDC4;    /* the plate lifted — selection */
+  --line:#B4ADA1;   /* hairline */
+  --rule:#878074;   /* structural rule, tick, dot — NEVER text */
+  --dim:#413D35;    /* secondary text        5.98:1 on panel */
+  --body:#312E27;   /* reading text          7.49:1 on panel */
+  --bone:#1A1712;   /* the ink               9.89:1 on panel */
+
+  /* the two lanterns. In daylight you do not see the light — you see the glass. */
+  --binnacle:#5B4D35;    /* 578 nm compass lamp, its filter seen unlit */
+  --port:#663737;        /* 615 nm sidelight,    its filter seen unlit */
+  --port-face:#663737;   /* the live throw: in daylight a lens is DARK and saturated */
+  --port-ink:#D2CDC4;    /* what is legible on it */
+
+  --hatch:rgba(26,23,18,.36);   /* ink ruling: an adversary-written value */
+  --shadow:0 1px 0 rgba(26,23,18,.06), 0 12px 26px -18px rgba(26,23,18,.55);
+  --cast:rgba(26,23,18,.42);
+
+  --f-panel:"Barlow Semi Condensed","Barlow Condensed","Roboto Condensed","Arial Narrow","Helvetica Neue",sans-serif;
+  --f-text:"Barlow","Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+  --f-dial:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+
+  /* seven steps, each a real step: 56 / 38 / 22 / 17 / 15 / 13 / 11 px at a 16px rem */
+  --t-mast:3.5rem;
+  --t-chrono:2.375rem;
+  --t-lg:1.375rem;
+  --t-lead:1.0625rem;
+  --t-base:.9375rem;
+  --t-sm:.8125rem;
+  --t-cap:.6875rem;
+}
+:root[data-theme="dark"]{
+  --night:#04100F; --field:#181613; --panel:#211E1A; --lit:#2B2721;
+  --line:#332E27; --rule:#4A443A;
+  --dim:#9B9486; --body:#CAC3B3; --bone:#F2ECDD;
+  --binnacle:#AB8200; --port:#F5703F; --port-face:#571D19; --port-ink:#F2ECDD;
+  --hatch:rgba(242,236,221,.38);
+  --shadow:0 1px 0 rgba(0,0,0,.55), 0 16px 34px -22px #000;
+  --cast:rgba(0,0,0,.62);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --night:#04100F; --field:#181613; --panel:#211E1A; --lit:#2B2721;
+    --line:#332E27; --rule:#4A443A;
+    --dim:#9B9486; --body:#CAC3B3; --bone:#F2ECDD;
+    --binnacle:#AB8200; --port:#F5703F; --port-face:#571D19; --port-ink:#F2ECDD;
+    --hatch:rgba(242,236,221,.38);
+    --shadow:0 1px 0 rgba(0,0,0,.55), 0 16px 34px -22px #000;
+    --cast:rgba(0,0,0,.62);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   §2  BASE
+   ══════════════════════════════════════════════════════════════════════════ */
+*{box-sizing:border-box}
+html{font-size:100%}
+body{
+  margin:0; background:var(--night); color:var(--body);
+  font-family:var(--f-text); font-size:var(--t-base); line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+b,strong{font-weight:600;color:var(--bone)}
+.mono{font-family:var(--f-dial);font-variant-numeric:tabular-nums;font-size:.94em;letter-spacing:-.012em}
+.num{font-variant-numeric:tabular-nums}
+.grow{flex:1}
+
+/* the silkscreen — every label on this console is stencilled, not written */
+.sil{
+  font-family:var(--f-panel); font-weight:600; text-transform:uppercase;
+  letter-spacing:.135em; font-size:var(--t-cap); line-height:1.2; color:var(--dim);
+}
+.sil--ink{color:var(--bone)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   §3  BOARD CHROME
+   ══════════════════════════════════════════════════════════════════════════ */
+.board{width:1440px;margin:0 auto;padding:0 0 6rem;background:var(--field)}
+.plate{background:var(--field);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.pad{padding:2.75rem 3.5rem}
+
+.masthead{display:flex;align-items:flex-end;gap:2.75rem;padding:3.25rem 3.5rem 2.5rem}
+.masthead h1{
+  font-family:var(--f-panel); font-weight:700; text-transform:uppercase;
+  letter-spacing:.035em; font-size:var(--t-mast); line-height:.84; margin:0; color:var(--bone);
+}
+.masthead .sub{max-width:37rem}
+.masthead .sub p{margin:.55rem 0 0;font-size:var(--t-sm);color:var(--dim);line-height:1.6}
+.masthead .sub p b{color:var(--body);font-weight:500}
+.mast-r{margin-left:auto;text-align:right;display:flex;flex-direction:column;gap:.7rem;align-items:flex-end}
+
+.themectl{display:inline-flex;border:1px solid var(--rule)}
+.themectl button{
+  font-family:var(--f-panel);text-transform:uppercase;letter-spacing:.12em;
+  font-size:var(--t-cap);font-weight:600;padding:.36rem .78rem;background:none;
+  border:0;border-right:1px solid var(--line);color:var(--dim);cursor:pointer;
+}
+.themectl button:last-child{border-right:0}
+.themectl button[aria-pressed="true"]{background:var(--lit);color:var(--bone)}
+
+.sechead{display:flex;align-items:baseline;gap:1.1rem;padding:3.25rem 3.5rem 1.1rem}
+.sechead .idx{
+  font-family:var(--f-panel);font-weight:700;font-size:var(--t-lg);color:var(--dim);
+  letter-spacing:.06em;width:1.4rem;flex:none;
+}
+.sechead h2{
+  font-family:var(--f-panel);font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+  font-size:var(--t-lg);margin:0;color:var(--bone);flex:none;
+}
+.sechead p{margin:0;max-width:52rem;font-size:var(--t-sm);color:var(--dim);line-height:1.6}
+
+.note{padding:1.5rem 3.5rem 0;column-count:2;column-gap:3.5rem}
+.note p{margin:0 0 .9rem;font-size:var(--t-sm);color:var(--dim);line-height:1.7;
+  break-inside:avoid}
+.note p b{color:var(--body)}
+
+.frame{margin:0 3.5rem;background:var(--field);border:1px solid var(--line);box-shadow:var(--shadow)}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   §4  SHARED PRODUCT PARTS
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* adversary-written values: a ruling, never a hue */
+.adv{
+  font-family:var(--f-dial);font-size:.94em;color:var(--bone);
+  padding:.04em .3em .34em; position:relative; letter-spacing:-.012em;
+  display:inline-block;
+}
+/* the clerk's ruling: a hatched band laid UNDER the entry. It never crosses a
+   glyph, because a mark across a value already means "struck" in this system. */
+.adv::after{
+  content:"";position:absolute;left:0;right:0;bottom:0;height:.3em;
+  background-image:repeating-linear-gradient(-45deg,var(--hatch) 0 1px,transparent 1px 4px);
+  box-shadow:inset 0 1px 0 var(--hatch);
+}
+
+/* severity — four non-colour channels: word, cells, rail weight, rail pattern */
+.sev{display:inline-flex;align-items:center;gap:.42rem;font-family:var(--f-panel);
+  font-weight:600;text-transform:uppercase;letter-spacing:.12em;font-size:var(--t-cap)}
+.sev[data-s="CRITICAL"]{color:var(--bone)}
+.sev[data-s="HIGH"]{color:var(--body)}
+.sev[data-s="MEDIUM"],.sev[data-s="LOW"]{color:var(--dim)}
+.sevbar{display:inline-flex;gap:1px}
+.sevbar i{width:4px;height:11px;background:var(--rule);display:block}
+.sev[data-s="CRITICAL"] .sevbar i[data-on]{background:var(--bone)}
+.sev[data-s="HIGH"] .sevbar i[data-on]{background:var(--body)}
+.sev[data-s="MEDIUM"] .sevbar i[data-on],.sev[data-s="LOW"] .sevbar i[data-on]{background:var(--dim)}
+
+/* confidence — the numeral first, always; the meter never stands alone */
+.conf{display:inline-flex;align-items:center;gap:.4rem;color:var(--body)}
+.dots{display:inline-flex;gap:2px}
+.dots i{width:5px;height:5px;border:1px solid var(--rule);display:block}
+.dots i[data-on]{background:var(--dim);border-color:var(--dim)}
+
+/* derived / served / request-carried marks */
+.mark{font-family:var(--f-panel);text-transform:uppercase;letter-spacing:.11em;
+  font-size:var(--t-cap);font-weight:600;color:var(--dim);border:1px solid var(--rule);
+  padding:.12rem .42rem .16rem;display:inline-block;white-space:nowrap}
+.mark--served{border-style:solid}
+.mark--derived{border-style:dashed}
+.mark--req{border-style:dotted;color:var(--body);border-color:var(--dim)}
+
+.kbd{font-family:var(--f-panel);font-weight:600;font-size:var(--t-cap);letter-spacing:.06em;
+  border:1px solid var(--rule);color:var(--body);padding:.08rem .34rem .12rem;
+  min-width:1.2rem;text-align:center;display:inline-block}
+.kbd[data-off]{color:var(--dim);border-style:dotted}
+
+.chip{font-family:var(--f-panel);text-transform:uppercase;letter-spacing:.12em;font-weight:600;
+  font-size:var(--t-cap);color:var(--body);background:none;border:1px solid var(--rule);
+  padding:.5rem .85rem;display:inline-flex;align-items:center;gap:.5rem;cursor:pointer}
+.chip:hover{border-color:var(--dim);color:var(--bone)}
+.chip[disabled]{color:var(--dim);border-style:dotted;cursor:not-allowed}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   §5  THE SIGNATURE — THE GUARDED THROW
+       A plate that occludes the throw, hinged along its top edge, which turns
+       up about that axis. Closed, the well is not on the screen at all.
+       Lifted, the plate is foreshortened, it casts a shadow down the well,
+       and the 615 nm lantern behind the throw is visible.
+   ══════════════════════════════════════════════════════════════════════════ */
+.switch{
+  --u:1;                       /* geometry scale; the specimen strip runs at 2 */
+  --tu:1;                      /* type scale, deliberately slower than geometry */
+  position:relative;
+  perspective:calc(1000px * var(--u));
+  perspective-origin:50% 62%;
+  padding-top:calc(60px * var(--u));   /* headroom the raised cover swings into */
+}
+.switch .assembly{position:relative;transform-style:preserve-3d}
+
+/* the well — a recess milled into the panel */
+.well{
+  position:relative;
+  min-height:calc(84px * var(--u));
+  background:var(--night);
+  border:1px solid var(--rule);
+  box-shadow:inset 0 calc(2px * var(--u)) calc(9px * var(--u)) -2px var(--cast);
+  padding:calc(13px * var(--u)) calc(16px * var(--u));
+  display:flex;flex-direction:column;justify-content:center;gap:calc(7px * var(--u));
+  overflow:hidden;
+}
+/* the lamp band: light leaking along the bottom bezel of a lit well */
+.well .lampband{
+  position:absolute;left:0;right:0;bottom:0;height:calc(3px * var(--u));z-index:3;
+  background:var(--port);opacity:0;transition:opacity .28s ease;
+}
+/* the lantern behind the throw. Only visible when the throw is live. */
+.well::before{
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:0;
+  transition:opacity .28s ease;
+  background:
+    radial-gradient(155% 46% at 50% 116%, var(--port) 0%, transparent 72%),
+    linear-gradient(var(--port-face),var(--port-face));
+}
+/* the guard's cast shadow, thrown down the well from the hinge edge */
+.well::after{
+  content:"";position:absolute;left:0;right:0;top:0;pointer-events:none;
+  height:0;opacity:0;transition:height .34s ease,opacity .34s ease;
+  background:linear-gradient(var(--cast),transparent);
+}
+.well > *{position:relative;z-index:2}
+
+.well .sil{color:var(--bone)}
+.well .st{font-size:calc(var(--t-sm) * var(--tu));color:var(--bone);display:block;
+  line-height:1.4;max-width:34ch}
+.go{
+  font-family:var(--f-panel);font-weight:700;text-transform:uppercase;letter-spacing:.16em;
+  font-size:calc(var(--t-base) * var(--tu));color:var(--bone);opacity:.28;transition:opacity .28s ease;
+}
+
+/* the guard plate: a real cover with thickness, hinged along its top edge */
+.cover{
+  position:absolute;inset:0;z-index:6;
+  transform-origin:50% 0%;
+  transform:rotateX(0deg);
+  transition:transform .42s cubic-bezier(.3,.7,.25,1);
+  transform-style:preserve-3d;
+}
+.cover .face{
+  position:absolute;inset:0;backface-visibility:hidden;
+  background:
+    repeating-linear-gradient(-45deg, rgba(0,0,0,.06) 0 calc(2px * var(--u)), transparent calc(2px * var(--u)) calc(7px * var(--u))),
+    linear-gradient(var(--lit), var(--panel));
+  border:1px solid var(--rule);
+  box-shadow:0 calc(9px * var(--u)) calc(18px * var(--u)) calc(-9px * var(--u)) var(--cast);
+  display:flex;flex-direction:column;justify-content:center;
+  padding:calc(13px * var(--u)) calc(16px * var(--u));
+  gap:calc(5px * var(--u));
+}
+/* the plate's own thickness, seen once it starts to turn */
+/* the underside of the plate — what you see once it is past vertical */
+.cover .under{
+  position:absolute;inset:0;backface-visibility:hidden;
+  transform:rotateX(180deg);
+  background:linear-gradient(var(--field),var(--panel));
+  border:1px solid var(--rule);
+  box-shadow:0 calc(10px * var(--u)) calc(22px * var(--u)) calc(-8px * var(--u)) var(--cast);
+  display:flex;align-items:flex-start;justify-content:flex-start;
+  padding:calc(9px * var(--u)) calc(14px * var(--u));
+}
+.cover .under .stencil{
+  font-family:var(--f-panel);font-weight:600;text-transform:uppercase;
+  letter-spacing:.18em;font-size:calc(var(--t-cap) * var(--tu));color:var(--dim);white-space:nowrap;
+}
+.cover .gl{font-family:var(--f-panel);font-weight:700;text-transform:uppercase;
+  letter-spacing:.15em;font-size:calc(var(--t-base) * var(--tu));color:var(--bone)}
+.cover .gt{font-size:calc(var(--t-sm) * var(--tu));color:var(--dim);line-height:1.45}
+.cover .gk{display:flex;align-items:center;gap:calc(6px * var(--u));margin-top:calc(2px * var(--u))}
+
+/* the hinge: a knuckled barrel along the top edge, the axis the cover turns about */
+.hinge{
+  position:absolute;left:0;right:0;top:calc(-4px * var(--u));height:calc(7px * var(--u));z-index:9;
+  background:
+    repeating-linear-gradient(90deg,
+      var(--rule) 0 calc(11px * var(--u)),
+      var(--night) calc(11px * var(--u)) calc(14px * var(--u)));
+  box-shadow:inset 0 calc(1px * var(--u)) 0 var(--line);
+}
+.hinge::after{
+  content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--line);
+}
+
+/* ── states ────────────────────────────────────────────────────────────── */
+/* CLOSED: the plate lies flat over the throw's own footprint and occludes it.
+   ARMED / LIVE: it swings up past vertical about the hinge and leans back, so
+   its underside faces you and the throw is exposed beneath. */
+.switch[data-state="closed"] .cover{transform:rotateX(0deg)}
+/* the cover has exactly two positions. Arming lifts it; the dwell does not move it.
+   What separates ARMED from LIVE is the lantern, because that is what actually differs. */
+.switch[data-state="armed"]  .cover,
+.switch[data-state="live"]   .cover,
+.switch[data-state="recorded"] .cover{transform:rotateX(-116deg)}
+
+.switch[data-state="armed"] .well::after{height:calc(30px * var(--u));opacity:1}
+.switch[data-state="live"]  .well::after{height:calc(30px * var(--u));opacity:.7}
+
+.switch[data-state="live"] .well::before,
+.switch[data-state="live"] .well .lampband{opacity:1}
+.switch[data-state="live"] .well{border-color:var(--port)}
+.switch[data-state="live"] .go{opacity:1;color:var(--port-ink)}
+.switch[data-state="live"] .well .st,
+.switch[data-state="live"] .well .sil{color:var(--port-ink)}
+/* the raised plate catches the lantern on its underside */
+.switch[data-state="live"] .cover .under{
+  background:linear-gradient(var(--panel),var(--field));
+  box-shadow:inset 0 calc(-14px * var(--u)) calc(20px * var(--u)) calc(-12px * var(--u)) var(--port);
+}
+
+.switch[data-state="closed"] .well{visibility:hidden}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   §6  SCREEN A — THE VERDICT PANE
+       One measure. No second column, because there is not enough material for
+       one: a column carries content for its full height or it does not exist.
+   ══════════════════════════════════════════════════════════════════════════ */
+.annun{
+  display:flex;align-items:center;gap:.7rem;padding:.72rem 1.4rem;
+  background:var(--field);border-bottom:1px solid var(--line);font-size:var(--t-sm);
+}
+.annun .lamp{width:7px;height:7px;border:1px solid var(--dim);flex:none}
+.annun .v{color:var(--body)}
+.annun .sep{color:var(--dim)}
+.annun .r{margin-left:auto;display:flex;align-items:center;gap:.7rem}
+
+.pane{background:var(--night);padding:2rem}
+.card{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow)}
+
+.hd{display:flex;gap:2rem;padding:1.6rem 1.9rem 1.4rem;border-bottom:1px solid var(--line)}
+.hd-tag{display:flex;align-items:center;gap:.6rem;margin-bottom:.35rem}
+.hd-kind{font-family:var(--f-dial);font-size:var(--t-lg);color:var(--bone);margin:0 0 .55rem;
+  font-weight:500;letter-spacing:-.02em}
+.hd-badges{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem}
+.hd-l3{margin:0;font-size:var(--t-sm);color:var(--dim);line-height:1.65;max-width:47rem}
+.chrono{margin-left:auto;text-align:right;flex:none;display:flex;flex-direction:column;
+  align-items:flex-end;gap:.25rem;padding-left:1.6rem;position:relative}
+/* the binnacle: the one lamp on this card, and it lights only the clock */
+.chrono::before{
+  content:"";position:absolute;right:-1.9rem;top:-1.6rem;width:15rem;height:9rem;
+  pointer-events:none;
+  background:radial-gradient(90% 90% at 78% 22%,var(--binnacle),transparent 68%);
+  opacity:.16;
+}
+.chrono .v{font-family:var(--f-dial);font-size:var(--t-chrono);color:var(--bone);
+  line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.03em;position:relative}
+.chrono .lampline{width:100%;height:2px;background:var(--binnacle);margin:.3rem 0 .1rem;position:relative}
+
+.legend{margin:0;padding:1rem 1.9rem;border-bottom:1px solid var(--line);
+  font-size:var(--t-sm);color:var(--dim);line-height:1.7}
+
+/* the five slots — ruled entries hung on a continuous spine */
+.log{padding:.4rem 1.9rem 1.4rem}
+.slot{display:grid;grid-template-columns:9.5rem 1fr;gap:1.5rem;padding:1.5rem 0;
+  border-bottom:1px solid var(--line)}
+.slot:last-child{border-bottom:0}
+.slot-m{position:relative;padding-left:1.9rem}
+.slot-m::before{content:"";position:absolute;left:.42rem;top:-1.5rem;bottom:-1.5rem;
+  width:1px;background:var(--rule)}
+.slot:first-child .slot-m::before{top:.1rem}
+.slot:last-child .slot-m::before{bottom:auto;height:1.6rem}
+.slot-n{position:absolute;left:0;top:-.1rem;width:.86rem;height:.86rem;
+  background:var(--rule);display:block;font-size:0}
+.slot-m[data-x] .slot-n{background:none;border:1px solid var(--rule)}
+.slot[data-solo] .slot-m::before{display:none}
+.slot[data-solo] .slot-n{left:.1rem}
+.slot-l{font-size:var(--t-sm);letter-spacing:.13em;line-height:1.25}
+.slot-l .i{font-family:var(--f-dial);color:var(--dim);margin-right:.5rem;letter-spacing:0}
+.slot-adv{display:block;margin-top:.6rem;font-family:var(--f-panel);font-size:var(--t-cap);
+  text-transform:uppercase;letter-spacing:.11em;color:var(--dim);
+  padding:0 0 .34rem;line-height:1.3;position:relative;max-width:6.6rem}
+.slot-adv::after{content:"";position:absolute;left:0;right:0;bottom:0;height:.3rem;
+  background-image:repeating-linear-gradient(-45deg,var(--hatch) 0 1px,transparent 1px 4px);
+  box-shadow:inset 0 1px 0 var(--hatch)}
+.lead{font-size:var(--t-lead);color:var(--bone);line-height:1.55}
+.kv{display:grid;grid-template-columns:11rem 1fr;gap:.36rem 1rem;margin:.9rem 0 0;
+  font-size:var(--t-sm)}
+.kv dt{color:var(--dim);font-family:var(--f-panel);text-transform:uppercase;letter-spacing:.11em;
+  font-size:var(--t-cap);padding-top:.12rem}
+.kv dd{margin:0;color:var(--body)}
+.sub{margin:.85rem 0 0;font-size:var(--t-sm);color:var(--dim);line-height:1.7;max-width:46rem}
+.subhead{display:flex;align-items:center;gap:.8rem;margin:1.1rem 0 .1rem}
+.subhead .rule{flex:1;height:1px;background:var(--line)}
+.caps{display:flex;gap:.5rem;margin-top:.6rem;flex-wrap:wrap}
+.caps span{font-family:var(--f-dial);font-size:var(--t-sm);color:var(--bone);
+  border:1px solid var(--rule);padding:.28rem .6rem}
+
+.absence{border:1px dashed var(--rule);padding:.95rem 1.05rem}
+.absence b{display:block;font-size:var(--t-base);margin-bottom:.4rem}
+.absence .strike{height:1px;background:var(--rule);margin:.55rem 0 .65rem}
+.absence p{margin:0;font-size:var(--t-sm);color:var(--dim);line-height:1.7}
+
+/* the dwell gate */
+.gate{margin-top:1.1rem;border:1px solid var(--rule);padding:.8rem .95rem}
+.gate-l{display:flex;align-items:center;gap:.6rem;font-size:var(--t-sm);color:var(--dim);
+  padding:.16rem 0}
+.gate-l .box{width:9px;height:9px;border:1px solid var(--rule);flex:none}
+.gate-l[data-ok]{color:var(--body)}
+.gate-l[data-ok] .box{background:var(--dim);border-color:var(--dim)}
+.gate-pct{margin-left:auto;font-family:var(--f-dial);font-size:var(--t-cap);color:var(--dim)}
+.gate-bar{height:2px;background:var(--rule);margin-top:.55rem}
+.gate-bar i{display:block;height:100%;width:0;background:var(--binnacle)}
+
+/* provenance */
+.prov{border-top:1px solid var(--line);padding:1.4rem 1.9rem 1.6rem}
+.prov-h{display:flex;align-items:center;gap:.9rem;margin-bottom:1rem}
+.stamp{position:relative;display:inline-flex;align-items:baseline;gap:.5rem;
+  border:1px solid var(--dim);padding:.2rem .55rem .26rem}
+.stamp .t{font-family:var(--f-dial);font-size:var(--t-sm);color:var(--bone)}
+.stamp .w{font-family:var(--f-panel);font-weight:600;text-transform:uppercase;
+  letter-spacing:.13em;font-size:var(--t-cap);color:var(--body)}
+.stamp[data-unattested]::after{content:"";position:absolute;left:-3px;right:-3px;top:50%;
+  height:1px;background:var(--bone)}
+.provrow{display:grid;grid-template-columns:9.5rem 1fr;gap:1.5rem;padding:.95rem 0;
+  border-top:1px dotted var(--rule)}
+.provrow .st{font-size:var(--t-base);color:var(--bone);margin-bottom:.4rem}
+.provrow p{margin:0 0 .5rem;font-size:var(--t-sm);color:var(--dim);line-height:1.7;max-width:46rem}
+.npub{font-family:var(--f-dial);font-size:var(--t-sm);color:var(--body);word-break:break-all;
+  border:1px solid var(--line);padding:.4rem .55rem;margin-bottom:.55rem;max-width:44rem}
+
+/* controls */
+.controls{border-top:1px solid var(--line);padding:1.5rem 1.9rem 1.9rem}
+.ctlrow{display:flex;gap:.7rem;margin-bottom:1.4rem;align-items:center}
+.chip--refuse{border-color:var(--dim);color:var(--bone)}
+.throw-head{display:flex;align-items:center;gap:1rem;margin-bottom:.45rem}
+.throw-label{font-family:var(--f-panel);font-weight:600;text-transform:uppercase;
+  letter-spacing:.13em;font-size:var(--t-sm);color:var(--bone)}
+.throw-keys{margin-left:auto;display:flex;align-items:center;gap:.4rem;
+  font-size:var(--t-cap);color:var(--dim);font-family:var(--f-panel);
+  text-transform:uppercase;letter-spacing:.12em}
+.throw-l2{margin:0 0 1rem;font-size:var(--t-sm);color:var(--dim);line-height:1.7;max-width:52rem}
+.recorded{margin-top:1.1rem;border:1px solid var(--dim);padding:.9rem 1.05rem;
+  font-size:var(--t-sm);color:var(--body);line-height:1.7;max-width:52rem}
+.recorded .sil{margin-bottom:.3rem}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   §7  THE OBJECT — the three-state specimen, at 2×
+   ══════════════════════════════════════════════════════════════════════════ */
+.objwrap{padding:0 3.5rem}
+.objgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:2.25rem;
+  background:var(--field);border:1px solid var(--line);padding:2.5rem 2.5rem 2.75rem;
+  box-shadow:var(--shadow)}
+.objcell .capline{display:flex;align-items:baseline;gap:.7rem;margin-bottom:1.1rem}
+.objcell .n{font-family:var(--f-dial);font-size:var(--t-lead);color:var(--dim)}
+.objcell p{margin:1.1rem 0 0;font-size:var(--t-sm);color:var(--dim);line-height:1.65}
+.objcell p b{color:var(--body)}
+.objhead{display:flex;align-items:flex-end;gap:2rem;padding:0 3.5rem 1.1rem}
+.objhead h2{font-family:var(--f-panel);font-weight:700;text-transform:uppercase;
+  letter-spacing:.07em;font-size:var(--t-lg);margin:0;color:var(--bone)}
+.objhead p{margin:0;max-width:46rem;font-size:var(--t-sm);color:var(--dim);line-height:1.65}
+.objhead .live{margin-left:auto;text-align:right;font-size:var(--t-sm);color:var(--dim);flex:none}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   §8  SCREEN B — THE WATCH
+   ══════════════════════════════════════════════════════════════════════════ */
+.appB{display:grid;grid-template-columns:2.6rem 15.5rem 1fr 17.5rem;
+  min-height:1180px;background:var(--night)}
+.rail{background:var(--field);border-right:1px solid var(--line);padding:.8rem .5rem;
+  display:flex;flex-direction:column;gap:.5rem;align-items:center}
+.rail i{width:1.6rem;height:1.6rem;border:1px solid var(--rule);display:flex;
+  align-items:center;justify-content:center;font-style:normal;
+  font-family:var(--f-panel);font-weight:600;font-size:var(--t-cap);color:var(--dim);
+  letter-spacing:.04em}
+.rail i[data-on]{border-color:var(--bone);color:var(--bone);background:var(--lit)}
+
+.side{background:var(--field);border-right:1px solid var(--line);padding:1.1rem 1rem;
+  font-size:var(--t-sm);overflow:hidden}
+.sgroup{margin-bottom:1.35rem}
+.shead{display:flex;align-items:baseline;gap:.6rem;padding:0 .3rem .45rem}
+.shead .c{margin-left:auto;font-family:var(--f-dial);font-size:var(--t-cap);color:var(--dim)}
+.srow{display:flex;align-items:center;gap:.5rem;padding:.28rem .3rem;color:var(--body)}
+.srow .r{margin-left:auto;font-family:var(--f-dial);font-size:var(--t-cap);color:var(--dim)}
+.srow[data-on]{background:var(--lit);color:var(--bone);box-shadow:inset 2px 0 0 var(--bone)}
+.ssub{padding:0 .3rem .45rem 1.3rem;font-size:var(--t-cap);color:var(--dim);
+  font-family:var(--f-dial);line-height:1.55}
+.lane{width:.75rem;height:.75rem;border:1px solid var(--rule);flex:none;display:block}
+.lane[data-over]{background:var(--bone);border-color:var(--bone)}
+.lane[data-empty]{border-style:dotted}
+.sdiv{height:1px;background:var(--line);margin:.4rem .3rem 1rem}
+
+.inbox{padding:0;overflow:hidden;background:var(--field);border-right:1px solid var(--line)}
+.recon{display:flex;align-items:center;gap:.6rem;padding:.65rem 1.2rem;
+  border-bottom:1px solid var(--line);font-size:var(--t-cap);color:var(--dim)}
+.qhead{display:flex;align-items:center;gap:.85rem;padding:1.1rem 1.2rem .5rem}
+.qhead .rule{flex:1;height:1px;background:var(--line)}
+.qhead .c{font-family:var(--f-dial);font-size:var(--t-cap);color:var(--dim)}
+.qhead .c[data-absent]{border:1px dotted var(--rule);padding:.06rem .34rem}
+
+.wrow{display:block;width:100%;text-align:left;background:none;border:0;
+  border-top:1px solid var(--line);padding:.72rem 1.2rem .78rem 1.2rem;cursor:pointer;
+  position:relative;font:inherit;color:inherit}
+.wrow:first-of-type{border-top:0}
+/* the severity rail: weight AND pattern AND luminance. No hue anywhere in this queue. */
+.wrow::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
+.wrow[data-sev="CRITICAL"]::before{background:var(--bone)}
+.wrow[data-sev="HIGH"]::before{
+  background:repeating-linear-gradient(var(--body) 0 5px,transparent 5px 9px)}
+.wrow[data-sev="MEDIUM"]::before{width:2px;
+  background:repeating-linear-gradient(var(--dim) 0 2px,transparent 2px 5px)}
+.wrow[data-sev="LOW"]::before{width:1px;background:var(--rule)}
+.wrow[data-sel]{background:var(--lit)}
+.wrow[data-sel]::after{content:"";position:absolute;inset:0;border:1px solid var(--dim);
+  pointer-events:none}
+.l1{display:flex;align-items:center;gap:.55rem;margin-bottom:.24rem}
+.verb{font-family:var(--f-panel);text-transform:uppercase;letter-spacing:.12em;
+  font-size:var(--t-cap);font-weight:600;color:var(--dim)}
+.kind{font-family:var(--f-dial);font-size:var(--t-base);color:var(--bone);letter-spacing:-.015em}
+.l1 .sp{flex:1}
+.l2{display:block;margin:.16rem 0 .3rem}
+.l3{display:flex;align-items:center;gap:.5rem;font-size:var(--t-cap);color:var(--dim);
+  font-family:var(--f-dial);margin-bottom:.16rem}
+.l3 .ttl{font-family:var(--f-dial);color:var(--body)}
+.l4{display:block;font-size:var(--t-sm);color:var(--dim);line-height:1.5}
+.rkeys{display:none;gap:.28rem;margin-top:.5rem}
+.wrow[data-sel] .rkeys{display:flex}
+.absentq{margin:.35rem 1.2rem .3rem;border:1px dashed var(--rule);padding:.85rem .95rem}
+.absentq b{display:block;font-size:var(--t-base);margin-bottom:.35rem}
+.absentq p{margin:0;font-size:var(--t-sm);color:var(--dim);line-height:1.7}
+.shedrow{padding:.6rem 1.2rem 1rem;font-size:var(--t-cap);color:var(--dim);
+  border-top:1px solid var(--line)}
+
+/* the substrate ledger — what accumulated this shift and is not asking for you */
+.ldg{width:100%;border-collapse:collapse;font-size:var(--t-cap);font-family:var(--f-dial)}
+.ldg th{text-align:left;font-family:var(--f-panel);text-transform:uppercase;
+  letter-spacing:.11em;font-weight:600;color:var(--dim);padding:.35rem 1.2rem .4rem;
+  border-bottom:1px solid var(--line);font-size:var(--t-cap)}
+.ldg td{padding:.3rem 1.2rem;color:var(--body);border-bottom:1px dotted var(--line);
+  white-space:nowrap}
+.ldg td.d{color:var(--dim)}
+.ldg .meter{display:inline-flex;gap:1px;vertical-align:-1px}
+.ldg .meter i{width:3px;height:8px;background:var(--rule);display:block}
+.ldg .meter i[data-on]{background:var(--dim)}
+
+.hand{background:var(--field);padding:1.2rem 1.15rem}
+.hand h3{margin:0 0 .9rem}
+.hblock{border-top:1px solid var(--line);padding:.95rem 0 .1rem}
+.hblock .big{font-family:var(--f-dial);font-size:var(--t-lg);color:var(--bone);display:block;
+  margin:.25rem 0 .35rem;font-variant-numeric:tabular-nums}
+.hblock p{margin:.4rem 0 .8rem;font-size:var(--t-cap);color:var(--dim);line-height:1.65}
+.hbar{display:flex;gap:2px;margin-bottom:.2rem}
+.hbar i{height:5px;flex:1;background:var(--rule)}
+.hbar i[data-on]{background:var(--dim)}
+.um{font-family:var(--f-panel);font-weight:600;text-transform:uppercase;letter-spacing:.13em;
+  font-size:var(--t-sm);color:var(--body);border:1px dashed var(--rule);
+  padding:.2rem .5rem;display:inline-block;margin:.3rem 0 .1rem}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   §9  SPECIMENS + MEASUREMENT
+   ══════════════════════════════════════════════════════════════════════════ */
+.spec{display:grid;grid-template-columns:repeat(2,1fr);gap:0;margin:0 3.5rem;
+  border:1px solid var(--line);background:var(--field)}
+.speccell{padding:1.75rem 1.9rem;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.speccell:nth-child(2n){border-right:0}
+.speccell h4{font-family:var(--f-panel);font-weight:600;text-transform:uppercase;
+  letter-spacing:.13em;font-size:var(--t-cap);color:var(--bone);margin:0 0 1rem}
+.speccell p{margin:.9rem 0 0;font-size:var(--t-sm);color:var(--dim);line-height:1.7}
+
+.sw{display:flex;gap:0}
+.sw div{flex:1;height:3.4rem;border:1px solid var(--line);border-right:0}
+.sw div:last-child{border-right:1px solid var(--line)}
+.swleg{display:flex;gap:0;margin:.3rem 0 .9rem}
+.swleg span{flex:1;font-family:var(--f-dial);font-size:var(--t-cap);color:var(--dim);
+  letter-spacing:-.02em}
+
+.lantern{display:flex;gap:1.4rem;margin-bottom:.4rem}
+.lantern .cell{flex:1;border:1px solid var(--line);padding:.9rem 1rem;background:var(--panel);
+  position:relative;overflow:hidden}
+.lantern .cell .glow{position:absolute;inset:0;pointer-events:none}
+.lantern .cell .lbl{position:relative;font-family:var(--f-panel);font-weight:600;
+  text-transform:uppercase;letter-spacing:.13em;font-size:var(--t-cap);color:var(--bone)}
+.lantern .cell .hexv{position:relative;font-family:var(--f-dial);font-size:var(--t-sm);
+  color:var(--body);margin-top:.35rem}
+.lantern .cell .job{position:relative;font-size:var(--t-sm);color:var(--dim);margin-top:.5rem;
+  line-height:1.6}
+
+.typerow{display:flex;align-items:baseline;gap:1.1rem;padding:.5rem 0;
+  border-bottom:1px dotted var(--rule)}
+.typerow .m{font-family:var(--f-dial);font-size:var(--t-cap);color:var(--dim);width:8.5rem;flex:none}
+
+.grey{filter:grayscale(1)}
+
+.tbl{width:100%;border-collapse:collapse;font-size:var(--t-sm);margin-top:.4rem}
+.tbl th{text-align:left;font-family:var(--f-panel);text-transform:uppercase;
+  letter-spacing:.11em;font-weight:600;color:var(--dim);font-size:var(--t-cap);
+  padding:.4rem .7rem .45rem 0;border-bottom:1px solid var(--line)}
+.tbl td{padding:.32rem .7rem .34rem 0;border-bottom:1px dotted var(--rule);
+  color:var(--body);vertical-align:top}
+.tbl td.d{color:var(--dim)}
+.tbl .mono{font-size:var(--t-cap)}
+
+.colophon{padding:2.5rem 3.5rem 0;column-count:2;column-gap:3.5rem}
+.colophon p{font-size:var(--t-sm);color:var(--dim);line-height:1.75;margin:0 0 .8rem;
+  break-inside:avoid}
+.colophon p b{color:var(--body)}
+</style>
+</head>
+<body>
+<div class="board">
+
+<!-- ══════════════════════════ MASTHEAD ══════════════════════════ -->
+<div class="plate">
+  <div class="masthead">
+    <div>
+      <h1>Night<br>Bridge</h1>
+    </div>
+    <div class="sub">
+      <div class="sil">Perch · art direction</div>
+      <p>A darkened bridge keeps a tired person accurate for eight hours by doing two things:
+        it paints the panel a colour that does not glare, and it burns as few lamps as it can.
+        <b>The panel is warm graphite and it is not lit. The night outside the glass is colder
+        and darker than anything on it. Two lanterns burn, and colour never lands on a word.</b></p>
+      <p>Chroma in this system is <b>light falling on a surface</b>, never ink. Every glyph is
+        bone on graphite, so the whole console survives colour-blindness, a bad monitor and a
+        greyscale print by construction — and the two lit things on the screen are the only two
+        things that can hurt you.</p>
+    </div>
+    <div class="mast-r">
+      <div class="themectl" role="group" aria-label="Theme">
+        <button data-t="system" aria-pressed="false">System</button>
+        <button data-t="dark" aria-pressed="true">Dark</button>
+        <button data-t="light" aria-pressed="false">Light</button>
+      </div>
+      <div class="sil">Fixture · hellcat-office</div>
+      <div class="mono" style="font-size:var(--t-cap);color:var(--dim)">
+        rendered at open_row_ms · 2026-03-17 09:16:05 UTC</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ THE OBJECT ══════════════════════════ -->
+<div class="objhead" style="padding-top:3.25rem">
+  <h2>The guarded throw</h2>
+  <p>The one control in the product that can isolate a production host. Meet the object before
+    the document it lives in: a cover, an axis, and a lantern behind the throw that you cannot
+    see until the cover is off.</p>
+  <div class="live">This strip is live —<br>
+    <span class="kbd">G</span> lifts the cover, <span class="kbd">Enter</span> records,
+    <span class="kbd">R</span> refuses.</div>
+</div>
+
+<div class="objwrap">
+  <div class="objgrid">
+
+    <div class="objcell">
+      <div class="capline"><span class="n">01</span><span class="sil sil--ink">Guard closed</span></div>
+      <div class="switch" style="--u:2;--tu:1.35" data-state="closed">
+        <div class="assembly">
+          <div class="hinge"></div>
+          <div class="well">
+            <span class="sil">Interlock</span>
+            <span class="st">Nothing to throw.</span>
+            <span class="go">Press Enter to record</span>
+            <span class="lampband"></span>
+          </div>
+          <div class="cover">
+            <div class="face">
+              <span class="gl">Guard closed</span>
+              <span class="gt">There is nothing to throw until you lift this.</span>
+              <span class="gk"><span class="kbd">G</span><span class="sil">to arm</span></span>
+            </div>
+            <div class="under"><span class="stencil">Guard · lift to expose the throw</span></div>
+          </div>
+        </div>
+      </div>
+      <p>The cover occupies the throw's own footprint, so the throw is <b>not on the screen</b>.
+        There is no disabled button to habituate to and nothing to mis-click.</p>
+    </div>
+
+    <div class="objcell">
+      <div class="capline"><span class="n">02</span><span class="sil sil--ink">Lifted, interlocked</span></div>
+      <div class="switch" style="--u:2;--tu:1.35" data-state="armed">
+        <div class="assembly">
+          <div class="hinge"></div>
+          <div class="well">
+            <span class="sil">Interlock</span>
+            <span class="st">Waiting on the blast radius. 0.9 of 1.5&nbsp;s.</span>
+            <span class="go">Press Enter to record</span>
+            <span class="lampband"></span>
+          </div>
+          <div class="cover">
+            <div class="face">
+              <span class="gl">Guard open</span>
+              <span class="gt">Lifted at 09:16:02.</span>
+            </div>
+            <div class="under"><span class="stencil">Guard · lift to expose the throw</span></div>
+          </div>
+        </div>
+      </div>
+      <p>The plate has turned about its hinge and leans back above the throw, throwing a
+        shadow down the well. The throw is exposed and <b>inert</b>: the lantern is not lit,
+        because the interlock on the card is still counting. <b>The cover has two positions and
+        only two</b> — arming lifts it, and nothing afterwards moves it again.</p>
+    </div>
+
+    <div class="objcell">
+      <div class="capline"><span class="n">03</span><span class="sil sil--ink">The throw is live</span></div>
+      <div class="switch" style="--u:2;--tu:1.35" data-state="live">
+        <div class="assembly">
+          <div class="hinge"></div>
+          <div class="well">
+            <span class="sil">Interlock</span>
+            <span class="st">Armed. The blast radius has been read.</span>
+            <span class="go">Press Enter to record</span>
+            <span class="lampband"></span>
+          </div>
+          <div class="cover">
+            <div class="face">
+              <span class="gl">Guard open</span>
+              <span class="gt">Lifted at 09:16:02.</span>
+            </div>
+            <div class="under"><span class="stencil">Guard · lift to expose the throw</span></div>
+          </div>
+        </div>
+      </div>
+      <p>The 615&nbsp;nm lantern behind the throw is burning — a lit well in the dark, a deep
+        lens in daylight. <b>This is the only place port red appears in the product.</b> Not on
+        a queue row, not on a severity, not on a warning, not on another card. Seeing it means
+        one thing.</p>
+    </div>
+
+  </div>
+</div>
+
+<div class="note">
+  <p><b>Why an object and not a state.</b> The question the whole safety argument turns on is
+  <i>is this armed</i>, and a tint change answers it badly at hour nine of a shift. Here the
+  answer is a physical fact with two positions: the cover is down or it is up, at arm's length,
+  in greyscale, on a bad monitor. Arming it is a stroke with a visible result, so the two-stroke
+  contract is a property of the object rather than a line in a keymap — which is also why there
+  is no paragraph in the card explaining that friction is asymmetric. Look at it.</p>
+  <p><b>And the control can never read as a friendly primary.</b> There is no filled path in the
+  component: the throw is a recess, the cover is a plate, and the only fill that ever appears is
+  lamplight.</p>
+</div>
+
+<!-- ══════════════════════════ SCREEN A ══════════════════════════ -->
+<div class="sechead">
+  <span class="idx">A</span>
+  <h2>The verdict pane</h2>
+  <p>A hold on <span class="mono">isolate_host</span> waiting on a human. Five slots in a fixed
+    order that never varies by action type; a countdown; a verification tier that is honest about
+    carrying no signature; and two controls whose costs are deliberately unequal. One measure —
+    a column carries content for its full height or it does not exist.</p>
+</div>
+
+<div class="frame">
+  <div class="annun">
+    <span class="lamp"></span>
+    <span class="sil sil--ink">Governance healthy</span>
+    <span class="sep">·</span>
+    <span class="v">committee of 3, networked transport, quorum reachable</span>
+    <span class="r">
+      <span class="sil">Normal</span><span class="sep">·</span>
+      <span class="mono" style="font-size:var(--t-cap);color:var(--dim)">relay live</span>
+      <span class="sep">·</span>
+      <span class="v">watch held by <span class="mono">perch-operator-1</span> since 08:00</span>
+    </span>
+  </div>
+
+  <div class="pane">
+    <article class="card">
+
+      <header class="hd">
+        <div>
+          <div class="hd-tag">
+            <span class="sil">Hold</span>
+            <span class="mono" style="font-size:var(--t-sm);color:var(--dim)">h_a07aeacf</span>
+          </div>
+          <h3 class="hd-kind">isolate_host</h3>
+          <div class="hd-badges">
+            <span class="sev" data-s="CRITICAL">CRITICAL<span class="sevbar"><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span>
+            <span class="mark mark--derived">gated · receipt</span>
+            <span class="mark mark--derived">undo: restore_host_connectivity</span>
+          </div>
+          <p class="hd-l3">
+            <span class="mono">case-2026-03-17-host-ops-1</span> ·
+            <span class="mono">execution</span> · requested by
+            <span class="mono">swarm:ed25519:18085f16811d…</span> ·
+            <span class="mono">hunt-evt-1</span> · held at
+            <span class="mono">2026-03-17 09:14:42 UTC</span>
+          </p>
+        </div>
+        <div class="chrono">
+          <span class="sil">Expires in</span>
+          <span class="v">58m 37s</span>
+          <span class="lampline"></span>
+          <span class="mark mark--derived">derived · expires_at_ms − now</span>
+        </div>
+      </header>
+
+      <p class="legend">
+        Ruled values are written by the adversary. They render as plain text — no markdown, no
+        autolinking, no mention resolution — and control, zero-width and bidi codepoints are
+        escaped to a visible form before they reach the DOM. Nothing here is ever passed to an
+        agent as instruction. Enum and integer fields carry no rule, which is what makes the rule
+        mean something.
+      </p>
+
+      <div class="log">
+
+        <!-- 01 ACTION -->
+        <div class="slot">
+          <div class="slot-m">
+            <span class="slot-n" aria-hidden="true"></span>
+            <div class="sil sil--ink slot-l"><span class="i">01</span>Action</div>
+            <span class="slot-adv">Adversary-<br>controlled</span>
+          </div>
+          <div class="slot-b">
+            <div class="lead"><span class="mono">isolate_host</span> — Cut
+              <span class="adv">host-ops-1</span> off from the network.</div>
+            <dl class="kv"><dt>host_id</dt><dd><span class="adv">host-ops-1</span></dd></dl>
+            <p class="sub">Typed <span class="mono">ResponseAction</span> from the hold record.
+              Every value field here is attacker-written, and every one of them renders through the
+              adversary frame. <span class="mark mark--served">served · hold record</span></p>
+          </div>
+        </div>
+
+        <!-- 02 BLAST RADIUS -->
+        <div class="slot">
+          <div class="slot-m">
+            <span class="slot-n" aria-hidden="true"></span>
+            <div class="sil sil--ink slot-l"><span class="i">02</span>Blast radius</div>
+            <span class="slot-adv">Adversary-<br>controlled</span>
+          </div>
+          <div class="slot-b">
+            <div class="lead">One host loses network connectivity —
+              <span class="adv">host-ops-1</span>.</div>
+            <dl class="kv">
+              <dt>scope_kind</dt><dd class="mono">host</dd>
+              <dt>scope_value</dt><dd><span class="adv">host-ops-1</span></dd>
+              <dt>impact</dt><dd class="mono">host_connectivity_isolated</dd>
+              <dt>max_affected_scopes</dt><dd class="mono num">1</dd>
+            </dl>
+            <div class="subhead">
+              <span class="sil">affected_capabilities <span class="mono">(2)</span></span>
+              <span class="rule"></span>
+            </div>
+            <div class="caps"><span>network.egress</span><span>network.ingress</span></div>
+            <p class="sub">All <span class="mono num">2</span> render. There is no
+              <span class="mono">+N more</span> affordance in this slot: the capability list is the
+              real cost of the action, and truncating it hides the half an operator is deciding on.
+              <span class="mark mark--served">served · rehearsal preview</span></p>
+            <p class="sub">Derived by the runtime's own rehearsal preview — the same derivation the
+              capability lease will bind, so what you are shown here and what is authorized cannot
+              disagree.</p>
+
+            <div class="gate" id="gate">
+              <div class="gate-l" data-ok><span class="box"></span>
+                blast radius fully visible, in front of you</div>
+              <div class="gate-l" id="gate-dwell"><span class="box"></span>
+                read for <span class="mono num" id="gate-s">0.0</span> of
+                <span class="mono num">1.5</span> s on this hold
+                <span class="gate-pct" id="gate-pct">0%</span></div>
+              <div class="gate-bar"><i id="gate-fill"></i></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 03 IF YOU UNDO -->
+        <div class="slot">
+          <div class="slot-m">
+            <span class="slot-n" aria-hidden="true"></span>
+            <div class="sil sil--ink slot-l"><span class="i">03</span>If you undo</div>
+          </div>
+          <div class="slot-b">
+            <div class="lead"><span class="mono">restore_host_connectivity</span>
+              <span class="mark mark--derived" style="margin-left:.4rem">executable inverse</span></div>
+            <div style="margin-top:.6rem">→ <span class="adv">host-ops-1</span></div>
+            <p class="sub">Reversible. The planned step reads “re-enable
+              <span class="mono">host-ops-1</span> network interfaces”, under a rollback summary of
+              “restore host connectivity”. A release runs it, and the receipt reports what actually
+              happened: read from <span class="mono">lease_closed</span> and
+              <span class="mono">fully_reversed</span> in the response body, never from the HTTP
+              status. <span class="mark mark--served">served · rollback plan</span></p>
+          </div>
+        </div>
+
+        <!-- 04 WHY WE ARE ASKING -->
+        <div class="slot">
+          <div class="slot-m">
+            <span class="slot-n" aria-hidden="true"></span>
+            <div class="sil sil--ink slot-l"><span class="i">04</span>Why we are asking</div>
+          </div>
+          <div class="slot-b">
+            <div class="lead" style="font-size:var(--t-base)">No policy rule matched. The static
+              gate asks a human for any destructive action at
+              <span class="mono">human_gate_severity</span> or above, which is
+              <span class="mono">HIGH</span>. This request is <span class="mono">CRITICAL</span>.</div>
+            <dl class="kv">
+              <dt>rule_name</dt><dd class="mono">static.human_gate</dd>
+              <dt>reason</dt><dd class="mono">authorized but held for human approval</dd>
+            </dl>
+            <p class="sub">The reason is the daemon's own string, rendered verbatim rather than
+              paraphrased. Paraphrasing the reason a human was asked is the one thing this pane must
+              not do.</p>
+
+            <div class="subhead"><span class="sil">matched selector</span><span class="rule"></span></div>
+            <dl class="kv">
+              <dt>threat_class</dt><dd><span class="mono">execution</span>
+                <span class="mark mark--req">request-carried</span></dd>
+              <dt>severity</dt><dd><span class="mono">CRITICAL</span>
+                <span class="mark mark--req">request-carried</span></dd>
+              <dt>action</dt><dd class="mono">isolate_host</dd>
+            </dl>
+            <p class="sub">Not adversary-written — <b>agent-written</b>, which is its own problem.
+              <span class="mono">threat_class</span> and <span class="mono">severity</span> are read
+              out of the requesting agent's own request, and the configurable gate returns on the
+              first selector match in file order — so file order is precedence, and an agent
+              influences which rule judges its own destructive action. This warning is permanent,
+              not conditional on a state.</p>
+
+            <div class="subhead"><span class="sil">the escalation behind it</span><span class="rule"></span></div>
+            <div style="font-size:var(--t-sm);color:var(--body);line-height:1.75">
+              concentration <span class="mono num">2.696884</span> against an alert threshold of
+              <span class="mono num">2.0</span>, from <span class="mono num">2</span> sources /
+              <span class="mono num">1</span> agent, peak confidence
+              <span class="mono num">0.90</span>, level <span class="mono">alert</span>, measured at
+              <span class="mono">09:14:41</span> when the lane crossed.
+              <span class="mark mark--served">served · concentration_at_hold</span>
+            </div>
+            <ul class="mono" style="margin:.7rem 0 0;padding-left:1.1rem;font-size:var(--t-cap);
+              color:var(--dim);line-height:1.95">
+              <li>swarm:ed25519:18085f16…ce470:suspicious_process_tree</li>
+              <li>swarm:ed25519:18085f16…ce470:suspicious_scripting</li>
+            </ul>
+            <p class="sub">One agent, two detector strategies.
+              <span class="mono">distinct_sources</span> counts strategy-scoped ids, so
+              <span class="mono">min_sources_for_escalation: 2</span> was cleared by one agent's own
+              two detectors agreeing with themselves. That is the fact this expansion exists to make
+              visible, and it is why the expansion is mandatory rather than an affordance.</p>
+          </div>
+        </div>
+
+        <!-- 05 WHAT GRANTING OPENS -->
+        <div class="slot">
+          <div class="slot-m">
+            <span class="slot-n" aria-hidden="true"></span>
+            <div class="sil sil--ink slot-l"><span class="i">05</span>What granting opens</div>
+            <span class="slot-adv">Adversary-<br>controlled</span>
+          </div>
+          <div class="slot-b">
+            <div class="lead"><b>capability lease</b> · <span class="mono">isolate_host</span> ·
+              scope <span class="adv">host-ops-1</span> · <span class="mono num">60</span> s</div>
+            <p class="sub" style="color:var(--body)">Not minted yet. It is minted <b>when you
+              decide</b>, not when this hold opened, and it expires <span class="mono num">60</span> s
+              after your decision whether or not the action has dispatched.</p>
+            <p class="sub">A capability lease minted when this hold opened would have expired
+              <span class="mono num">00m 23s</span> ago.
+              <span class="mark mark--derived">derived · held_at_ms + policy.lease_ttl_ms</span></p>
+
+            <div class="lead" style="margin-top:1.2rem"><b>containment lease</b> · opens on dispatch ·
+              <span class="mono num">900</span> s · appears on the containment board</div>
+            <p class="sub">A second, unrelated object with its own clock,
+              <span class="mono num">15</span>× the capability window above. When it expires the sweep
+              runs the inverse; on the containment board <span class="mono">remaining_ms</span> and
+              <span class="mono">expired</span> are two facts and never one progress bar.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- PROVENANCE -->
+      <section class="prov">
+        <div class="prov-h">
+          <span class="sil sil--ink">Provenance</span>
+          <span class="stamp" data-unattested><span class="t">TIER 0</span><span class="w">Unattested</span></span>
+          <span style="font-size:var(--t-cap);color:var(--dim)">three rows, always three, never merged</span>
+        </div>
+
+        <div class="provrow">
+          <div class="sil">Ambush record</div>
+          <div>
+            <div class="st">unattested — no ed25519 signature of its own</div>
+            <p><span class="mono">ambush:hold:v1</span> carries no Ed25519 signature in Ambush today,
+              under any condition. This card is a copy; the daemon holds the record.</p>
+            <p>Nothing here can be checked offline. Tier 0 runs none of the three checks, so the
+              affordance below does the only honest thing available: it re-reads the hold from the
+              daemon by id and diffs the canonical bytes. It is not checking a signature, because
+              there is none to check.</p>
+            <button class="chip" style="margin-top:.65rem">Re-read this hold from the daemon and diff the bytes</button>
+          </div>
+        </div>
+
+        <div class="provrow">
+          <div class="sil">Relay envelope</div>
+          <div>
+            <div class="st">secp256k1 — transport only</div>
+            <div class="npub">207176338a897b2379564322033e86ed7197600499ba348e6c6c898b8139b586</div>
+            <p>Shows this card reached the relay from the bridge's key and was not altered in
+              transit. It says nothing about whether the daemon produced it. Rendered in full, never
+              truncated: a truncated key is forgeable by vanity grinding.</p>
+          </div>
+        </div>
+
+        <div class="provrow">
+          <div class="sil">Who answered</div>
+          <div>
+            <div class="st">a human was asked</div>
+            <p>Perch's own hold record and the <span class="mono">ambush:verdict:v1</span> card you
+              publish under your own key both name you. The daemon's receipt does not:
+              <span class="mono">ResponseReceiptAudit</span> has exactly two fields, both
+              <span class="mono">Option</span> — a policy attribution and a governance one — and the
+              governance one names an agent, not you. Until B2o lands the daemon's record shows that
+              a human was asked, not which one answered.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- CONTROLS -->
+      <section class="controls">
+        <div class="ctlrow">
+          <button class="chip chip--refuse" id="refusebtn"><span class="kbd">R</span>Refuse</button>
+          <button class="chip"><span class="kbd">E</span>Promote to a case</button>
+          <button class="chip" disabled aria-disabled="true"><span class="kbd" data-off>S</span>Snooze</button>
+          <span style="margin-left:.5rem;font-size:var(--t-cap);color:var(--dim)">
+            one stroke, no dialog, no undo · snooze is disabled on a hold and rendered rather than hidden</span>
+        </div>
+
+        <div class="throw-head">
+          <span class="throw-label">Record my decision and send it to the daemon</span>
+          <span class="throw-keys"><span class="kbd">G</span>then<span class="kbd">Enter</span></span>
+        </div>
+        <p class="throw-l2">Perch does not authorize. Recording publishes a human intent record to
+          the relay under your own key, carrying your Ed25519 signature over
+          <span class="mono">{decided_at_ms, decision, hold_id}</span>, and separately posts your
+          decision to the daemon, which re-derives authority from scratch — partition, governance,
+          policy, rate limit — and mints the capability lease at your decision. The two legs cross a
+          process boundary, which is what makes this guaranteed rather than conventional.</p>
+
+        <div class="switch" id="sw" data-state="closed">
+          <div class="assembly">
+            <div class="hinge"></div>
+            <div class="well">
+              <span class="sil">Interlock</span>
+              <span class="st">
+                <span id="throwstatus">Armed, and waiting on the blast radius. Read for 0.0 of 1.5 s.</span>
+                </span>
+              <span class="go">Press Enter to record</span>
+              <span class="lampband"></span>
+            </div>
+            <div class="cover">
+              <div class="face">
+                <span class="gl" id="guardlabel">Guard closed</span>
+                <span class="gt" id="guardtext">There is nothing to throw until you lift this.</span>
+                <span class="gk"><span class="kbd">G</span><span class="sil">to arm</span></span>
+              </div>
+              <div class="under"><span class="stencil">Guard · lift to expose the throw</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="recorded" id="recorded" hidden>
+          <div class="sil sil--ink">Recorded</div>
+          Leg 1 published to the relay under your own key. Leg 2 posted to the daemon, which
+          re-derives authority from scratch. A <span class="mono">200</span> on the decide route
+          never means the action happened — the receipt is the answer.
+        </div>
+      </section>
+    </article>
+  </div>
+</div>
+
+<div class="note">
+  <p><b>The slot spine is the fixed order, made visible.</b> Five entries hang off one continuous
+  rule; the tick is solid where the entry is filled and hollow where it is struck. You can see at
+  a glance that there are five and which one is empty, which is the property the fixed order
+  exists to give you — and the reason an unfillable slot is stated rather than collapsed.</p>
+  <p><b>Every explanatory sentence that describes what you can already see has been moved out of
+  the card and onto this board.</b> On a bench at 3am, a sentence between the operator and the
+  blast radius is a cost. What is left inside the card is interface: the daemon's own strings,
+  the derivations that produced them, and the marks that say which is which.</p>
+</div>
+
+<!-- the fixed order proved: the same slot, unfillable -->
+<div class="sechead" style="padding-top:2.5rem">
+  <span class="idx">·</span>
+  <h2>Slot 03 on the other hold</h2>
+  <p>The order never varies by action type, so a slot that cannot be filled is struck through and
+    stated. Its tick in the margin goes hollow. This is <span class="mono">block_egress</span>,
+    where the absence is double and both halves render.</p>
+</div>
+<div class="frame" style="padding:2rem;background:var(--night)">
+  <div class="card" style="padding:1.6rem 1.9rem">
+    <div class="slot" data-solo style="border:0;padding:0">
+      <div class="slot-m" data-x>
+        <span class="slot-n" aria-hidden="true"></span>
+        <div class="sil sil--ink slot-l"><span class="i">03</span>If you undo</div>
+      </div>
+      <div class="slot-b">
+        <div class="absence">
+          <b>No containment lease is opened, so nothing plans a rollback</b>
+          <div class="strike"></div>
+          <p><span class="mono">block_egress</span> is not one of the four containment actions
+            (<span class="mono">is_containment_action</span>, which matches
+            <span class="mono">QuarantineFile</span>, <span class="mono">SuspendProcess</span>,
+            <span class="mono">IsolateHost</span> and
+            <span class="mono">TerminateUserSession</span>), so no
+            <span class="mono">ContainmentLease</span> is created and its rollback plan is never
+            resolved.</p>
+        </div>
+        <div class="absence" style="margin-top:1.1rem">
+          <b>And no inverse is mapped, so nothing could run it either</b>
+          <div class="strike"></div>
+          <p>The rehearsal preview plans a <span class="mono">RemoveNetworkBlock</span> step
+            (<span class="mono">required: true</span>), but <span class="mono">resolve_inverse</span>
+            has no arm joining <span class="mono">BlockEgress</span> to that step and falls to
+            <span class="mono">_ =&gt; Err(InverseGap::Unmapped)</span>. Undoing this is a manual
+            operation on your side.
+            <span class="mark mark--served">served · inverse resolution</span></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ SCREEN B ══════════════════════════ -->
+<div class="sechead">
+  <span class="idx">B</span>
+  <h2>The Watch</h2>
+  <p>The queue an analyst lives in for a shift. Four inbox categories with counts — one of them
+    absent rather than zero — holds and findings interleaved, then the substrate ledger of
+    everything the swarm accumulated this shift that is <i>not</i> asking for a judgment. Every
+    row on this screen names a fixture path; nothing is invented to make the queue look busy.</p>
+</div>
+
+<div class="frame">
+  <div class="annun">
+    <span class="lamp"></span>
+    <span class="sil sil--ink">Governance healthy</span>
+    <span class="sep">·</span>
+    <span class="v">committee of 3, networked transport, quorum reachable</span>
+    <span class="r">
+      <span class="sil">Normal</span><span class="sep">·</span>
+      <span class="mono" style="font-size:var(--t-cap);color:var(--dim)">relay live</span>
+      <span class="sep">·</span>
+      <span class="v">watch held by <span class="mono">perch-operator-1</span> since 08:00</span>
+    </span>
+  </div>
+
+  <div class="appB">
+    <nav class="rail" aria-label="Colonies"><i data-on>HO</i><i>C2</i></nav>
+
+    <aside class="side">
+      <div class="sgroup">
+        <div class="shead"><span class="sil sil--ink">Watch</span><span class="c">4</span></div>
+        <div class="srow" data-on><span>Holds</span><span class="r">1</span></div>
+        <div class="srow"><span>Findings</span><span class="r">1 / 3</span></div>
+        <div class="srow"><span>Case activity</span><span class="r">1</span></div>
+        <div class="srow"><span>Named you</span><span class="r" title="absent, not zero">—</span></div>
+      </div>
+
+      <div class="sgroup">
+        <div class="shead"><span class="sil sil--ink">Threat lanes</span><span class="c">12</span></div>
+        <div class="srow"><span class="lane" data-over></span><span>execution</span></div>
+        <div class="ssub">2.653617 at 09:16:05<br>2 sources / 1 agent · alert threshold 2.0</div>
+        <div class="srow"><span class="lane"></span><span>lateral_movement</span><span class="r">1.076102</span></div>
+        <div class="srow"><span class="lane"></span><span>command_and_control</span><span class="r">0.988519</span></div>
+        <div class="srow"><span class="lane"></span><span>data_exfiltration</span><span class="r">0.830093</span></div>
+        <div class="srow"><span class="lane"></span><span>credential_access</span><span class="r">0.586899</span></div>
+        <div class="srow"><span class="lane"></span><span>defense_evasion</span><span class="r">0.418722</span></div>
+        <div class="srow"><span class="lane"></span><span>persistence</span><span class="r">0.309194</span></div>
+        <div class="srow"><span class="lane"></span><span>privilege_escalation</span><span class="r">0.258361</span></div>
+        <div class="srow"><span class="lane"></span><span>supply_chain</span><span class="r">0.165000</span></div>
+        <div class="srow"><span class="lane"></span><span>initial_access</span><span class="r">0.122842</span></div>
+        <div class="srow"><span class="lane"></span><span>impact</span><span class="r">0.060965</span></div>
+        <div class="srow"><span class="lane" data-empty></span><span>discovery</span><span class="r">—</span></div>
+        <div class="ssub">discovery has no detector registered.<br>Empty for a stated reason, not zero.</div>
+      </div>
+
+      <div class="sgroup">
+        <div class="shead"><span class="sil sil--ink">Cases</span><span class="c">1 open</span></div>
+        <div class="srow"><span class="mono" style="font-size:var(--t-cap)">case ·27799e23</span><span class="r">5h 44m</span></div>
+        <div class="ssub">ttl 21600 s from 09:14:42</div>
+      </div>
+
+      <div class="sdiv"></div>
+      <div class="srow"><span>Containments</span></div>
+      <div class="srow"><span>Policy</span></div>
+      <div class="srow"><span>Tuning</span></div>
+      <div class="srow"><span>Gaps</span></div>
+      <div class="srow"><span>Ledger</span></div>
+      <div class="srow"><span>Watchfloor</span></div>
+      <div class="srow"><span>Handoff</span></div>
+      <div class="srow"><span>Settings</span></div>
+    </aside>
+
+    <section class="inbox" aria-label="Inbox">
+      <div class="recon"><span class="mono">reconciled with the daemon 4s ago</span>
+        <span>·</span><span class="mono">0 divergences</span>
+        <span class="grow"></span>
+        <span>the relay carries the notification; the daemon's open-hold list is the record</span></div>
+
+      <!-- QUEUE 1 -->
+      <div class="qhead"><span class="sil sil--ink">Holds</span><span class="rule"></span><span class="c">1</span></div>
+
+      <button class="wrow" data-sev="CRITICAL" data-sel>
+        <span class="l1"><span class="verb">Held</span><span class="kind">block_egress</span>
+          <span class="sp"></span>
+          <span class="sev" data-s="CRITICAL">CRITICAL<span class="sevbar"><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span></span>
+        <span class="l2"><span class="adv">198.51.100.20</span></span>
+        <span class="l3"><span class="mono">ed25519:18085f16…</span><span>·</span><span>09:14:42</span>
+          <span class="grow"></span><span class="ttl">expires in 58m 37s</span></span>
+        <span class="l4">2 sources / 1 agent · <span class="mono">execution</span> ·
+          no undo mapped — containment stays in effect</span>
+        <span class="rkeys"><span class="kbd">G</span><span class="kbd">R</span><span class="kbd">E</span><span class="kbd" data-off>S</span><span class="kbd">M</span></span>
+      </button>
+
+      <div class="shedrow"><span class="mono">h_a07aeacf</span> left this queue when the daemon
+        recorded the decision, by reconciliation against the open-hold list — never by a relay
+        delete. It is the hold on screen A.</div>
+
+      <!-- QUEUE 2 — absent, not zero -->
+      <div class="qhead"><span class="sil sil--ink">Named you</span><span class="rule"></span>
+        <span class="c" data-absent>count unavailable</span></div>
+      <div class="absentq">
+        <b>Absent, not zero</b>
+        <p>No operator directory exists in either tree; one principal is synthesised from config,
+          so nothing in Ambush can name an operator and Perch does not p-tag escalations. A zero
+          here would claim a fact nobody measured.</p>
+      </div>
+
+      <!-- QUEUE 3 -->
+      <div class="qhead"><span class="sil sil--ink">Findings to review</span><span class="rule"></span>
+        <span class="c">1 / 3 this shift</span></div>
+
+      <button class="wrow" data-sev="CRITICAL">
+        <span class="l1"><span class="verb">Unreviewed</span><span class="kind">suspicious_process_tree</span>
+          <span class="sp"></span>
+          <span class="sev" data-s="CRITICAL">CRITICAL<span class="sevbar"><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span></span>
+        <span class="l2"><span class="adv">host-ops-1</span></span>
+        <span class="l3"><span class="mono">ed25519:18085f16…</span><span>·</span>
+          <span class="conf"><span class="mono">0.90</span>
+            <span class="dots"><i data-on></i><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span>
+          <span class="grow"></span><span>hunt-evt-1 · 09:14:32</span></span>
+        <span class="l4">2 sources / 1 agent · <span class="mono">execution</span> ·
+          card <span class="mono">ad87733a…9874a</span></span>
+      </button>
+
+      <button class="wrow" data-sev="CRITICAL">
+        <span class="l1"><span class="verb">Unreviewed</span><span class="kind">suspicious_process_tree</span>
+          <span class="sp"></span>
+          <span class="sev" data-s="CRITICAL">CRITICAL<span class="sevbar"><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span></span>
+        <span class="l2"><span class="adv">host-ops-1</span></span>
+        <span class="l3"><span class="mono">ed25519:18085f16…</span><span>·</span>
+          <span class="conf"><span class="mono">0.90</span>
+            <span class="dots"><i data-on></i><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span>
+          <span class="grow"></span><span>hunt-evt-2 · 09:14:41</span></span>
+        <span class="l4">2 sources / 1 agent · <span class="mono">execution</span> ·
+          card <span class="mono">2b1c9dce…f2536</span></span>
+      </button>
+
+      <button class="wrow" data-sev="CRITICAL">
+        <span class="l1"><span class="verb">Dismissed</span><span class="kind">suspicious_scripting</span>
+          <span class="sp"></span>
+          <span class="sev" data-s="CRITICAL">CRITICAL<span class="sevbar"><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span></span>
+        <span class="l2"><span class="adv">host-ops-1</span></span>
+        <span class="l3"><span class="mono">ed25519:18085f16…</span><span>·</span>
+          <span class="conf"><span class="mono">0.90</span>
+            <span class="dots"><i data-on></i><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span>
+          <span class="grow"></span><span>reviewed 09:18:44</span></span>
+        <span class="l4">The lane fell from <span class="mono">2.573610</span> to
+          <span class="mono">0.858696</span> and from 2 sources to 1 when this was dismissed.
+          A verdict is a detector-tuning input.</span>
+      </button>
+
+      <div class="shedrow">Confirm, Dismiss and Investigate all raise the denominator; only
+        Dismiss records a false positive.</div>
+
+      <!-- QUEUE 4 -->
+      <div class="qhead"><span class="sil sil--ink">Case activity</span><span class="rule"></span><span class="c">1</span></div>
+      <button class="wrow">
+        <span class="l1"><span class="verb">Case</span><span class="kind">case-2026-03-17-host-ops-1</span>
+          <span class="sp"></span><span class="mono" style="font-size:var(--t-cap);color:var(--dim)">09:14:42</span></span>
+        <span class="l2" style="font-size:var(--t-sm);color:var(--body)">incident:hunt-evt-1:1773738882400 — a correlated incident opened a private case channel</span>
+        <span class="l4"><span class="mono">27799e23-ab25-4659-b381-3de47ea7ca4d</span> · ttl 21600 s</span>
+      </button>
+
+      <!-- THE SUBSTRATE LEDGER — real accumulation, nothing asking for you -->
+      <div class="qhead"><span class="sil sil--ink">Accumulating · not asking for you</span>
+        <span class="rule"></span><span class="c">14 deposits · 7 hosts</span></div>
+      <div class="shedrow" style="border-top:0;padding-bottom:.5rem">
+        Below the alert threshold on every lane. It is here because a watch that shows only what
+        crossed cannot tell you what is about to.
+      </div>
+      <table class="ldg">
+        <thead><tr>
+          <th>Detector</th><th>Host</th><th>Lane</th><th>Conf</th><th></th><th>Seen</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>network_connect</td><td class="d"><span class="adv">host-ops-2</span></td><td class="d">command_and_control</td><td>0.83</td><td><span class="meter"><i data-on></i><i data-on></i><i data-on></i><i data-on></i><i></i></span></td><td class="d">09:16</td></tr>
+          <tr><td>lateral_movement</td><td class="d"><span class="adv">host-ops-2</span></td><td class="d">lateral_movement</td><td>0.72</td><td><span class="meter"><i data-on></i><i data-on></i><i data-on></i><i data-on></i><i></i></span></td><td class="d">09:13</td></tr>
+          <tr><td>dns_exfiltration</td><td class="d"><span class="adv">wks-114</span></td><td class="d">data_exfiltration</td><td>0.68</td><td><span class="meter"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i></span></td><td class="d">09:05</td></tr>
+          <tr><td>supply_chain</td><td class="d"><span class="adv">build-1</span></td><td class="d">supply_chain</td><td>0.66</td><td><span class="meter"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i></span></td><td class="d">07:20</td></tr>
+          <tr><td>credential_access</td><td class="d"><span class="adv">dc-1</span></td><td class="d">credential_access</td><td>0.61</td><td><span class="meter"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i></span></td><td class="d">08:50</td></tr>
+          <tr><td>kubernetes_audit</td><td class="d"><span class="adv">build-1</span></td><td class="d">privilege_escalation</td><td>0.58</td><td><span class="meter"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i></span></td><td class="d">08:10</td></tr>
+          <tr><td>behavioral_anomaly</td><td class="d"><span class="adv">bastion-1</span></td><td class="d">lateral_movement</td><td>0.55</td><td><span class="meter"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i></span></td><td class="d">08:55</td></tr>
+          <tr><td>persistence</td><td class="d"><span class="adv">build-1</span></td><td class="d">persistence</td><td>0.52</td><td><span class="meter"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i></span></td><td class="d">08:35</td></tr>
+          <tr><td>fileless_execution</td><td class="d"><span class="adv">build-1</span></td><td class="d">defense_evasion</td><td>0.47</td><td><span class="meter"><i data-on></i><i data-on></i><i></i><i></i><i></i></span></td><td class="d">09:10</td></tr>
+          <tr><td>cloudtrail</td><td class="d"><span class="adv">dc-1</span></td><td class="d">credential_access</td><td>0.44</td><td><span class="meter"><i data-on></i><i data-on></i><i></i><i></i><i></i></span></td><td class="d">07:50</td></tr>
+          <tr><td>behavioral_anomaly</td><td class="d"><span class="adv">wks-114</span></td><td class="d">data_exfiltration</td><td>0.41</td><td><span class="meter"><i data-on></i><i data-on></i><i></i><i></i><i></i></span></td><td class="d">08:40</td></tr>
+          <tr><td>cloudtrail</td><td class="d"><span class="adv">dc-1</span></td><td class="d">initial_access</td><td>0.39</td><td><span class="meter"><i data-on></i><i data-on></i><i></i><i></i><i></i></span></td><td class="d">07:40</td></tr>
+          <tr><td>behavioral_anomaly</td><td class="d"><span class="adv">mail-1</span></td><td class="d">command_and_control</td><td>0.37</td><td><span class="meter"><i data-on></i><i></i><i></i><i></i><i></i></span></td><td class="d">08:25</td></tr>
+          <tr><td>infrastructure_anomaly</td><td class="d"><span class="adv">host-ops-2</span></td><td class="d">impact</td><td>0.29</td><td><span class="meter"><i data-on></i><i></i><i></i><i></i><i></i></span></td><td class="d">07:05</td></tr>
+        </tbody>
+      </table>
+      <div class="shedrow">Host names are attacker-observable, so they are ruled here exactly as
+        they are ruled in a hold card. The rule means the same thing everywhere or it means
+        nothing.</div>
+    </section>
+
+    <aside class="hand">
+      <h3 class="sil sil--ink">The watch</h3>
+      <div class="hblock" style="border-top:0;padding-top:0">
+        <span class="big">08:00</span>
+        <p>Held by <span class="mono">perch-operator-1</span>. <span class="mono">1h 16m</span>
+          elapsed. End watch publishes the handover; it cannot be completed while
+          <span class="mono">expired_undecided &gt; 0</span> without an acknowledgement.</p>
+      </div>
+      <div class="hblock">
+        <div class="sil">Findings reviewed this shift</div>
+        <span class="big">1 / 3</span>
+        <div class="hbar"><i data-on></i><i></i><i></i></div>
+        <p>Confirm, Dismiss and Investigate all raise the denominator.</p>
+      </div>
+      <div class="hblock">
+        <div class="sil">Expired undecided</div>
+        <span class="big">0</span>
+        <p>A hold that expires undecided is counted here and stays in the queue for the rest of
+          the shift.</p>
+      </div>
+      <div class="hblock">
+        <div class="sil">Colony</div>
+        <span class="big">3 / 8</span>
+        <div class="hbar"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i><i></i><i></i><i></i></div>
+        <p><span class="mono">whisker</span>, <span class="mono">tom</span> and
+          <span class="mono">pouncer</span> are registered. <span class="mono">stalker</span>,
+          <span class="mono">weaver</span>, <span class="mono">kitten</span>,
+          <span class="mono">sphinx</span> and <span class="mono">calico</span> are gated off by
+          config default. Five of the eight typed agents are not running, and the queue you are
+          reading was produced by three.</p>
+      </div>
+      <div class="hblock">
+        <div class="sil">Page to verdict</div>
+        <span class="um">Unmeasured</span>
+        <p>Median page-to-verdict, measurements written this week, and recommendations traced to a
+          verdict. Nothing writes them yet: the daemon keeps <span class="mono num">20</span>
+          incidents in memory that do not survive a restart. A number here would be an invention.</p>
+      </div>
+      <div class="hblock">
+        <div class="sil">Reconcile</div>
+        <p><span class="mono">reconciled 4s ago · 0 divergences</span> — the relay carries the
+          notification; the daemon's open-hold list is the record.</p>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="note">
+  <p><b>Row anatomy, four lines, one shape for holds and findings alike.</b> Line 1 is the verb and
+  the typed kind, with severity at the right. Line 2 is the subject; it is adversary-controlled,
+  so it is ruled, it owns its line and it never truncates. Line 3 carries the producing key, the
+  instant and the clock. Line 4 carries what the row costs you. <b>Selection is the plate lifting
+  under a lamp</b> — the surface rises to <span class="mono">--lit</span>, a hairline outlines it,
+  and the keys you can press appear. It is not a coloured row, because a coloured row on this
+  console would mean the lantern was lit.</p>
+  <p><b>There is no hue anywhere in this queue.</b> Severity is the word, four cells, and a rail
+  whose weight, pattern and luminance all move together — solid bone at CRITICAL, a 5&nbsp;/&nbsp;4
+  dash in body at HIGH, a 2&nbsp;/&nbsp;3 dot in dim at MEDIUM, a hairline at LOW. Sort a queue by
+  it in greyscale and the order is right, which is the test a colour ramp fails.</p>
+</div>
+
+<!-- ══════════════════════════ SPECIMENS ══════════════════════════ -->
+<div class="sechead">
+  <span class="idx">C</span>
+  <h2>The system</h2>
+  <p>Two lanterns, a nine-step warm graphite ramp, and one typeface family drawn at two widths.</p>
+</div>
+
+<div class="spec">
+
+  <div class="speccell">
+    <h4>The neutral ramp — the console</h4>
+    <div class="sw">
+      <div style="background:var(--night)"></div>
+      <div style="background:var(--field)"></div>
+      <div style="background:var(--panel)"></div>
+      <div style="background:var(--lit)"></div>
+      <div style="background:var(--line)"></div>
+      <div style="background:var(--rule)"></div>
+      <div style="background:var(--dim)"></div>
+      <div style="background:var(--body)"></div>
+      <div style="background:var(--bone)"></div>
+    </div>
+    <div class="swleg"><span>night</span><span>field</span><span>panel</span><span>lit</span>
+      <span>line</span><span>rule</span><span>dim</span><span>body</span><span>bone</span></div>
+    <p>Warm graphite: painted marine panel, not a blue-grey console. The ground it floats on —
+      <span class="mono">--night</span> — is the only cold value in the file and the darkest, and
+      that is the whole temperature split. It costs nothing from the chromatic budget because
+      both halves are neutrals, which is why it survives into light mode where the deck is a
+      grey-painted steel and the plates are pale stone.</p>
+    <p><span class="mono">--rule</span> is a structural token and is never text. Every glyph on
+      this board is <span class="mono">--dim</span> or lighter.</p>
+  </div>
+
+  <div class="speccell">
+    <h4>The two lanterns — chroma as light, never as ink</h4>
+    <div class="lantern">
+      <div class="cell">
+        <div class="glow" style="background:radial-gradient(110% 130% at 22% 110%,var(--binnacle),transparent 66%);opacity:.28"></div>
+        <div class="lbl">Binnacle · 578 nm</div>
+        <div class="hexv" id="hexBinnacle">#AB8200</div>
+        <div class="job">A clock is running against you. The countdown, the dwell bar, and
+          nothing else.</div>
+      </div>
+      <div class="cell">
+        <div class="glow" style="background:radial-gradient(110% 130% at 22% 110%,var(--port),transparent 66%);opacity:.3"></div>
+        <div class="lbl">Port · 615 nm</div>
+        <div class="hexv" id="hexPort">#F5703F</div>
+        <div class="job">The throw. The irreversible act, in the one place you can commit it, and
+          nowhere else in the product.</div>
+      </div>
+    </div>
+    <p>Both are derived rather than picked: a signal-lantern dominant wavelength mixed toward
+      CIE Illuminant A — the incandescent source marine lanterns are specified against — and then
+      <i>added to the graphite panel</i>, because what you see at night is not the lamp, it is the
+      panel under the lamp. §D has the arithmetic.</p>
+    <p>Severity gets no lantern. Neither does policy, provenance, confidence, "no undo mapped" or
+      a CRITICAL row. Each of those already carries a word, a shape and a position, and a lamp on
+      a queue row would be a lamp you learn to stop reading.</p>
+  </div>
+
+  <div class="speccell">
+    <h4>Severity, confidence and tier with the colour removed</h4>
+    <div class="grey" style="border:1px solid var(--line);padding:1rem 1.1rem;background:var(--panel)">
+      <div style="display:flex;flex-direction:column;gap:.55rem">
+        <div style="display:flex;align-items:center;gap:.9rem;padding-left:.9rem;position:relative">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--bone)"></span>
+          <span class="sev" data-s="CRITICAL">CRITICAL<span class="sevbar"><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span>
+          <span class="conf"><span class="mono">0.90</span><span class="dots"><i data-on></i><i data-on></i><i data-on></i><i data-on></i><i data-on></i></span></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:.9rem;padding-left:.9rem;position:relative">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:3px;background:repeating-linear-gradient(var(--body) 0 5px,transparent 5px 9px)"></span>
+          <span class="sev" data-s="HIGH">HIGH<span class="sevbar"><i data-on></i><i data-on></i><i data-on></i><i></i></span></span>
+          <span class="conf"><span class="mono">0.68</span><span class="dots"><i data-on></i><i data-on></i><i data-on></i><i></i><i></i></span></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:.9rem;padding-left:.9rem;position:relative">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:2px;background:repeating-linear-gradient(var(--dim) 0 2px,transparent 2px 5px)"></span>
+          <span class="sev" data-s="MEDIUM">MEDIUM<span class="sevbar"><i data-on></i><i data-on></i><i></i><i></i></span></span>
+          <span class="conf"><span class="mono">0.44</span><span class="dots"><i data-on></i><i data-on></i><i></i><i></i><i></i></span></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:.9rem;padding-left:.9rem;position:relative">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:1px;background:var(--rule)"></span>
+          <span class="sev" data-s="LOW">LOW<span class="sevbar"><i data-on></i><i></i><i></i><i></i></span></span>
+          <span class="conf"><span class="mono">0.29</span><span class="dots"><i data-on></i><i></i><i></i><i></i><i></i></span></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:.9rem;margin-top:.4rem;padding-left:.9rem">
+          <span class="stamp" data-unattested><span class="t">TIER 0</span><span class="w">Unattested</span></span>
+          <span class="mark mark--served">served</span>
+          <span class="mark mark--derived">derived</span>
+          <span class="mark mark--req">request-carried</span>
+        </div>
+      </div>
+    </div>
+    <p>This block is rendered through <span class="mono">grayscale(1)</span> on the board itself,
+      not simulated in a caption. Severity moves on four channels at once — word, filled cells,
+      rail weight, rail pattern — and the rail's luminance is monotonic, so the ramp cannot
+      invert. Confidence leads with the numeral; the meter never stands alone. Tier is a numeral,
+      a word and a strike ruled across the stamp.</p>
+    <p>The two marks beneath it are the pair the system must never confuse. An adversary-written
+      value is <b>ruled underneath</b>, the way a clerk rules a suspect entry; a value that cannot
+      exist is <b>struck through</b>. A mark across a glyph means absence and nothing else — which
+      is why the ruling never touches a letter.</p>
+  </div>
+
+  <div class="speccell">
+    <h4>Type — one drawing, two widths</h4>
+    <div class="typerow"><span class="m">Barlow SemiCond 700</span>
+      <span style="font-family:var(--f-panel);font-weight:700;text-transform:uppercase;letter-spacing:.035em;font-size:var(--t-lg);color:var(--bone)">Night Bridge</span></div>
+    <div class="typerow"><span class="m">Barlow SemiCond 600</span>
+      <span class="sil sil--ink" style="font-size:var(--t-sm)">Blast radius · expires in · guard closed</span></div>
+    <div class="typerow"><span class="m">Barlow 400/500</span>
+      <span style="font-size:var(--t-lead);color:var(--body)">One host loses network connectivity.</span></div>
+    <div class="typerow"><span class="m">IBM Plex Mono</span>
+      <span class="mono" style="font-size:var(--t-base);color:var(--bone)">2.696884 · h_a07aeacf · 58m 37s</span></div>
+    <p>Barlow is a transport-signage grotesque, drawn for the flat, wide, low-contrast lettering
+      on vehicles and public infrastructure — and it ships a genuine condensed cut
+      <i>in the same family</i>, which is exactly what an instrument panel does: the placard and
+      the silkscreen come off one drawing at two widths. Inter is what I would reach for by
+      default on any dark UI and it has no condensed cut with this character.</p>
+    <p>One rule makes the pane checkable: <b>mono means the machine's own bytes; Barlow means
+      English.</b> Ids, keys, times, thresholds, strengths, rule names and the daemon's verbatim
+      strings are mono, and nothing else is. Plex Mono has the flat-topped 1, the unambiguous 0
+      and tabular figures that let a 64-hex key and a six-decimal concentration sit in a column
+      without wobbling. Sizes are seven rem tokens — 3.5 / 2.375 / 1.375 / 1.0625 / .9375 / .8125
+      / .6875 rem — with no px anywhere in the file, so the app's zoom contract holds.</p>
+  </div>
+
+</div>
+
+<!-- ══════════════════════════ MEASUREMENT ══════════════════════════ -->
+<div class="sechead">
+  <span class="idx">D</span>
+  <h2>Where the two lanterns came from</h2>
+  <p>The previous pass of this direction assigned blue&nbsp;=&nbsp;observation,
+    violet&nbsp;=&nbsp;policy, amber&nbsp;=&nbsp;caution, red&nbsp;=&nbsp;danger, and then nudged
+    the hexes until they cleared a fence. That is the standard semantic four with different
+    digits. This is the derivation that replaced it.</p>
+</div>
+
+<div class="spec" style="grid-template-columns:1fr">
+  <div class="speccell" style="border-right:0">
+    <h4>The arithmetic, and what it refused to give me</h4>
+    <table class="tbl">
+      <thead><tr><th style="width:15rem">Step</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td class="d">Take the cold light first</td>
+            <td>The dark-adapted eye peaks at <b>507&nbsp;nm</b> — that is the physical fact night
+              vision runs on. Rendered on graphite at any usable luminance it produces
+              <span class="mono">#009368</span>, <span class="mono">#00A877</span>,
+              <span class="mono">#00BE86</span> — ΔE00 <b>1.10 to 4.98</b> from
+              <span class="mono">#059669</span> and <span class="mono">#10b981</span>.
+              The rod peak <i>is</i> emerald. Physics does not excuse a banned look.</td></tr>
+        <tr><td class="d">So try any cold hue</td>
+            <td>A sweep of 470–495&nbsp;nm at every purity and every irradiance that clears
+              4.5:1 on the panel returns <b>nothing</b> at ΔE00 ≥ 10. Slate-500/400, sky, cyan and
+              blue-600 carpet the entire cold half of the wheel at instrument lightness. The
+              honest reading of the banned list is that <b>it is the saturated hue circle</b>, and
+              a console's cold cannot be a hue.</td></tr>
+        <tr><td class="d">So the cold became value</td>
+            <td>The ground behind the console is <span class="mono">--night&nbsp;#04100F</span>,
+              L*&nbsp;3.9, the coldest and darkest value in the file, against a warm graphite panel
+              at L*&nbsp;11.5. The temperature split is now a fact about the two largest areas on
+              the screen rather than a hue applied to text — and it reads at thumbnail size.</td></tr>
+        <tr><td class="d">The two lanterns that remain</td>
+            <td>A darkened bridge burns red and amber, and nothing else, for the same reason this
+              console does. Each is a dominant wavelength mixed toward <b>CIE Illuminant A</b>
+              (2856&nbsp;K — the incandescent source marine signal lanterns are specified against),
+              then <b>added to the graphite panel in linear light</b>, because you never see the
+              lamp, you see the panel under it.</td></tr>
+        <tr><td class="d">Binnacle</td>
+            <td><span class="mono">578&nbsp;nm</span>, purity 1.00, irradiance 0.392 on
+              <span class="mono">#211E1A</span> → <span class="mono">#AB8200</span>.
+              4.68:1 on panel. Nearest banned value <span class="mono">#d97706</span>, ΔE00
+              <b>15.67</b>.</td></tr>
+        <tr><td class="d">Port</td>
+            <td><span class="mono">615&nbsp;nm</span>, purity 0.38, irradiance 0.90 on
+              <span class="mono">#211E1A</span> → <span class="mono">#F5703F</span>.
+              5.75:1 on panel. Nearest banned value <span class="mono">#ef4444</span>, ΔE00
+              <b>12.99</b>. Its low-irradiance member, the panel at the edge of the well, is
+              <span class="mono">#571D19</span> — ΔE00 <b>26.57</b>.</td></tr>
+        <tr><td class="d">Light mode</td>
+            <td>Not an inversion and not a second palette: <b>in the dark you see the light; in
+              daylight you see the glass.</b> The same two filters, rendered subtractively against
+              a daylit panel — <span class="mono">#5B4D35</span> and
+              <span class="mono">#663737</span>, ΔE00 <b>23.55</b> and <b>24.52</b>.</td></tr>
+      </tbody>
+    </table>
+    <p><b>Two hues; five chromatic hexes in the entire file.</b> Each lantern in each theme, plus
+      the low member of the port line that the panel takes at the edge of the lit well. The cap is
+      eight. The reason to be this far under it is not virtue: it is that a value with one job can
+      be given the job in a sentence, and a sixth value here had no sentence.</p>
+  </div>
+</div>
+
+<div class="sechead">
+  <span class="idx">E</span>
+  <h2>The floor, measured</h2>
+  <p>Computed in ΔE2000 against the full banned list and in WCAG contrast against each value's
+    real surface. Every figure below is reproduced by the audit script in the plan.</p>
+</div>
+
+<div class="spec">
+  <div class="speccell">
+    <h4>ΔE2000 to the nearest banned value — dark</h4>
+    <table class="tbl">
+      <thead><tr><th>Token</th><th>Hex</th><th>Nearest</th><th>ΔE00</th></tr></thead>
+      <tbody>
+        <tr><td class="d">night</td><td class="mono">#04100F</td><td class="mono d">#0f172a</td><td class="mono">13.21</td></tr>
+        <tr><td class="d">field</td><td class="mono">#181613</td><td class="mono d">#0f172a</td><td class="mono">13.30</td></tr>
+        <tr><td class="d">panel</td><td class="mono">#211E1A</td><td class="mono d">#1e293b</td><td class="mono">13.63</td></tr>
+        <tr><td class="d">lit</td><td class="mono">#2B2721</td><td class="mono d">#1e293b</td><td class="mono">14.48</td></tr>
+        <tr><td class="d">line</td><td class="mono">#332E27</td><td class="mono d">#1e293b</td><td class="mono">15.15</td></tr>
+        <tr><td class="d">rule</td><td class="mono">#4A443A</td><td class="mono d">#334155</td><td class="mono">16.91</td></tr>
+        <tr><td class="d">dim</td><td class="mono">#9B9486</td><td class="mono d">#94a3b8</td><td class="mono">18.40</td></tr>
+        <tr><td class="d">body</td><td class="mono">#CAC3B3</td><td class="mono d">#e2e8f0</td><td class="mono">14.68</td></tr>
+        <tr><td class="d">bone</td><td class="mono">#F2ECDD</td><td class="mono d">#e2e8f0</td><td class="mono">11.40</td></tr>
+        <tr><td class="d">binnacle</td><td class="mono">#AB8200</td><td class="mono d">#d97706</td><td class="mono">15.67</td></tr>
+        <tr><td class="d">port</td><td class="mono">#F5703F</td><td class="mono d">#ef4444</td><td class="mono">12.99</td></tr>
+        <tr><td class="d">port-face</td><td class="mono">#571D19</td><td class="mono d">#0f172a</td><td class="mono">26.57</td></tr>
+      </tbody>
+    </table>
+    <p>Minimum across the dark theme: <b>ΔE00 11.40</b>.</p>
+  </div>
+
+  <div class="speccell">
+    <h4>ΔE2000 to the nearest banned value — light</h4>
+    <table class="tbl">
+      <thead><tr><th>Token</th><th>Hex</th><th>Nearest</th><th>ΔE00</th></tr></thead>
+      <tbody>
+        <tr><td class="d">night</td><td class="mono">#969084</td><td class="mono d">#94a3b8</td><td class="mono">17.83</td></tr>
+        <tr><td class="d">field</td><td class="mono">#AFA89A</td><td class="mono d">#cbd5e1</td><td class="mono">17.68</td></tr>
+        <tr><td class="d">panel</td><td class="mono">#C7C0B3</td><td class="mono d">#cbd5e1</td><td class="mono">13.89</td></tr>
+        <tr><td class="d">lit</td><td class="mono">#D2CDC4</td><td class="mono d">#e2e8f0</td><td class="mono">10.78</td></tr>
+        <tr><td class="d">line</td><td class="mono">#B4ADA1</td><td class="mono d">#cbd5e1</td><td class="mono">16.12</td></tr>
+        <tr><td class="d">rule</td><td class="mono">#878074</td><td class="mono d">#64748b</td><td class="mono">18.48</td></tr>
+        <tr><td class="d">dim</td><td class="mono">#413D35</td><td class="mono d">#334155</td><td class="mono">15.80</td></tr>
+        <tr><td class="d">body</td><td class="mono">#312E27</td><td class="mono d">#1e293b</td><td class="mono">15.11</td></tr>
+        <tr><td class="d">bone</td><td class="mono">#1A1712</td><td class="mono d">#0f172a</td><td class="mono">14.64</td></tr>
+        <tr><td class="d">binnacle</td><td class="mono">#5B4D35</td><td class="mono d">#334155</td><td class="mono">23.55</td></tr>
+        <tr><td class="d">port</td><td class="mono">#663737</td><td class="mono d">#dc2626</td><td class="mono">24.52</td></tr>
+      </tbody>
+    </table>
+    <p>Minimum across the light theme: <b>ΔE00 10.78</b>. The light ground is
+      <b>ΔE00 25.16 from the cream at #F4F1EA</b>: this is a grey-painted deck in daylight, there
+      is no display serif in the file, and the two accents are lens glass at L*&nbsp;29 and 33.</p>
+  </div>
+
+  <div class="speccell">
+    <h4>Contrast on the real surface — dark</h4>
+    <table class="tbl">
+      <thead><tr><th>Fg</th><th>night</th><th>field</th><th>panel</th><th>lit</th></tr></thead>
+      <tbody>
+        <tr><td class="d">bone</td><td class="mono">16.40</td><td class="mono">15.32</td><td class="mono">14.08</td><td class="mono">12.59</td></tr>
+        <tr><td class="d">body</td><td class="mono">11.02</td><td class="mono">10.29</td><td class="mono">9.46</td><td class="mono">8.46</td></tr>
+        <tr><td class="d">dim</td><td class="mono">6.42</td><td class="mono">6.00</td><td class="mono">5.51</td><td class="mono">4.93</td></tr>
+        <tr><td class="d">port <span style="font-size:var(--t-cap)">(graphical, floor 3.0)</span></td><td class="mono">6.69</td><td class="mono">6.25</td><td class="mono">5.75</td><td class="mono">5.14</td></tr>
+        <tr><td class="d">binnacle <span style="font-size:var(--t-cap)">(graphical, floor 3.0)</span></td><td class="mono">5.45</td><td class="mono">5.09</td><td class="mono">4.68</td><td class="mono">4.19</td></tr>
+      </tbody>
+    </table>
+    <p>Every text token clears 4.5:1 on every surface it is used on; the worst case in the file is
+      <span class="mono">--dim</span> on <span class="mono">--lit</span> at <b>4.93:1</b>.
+      <span class="mono">--rule</span> measures 1.72:1 and is therefore never text — it draws the
+      spine, the ticks, the unlit cells and the hairlines, all of which are bounded shapes.</p>
+  </div>
+
+  <div class="speccell">
+    <h4>Contrast on the real surface — light</h4>
+    <table class="tbl">
+      <thead><tr><th>Fg</th><th>night</th><th>field</th><th>panel</th><th>lit</th></tr></thead>
+      <tbody>
+        <tr><td class="d">bone</td><td class="mono">5.63</td><td class="mono">7.56</td><td class="mono">9.89</td><td class="mono">11.29</td></tr>
+        <tr><td class="d">body</td><td class="mono d">4.27</td><td class="mono">5.73</td><td class="mono">7.49</td><td class="mono">8.56</td></tr>
+        <tr><td class="d">dim</td><td class="mono d">3.41</td><td class="mono">4.57</td><td class="mono">5.98</td><td class="mono">6.83</td></tr>
+        <tr><td class="d">port <span style="font-size:var(--t-cap)">(graphical, floor 3.0)</span></td><td class="mono">3.06</td><td class="mono">4.10</td><td class="mono">5.36</td><td class="mono">6.12</td></tr>
+        <tr><td class="d">binnacle <span style="font-size:var(--t-cap)">(graphical, floor 3.0)</span></td><td class="mono d">2.59</td><td class="mono">3.48</td><td class="mono">4.54</td><td class="mono">5.19</td></tr>
+      </tbody>
+    </table>
+    <p>Two constraints are visible here and both are enforced in the file.
+      <span class="mono">--night</span> is the deck the console stands on and in daylight it is
+      <b>not a text surface</b>: nothing but bone ever sits on it, and all prose lives on
+      <span class="mono">--field</span> or lighter, where the worst case is
+      <span class="mono">--dim</span> at <b>4.57:1</b>. And neither lantern is ever drawn against
+      the deck — the binnacle appears on the card face and inside the throw, the port only inside
+      the throw, so the greyed <span class="mono">night</span> column is a column nothing uses.</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════ FIXTURE ══════════════════════════ -->
+<div class="sechead">
+  <span class="idx">F</span>
+  <h2>Every string, and the path it came from</h2>
+  <p>One instant for the whole board — <span class="mono">clock.timestamps.open_row_ms</span>,
+    2026-03-17 09:16:05 UTC — and one source. Nothing on either screen is invented.</p>
+</div>
+
+<div class="spec" style="grid-template-columns:1fr">
+  <div class="speccell" style="border-right:0;border-bottom:0">
+    <table class="tbl">
+      <thead><tr><th style="width:22rem">Rendered</th><th>Fixture path</th></tr></thead>
+      <tbody>
+        <tr><td><span class="mono">network.egress</span> · <span class="mono">network.ingress</span></td>
+            <td class="mono d">holds.a.rehearsal.blast_radius.affected_capabilities</td></tr>
+        <tr><td>“one host loses network connectivity”</td>
+            <td class="mono d">holds.a.rehearsal.blast_radius.summary</td></tr>
+        <tr><td><span class="mono">host_connectivity_isolated</span> · scope host / host-ops-1 / 1</td>
+            <td class="mono d">holds.a.rehearsal.blast_radius.{impact,scope_kind,scope_value,max_affected_scopes}</td></tr>
+        <tr><td><span class="mono">restore_host_connectivity</span> · “re-enable host-ops-1 network interfaces”</td>
+            <td class="mono d">holds.a.rehearsal.rollback.steps[0] · holds.a.inverse_resolution[0].verdict</td></tr>
+        <tr><td><span class="mono">2.696884</span> · 2 sources · peak 0.90 · alert</td>
+            <td class="mono d">holds.a.rationale.concentration_at_hold · .escalation_level</td></tr>
+        <tr><td><span class="mono">2.653617</span> in the lane list</td>
+            <td class="mono d">concentration.at_open_row.total_strength</td></tr>
+        <tr><td>58m 37s</td>
+            <td class="mono d">holds.a.expires_at_ms − clock.timestamps.open_row_ms</td></tr>
+        <tr><td><span class="mono">static.human_gate</span> · “authorized but held for human approval”</td>
+            <td class="mono d">holds.a.policy_decision.{rule_name,reason}</td></tr>
+        <tr><td>60 s capability lease · 900 s containment lease</td>
+            <td class="mono d">constants.capability_lease_ttl_ms · constants.containment_lease_ttl_ms</td></tr>
+        <tr><td>relay envelope pubkey, in full</td>
+            <td class="mono d">cast.bridge.nostr_pubkey</td></tr>
+        <tr><td>Holds queue: one row, <span class="mono">h_1c28ae79</span></td>
+            <td class="mono d">queue.holds.rows · queue.holds.note</td></tr>
+        <tr><td>Named you: absent, not zero</td>
+            <td class="mono d">queue.named_you.present=false · .absent_reason</td></tr>
+        <tr><td>Findings 1 / 3; three rows with review states</td>
+            <td class="mono d">queue.findings_to_review · findings[].review_state</td></tr>
+        <tr><td>Lane fell 2.573610 → 0.858696, 2 sources → 1</td>
+            <td class="mono d">concentration.before_dismiss · concentration.after_dismiss</td></tr>
+        <tr><td>Case activity: one case, ttl 21600 s</td>
+            <td class="mono d">queue.case_activity · channels.case</td></tr>
+        <tr><td>Twelve threat lanes with strengths; discovery empty for a reason</td>
+            <td class="mono d">lanes[] · lanes_with_no_detector</td></tr>
+        <tr><td>Fourteen accumulating deposits, seven hosts</td>
+            <td class="mono d">background.deposits[] · background.hosts[]</td></tr>
+        <tr><td>Colony 3 / 8 registered, five gated off</td>
+            <td class="mono d">colony[].registered · colony[].gate</td></tr>
+        <tr><td>Watch held since 08:00, 1h 16m elapsed</td>
+            <td class="mono d">clock.shift_start_ms → clock.timestamps.open_row_ms</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:1.2rem"><b>One correction filed.</b>
+      <span class="mono">build/prototypes/verdict-hold.html:1250</span> hardcodes
+      <span class="mono">network_connectivity</span> / <span class="mono">remote_management</span>
+      in this slot, and argues in its own margin that these are the daemon's strings and the
+      fixture's are paraphrases. Whatever the runtime emits, <b>the fixture is the contract for
+      this exercise</b> — it is what makes six boards comparable — and a board that prints one
+      pair while arguing at length that this list must never be truncated is eloquent exactly
+      where it is wrong. This board renders the fixture. The prototype line should be corrected
+      at source so the next pass does not inherit it.</p>
+  </div>
+</div>
+
+<div class="colophon">
+  <p><b>Offline.</b> No CDN, no <span class="mono">@font-face</span>, no
+    <span class="mono">&lt;img&gt;</span>, no fetch. Type is declared as three self-hostable
+    families (Fontsource / Google Fonts) with fallback stacks chosen so a machine with nothing
+    installed still renders a condensed silkscreen silhouette — Arial Narrow ships on macOS and
+    Windows. No <span class="mono">font-size</span> in px anywhere in the file.</p>
+  <p><b>Themes.</b> The complete light palette is on bare <span class="mono">:root</span>; the dark
+    palette is declared twice, identically — once under
+    <span class="mono">[data-theme="dark"]</span> and once inside a guarded
+    <span class="mono">prefers-color-scheme</span> query. No colour exists only inside a media
+    query. The control above has three positions and <b>System</b> is a real one.</p>
+</div>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* theme ------------------------------------------------------------------ */
+  var btns = Array.prototype.slice.call(document.querySelectorAll('.themectl button'));
+  var HEXD = { binnacle:'#AB8200', port:'#F5703F' };
+  var HEXL = { binnacle:'#5B4D35', port:'#663737' };
+  function effective(mode){
+    if (mode === 'system') {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    return mode;
+  }
+  function setTheme(mode){
+    if (mode === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', mode);
+    btns.forEach(function(b){ b.setAttribute('aria-pressed', String(b.dataset.t === mode)); });
+    var map = effective(mode) === 'dark' ? HEXD : HEXL;
+    document.getElementById('hexBinnacle').textContent = map.binnacle;
+    document.getElementById('hexPort').textContent = map.port;
+  }
+  btns.forEach(function(b){ b.addEventListener('click', function(){ setTheme(b.dataset.t); }); });
+  setTheme('dark');
+
+  /* the guarded throw ------------------------------------------------------- */
+  var sw = document.getElementById('sw');
+  var status = document.getElementById('throwstatus');
+  var goLine = document.querySelector('#sw .go');
+  var guardLabel = document.getElementById('guardlabel');
+  var guardText = document.getElementById('guardtext');
+  var gateFill = document.getElementById('gate-fill');
+  var gateS = document.getElementById('gate-s');
+  var gatePct = document.getElementById('gate-pct');
+  var gateDwell = document.getElementById('gate-dwell');
+  var recorded = document.getElementById('recorded');
+
+  var DWELL = 1500, ms = 0, armed = false, done = false, last = null;
+
+  function paint(){
+    var pct = Math.min(1, ms / DWELL);
+    gateFill.style.width = (pct * 100) + '%';
+    gateS.textContent = (ms / 1000).toFixed(1);
+    gatePct.textContent = Math.round(pct * 100) + '%';
+    if (pct >= 1) gateDwell.setAttribute('data-ok', '');
+    if (done) {
+      sw.dataset.state = 'recorded';
+      status.textContent = 'The throw was made at 09:16:07. The lantern is out.';
+      goLine.textContent = 'Recorded';
+      return;
+    }
+    if (!armed) { sw.dataset.state = 'closed'; return; }
+    sw.dataset.state = pct >= 1 ? 'live' : 'armed';
+    status.textContent = pct >= 1
+      ? 'Armed. The blast radius has been read.'
+      : 'Armed, and waiting on the blast radius. Read for ' + (ms/1000).toFixed(1) + ' of 1.5 s.';
+  }
+
+  /* the dwell accrues only while the block is visible, the document is visible
+     and the window is focused, and freezes — never resets — otherwise. */
+  var visible = false;
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(function(es){ visible = es[0].isIntersecting; },
+      { threshold: 0.95 }).observe(document.getElementById('gate'));
+  } else { visible = true; }
+
+  function tick(t){
+    if (last === null) last = t;
+    var d = t - last; last = t;
+    if (armed && !done && visible && !document.hidden && document.hasFocus() && ms < DWELL) {
+      ms = Math.min(DWELL, ms + d);
+      paint();
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  function arm(){
+    if (done || armed) return;
+    armed = true;
+    guardLabel.textContent = 'Guard open';
+    guardText.textContent = 'Lifted at 09:16:02.';
+    paint();
+  }
+  function record(){
+    if (!armed || done || ms < DWELL) return;
+    done = true;
+    recorded.hidden = false;
+    paint();
+  }
+  function refuse(){
+    if (done) return;
+    done = true;
+    recorded.hidden = false;
+    recorded.innerHTML = '<div class="sil sil--ink">Refused</div>One stroke. Your refusal is ' +
+      'published under your own key and posted to the daemon. There is no undo.';
+    paint();
+    if (!armed) { status.textContent = 'Refused. The guard was never lifted.'; }
+  }
+
+  document.addEventListener('keydown', function(e){
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key.toLowerCase();
+    if (k === 'g') { arm(); e.preventDefault(); }
+    else if (e.key === 'Enter') { record(); e.preventDefault(); }
+    else if (k === 'r') { refuse(); e.preventDefault(); }
+  });
+  document.getElementById('refusebtn').addEventListener('click', refuse);
+  paint();
+})();
+</script>
+</body>
+</html>

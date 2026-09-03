@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Ambush">
+  <rect width="256" height="256" fill="#171717"/>
+  <g transform="translate(31.10 27.43) scale(0.78)">
+    <path d="M64 0h64v152h-64z" fill="#E05E28"/>
+    <path d="M128 136h64v120h-64z" fill="#727272"/>
+  </g>
+</svg>

@@ -1,0 +1,17 @@
+# Required environment-owned values are deliberately invalid/empty here. A
+# production renderer must inject all of them; CI proves omission fails.
+image:
+  tag: ""
+  digest: ""
+profiles:
+  dogfood:
+    appAttestAppId: ""
+httpRoute:
+  enabled: true
+  parentRefs: []
+  hostnames:
+    - push.ambush.xyz
+networkPolicy:
+  apnsEgressCidrs:
+    - 0.0.0.0/0
+  postgresEgressCidrs: []

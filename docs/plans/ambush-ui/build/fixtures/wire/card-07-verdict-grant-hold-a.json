@@ -1,0 +1,43 @@
+{
+  "schema": "swarm.spine.envelope.v1",
+  "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+  "seq": 3,
+  "prev_envelope_hash": "0xc8290784b13d5636e3058089fdf3e4344af6862a9d9dae312308c87efca3356d",
+  "issued_at": "2026-03-17T09:16:19Z",
+  "capability_token": null,
+  "fact": {
+    "schema": "ambush.perch.verdict.v1",
+    "issuer": {
+      "swarm_agent_id": "perch-operator-1",
+      "role": null,
+      "nostr_pubkey": "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5"
+    },
+    "emitted_at_ms": 1773738979000,
+    "locator": {
+      "hold_id": "h_a07aeacf",
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c"
+    },
+    "decision": {
+      "decision": "grant",
+      "hold_id": "h_a07aeacf",
+      "operator_id": "perch-operator-1",
+      "decided_at_ms": 1773738979000,
+      "rationale": "Two detectors on one workstation, encoded PowerShell under WINWORD and a fetch under OUTLOOK. Isolating host-ops-1 while we read the disk."
+    },
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "perch-operator-1",
+      "public_key_hex": "bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+      "signature_hex": "cf66da852831018f3171f4d2da1e1a0a9868db7080d577ccbb2567cd71946953d53595d0364b3b60478ae7f9392daf71183ef06366b37a01253aaf1742825135"
+    },
+    "leg2": {
+      "state": "sending",
+      "receipt_id": null,
+      "refusal_check": null,
+      "superseded_by": null,
+      "superseded_at_ms": null
+    }
+  },
+  "envelope_hash": "0x5866d48541b908f74416bbdac90d4edee9f7a81558fbb03893f2730412654ae7"
+}

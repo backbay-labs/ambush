@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/frame-26004-governance-status.schema.json",
+  "title": "kind:26004 \u2014 governance status report",
+  "description": "GovernanceStatusReport (crates/swarm-policy/src/governance.rs:55-71), all EIGHT fields. APPENDIX-NORMATIVE.md section 3 lists six; last_transition_at_ms and last_reconciliation_report_id are also on the type and last_transition_at_ms is the natural source for the governance strip's staleness clock, so both are carried. See 13-WIRE-SCHEMAS.md section 9 amendment W-7.\n\nNO QUORUM FRACTION MAY BE RENDERED FROM THIS (INV-09). The honest string is `committee of 1 (solo transport)`.\n\nAGGREGATES-ONLY. This frame is community-global and reaches every member of the colony's Buzz community, including members on no case: handle_ephemeral_event's channel-less branch publishes to Redis EventTopic::Global under a Uuid::nil() routing sentinel and fans out with channel_id=None (crates/buzz-relay/src/handlers/event.rs:875-903), and filter_fanout_by_access returns every match at :177-179 for a channel-less event after applying only the receiver tenant label, AUTHOR_ONLY_KINDS and SHARED_GATED_KINDS. No host id, no indicator, no finding id, no library path and no non-opaque join key may appear here.\n\nADMITTED-ISSUER RULE. A frame renders only if the NOSTR EVENT's pubkey resolves to an admitted bridge identity; others are counted and dropped, and the count is visible. Without it, any chat-capable member of the community can publish one: the ephemeral ingest gate is a single scope test with no per-kind allowlist (`if !scopes.is_empty() && !scopes.contains(&Scope::MessagesWrite)`, crates/buzz-relay/src/handlers/event.rs:699-707). The shipped precedent for the predicate is getConfigNudgeAuthorPubkey (desktop/src/features/messages/ui/configNudgeAuthPubkey.ts:22-34), which authenticates against message.signerPubkey \u2014 the RAW EVENT SIGNER \u2014 and not message.pubkey, which may be a relay-delegated display author.",
+  "type": "object",
+  "required": [
+    "schema",
+    "kind",
+    "issuer",
+    "emitted_at_ms",
+    "seq",
+    "partition_state",
+    "total_governors",
+    "healthy_governors",
+    "quorum_threshold",
+    "active_contingency_leases",
+    "unauthorized_partition_actions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "ambush.perch.frame.governance_status.v1"
+    },
+    "kind": {
+      "const": 26004
+    },
+    "issuer": {
+      "$ref": "common.schema.json#/$defs/SpineIssuer",
+      "description": "The bridge's spine identity, for display only. THE ADMITTED-ISSUER RULE MATCHES THE NOSTR EVENT'S `pubkey`, NOT THIS FIELD \u2014 this one is inside the content an adversary controls."
+    },
+    "emitted_at_ms": {
+      "$ref": "common.schema.json#/$defs/UnixMillis"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Per-kind monotonic counter assigned by the bridge. A gap between two frames the console actually received proves loss on a live connection; it says nothing about frames emitted while the console was disconnected, because ephemerals are never stored (crates/buzz-relay/src/handlers/event.rs:794-906 writes nothing to Postgres in either branch)."
+    },
+    "partition_state": {
+      "$ref": "common.schema.json#/$defs/PartitionState"
+    },
+    "total_governors": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "healthy_governors": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "quorum_threshold": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "active_contingency_leases": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unauthorized_partition_actions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_transition_at_ms": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/UnixMillis"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The strip's `recv Nm ago` staleness clock reads this."
+    },
+    "last_reconciliation_report_id": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "contingency_lease_ttl_ms": {
+      "type": "integer",
+      "description": "runtime.partition_contingency_lease_ttl_ms, so no surface has to guess. The production default is 300,000 ms / 5 minutes (crates/swarm-core/src/config/defaults.rs:15, set explicitly at rulesets/default.yaml:20 and threaded into GovernancePolicyConfig.contingency_lease_ttl_ms at crates/swarm-runtime-http/src/bin/swarm_detect.rs:721). 06 section 2.2's '60-second TTL, dispatcher.rs:1592' cites a #[tokio::test] fixture and is wrong by 5x."
+    }
+  },
+  "examples": [
+    {
+      "schema": "ambush.perch.frame.governance_status.v1",
+      "kind": 26004,
+      "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+      "emitted_at_ms": 1787754973300,
+      "seq": 4413,
+      "partition_state": "healthy",
+      "total_governors": 1,
+      "healthy_governors": 1,
+      "quorum_threshold": 1,
+      "active_contingency_leases": 0,
+      "unauthorized_partition_actions": 0,
+      "last_transition_at_ms": null,
+      "last_reconciliation_report_id": null,
+      "contingency_lease_ttl_ms": 300000
+    }
+  ],
+  "x-transport": {
+    "kind": 26004,
+    "ephemeral": true,
+    "why_no_relay_change": "handle_event short-circuits every 20000-29999 kind into handle_ephemeral_event and RETURNS at crates/buzz-relay/src/handlers/event.rs:751, before ingest_event is reached at :761, so required_scope_for_kind never sees a 26xxx. Proved in-tree by the test ephemeral_kinds_not_in_scope_allowlist at crates/buzz-relay/src/handlers/ingest.rs:3851-3854.",
+    "websocket_only": "POST /events goes straight into ingest_event (crates/buzz-relay/src/api/bridge.rs:925) with no ephemeral branch, so an HTTP-posted 26xxx is rejected 'restricted: unknown event kind'. The bridge must hold a live WebSocket.",
+    "h_tag": "none (global)",
+    "p_tags": "none"
+  }
+}

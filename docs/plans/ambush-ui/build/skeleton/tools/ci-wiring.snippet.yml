@@ -1,0 +1,178 @@
+# Workflow steps for the four new gates. PASTE INTO .github/workflows/ci.yml IN
+# THE SAME PR THAT ADDS THE SCRIPTS.
+#
+# This is not optional and it is not a nicety. tools/check-gates-wired.sh
+# enumerates every tools/check-*.sh -- TRACKED OR UNTRACKED, via
+# `git ls-files -c -o --exclude-standard` (check-gates-wired.sh:66-73, the
+# enumeration block) -- and fails on any not named by a real `run:` command in
+# some workflow job. So a PR that adds check-copy-banned-terms.sh without this
+# edit fails CI in a way that reads like the new guard is broken, when the
+# failure is the absence of these lines. It counts on the commit that adds the
+# script, not the commit after.
+#
+# The parser is strict about two more things (check-gates-wired.sh:50-58 header;
+# PERMISSIVE_CONDITIONS at :106):
+#   - a `run:` inside a `#` comment, an `on: paths:` filter, or a step under
+#     `if: false` does NOT count as wired;
+#   - a step or job carrying an `if:` is rejected unless the expression is one of
+#     `always()`, `!cancelled()`, `success() || failure()`.
+# So none of the steps below carries an `if:`.
+#
+# ── WHY THESE STEPS ARE GREEN IN PHASE 0, WHICH THEY WERE NOT ──────────────
+#
+#   The first version of this snippet wired four gates unconditionally, three of
+#   which exited 1 with "no Perch source files found; refusing to pass silently"
+#   on any tree where `src/features/perch*` does not exist -- which is every tree
+#   until the first Perch feature PR. 20-TASK-BREAKDOWN.md's T5 puts this commit
+#   in Phase 0. Wiring it as written turned CI red on the commit that added it,
+#   and the `if:` that would have papered over it is exactly what
+#   check-gates-wired.sh rejects.
+#
+#   The fix is not a blanket "tree absent, pass" arm, because then the refusal
+#   never arrives. It is tools/perch-source-roots.tsv: a data file naming every
+#   Perch root and whether it is expected to exist yet, read by all four gates
+#   through tools/lib/perch-roots.sh. It is wrong in BOTH directions -- a root
+#   marked `absent` whose directory EXISTS is a hard failure, so the commit that
+#   creates the first Perch feature directory fails these gates until it also
+#   flips that row. The refusal arrives on its own, on a known commit, without
+#   anyone having to remember. A third status, `probe`, pins a directory that
+#   already exists in block/buzz so a WRONG PERCH_DESKTOP_ROOT can never be
+#   mistaken for Phase 0.
+#
+#   Measured on this session's tree (BUZZ @ eed74bde2, no Perch source):
+#     check-copy-banned-terms.sh      exit 0, WARNING, asset half enforced
+#     check-perch-grant-affordance.sh exit 0, WARNING, fixture ran
+#     check-perch-adversary-strings.sh exit 0, WARNING, fixture ran
+#     check-perch-write-allowlist.sh  exit 0, WARNING, probe row satisfied
+#   and with PERCH_DESKTOP_ROOT pointed one directory too high, the writes gate
+#   exits 1 naming PERCH_DESKTOP_ROOT as the likely cause.
+#
+#   THE COPY GATE IS THE EXCEPTION AND IT IS NOT A PHASE-0 PROBLEM, IT IS A
+#   PHASE-0 COST: its asset half is enforced from day one and currently finds 41
+#   violations across 12 of the 20 docs/assets/*.svg, over six ban rows. Those
+#   twelve rewrites land in the SAME PR as this snippet. See
+#   16-INVARIANT-TESTS.md decision D8.
+#
+# THE SECOND CHECKOUT IS THE COST NOBODY BUDGETED.
+#   All four gates scan product copy and product source that live in block/buzz,
+#   not in this repository. The `gates` job therefore grows an actions/checkout
+#   of a second repo. That is a real change to a job that today needs no
+#   toolchain beyond python3, and it belongs in the estimate.
+
+# --- in .github/workflows/ci.yml, job `gates`, after the existing
+# --- "Check every gate script is wired into a workflow" step ---
+
+      # The Perch console's product copy lives in block/buzz. Four gates below
+      # read it. Pinned to a ref rather than a floating default branch so a copy
+      # change in the other repo cannot turn this repo's CI red without a commit
+      # here -- the same reason check-visibility-baseline.sh works from a
+      # recorded baseline rather than from HEAD.
+      - name: Check out the Perch desktop tree
+        uses: actions/checkout@v4
+        with:
+          repository: block/buzz
+          ref: ${{ vars.PERCH_DESKTOP_REF }}
+          path: .perch-desktop
+
+      # APPENDIX-NORMATIVE.md sections 2 and 7 name this script as the enforcing
+      # gate for the vocabulary rulings, the outright ban list and INV-31. It did
+      # not exist in either repository; ten documents cited a filename. It also
+      # carries INV-32, because the keymap registry is the only place both rules
+      # can be checked as data. Its fixture includes the cross-implementation
+      # PARITY corpus that BUZZ desktop/scripts/check-copy-banned-terms.mjs also
+      # runs, so the two scanners cannot drift.
+      - name: Check Perch copy, the A-key ban and one-key-one-verb
+        env:
+          PERCH_DESKTOP_ROOT: ${{ github.workspace }}/.perch-desktop/desktop
+        run: bash tools/check-copy-banned-terms.sh
+
+      # INV-07, INV-10, INV-11 (static half), INV-27, and the closure of the
+      # data-perch-role attribute. AlertDialogAction forwards buttonVariants()
+      # with no variant, which resolves to bg-primary; applyAccentColor then
+      # writes --primary inline on the root element, so a grant control built the
+      # obvious way is the app's primary action in whatever colour the operator
+      # picked. R7 and R8 catch an UNDECLARED grant control -- one that omits
+      # data-perch-role entirely -- which every other rule is blind to.
+      - name: Check the Perch grant affordance
+        env:
+          PERCH_DESKTOP_ROOT: ${{ github.workspace }}/.perch-desktop/desktop
+        run: bash tools/check-perch-grant-affordance.sh
+
+      # INV-14. Guards the AdversaryText brand's four escape hatches; `tsc` is
+      # the exhaustive half and runs on the Buzz side.
+      - name: Check the Perch adversary-string brand
+        env:
+          PERCH_DESKTOP_ROOT: ${{ github.workspace }}/.perch-desktop/desktop
+        run: bash tools/check-perch-adversary-strings.sh
+
+      # INV-01. The console's Ambush-bound write surface is exactly five routes.
+      # The behavioural half is the Rust test in desktop/src-tauri; this asserts
+      # the shape stays reviewable.
+      - name: Check the Perch write allowlist
+        env:
+          PERCH_DESKTOP_ROOT: ${{ github.workspace }}/.perch-desktop/desktop
+        run: bash tools/check-perch-write-allowlist.sh
+
+# --- NOT a gate, and deliberately not named check-*.sh ---------------------
+#
+#   tools/lib/perch-roots.sh is SOURCED by all four scripts above. It is not
+#   enumerated by check-gates-wired.sh (whose pathspec is tools/check-*.sh and
+#   tools/verify-*.sh), which is why it lives under tools/lib/ with a name
+#   matching neither. Each gate refuses to run if it is missing, so it cannot
+#   become a silently absent dependency.
+#
+#   tools/perch-source-roots.tsv and tools/copy-ban-list.tsv are DATA, read by
+#   the gates and (the ban list) byte for byte by the Buzz-side .mjs.
+
+# --- in BUZZ desktop/package.json, extend the existing `check` script -------
+#
+#   Today (BUZZ desktop/package.json:15) `check` is:
+#     "check": "biome check . && pnpm check:px-text && pnpm check:pubkey-truncation"
+#
+#   Perch adds two:
+#     "check:csp-pin": "node ./scripts/check-csp-pin.mjs",
+#     "check:copy-bans": "node ./scripts/check-copy-banned-terms.mjs",
+#     "check": "biome check . && pnpm check:px-text && pnpm check:pubkey-truncation && pnpm check:csp-pin && pnpm check:copy-bans",
+#
+# BUZZ has no tools/ directory and no check-gates-wired.sh; `pnpm check` (reached
+# by `just desktop-check`, `just check`, `just ci` and pre-push) is where a Buzz
+# gate becomes real. INV-30 lands there.
+#
+# check-copy-banned-terms.mjs needs the ban list, which is NOT vendored into
+# Buzz -- one file, two runners. It resolves it through PERCH_BAN_LIST or
+# PERCH_AMBUSH_ROOT and SKIPS with a printed reason when neither is set, so a
+# Buzz contributor with no Ambush checkout is not blocked. In Buzz CI the
+# workflow sets PERCH_AMBUSH_ROOT and passes --require, which turns that skip
+# into an error:
+#
+#       - name: Check out Ambush for the Perch ban list
+#         uses: actions/checkout@v4
+#         with:
+#           repository: backbay-labs/ambush
+#           path: .ambush
+#       - name: Perch copy bans
+#         env:
+#           PERCH_AMBUSH_ROOT: ${{ github.workspace }}/.ambush
+#         run: cd desktop && node ./scripts/check-copy-banned-terms.mjs --require
+#
+# --- and register the five Playwright specs in desktop/playwright.config.ts ---
+#
+# In the `smoke` project's testMatch array (they need no relay):
+#
+#   "**/perch-verdict-pane.spec.ts",
+#   "**/perch-containment.spec.ts",
+#   "**/perch-provenance.spec.ts",
+#   "**/perch-marker-admission.spec.ts",
+#   "**/perch-queue-lifecycle.spec.ts",
+#
+# A spec not listed in a project's testMatch is silently never run -- the config
+# has no catch-all project. That is the single most likely way this whole set
+# becomes decoration.
+#
+# --- and name the Tauri Rust tests in the Tauri test lane ------------------
+#
+# The desktop crate is EXCLUDED from the root workspace, so a bare `cargo test`
+# at the Buzz repo root does not run perch_marker_guard_tests.rs (BUZZ
+# CLAUDE.md, gotcha 5). `cargo test --manifest-path desktop/src-tauri/Cargo.toml`
+# is what runs it, and INV-29's call-site completeness test additionally needs
+# `--features perch-boundary`.

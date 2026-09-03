@@ -1,0 +1,36 @@
+{
+  "capability_token": null,
+  "envelope_hash": "0xabababababababababababababababababababababababababababababababab",
+  "fact": {
+    "emitted_at_ms": 1773738881900,
+    "escalation": {
+      "cause": "concentration_crossing",
+      "current_mode": "alert",
+      "dedupe_key": "execution:alert:1773738881",
+      "distinct_sources": 2,
+      "distinct_sources_counts": "strategy_scoped_agent_id",
+      "level": "alert",
+      "mode_changed": true,
+      "peak_confidence": 0.9,
+      "source_ids": null,
+      "source_ids_absent_reason": "not_carried_by_runtime_event",
+      "threat_class": "execution",
+      "total_strength": 2.696884
+    },
+    "issuer": {
+      "nostr_pubkey": null,
+      "role": null,
+      "swarm_agent_id": "concentration-monitor"
+    },
+    "locator": {
+      "case_channel": null,
+      "lane_channel": "b8240a37-88b1-4a9f-8b77-5cc005891115"
+    },
+    "schema": "ambush.perch.escalation.v1"
+  },
+  "issued_at": "2026-03-17T09:14:41Z",
+  "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+  "prev_envelope_hash": "0xabababababababababababababababababababababababababababababababab",
+  "schema": "swarm.spine.envelope.v1",
+  "seq": 2
+}

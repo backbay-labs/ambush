@@ -1,0 +1,70 @@
+# tools/copy-ban-list.tsv -- the ONE ban list.
+#
+# Read by tools/check-copy-banned-terms.sh (this repo) and, byte for byte, by
+# BUZZ desktop/scripts/check-copy-banned-terms.mjs. The parity test
+# (16-INVARIANT-TESTS.md section 6.2) asserts both produce identical verdicts
+# over tools/fixtures/copy-corpus/, so this file is the only place a ban is
+# added, softened or scoped.
+#
+# Source of truth for the bans themselves: APPENDIX-NORMATIVE.md section 7
+# ("Banned outright in rendered strings") plus the vocabulary table above it.
+# A row here that the appendix does not carry is a brief amendment, not a
+# convenience.
+#
+# COLUMNS, tab-separated:
+#   id        stable slug. Appears in the failure output and is the allowlist key.
+#   severity  P0 | P1 | hygiene. Reported; does not change the exit code -- every
+#             row fails the build. Severity tells a reviewer how hard to think.
+#   flags     'i' = case-insensitive (pattern must then be written lowercase);
+#             '-' = case-sensitive.
+#   minlen    minimum length of the extracted string before the row applies.
+#             '0' for almost everything; 4 for the exclamation-mark rule, whose
+#             appendix wording is "any rendered string longer than three
+#             characters".
+#   pattern   POSIX ERE, matched against ONE extracted rendered string.
+#             awk's ERE has no \b, so a word boundary is written
+#             `(^|[^a-z])word([^a-z]|$)`. Five rows need it and the fixture
+#             proves each: without it `release` trips bare-lease, `control-plane`
+#             trips bare-lane, `resources` trips bare-source-count and `hunting`
+#             trips hunt-noun. All four were live false positives on this
+#             repository's own assets on the first real run.
+#   exempt    POSIX ERE. If it also matches the same string, the hit is dropped.
+#             '-' = no exemption. Matched against the SAME normalized string as
+#             `pattern` (lowercased when flags=i), so an exemption written for a
+#             case-insensitive row must itself be lowercase.
+#   message   what to write instead. Printed verbatim on failure.
+#
+# WHAT IS NOT HERE, AND WHY
+#   1. 'signed'/'verified' on a finding, escalation, hold, containment-lease or
+#      bare response-receipt card (appendix section 7) is NOT a row. That ban is
+#      card-scoped and a flat string scan cannot see which card a string lands
+#      on. It is enforced instead by the DOM assertion in
+#      tests/playwright/perch-provenance.spec.ts (INV-25), which reads the seven
+#      card presenters directly. Putting it here would produce a false FAIL on
+#      "the daemon signed the release attestation", which is true and renderable,
+#      and would still miss "verified" reaching a finding card through a variable.
+#
+#   2. NOTHING HERE COVERS A STRING THAT ARRIVES AS DATA. The scanner reads
+#      authored literals: copy-module strings, four attribute values, six object
+#      field names, and JSX text nodes. A daemon-supplied string interpolated
+#      into a rendered slot is invisible to every row below, in every case. The
+#      `approve` row's exemption exists precisely because the daemon's own hold
+#      reason is such a string and render law 1's fourth slot REQUIRES it be
+#      rendered. Daemon-supplied text is INV-14's problem (the AdversaryText
+#      brand and <AdversaryString>), not this file's, and 16-INVARIANT-TESTS.md
+#      section 7.7 states the limit so a green line here is not read as coverage.
+#
+id	severity	flags	minlen	pattern	exempt	message
+approve	P0	i	0	appro(ve|ved|val)	static\.human_gate|policy_decision\.reason|rationale\.reason|hold\.reason|authorized but held for human approval	Perch does not authorize. Render law 6: the control says "record my decision and send it to the daemon". EXEMPTION: the daemon's own verbatim policy reason is "authorized but held for human approval" (AMB crates/swarm-policy/src/static_gate.rs:297, set by StaticApprovalGate::evaluate inside swarm_detect --serve and carried onto every PolicyDecision and thus onto B1's HoldRationale). Render law 1's fourth slot requires it be rendered verbatim, and 12-BACKEND-BILL-API.md commits it as part of B1's record. Quoting the daemon is not the product claiming an authority.
+deny-label	P1	-	0	(^|[^A-Za-z])Den(y|ied)([^A-Za-z]|$)	PolicyVerdict|policy_verdict	Capital-D Deny is policy's typed word; the operator's word is Refuse. Lowercase mono `deny` as a wire value is fine.
+trust-claim	P0	i	0	verified by|(^|[^a-z])trusted([^a-z]|$)|(^|[^a-z])proofs?([^a-z]|$)	[a-z]-proof|proof-?read	No trust anchor exists. Say "attestation matches this body". WORD-BOUNDED, and the boundary idiom is not enough on its own: awk's `[^a-z]` treats a hyphen as a boundary, so `repeat-proof` and `future-proof` still matched. The exempt column carries the hyphenated-compound form explicitly, which is reviewable in a way that loosening the boundary class would not be -- `lane` genuinely wants a hyphen to be a boundary, so the two rows cannot share one rule. Found by scanning this artifact set's own test names.
+shield-glyph	P0	-	0	🛡|🔒|🔐|⚠	-	No shield or lock glyph beside an attestation (appendix section 7). Severity is a word plus a four-segment bar, never a glyph.
+quorum-fraction	P1	i	0	quorum[^.]{0,24}[0-9]+ */ *[0-9]+|[0-9]+ */ *[0-9]+ +governors?	-	Committee of one. Render "committee of 1 (solo transport)".
+bare-source-count	P1	i	0	(^|[^a-z])sources?([^a-z]|$)	agent	Render law 2: never a bare source count. Always "N sources / M agents".
+reassurance	hygiene	i	0	everything looks good|all clear|you.{0,3}re all caught up|no data|nothing to see	-	Voice law L6. An empty queue is a claim about coverage; name what is not covered.
+hunt-noun	hygiene	i	0	(^|[^a-z])hunts?([^a-z]|$)	hunt_id|hunt[_-][a-z0-9]	'hunt' is dropped as a noun (06 section 3). The noun is "case"; the field label hunt_id and the identifier tokens hunt-evt-1 / hunt_id survive (22-DEMO-FIXTURE.md amendment C-A1).
+clowder	hygiene	i	0	(^|[^a-z])clowders?([^a-z]|$)	-	Dead term. The word is "colony".
+legacy-codename	hygiene	i	0	swarm team six	-	Legacy codename. The product is "Ambush".
+bare-lease	P1	i	0	(^|[^a-z])leases?([^a-z]|$)	capability|containment|contingency|lease_id|lease_ttl|lease_store|lease_closed|lease:	Three unrelated objects share the word. Say capability lease / containment lease / contingency lease. EXEMPTION `lease:` covers the capability_id token form `lease:{hunt}:{action}:{ms}` (22-DEMO-FIXTURE.md amendment C-A3), which is an identifier, not prose.
+bare-lane	P1	i	0	(^|[^a-z])lanes?([^a-z]|$)	^lanes?$|^open lanes?$|^all lanes?$|threat|twelve|12|lateral|exfiltration|privilege|command and control|initial access|persistence|supply chain|defense evasion|credential|discovery|execution|impact	'lane' means one of the twelve threat-class channels and nothing else. Use queue / pillar / stream (brief A9). EXEMPTION: the standalone nav/heading label. APPENDIX-NORMATIVE.md section 1 ratifies the routes /lanes and /lanes/$laneId, whose sidebar item and page heading are the bare word "Lanes" -- naming exactly the twelve threat-class channels the ruling permits. Anchored to the WHOLE string so it exempts a label and never a sentence: "open the async lane" still fails.
+exclamation	hygiene	-	4	!	^<!--[^!]*-->$	Voice law L3: no exclamation marks, ever. The single permitted intensifier is the word "still". EXEMPTION: a literal that is ENTIRELY an HTML comment carrying no other `!`. The seven `<!-- ambush:<slug>:v1 -->` markers are wire literals the product must carry verbatim (APPENDIX-NORMATIVE.md section 3), and `<!--` contains a `!`, so without this the ban fires on every marker constant. Anchored and `[^!]*`-bounded so `<!-- Great news! -->` still fails. Found by scanning this artifact set's own fixtures.
