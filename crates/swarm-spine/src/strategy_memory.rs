@@ -36,6 +36,8 @@ use swarm_crypto::{
     DetachedSignature, Keypair, canonical_json_bytes, sha256_hex, verify_detached_signature,
 };
 
+const MAX_STRATEGY_MEMORY_LIST_LIMIT: usize = 4_096;
+
 pub const STRATEGY_MEMORY_STORE_SCHEMA_VERSION: u32 = 1;
 pub const STRATEGY_MEMORY_STATE_KIND: &str = "collective_strategy_memory";
 pub const STRATEGY_MEMORY_STATE_FILE: &str = "state.json";
@@ -379,6 +381,28 @@ impl StrategyMemoryState {
     }
 }
 
+fn strategy_memory_page(
+    state: &StrategyMemoryState,
+    after: Option<(u64, &str)>,
+    limit: usize,
+) -> Vec<StrategyMemoryRecord> {
+    state
+        .order
+        .iter()
+        .rev()
+        .filter_map(|id| state.memories.get(id))
+        .filter(|record| {
+            after.is_none_or(|(generation, stable_id)| {
+                record.generation < generation
+                    || (record.generation == generation
+                        && record.memory.memory_id.as_str() < stable_id)
+            })
+        })
+        .take(limit)
+        .cloned()
+        .collect()
+}
+
 impl StrategyMemoryRecord {
     fn new(
         memory: StrategyMemory,
@@ -657,6 +681,11 @@ pub trait StrategyMemoryStore: Send + Sync {
         memory_id: &swarm_core::hypothesis_graph::MemoryId,
     ) -> Result<Option<StrategyMemoryRecord>, StrategyMemoryStoreError>;
     fn list(&self, limit: usize) -> Result<Vec<StrategyMemoryRecord>, StrategyMemoryStoreError>;
+    fn list_page(
+        &self,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<StrategyMemoryRecord>, StrategyMemoryStoreError>;
     fn retrieve(
         &self,
         graph_id: &GraphId,
@@ -992,8 +1021,10 @@ impl StrategyMemoryStore for MemoryStrategyMemoryStore {
     }
 
     fn list(&self, limit: usize) -> Result<Vec<StrategyMemoryRecord>, StrategyMemoryStoreError> {
-        if limit == 0 || limit > 256 {
-            return Err(StrategyMemoryStoreError::InvalidLimit(256));
+        if limit == 0 || limit > MAX_STRATEGY_MEMORY_LIST_LIMIT {
+            return Err(StrategyMemoryStoreError::InvalidLimit(
+                MAX_STRATEGY_MEMORY_LIST_LIMIT,
+            ));
         }
         let state = self.read_state()?;
         let records = state
@@ -1005,6 +1036,20 @@ impl StrategyMemoryStore for MemoryStrategyMemoryStore {
             .filter_map(|id| state.state.memories.get(id).cloned())
             .collect::<Vec<_>>();
         Ok(records)
+    }
+
+    fn list_page(
+        &self,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<StrategyMemoryRecord>, StrategyMemoryStoreError> {
+        if limit == 0 || limit > MAX_STRATEGY_MEMORY_LIST_LIMIT {
+            return Err(StrategyMemoryStoreError::InvalidLimit(
+                MAX_STRATEGY_MEMORY_LIST_LIMIT,
+            ));
+        }
+        let state = self.read_state()?;
+        Ok(strategy_memory_page(&state.state, after, limit))
     }
 
     fn retrieve(
@@ -1904,8 +1949,10 @@ impl StrategyMemoryStore for FileStrategyMemoryStore {
     }
 
     fn list(&self, limit: usize) -> Result<Vec<StrategyMemoryRecord>, StrategyMemoryStoreError> {
-        if limit == 0 || limit > 256 {
-            return Err(StrategyMemoryStoreError::InvalidLimit(256));
+        if limit == 0 || limit > MAX_STRATEGY_MEMORY_LIST_LIMIT {
+            return Err(StrategyMemoryStoreError::InvalidLimit(
+                MAX_STRATEGY_MEMORY_LIST_LIMIT,
+            ));
         }
         let state = self.read_state()?;
         let records = state
@@ -1917,6 +1964,20 @@ impl StrategyMemoryStore for FileStrategyMemoryStore {
             .filter_map(|id| state.state.memories.get(id).cloned())
             .collect::<Vec<_>>();
         Ok(records)
+    }
+
+    fn list_page(
+        &self,
+        after: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<StrategyMemoryRecord>, StrategyMemoryStoreError> {
+        if limit == 0 || limit > MAX_STRATEGY_MEMORY_LIST_LIMIT {
+            return Err(StrategyMemoryStoreError::InvalidLimit(
+                MAX_STRATEGY_MEMORY_LIST_LIMIT,
+            ));
+        }
+        let state = self.read_state()?;
+        Ok(strategy_memory_page(&state.state, after, limit))
     }
 
     fn retrieve(

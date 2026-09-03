@@ -45,6 +45,11 @@ use swarm_runtime_http::serve::serve_with_listener;
 const RELOAD_DEBOUNCE_MS: u64 = 500;
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 const CONCENTRATION_MONITOR_INTERVAL_MS: u64 = 100;
+const HYPOTHESIS_GRAPH_ADMISSION_RETRY_INTERVAL_SECS: u64 = 5;
+
+fn hypothesis_graph_admission_requires_retry(failures: usize) -> bool {
+    failures > 0
+}
 
 // Keep the detector crate independent of a direct libc dependency while still
 // requesting the descriptor protections required for artifact reads and
@@ -4736,6 +4741,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let approval_harness = build_approval_harness(&cli)?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (telemetry_tx, telemetry_rx) = tokio::sync::mpsc::channel(10_000);
+        let hypothesis_graph_admission_notify = config
+            .hypothesis_graph
+            .enabled
+            .then(|| Arc::new(tokio::sync::Notify::new()));
         let (bridge_ingest_tx, mut bridge_ingest_rx) =
             tokio::sync::mpsc::channel::<swarm_core::telemetry::TelemetryEvent>(10_000);
         let telemetry_rx = WhiskerAgent::shared_receiver(telemetry_rx);
@@ -4880,6 +4889,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?
         .with_startup_attestation(startup_attestation.clone())
         .with_anti_tamper_report(anti_tamper.clone());
+        let state = match &hypothesis_graph_admission_notify {
+            Some(notify) => state.with_hypothesis_graph_admission_notify(Arc::clone(notify)),
+            None => state,
+        };
         let state = governance.configure_ingest(
             state
                 .with_telemetry_channel(telemetry_tx.clone())
@@ -5050,14 +5063,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let state = state.clone();
                     move |identity| {
                         build_restartable_agent(move || {
-                            Ok(Box::new(StalkerAgent::new_with_signing_key(
+                            let graph_worker = state
+                                .current_hypothesis_graph_worker(
+                                    [
+                                        swarm_core::hypothesis_graph::TaskKind::AcquireEvidence,
+                                        swarm_core::hypothesis_graph::TaskKind::FalsifyHypothesis,
+                                    ],
+                                    &identity.signing_key,
+                                )
+                                .map_err(|error| error.to_string())?;
+                            let mut agent = StalkerAgent::new_with_signing_key(
                                 identity.id.clone(),
                                 identity.signing_key.clone(),
                                 state.current_replay_store(),
                                 state.current_investigation(),
                                 state.current_substrate(),
                                 state.current_pheromone_config(),
-                            )))
+                            );
+                            if let Some(worker) = graph_worker {
+                                agent = agent
+                                    .with_hypothesis_graph(worker)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            Ok(Box::new(agent))
                         })
                     }
                 },
@@ -5077,13 +5105,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let state = state.clone();
                     move |identity| {
                         build_restartable_agent(move || {
-                            Ok(Box::new(WeaverAgent::new_with_signing_key(
+                            let graph_worker = state
+                                .current_hypothesis_graph_worker(
+                                    [swarm_core::hypothesis_graph::TaskKind::ChallengeEdge],
+                                    &identity.signing_key,
+                                )
+                                .map_err(|error| error.to_string())?;
+                            let mut agent = WeaverAgent::new_with_signing_key(
                                 identity.id.clone(),
                                 identity.signing_key.clone(),
                                 state.current_correlation_engine(),
                                 state.current_investigation_store(),
                                 state.current_incident_store(),
-                            )))
+                            );
+                            if let Some(worker) = graph_worker {
+                                agent = agent
+                                    .with_hypothesis_graph(worker)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            Ok(Box::new(agent))
                         })
                     }
                 },
@@ -5091,6 +5131,119 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             admitted_identities.push(weaver_id);
         }
+        let mut hypothesis_graph_admission_retry_pending = false;
+        let mut hypothesis_graph_admission_continuation_pending = false;
+        if config.hypothesis_graph.enabled {
+            state
+                .current_hypothesis_graph()
+                .ok_or_else(|| {
+                    std::io::Error::other(
+                        "enabled hypothesis graph was not constructed during runtime startup",
+                    )
+                })?
+                .ensure_workers_registered()
+                .map_err(std::io::Error::other)?;
+            let reconciliation = state.reconcile_hypothesis_graph_replays()?;
+            tracing::info!(
+                examined = reconciliation.examined,
+                admitted = reconciliation.admitted,
+                idempotent = reconciliation.idempotent,
+                quarantined = reconciliation.quarantined,
+                retryable_failures = reconciliation.retryable_failures,
+                failures = reconciliation.failures,
+                continuation_pending = reconciliation.continuation_pending,
+                "reconciled durable replays into the collective hypothesis graph"
+            );
+            hypothesis_graph_admission_retry_pending =
+                hypothesis_graph_admission_requires_retry(reconciliation.retryable_failures);
+            hypothesis_graph_admission_continuation_pending = reconciliation.continuation_pending;
+        }
+        let mut hypothesis_graph_admission_handle = hypothesis_graph_admission_notify.map(|notify| {
+            let state = state.clone();
+            let mut shutdown = shutdown_rx.clone();
+            tokio::spawn(async move {
+                let mut retry_pending = hypothesis_graph_admission_retry_pending;
+                let mut continuation_pending =
+                    hypothesis_graph_admission_continuation_pending;
+                let mut retry_interval = tokio::time::interval(Duration::from_secs(
+                    HYPOTHESIS_GRAPH_ADMISSION_RETRY_INTERVAL_SECS,
+                ));
+                retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                // `interval` ticks immediately once. Consume that tick so a
+                // blocked startup reconciliation observes the configured
+                // retry delay instead of spinning a second full-store scan.
+                retry_interval.tick().await;
+                loop {
+                    if *shutdown.borrow() {
+                        break;
+                    }
+                    if !continuation_pending {
+                        tokio::select! {
+                            changed = shutdown.changed() => {
+                                if changed.is_err() || *shutdown.borrow() {
+                                    break;
+                                }
+                                continue;
+                            }
+                            () = notify.notified() => {}
+                            _ = retry_interval.tick(), if retry_pending => {}
+                        }
+                    }
+                    continuation_pending = false;
+                    let reconciliation_state = state.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        reconciliation_state.reconcile_hypothesis_graph_replays()
+                    })
+                    .await
+                    {
+                        Ok(Ok(report)) if report.failures == 0 => {
+                            retry_pending = false;
+                            continuation_pending = report.continuation_pending;
+                            tracing::debug!(
+                                examined = report.examined,
+                                admitted = report.admitted,
+                                idempotent = report.idempotent,
+                                failures = report.failures,
+                                continuation_pending,
+                                "reconciled durable replay queue into the collective hypothesis graph"
+                            );
+                        }
+                        Ok(Ok(report)) => {
+                            retry_pending =
+                                hypothesis_graph_admission_requires_retry(report.retryable_failures);
+                            continuation_pending = report.continuation_pending;
+                            tracing::warn!(
+                                examined = report.examined,
+                                admitted = report.admitted,
+                                idempotent = report.idempotent,
+                                quarantined = report.quarantined,
+                                retryable_failures = report.retryable_failures,
+                                failures = report.failures,
+                                continuation_pending,
+                                module = module_path!(),
+                                "durable replay queue reconciliation left collective hypothesis admissions degraded"
+                            );
+                        }
+                        Ok(Err(error)) => {
+                            retry_pending = true;
+                            tracing::warn!(
+                                reason = %error,
+                                module = module_path!(),
+                                "durable replay queue reconciliation failed"
+                            );
+                        }
+                        Err(error) => {
+                            retry_pending = true;
+                            tracing::error!(
+                                reason = %error,
+                                module = module_path!(),
+                                "durable replay queue worker panicked"
+                            );
+                        }
+                    }
+                }
+            })
+        });
         dispatcher.set_admitted_identities(admitted_identities);
         let mut dispatcher_handle = Some(tokio::spawn(async move {
             dispatcher.run().await;
@@ -5284,6 +5437,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(handle) = bridge_processor_handle.take() {
                     await_background_task("bridge_processor", handle).await;
                 }
+                if let Some(handle) = hypothesis_graph_admission_handle.take() {
+                    await_background_task("hypothesis_graph_admission", handle).await;
+                }
                 if let Some(handle) = monitor_handle.take() {
                     await_background_task("concentration_monitor", handle).await;
                 }
@@ -5341,6 +5497,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = bridge_processor_handle.take() {
                     await_background_task("bridge_processor", handle).await;
+                }
+                if let Some(handle) = hypothesis_graph_admission_handle.take() {
+                    await_background_task("hypothesis_graph_admission", handle).await;
                 }
                 if let Some(handle) = monitor_handle.take() {
                     await_background_task("concentration_monitor", handle).await;
@@ -5511,7 +5670,8 @@ mod tests {
         ensure_governance_authority_lock_pair, governance_artifact_record,
         governance_artifact_record_at, governance_artifact_set, governance_artifact_snapshot,
         governance_policy_for_bootstrap, governance_quarantine_expected_copy_name,
-        governance_selection_lock_path, inject_governance_rollback_cleanup_failure_on_call,
+        governance_selection_lock_path, hypothesis_graph_admission_requires_retry,
+        inject_governance_rollback_cleanup_failure_on_call,
         install_governance_artifact_read_barrier, install_governance_authority_hard_link_barrier,
         install_governance_authority_sidecar_create_barrier,
         install_governance_authority_source_open_barrier,
@@ -5533,6 +5693,13 @@ mod tests {
     use std::sync::Arc;
     use swarm_core::agent::{AgentRole, SwarmModeState};
     use swarm_ingest_runtime::ingest::IngestState;
+
+    #[test]
+    fn graph_admission_retry_tracks_remaining_durable_failures() {
+        assert!(!hypothesis_graph_admission_requires_retry(0));
+        assert!(hypothesis_graph_admission_requires_retry(1));
+        assert!(hypothesis_graph_admission_requires_retry(usize::MAX));
+    }
     use swarm_pheromone::ConfiguredPheromoneSubstrate;
     use swarm_runtime::agent_identity::{
         AgentKeyLoadStatus, FileAgentIdentityRegistry, FileAgentKeyStore, RegistryAdmission,

@@ -5,11 +5,15 @@
 //! witness/source-record admission index that makes idempotency and conflicts
 //! explicit without changing the core record model.
 
+pub mod benchmark;
 pub mod clock;
 pub mod containment_plan;
 pub mod hypotheses;
+pub mod inference;
 pub mod kill_chain;
+pub mod memory;
 pub mod normalize;
+pub mod service;
 pub mod tasks;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,6 +27,7 @@ use swarm_core::hypothesis_graph::{
 use swarm_core::types::AgentId;
 use swarm_crypto::Keypair;
 
+pub use benchmark::{CollectiveBenchmarkReport, run_collective_benchmark};
 pub use clock::{
     DeterministicScheduler, FixedGraphClock, GraphClock, ScheduledGraphTask, SystemObservationClock,
 };
@@ -31,13 +36,23 @@ pub use hypotheses::{
     HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput, competing_hypotheses,
     unresolved_task_targets,
 };
+pub use inference::{InferredCausalRelation, infer_causal_relations};
 pub use kill_chain::reconstruct_kill_chain;
+pub use memory::{
+    MemoryPriorityProjection, MemoryProjectionReport, StrategyMemoryProjector,
+    project_memory_priority,
+};
 pub use normalize::{
     MAX_RAW_PROJECTION_BYTES, MAX_RAW_PROJECTION_DEPTH, MAX_RAW_PROJECTION_NODES,
     MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX,
     TETRAGON_FALLBACK_TIME_SOURCE_MARKER, normalize_source_timestamp, normalize_telemetry,
     normalize_telemetry_event, normalize_telemetry_event_with_unit, normalize_telemetry_with_unit,
     normalize_threat_intel, normalize_threat_intel_at, normalize_threat_intel_entry,
+};
+pub use service::{
+    ClaimedGraphTask, CollectiveHypothesisService, GraphChallengeContext, GraphOperatorProjection,
+    GraphServiceError, GraphServiceMetricsSnapshot, GraphSubmission, GraphSummaryProjection,
+    GraphWorkerAdapter, StalkerGraphCompletion, WeaverGraphPublication,
 };
 pub use tasks::{
     DurableHypothesisCoordinator, HypothesisCoordinationResult, HypothesisTaskLedger, TaskClaim,

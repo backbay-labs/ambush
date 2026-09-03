@@ -27,6 +27,7 @@ use swarm_core::config::{
 use swarm_core::http_rate_limit::{
     HttpRateLimitRejection, HttpRateLimitStatus, HttpRateLimitThreshold,
 };
+use swarm_core::hypothesis_graph::{GraphId, GraphLogicalTime, TaskRecord};
 use swarm_core::pheromone::PheromoneDeposit;
 use swarm_core::types::{ProvidenceIncidentReconciliation, ResponseRehearsalPreview, Severity};
 use swarm_pheromone::{DepositQuery, PheromoneSubstrate};
@@ -35,12 +36,16 @@ use swarm_runtime::alert_tuning::{AlertTuningReport, build_alert_tuning_report};
 use swarm_runtime::escalation::standard_threat_classes;
 use swarm_runtime::evasion_coverage::EvasionCoverageSnapshot;
 use swarm_runtime::http::tls_identity::TlsClientIdentity;
+use swarm_runtime::hypothesis_graph::{
+    GraphOperatorProjection, GraphServiceError, GraphSummaryProjection,
+};
 use swarm_runtime::providence::verify_providence_context_token;
 use swarm_runtime::runtime_events::{AsyncLaneStatusSnapshot, RuntimeEvent, now_ms};
 use swarm_runtime::service::{OperatorBearerTokenStatus, RuntimeDegradationStatus};
 use swarm_spine::{
     FalsePositiveMeasurementReport, IncidentStore, InvestigationBundleStore, InvestigationStatus,
-    ReplayBundleLookup, ReplayBundleStore, summarize_false_positive_measurements,
+    ReplayBundleLookup, ReplayBundleStore, StrategyMemoryRecord,
+    summarize_false_positive_measurements,
 };
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
@@ -364,6 +369,104 @@ struct PlatformIncidentsQuery {
     correlation_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct GraphCollectionQuery {
+    cursor: Option<String>,
+    page_size: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct GraphCollectionCursor {
+    generation: u64,
+    stable_id: String,
+}
+
+impl GraphCollectionCursor {
+    fn encode(&self) -> String {
+        format!("{}:{}", self.generation, self.stable_id)
+    }
+
+    fn parse(raw: &str) -> Result<Self, PlatformApiError> {
+        let (generation, stable_id) = raw
+            .split_once(':')
+            .ok_or_else(|| PlatformApiError::bad_request("invalid graph collection cursor"))?;
+        let generation = generation
+            .parse::<u64>()
+            .map_err(|_| PlatformApiError::bad_request("invalid graph collection cursor"))?;
+        if stable_id.trim().is_empty() {
+            return Err(PlatformApiError::bad_request(
+                "invalid graph collection cursor",
+            ));
+        }
+        Ok(Self {
+            generation,
+            stable_id: stable_id.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TaskCollectionCursor {
+    requested_at: GraphLogicalTime,
+    stable_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct GraphSummaryCursor {
+    campaign_index: u64,
+    graph_id: String,
+}
+
+impl GraphSummaryCursor {
+    fn encode(&self) -> String {
+        format!("{}:{}", self.campaign_index, self.graph_id)
+    }
+
+    fn parse(raw: &str) -> Result<Self, PlatformApiError> {
+        let (campaign_index, graph_id) = raw
+            .split_once(':')
+            .ok_or_else(|| PlatformApiError::bad_request("invalid graph summary cursor"))?;
+        let campaign_index = campaign_index
+            .parse::<u64>()
+            .map_err(|_| PlatformApiError::bad_request("invalid graph summary cursor"))?;
+        if graph_id.trim().is_empty() {
+            return Err(PlatformApiError::bad_request(
+                "invalid graph summary cursor",
+            ));
+        }
+        Ok(Self {
+            campaign_index,
+            graph_id: graph_id.to_string(),
+        })
+    }
+}
+
+impl TaskCollectionCursor {
+    fn encode(&self) -> String {
+        format!("{}:{}", self.requested_at.as_millis(), self.stable_id)
+    }
+
+    fn parse(raw: &str) -> Result<Self, PlatformApiError> {
+        let (requested_at, stable_id) = raw
+            .split_once(':')
+            .ok_or_else(|| PlatformApiError::bad_request("invalid graph task cursor"))?;
+        let requested_at = requested_at
+            .parse::<i64>()
+            .map(GraphLogicalTime::new)
+            .map_err(|_| PlatformApiError::bad_request("invalid graph task cursor"))?;
+        requested_at
+            .validate()
+            .map_err(|_| PlatformApiError::bad_request("invalid graph task cursor"))?;
+        if stable_id.trim().is_empty() {
+            return Err(PlatformApiError::bad_request("invalid graph task cursor"));
+        }
+        Ok(Self {
+            requested_at,
+            stable_id: stable_id.to_string(),
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct EvasionCoverageQuery {
     detector: Option<String>,
@@ -641,6 +744,16 @@ pub(super) fn finalize_platform_page<T>(
     PlatformApiEnvelope::new(items, cursor)
 }
 
+fn finalize_graph_collection_page<T>(
+    mut items: Vec<T>,
+    page_size: usize,
+    cursor_for: impl Fn(&T) -> String,
+) -> PlatformApiEnvelope<T> {
+    let cursor = (items.len() > page_size).then(|| cursor_for(&items[page_size - 1]));
+    items.truncate(page_size);
+    PlatformApiEnvelope::new(items, cursor)
+}
+
 fn latest_rehearsal_for_hunt(
     state: &IngestState,
     hunt_id: &str,
@@ -835,6 +948,22 @@ pub(super) fn platform_api_router(state: &IngestState) -> Router<IngestState> {
         )
         .route("/stream/findings", get(platform_findings_stream_handler))
         .route("/runtime/status", get(platform_runtime_status_handler))
+        .route(
+            "/hypothesis-graphs",
+            get(platform_hypothesis_graphs_handler),
+        )
+        .route(
+            "/hypothesis-graphs/{graph_id}",
+            get(platform_hypothesis_graph_handler),
+        )
+        .route(
+            "/hypothesis-graphs/{graph_id}/tasks",
+            get(platform_hypothesis_graph_tasks_handler),
+        )
+        .route(
+            "/hypothesis-graphs/{graph_id}/memory",
+            get(platform_hypothesis_graph_memory_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_platform_api_key_auth_resolved,
@@ -1066,6 +1195,170 @@ fn retry_after_seconds(retry_after_ms: u64) -> u64 {
 }
 
 // --- Handlers ---
+
+fn map_hypothesis_graph_error(error: GraphServiceError) -> PlatformApiError {
+    match error {
+        GraphServiceError::InvalidCollectionCursor => {
+            PlatformApiError::bad_request("invalid graph summary cursor")
+        }
+        GraphServiceError::GraphMismatch { observed, .. } => {
+            PlatformApiError::not_found(format!("hypothesis graph `{observed}` was not found"))
+        }
+        error => PlatformApiError::service_unavailable(format!(
+            "hypothesis graph state is unavailable: {error}"
+        )),
+    }
+}
+
+fn require_hypothesis_graph(
+    state: &IngestState,
+) -> Result<Arc<swarm_runtime::hypothesis_graph::CollectiveHypothesisService>, PlatformApiError> {
+    state
+        .current_hypothesis_graph()
+        .ok_or_else(|| PlatformApiError::not_found("collective hypothesis graph is not enabled"))
+}
+
+async fn platform_hypothesis_graphs_handler(
+    Extension(principal): Extension<PlatformApiPrincipal>,
+    State(state): State<IngestState>,
+    Query(query): Query<GraphCollectionQuery>,
+) -> Result<Json<PlatformApiEnvelope<GraphSummaryProjection>>, PlatformApiError> {
+    let page_size = platform_api_page_size(query.page_size)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(GraphSummaryCursor::parse)
+        .transpose()?;
+    let mut summaries = state
+        .current_hypothesis_graph()
+        .map(|service| {
+            service.summary_page(
+                cursor
+                    .as_ref()
+                    .map(|cursor| (cursor.campaign_index, cursor.graph_id.as_str())),
+                page_size.saturating_add(1),
+            )
+        })
+        .transpose()
+        .map_err(map_hypothesis_graph_error)?
+        .unwrap_or_default();
+    let next_cursor = (summaries.len() > page_size).then(|| {
+        let (campaign_index, summary) = &summaries[page_size - 1];
+        GraphSummaryCursor {
+            campaign_index: *campaign_index,
+            graph_id: summary.graph_id.to_string(),
+        }
+        .encode()
+    });
+    summaries.truncate(page_size);
+    let summaries = summaries
+        .into_iter()
+        .map(|(_, summary)| summary)
+        .collect::<Vec<_>>();
+    tracing::debug!(
+        platform_api_principal = %principal.name,
+        endpoint = "/v2/api/hypothesis-graphs",
+        returned = summaries.len(),
+        "served hypothesis graph summaries"
+    );
+    Ok(Json(PlatformApiEnvelope::new(summaries, next_cursor)))
+}
+
+async fn platform_hypothesis_graph_handler(
+    Extension(principal): Extension<PlatformApiPrincipal>,
+    State(state): State<IngestState>,
+    AxumPath(graph_id): AxumPath<String>,
+) -> Result<Json<PlatformApiEnvelope<GraphOperatorProjection>>, PlatformApiError> {
+    let graph_id = GraphId::new(graph_id);
+    let projection = require_hypothesis_graph(&state)?
+        .operator_projection_for(&graph_id)
+        .map_err(map_hypothesis_graph_error)?;
+    tracing::debug!(
+        platform_api_principal = %principal.name,
+        endpoint = "/v2/api/hypothesis-graphs/{graph_id}",
+        graph_id = %graph_id,
+        "served hypothesis graph detail"
+    );
+    Ok(Json(PlatformApiEnvelope::new(vec![projection], None)))
+}
+
+async fn platform_hypothesis_graph_tasks_handler(
+    Extension(principal): Extension<PlatformApiPrincipal>,
+    State(state): State<IngestState>,
+    AxumPath(graph_id): AxumPath<String>,
+    Query(query): Query<GraphCollectionQuery>,
+) -> Result<Json<PlatformApiEnvelope<TaskRecord>>, PlatformApiError> {
+    let graph_id = GraphId::new(graph_id);
+    let page_size = platform_api_page_size(query.page_size)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(TaskCollectionCursor::parse)
+        .transpose()?;
+    let tasks = require_hypothesis_graph(&state)?
+        .operator_task_page_for(
+            &graph_id,
+            cursor
+                .as_ref()
+                .map(|cursor| (cursor.requested_at, cursor.stable_id.as_str())),
+            page_size.saturating_add(1),
+        )
+        .map_err(map_hypothesis_graph_error)?;
+    let page = finalize_graph_collection_page(tasks, page_size, |task| {
+        TaskCollectionCursor {
+            requested_at: task.request.requested_at,
+            stable_id: task.request.task_id.to_string(),
+        }
+        .encode()
+    });
+    tracing::debug!(
+        platform_api_principal = %principal.name,
+        endpoint = "/v2/api/hypothesis-graphs/{graph_id}/tasks",
+        graph_id = %graph_id,
+        returned = page.data.len(),
+        "served hypothesis graph tasks"
+    );
+    Ok(Json(page))
+}
+
+async fn platform_hypothesis_graph_memory_handler(
+    Extension(principal): Extension<PlatformApiPrincipal>,
+    State(state): State<IngestState>,
+    AxumPath(graph_id): AxumPath<String>,
+    Query(query): Query<GraphCollectionQuery>,
+) -> Result<Json<PlatformApiEnvelope<StrategyMemoryRecord>>, PlatformApiError> {
+    let graph_id = GraphId::new(graph_id);
+    let page_size = platform_api_page_size(query.page_size)?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(GraphCollectionCursor::parse)
+        .transpose()?;
+    let memory = require_hypothesis_graph(&state)?
+        .operator_memory_page_for(
+            &graph_id,
+            cursor
+                .as_ref()
+                .map(|cursor| (cursor.generation, cursor.stable_id.as_str())),
+            page_size.saturating_add(1),
+        )
+        .map_err(map_hypothesis_graph_error)?;
+    let page = finalize_graph_collection_page(memory, page_size, |record| {
+        GraphCollectionCursor {
+            generation: record.generation,
+            stable_id: record.memory.memory_id.to_string(),
+        }
+        .encode()
+    });
+    tracing::debug!(
+        platform_api_principal = %principal.name,
+        endpoint = "/v2/api/hypothesis-graphs/{graph_id}/memory",
+        graph_id = %graph_id,
+        returned = page.data.len(),
+        "served hypothesis graph memory"
+    );
+    Ok(Json(page))
+}
 
 async fn platform_findings_handler(
     Extension(principal): Extension<PlatformApiPrincipal>,

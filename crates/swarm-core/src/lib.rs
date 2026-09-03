@@ -45,10 +45,10 @@ pub use signed_state::{
 pub use telemetry::{
     AuthenticationEventData, BridgeHealth, BridgeStatusReport, BridgeStatusSnapshot,
     CloudTrailEvent, DnsQueryEvent, ExhaustedResource, FilePersistenceEvent,
-    InfrastructureHealthEvent, KubernetesAuditEvent, NetworkConnectEvent, ProcessMemoryAccessEvent,
-    ProcessStartEvent, RegistryAccessEvent, RegistryPersistenceEvent, ResourceExhaustionEvent,
-    TelemetryBridge, TelemetryBridgeError, TelemetryBridgeResult, TelemetryEvent, TelemetryPayload,
-    ThermalAnomalyEvent, ThermalSeverity,
+    InfrastructureHealthEvent, KubernetesAuditEvent, MAX_TELEMETRY_FUTURE_SKEW_MS,
+    NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent, RegistryAccessEvent,
+    RegistryPersistenceEvent, ResourceExhaustionEvent, TelemetryBridge, TelemetryBridgeError,
+    TelemetryBridgeResult, TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity,
 };
 pub use types::{
     AgentId, EscalationEvent, HuntId, ProvidenceCallbackAuditEntry, ProvidenceCallbackEvent,

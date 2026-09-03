@@ -1,0 +1,140 @@
+name: Phase 286 Product
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase286-product-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/phase286-product
+
+jobs:
+  collective-reasoning:
+    name: collective-reasoning-product
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Cache locked Cargo sources
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-sources-v1-${{ runner.os }}-
+
+      - name: Install pinned Rust stable action
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: clippy,rustfmt
+
+      - name: Hydrate the locked dependency closure
+        run: cargo fetch --locked
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint Phase 286 production and adjacent crates
+        run: >-
+          cargo clippy
+          -p swarm-core
+          -p swarm-spine
+          -p swarm-runtime
+          -p swarm-agents
+          -p swarm-ingest-runtime
+          -p swarm-runtime-http
+          --all-targets --locked --offline -- -D warnings
+
+      - name: Run the deterministic collective-reasoning acceptance gate
+        run: bash tools/check-collective-hypothesis-graph.sh
+
+      - name: Exercise the shipped operator graph surface
+        run: |
+          cargo test -p swarm-ingest-runtime --lib \
+            ingest::tests::platform_hypothesis_graph_endpoints_surface_durable_state \
+            --locked --offline -- --exact
+          cargo test -p swarm-ingest-runtime --lib \
+            ingest::tests::platform_hypothesis_graph_collection_is_empty_when_disabled \
+            --locked --offline -- --exact
+
+      - name: Exercise the enabled ingest-to-graph production seam
+        run: |
+          cargo test -p swarm-ingest-runtime --lib \
+            ingest::tests::handler_projects_persisted_replay_into_enabled_hypothesis_graph \
+            --locked --offline -- --exact
+          cargo test -p swarm-ingest-runtime --lib \
+            ingest::tests::startup_reconciliation_recovers_durable_replays_missing_from_graph \
+            --locked --offline -- --exact
+
+      - name: Exercise the shipped Stalker and Weaver graph adapters
+        run: |
+          cargo test -p swarm-agents --lib \
+            stalker_agent::tests::stalker_agent_completes_durable_graph_work_without_legacy_side_effects \
+            --locked --offline -- --exact
+          cargo test -p swarm-agents --lib \
+            stalker_agent::tests::stalker_reconciles_a_persisted_replay_before_claiming_investigation \
+            --locked --offline -- --exact
+          cargo test -p swarm-agents --lib \
+            weaver_agent::tests::weaver_agent_correlates_then_completes_durable_challenge \
+            --locked --offline -- --exact
+
+      - name: Prove the daemon composition builds
+        run: cargo check -p swarm-runtime-http --bin swarm_detect --locked --offline
+
+      - name: Render the enabled production profile
+        run: |
+          helm lint deploy/helm/swarm-team-six \
+            -f deploy/helm/swarm-team-six/values-production.yaml
+          helm template swarm-team-six deploy/helm/swarm-team-six \
+            -f deploy/helm/swarm-team-six/values-production.yaml >/dev/null
+
+  operator-contract:
+    name: collective-reasoning-openapi
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout the candidate without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Cache locked Cargo sources
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-sources-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-sources-v1-${{ runner.os }}-
+
+      - name: Install pinned Rust stable action
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+
+      - name: Install uv for the pinned OpenAPI validator
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+
+      - name: Check generated OpenAPI identity and validity
+        run: bash tools/check-platform-openapi.sh

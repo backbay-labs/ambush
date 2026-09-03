@@ -162,9 +162,14 @@
         let _ = std::fs::remove_dir_all(&replay_store_root);
         let replay_store = FileReplayBundleStore::open(&replay_store_root).unwrap();
         let investigation_store = MemoryInvestigationBundleStore::default();
+        let investigation_completed =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let coordinator = crate::investigation::InvestigationCoordinator::new(
             config.investigation.clone(),
-            SlowInvestigator { delay_ms: 75 },
+            SlowInvestigator {
+                delay_ms: 75,
+                completed: Some(std::sync::Arc::clone(&investigation_completed)),
+            },
             investigation_store.clone(),
         );
         let event = TelemetryEvent {
@@ -190,7 +195,6 @@
         };
         let agent_id = test_agent_id();
 
-        let started = std::time::Instant::now();
         let persisted = service
             .process_event_with_store_and_investigation(
                 &detector,
@@ -213,11 +217,10 @@
             .await
             .unwrap()
             .unwrap();
-        let elapsed = started.elapsed();
 
         assert!(
-            elapsed < std::time::Duration::from_millis(70),
-            "expected nonblocking path to return before the 75ms investigation delay, elapsed={elapsed:?}"
+            !investigation_completed.load(std::sync::atomic::Ordering::Acquire),
+            "expected nonblocking path to return before the background investigation completed"
         );
         let investigation = persisted.investigation.expect("queued investigation");
         assert_eq!(
@@ -317,6 +320,7 @@
                 vote_lineage: Vec::new(),
                 decision: swarm_spine::InvestigationDecision::default(),
                 failure_reason: None,
+                graph_findings_published: false,
             }
         };
 
@@ -407,7 +411,10 @@
         let incident_store = MemoryIncidentStore::default();
         let coordinator = crate::investigation::InvestigationCoordinator::new(
             config.investigation.clone(),
-            SlowInvestigator { delay_ms: 100 },
+            SlowInvestigator {
+                delay_ms: 100,
+                completed: None,
+            },
             investigation_store.clone(),
         );
         let event_one = TelemetryEvent {
@@ -533,6 +540,7 @@
                 vote_lineage: Vec::new(),
                 decision: swarm_spine::InvestigationDecision::default(),
                 failure_reason: None,
+                graph_findings_published: false,
             })
             .unwrap();
 
@@ -629,7 +637,10 @@
             config,
             StaticApprovalGate::default(),
             SandboxExecutor,
-            SlowInvestigator { delay_ms: 50 },
+            SlowInvestigator {
+                delay_ms: 50,
+                completed: None,
+            },
         )
         .unwrap();
         let detector = SuspiciousProcessTreeDetector::default();

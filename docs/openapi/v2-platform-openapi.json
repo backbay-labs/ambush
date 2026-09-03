@@ -37,6 +37,16 @@
           "type": "string"
         }
       },
+      "GraphIdPath": {
+        "description": "Stable key-derived collective hypothesis graph identifier.",
+        "in": "path",
+        "name": "graph_id",
+        "required": true,
+        "schema": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
       "HostId": {
         "description": "Optional host identifier filter.",
         "in": "query",
@@ -336,6 +346,333 @@
           "scenario_count",
           "techniques"
         ],
+        "type": "object"
+      },
+      "GraphServiceMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "campaign_rotations": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "completed_acquisitions": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "completed_challenges": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "completed_falsifications": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_acquisitions": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_challenges": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_falsifications": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "falsification_no_findings": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_projection_failures": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_records_projected": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "submission_failures": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "submissions": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "submissions",
+          "submission_failures",
+          "completed_acquisitions",
+          "completed_challenges",
+          "completed_falsifications",
+          "falsification_no_findings",
+          "failed_acquisitions",
+          "failed_challenges",
+          "failed_falsifications",
+          "memory_records_projected",
+          "memory_projection_failures",
+          "campaign_rotations"
+        ],
+        "type": "object"
+      },
+      "HypothesisGraphMemoryPage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Opaque cursor for the next page; null on the final page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyMemoryRecord"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "data"
+        ],
+        "type": "object"
+      },
+      "HypothesisGraphProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "generation": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "graph": {
+            "additionalProperties": true,
+            "description": "Typed durable causal graph including evidence and signed edges.",
+            "type": "object"
+          },
+          "graph_id": {
+            "type": "string"
+          },
+          "hypotheses": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "description": "Typed hypothesis record.",
+              "type": "object"
+            },
+            "description": "Competing hypothesis records keyed by hypothesis ID.",
+            "type": "object"
+          },
+          "logical_time_high_water": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyMemoryRecord"
+            },
+            "type": "array"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/GraphServiceMetrics"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/HypothesisTaskRecord"
+            },
+            "type": "array"
+          },
+          "terminal_publications": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "graph_id",
+          "generation",
+          "digest",
+          "graph",
+          "hypotheses",
+          "tasks",
+          "terminal_publications",
+          "memory",
+          "logical_time_high_water",
+          "metrics"
+        ],
+        "type": "object"
+      },
+      "HypothesisGraphProjectionPage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Opaque cursor for the next page; null on the final page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/HypothesisGraphProjection"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "data"
+        ],
+        "type": "object"
+      },
+      "HypothesisGraphSummariesPage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Opaque cursor for the next page; null on the final page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/HypothesisGraphSummary"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "data"
+        ],
+        "type": "object"
+      },
+      "HypothesisGraphSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "completed_task_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "contradiction_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edge_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "evidence_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_task_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "generation": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "graph_id": {
+            "type": "string"
+          },
+          "graph_version": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hypothesis_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "logical_time_high_water": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "memory_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/GraphServiceMetrics"
+          },
+          "node_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending_task_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "graph_id",
+          "generation",
+          "graph_version",
+          "evidence_count",
+          "node_count",
+          "edge_count",
+          "contradiction_count",
+          "hypothesis_count",
+          "pending_task_count",
+          "completed_task_count",
+          "failed_task_count",
+          "memory_count",
+          "logical_time_high_water",
+          "metrics"
+        ],
+        "type": "object"
+      },
+      "HypothesisGraphTasksPage": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "Opaque cursor for the next page; null on the final page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/HypothesisTaskRecord"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "data"
+        ],
+        "type": "object"
+      },
+      "HypothesisTaskRecord": {
+        "additionalProperties": true,
+        "description": "Typed durable graph task with claim, lease, completion, and terminal history.",
         "type": "object"
       },
       "PlatformAssetPosture": {
@@ -830,6 +1167,11 @@
         ],
         "type": "object"
       },
+      "StrategyMemoryRecord": {
+        "additionalProperties": true,
+        "description": "Authenticated strategy-memory record projected from the committed terminal outbox.",
+        "type": "object"
+      },
       "SwarmFindingEnvelope": {
         "additionalProperties": false,
         "properties": {
@@ -894,7 +1236,7 @@
   },
   "info": {
     "description": "Machine-readable contract for the shipped `/v2/api/*` read surface on the detect server. Requests require both an operator bearer token and a platform API key unless a scoped Providence context token is used on the supported read routes.",
-    "summary": "Authenticated read surface for findings, incidents, runtime status, posture, and evasion coverage.",
+    "summary": "Authenticated read surface for findings, incidents, collective hypotheses, runtime status, posture, and evasion coverage.",
     "title": "Swarm Team Six Platform API",
     "version": "v2-schema-1"
   },
@@ -1195,6 +1537,411 @@
         "summary": "List findings",
         "tags": [
           "platform"
+        ]
+      }
+    },
+    "/v2/api/hypothesis-graphs": {
+      "get": {
+        "description": "Returns the enabled runtime graph summary. The collection is empty when collective reasoning is disabled.",
+        "operationId": "list_hypothesis_graphs",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HypothesisGraphSummariesPage"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "List collective hypothesis graphs",
+        "tags": [
+          "platform",
+          "collective-reasoning"
+        ]
+      }
+    },
+    "/v2/api/hypothesis-graphs/{graph_id}": {
+      "get": {
+        "description": "Returns durable evidence, causal edges, competing hypotheses, task state, projected strategy memory, and graph metrics.",
+        "operationId": "get_hypothesis_graph",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/GraphIdPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HypothesisGraphProjectionPage"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Collective hypothesis graph is disabled or the requested graph ID does not exist"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "Read a collective hypothesis graph",
+        "tags": [
+          "platform",
+          "collective-reasoning"
+        ]
+      }
+    },
+    "/v2/api/hypothesis-graphs/{graph_id}/memory": {
+      "get": {
+        "description": "Returns authenticated strategy-memory records projected only after their terminal graph publication committed.",
+        "operationId": "list_hypothesis_graph_memory",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/GraphIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HypothesisGraphMemoryPage"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Collective hypothesis graph is disabled or the requested graph ID does not exist"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "List projected strategy memory",
+        "tags": [
+          "platform",
+          "collective-reasoning"
+        ]
+      }
+    },
+    "/v2/api/hypothesis-graphs/{graph_id}/tasks": {
+      "get": {
+        "description": "Returns the graph's bounded durable claim, lease, and terminal task records.",
+        "operationId": "list_hypothesis_graph_tasks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "$ref": "#/components/parameters/GraphIdPath"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HypothesisGraphTasksPage"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks required scope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Collective hypothesis graph is disabled or the requested graph ID does not exist"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying the request.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Requested platform API surface is unavailable"
+          }
+        },
+        "summary": "List durable graph tasks",
+        "tags": [
+          "platform",
+          "collective-reasoning"
         ]
       }
     },

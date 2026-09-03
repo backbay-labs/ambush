@@ -2,7 +2,7 @@
 //!
 //! The ingest crates and `swarm-whisker` own vendor parsing.  This module only
 //! consumes their typed records, bounds any legacy `serde_json::Value` fields
-//! before hashing them, and emits the six core evidence families.  Raw
+//! before hashing them, and emits typed evidence families. Raw
 //! request/response objects, command lines, credentials, and host labels never
 //! cross the evidence-envelope boundary.
 
@@ -10,17 +10,32 @@ use serde::Serialize;
 use serde_json::Value;
 use swarm_core::hypothesis_graph::{
     ActorNode, AssetNode, ClockPrecision, CredentialNode, EventNode, EvidenceClock,
-    EvidenceEnvelope, EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime,
+    EvidenceEnvelope, EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime, GraphNode,
     GraphProducerRole, OrderingClaim, ProcessNode, SourceLineage, TypedEvidencePayload,
 };
 use swarm_core::{
     AuthenticationEventData, CloudTrailEvent, DnsQueryEvent, KubernetesAuditEvent,
-    NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent, TelemetryEvent,
-    TelemetryPayload, ThreatIntelEntry, ThreatIntelIndicatorType,
+    MAX_TELEMETRY_FUTURE_SKEW_MS, NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent,
+    TelemetryEvent, TelemetryPayload, ThreatIntelEntry, ThreatIntelIndicatorType,
 };
 use swarm_crypto::{Keypair, canonical_json_bytes, sha256_hex};
 
 use super::clock::GraphClock;
+
+/// One normalized evidence envelope plus the exact typed graph nodes used to
+/// derive its entity identifiers. Runtime admission can therefore materialize
+/// inferred causal endpoints without reconstructing or aliasing identities.
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedGraphEvidence {
+    pub(crate) evidence: EvidenceEnvelope,
+    pub(crate) nodes: Vec<GraphNode>,
+}
+
+#[derive(Debug)]
+struct NormalizedPayload {
+    payload: TypedEvidencePayload,
+    nodes: Vec<GraphNode>,
+}
 
 /// Maximum size of a single source text field accepted by an adapter.
 pub const MAX_SOURCE_TEXT_BYTES: usize = 16 * 1024;
@@ -77,6 +92,18 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
     role: GraphProducerRole,
     scoped_agent_id: impl Into<String>,
 ) -> Result<EvidenceEnvelope, GraphAdmissionError> {
+    normalize_telemetry_graph_with_unit(event, timestamp_unit, clock, signer, role, scoped_agent_id)
+        .map(|normalized| normalized.evidence)
+}
+
+fn normalize_telemetry_graph_with_unit<C: GraphClock + ?Sized>(
+    event: &TelemetryEvent,
+    timestamp_unit: SourceTimestampUnit,
+    clock: &C,
+    signer: &Keypair,
+    role: GraphProducerRole,
+    scoped_agent_id: impl Into<String>,
+) -> Result<NormalizedGraphEvidence, GraphAdmissionError> {
     if event.source == TETRAGON_FALLBACK_TIME_SOURCE_MARKER
         || event
             .event_id
@@ -93,16 +120,28 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
     let (observed_at, precision, uncertainty_ms) =
         normalize_source_timestamp(event.timestamp, timestamp_unit)?;
     let evidence_clock = clock_for(observed_at, precision, uncertainty_ms, clock)?;
-    let (source_family, signal_kind, payload) = match &event.payload {
+    let (source_family, signal_kind, normalized) = match &event.payload {
         TelemetryPayload::ProcessStart(process) => (
             EvidenceSourceFamily::Process,
             "process_start",
-            process_payload(process, &source_id, &source_record_id, observed_at)?,
+            process_payload(
+                process,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::ProcessMemoryAccess(access) => (
             EvidenceSourceFamily::Process,
             "process_memory_access",
-            process_memory_payload(access, &source_id, &source_record_id, observed_at)?,
+            process_memory_payload(
+                access,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::RegistryAccess(access) => (
             EvidenceSourceFamily::Process,
@@ -127,7 +166,13 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
         TelemetryPayload::KubernetesAudit(audit) => (
             EvidenceSourceFamily::Kubernetes,
             "kubernetes_audit",
-            kubernetes_payload(audit, &source_id, &source_record_id, observed_at)?,
+            kubernetes_payload(
+                audit,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::CloudTrail(cloudtrail) => (
             EvidenceSourceFamily::Cloudtrail,
@@ -137,22 +182,61 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
         TelemetryPayload::NetworkConnect(network) => (
             EvidenceSourceFamily::Network,
             "network_connect",
-            network_payload(network, &source_id, &source_record_id, observed_at)?,
+            network_payload(
+                network,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::DnsQuery(dns) => (
             EvidenceSourceFamily::Network,
             "dns_query",
-            dns_payload(dns, &source_id, &source_record_id, observed_at)?,
+            dns_payload(
+                dns,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
-        other => {
-            return Err(GraphAdmissionError::InvalidField {
-                field: "telemetry.payload".to_string(),
-                reason: format!(
-                    "payload kind `{}` is not a graph source family",
-                    payload_kind(other)
-                ),
-            });
-        }
+        TelemetryPayload::InfrastructureHealth(health) => (
+            EvidenceSourceFamily::Infrastructure,
+            "infrastructure_health",
+            infrastructure_payload(
+                "infrastructure_health",
+                &health.node_name,
+                health,
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
+        ),
+        TelemetryPayload::ThermalAnomaly(thermal) => (
+            EvidenceSourceFamily::Infrastructure,
+            "thermal_anomaly",
+            infrastructure_payload(
+                "thermal_anomaly",
+                &thermal.node_name,
+                thermal,
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
+        ),
+        TelemetryPayload::ResourceExhaustion(exhaustion) => (
+            EvidenceSourceFamily::Infrastructure,
+            "resource_exhaustion",
+            infrastructure_payload(
+                "resource_exhaustion",
+                &exhaustion.node_name,
+                exhaustion,
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
+        ),
     };
 
     let lineage = SourceLineage::new(format!("telemetry:{signal_kind}"), source_record_id)?;
@@ -162,9 +246,13 @@ pub fn normalize_telemetry_with_unit<C: GraphClock + ?Sized>(
         lineage,
         evidence_clock,
         OrderingClaim::Unknown,
-        payload,
+        normalized.payload,
     )?;
-    envelope.sign_with(signer, role, scoped_agent_id)
+    let evidence = envelope.sign_with(signer, role, scoped_agent_id)?;
+    Ok(NormalizedGraphEvidence {
+        evidence,
+        nodes: normalized.nodes,
+    })
 }
 
 /// Compatibility alias with the name used by the plan and integration tests.
@@ -176,6 +264,25 @@ pub fn normalize_telemetry_event<C: GraphClock + ?Sized>(
     scoped_agent_id: impl Into<String>,
 ) -> Result<EvidenceEnvelope, GraphAdmissionError> {
     normalize_telemetry(event, clock, signer, role, scoped_agent_id)
+}
+
+/// Normalize telemetry for durable graph admission, retaining the exact typed
+/// nodes whose IDs appear in the evidence payload.
+pub(crate) fn normalize_telemetry_event_for_graph<C: GraphClock + ?Sized>(
+    event: &TelemetryEvent,
+    clock: &C,
+    signer: &Keypair,
+    role: GraphProducerRole,
+    scoped_agent_id: impl Into<String>,
+) -> Result<NormalizedGraphEvidence, GraphAdmissionError> {
+    normalize_telemetry_graph_with_unit(
+        event,
+        legacy_timestamp_unit(event.timestamp),
+        clock,
+        signer,
+        role,
+        scoped_agent_id,
+    )
 }
 
 /// Explicit-unit alias matching the event-oriented adapter name.
@@ -223,6 +330,49 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
     role: GraphProducerRole,
     scoped_agent_id: impl Into<String>,
 ) -> Result<EvidenceEnvelope, GraphAdmissionError> {
+    normalize_threat_intel_graph_at(
+        entry,
+        source_record_id,
+        observed_at,
+        clock,
+        signer,
+        role,
+        scoped_agent_id,
+    )
+    .map(|normalized| normalized.evidence)
+}
+
+/// Normalize an already-persisted threat-intelligence match for the durable
+/// graph transaction, retaining the exact nodes referenced by its payload.
+pub(crate) fn normalize_threat_intel_entry_for_graph<C: GraphClock + ?Sized>(
+    entry: &ThreatIntelEntry,
+    source_record_id: impl Into<String>,
+    observed_at: GraphLogicalTime,
+    clock: &C,
+    signer: &Keypair,
+    role: GraphProducerRole,
+    scoped_agent_id: impl Into<String>,
+) -> Result<NormalizedGraphEvidence, GraphAdmissionError> {
+    normalize_threat_intel_graph_at(
+        entry,
+        source_record_id,
+        observed_at,
+        clock,
+        signer,
+        role,
+        scoped_agent_id,
+    )
+}
+
+fn normalize_threat_intel_graph_at<C: GraphClock + ?Sized>(
+    entry: &ThreatIntelEntry,
+    source_record_id: impl Into<String>,
+    observed_at: GraphLogicalTime,
+    clock: &C,
+    signer: &Keypair,
+    role: GraphProducerRole,
+    scoped_agent_id: impl Into<String>,
+) -> Result<NormalizedGraphEvidence, GraphAdmissionError> {
     let source_record_id = source_record_id.into();
     let source_record_id = bounded_text("threat_intel.source_record_id", &source_record_id, 256)?;
     observed_at.validate()?;
@@ -239,7 +389,8 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
         });
     }
     let source_id = bounded_text("threat_intel.source", &entry.source, 256)?;
-    let indicator_value = bounded_text("threat_intel.value", &entry.value, 4 * 1024)?;
+    let indicator_value =
+        normalized_indicator_value("threat_intel.value", &entry.indicator_type, &entry.value)?;
     if !entry.confidence.is_finite() || !(0.0..=1.0).contains(&entry.confidence) {
         return Err(GraphAdmissionError::InvalidField {
             field: "threat_intel.confidence".to_string(),
@@ -278,7 +429,7 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
         indicator_kind: indicator_kind.to_string(),
         confidence_basis_points: confidence_basis_points(entry.confidence),
         expires_at,
-        entity_ids: vec![event_node.node_id, indicator_node.node_id],
+        entity_ids: vec![event_node.node_id.clone(), indicator_node.node_id.clone()],
         content_digest,
     };
     let evidence_clock = clock_for(observed_at, ClockPrecision::Millisecond, 0, clock)?;
@@ -288,7 +439,7 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
     } else {
         lineage
     };
-    EvidenceEnvelope::new(
+    let evidence = EvidenceEnvelope::new(
         EvidenceSourceFamily::ThreatIntelligence,
         source_id,
         lineage,
@@ -296,7 +447,14 @@ pub fn normalize_threat_intel_at<C: GraphClock + ?Sized>(
         OrderingClaim::Unknown,
         payload,
     )?
-    .sign_with(signer, role, scoped_agent_id)
+    .sign_with(signer, role, scoped_agent_id)?;
+    Ok(NormalizedGraphEvidence {
+        evidence,
+        nodes: vec![
+            GraphNode::Event(event_node),
+            GraphNode::Asset(indicator_node),
+        ],
+    })
 }
 
 /// Compatibility alias for callers that use the source record's type name.
@@ -323,16 +481,22 @@ pub fn normalize_threat_intel_entry<C: GraphClock + ?Sized>(
 fn clock_for<C: GraphClock + ?Sized>(
     observed_at: GraphLogicalTime,
     precision: ClockPrecision,
-    uncertainty_ms: u64,
+    source_uncertainty_ms: u64,
     clock: &C,
 ) -> Result<EvidenceClock, GraphAdmissionError> {
     let ingested_at = GraphLogicalTime::new(clock.now_ms());
     ingested_at.validate()?;
+    let accepted_future_skew_ms = observed_at
+        .as_millis()
+        .checked_sub(ingested_at.as_millis())
+        .filter(|skew| *skew > 0 && *skew <= MAX_TELEMETRY_FUTURE_SKEW_MS)
+        .and_then(|skew| u64::try_from(skew).ok())
+        .unwrap_or(0);
     let evidence_clock = EvidenceClock {
         observed_at,
         ingested_at: Some(ingested_at),
         precision,
-        uncertainty_ms,
+        uncertainty_ms: source_uncertainty_ms.max(accepted_future_skew_ms),
     };
     evidence_clock.validate()?;
     Ok(evidence_clock)
@@ -377,15 +541,17 @@ fn legacy_timestamp_unit(timestamp: i64) -> SourceTimestampUnit {
 
 fn process_payload(
     process: &ProcessStartEvent,
+    host_id: Option<&str>,
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let parent_process = match process.parent_process.trim() {
         "" | "<none>" | "none" | "unknown" => None,
         value => Some(bounded_text("process.parent_process", value, 4 * 1024)?),
     };
     let process_name = bounded_text("process.process_name", &process.process_name, 4 * 1024)?;
+    let host_id = optional_text("process.host_id", host_id, 4 * 1024)?;
     let command_line = bounded_text(
         "process.command_line",
         &process.command_line,
@@ -398,40 +564,57 @@ fn process_payload(
         4 * 1024,
     )?;
     let signer = optional_text("process.signer", process.signer.as_deref(), 4 * 1024)?;
-    let process_digest = digest_projection(&(
-        "process",
-        &process_name,
-        &command_line,
-        &user,
-        &signer,
-        process.signature_valid,
-    ))?;
-    let executable_digest = digest_projection(&("executable", &executable_path))?;
+    // Network telemetry has no PID or command-line instance discriminator.
+    // Use the strongest identity common to both sources (sensor, host, and
+    // process name) for the correlation node; instance-specific fields remain
+    // authenticated in content_digest below.
+    let origin_scope_digest =
+        digest_projection(&("process_origin", source_id, host_id.as_deref()))?;
+    let process_digest = digest_projection(&("process", &origin_scope_digest, &process_name))?;
     let parent_digest = parent_process
         .as_deref()
-        .map(|parent_process| digest_projection(&("parent_process", parent_process)))
+        .map(|parent_process| digest_projection(&("process", &origin_scope_digest, parent_process)))
         .transpose()?;
     let parent_node = parent_digest
         .as_deref()
-        .map(|digest| {
-            let parent_executable_digest = digest_projection(&("parent_executable", digest))?;
-            ProcessNode::new(digest, parent_executable_digest)
-        })
+        // A process must retain the same source/host/name identity when it
+        // appears first as a child and later as a parent. Parent-specific
+        // executable material created a disconnected third representation.
+        .map(|digest| ProcessNode::new(digest, digest))
         .transpose()?;
-    let process_node = match parent_node {
+    let correlation_node = ProcessNode::new(process_digest.clone(), process_digest.clone())?;
+    let process_node = match parent_node.as_ref() {
         Some(parent) => ProcessNode::new_with_parent(
             process_digest.clone(),
-            executable_digest,
+            process_digest.clone(),
             parent.node_id.clone(),
         )?,
-        None => ProcessNode::new(process_digest.clone(), executable_digest)?,
+        None => correlation_node.clone(),
     };
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event_node = EventNode::new("process_start", event_node_source_record_id, observed_at)?;
-    let mut entity_ids = vec![process_node.node_id, event_node.node_id];
+    let mut entity_ids = vec![process_node.node_id.clone(), event_node.node_id.clone()];
+    if let Some(parent) = parent_node.as_ref() {
+        entity_ids.push(parent.node_id.clone());
+        // A parent-bound ProcessNode preserves exact spawn lineage, while the
+        // unparented correlation node is the stable identity emitted by the
+        // less expressive network adapter for the same host/process tuple.
+        entity_ids.push(correlation_node.node_id.clone());
+    }
+    let has_parent = parent_node.is_some();
+    let mut nodes = parent_node
+        .into_iter()
+        .map(GraphNode::Process)
+        .collect::<Vec<_>>();
+    nodes.push(GraphNode::Process(process_node));
+    if has_parent {
+        nodes.push(GraphNode::Process(correlation_node));
+    }
+    nodes.push(GraphNode::Event(event_node));
     if let Some(user) = user.as_deref() {
-        entity_ids
-            .push(ActorNode::new(digest_projection(&("user", user))?, "process_user")?.node_id);
+        let actor = ActorNode::new(digest_projection(&("user", user))?, "process_user")?;
+        entity_ids.push(actor.node_id.clone());
+        nodes.push(GraphNode::Actor(actor));
     }
     let content_digest = digest_projection(&(
         "process_start",
@@ -443,21 +626,25 @@ fn process_payload(
         &signer,
         process.signature_valid,
     ))?;
-    Ok(TypedEvidencePayload::Process {
-        signal_kind: "process_start".to_string(),
-        process_digest,
-        parent_process_digest: parent_digest,
-        entity_ids,
-        content_digest,
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest,
+            parent_process_digest: parent_digest,
+            entity_ids,
+            content_digest,
+        },
+        nodes,
     })
 }
 
 fn process_memory_payload(
     access: &ProcessMemoryAccessEvent,
+    host_id: Option<&str>,
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let source = bounded_text(
         "process_memory.source_process",
         &access.source_process,
@@ -487,8 +674,14 @@ fn process_memory_payload(
         .iter()
         .map(|flag| bounded_text("process_memory.protection_flag", flag, 128))
         .collect::<Result<Vec<_>, _>>()?;
-    let source_digest = digest_projection(&("source_process", &source))?;
-    let target_digest = digest_projection(&("target_process", &target))?;
+    let host_id = optional_text("process_memory.host_id", host_id, 4 * 1024)?;
+    let origin_scope_digest =
+        digest_projection(&("process_origin", source_id, host_id.as_deref()))?;
+    // A process retains one graph identity when it is the target of one
+    // memory-access event and the source of the next. Role belongs to the
+    // inferred edge, while source/host scope prevents cross-host aliasing.
+    let source_digest = digest_projection(&("process", &origin_scope_digest, &source))?;
+    let target_digest = digest_projection(&("process", &origin_scope_digest, &target))?;
     let source_node = ProcessNode::new(source_digest.clone(), source_digest.clone())?;
     let target_node = ProcessNode::new(target_digest.clone(), target_digest.clone())?;
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
@@ -506,12 +699,24 @@ fn process_memory_payload(
         access.region_size,
         &call_stack,
     ))?;
-    Ok(TypedEvidencePayload::Process {
-        signal_kind: "process_memory_access".to_string(),
-        process_digest: target_digest,
-        parent_process_digest: Some(source_digest),
-        entity_ids: vec![source_node.node_id, target_node.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![
+        source_node.node_id.clone(),
+        target_node.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Process {
+            signal_kind: "process_memory_access".to_string(),
+            process_digest: target_digest,
+            parent_process_digest: Some(source_digest),
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Process(source_node),
+            GraphNode::Process(target_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -520,7 +725,7 @@ fn registry_access_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text("registry.process_name", &access.process_name, 4 * 1024)?;
     let path = bounded_text("registry.registry_path", &access.registry_path, 4 * 1024)?;
     let access_type = bounded_text("registry.access_type", &access.access_type, 512)?;
@@ -548,7 +753,7 @@ fn registry_persistence_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text(
         "registry_persistence.process_name",
         &persistence.process_name,
@@ -605,12 +810,19 @@ fn registry_persistence_payload(
         &value_name_digest,
         &value_data_digest,
     ))?;
-    Ok(TypedEvidencePayload::Process {
-        signal_kind: "registry_persistence".to_string(),
-        process_digest,
-        parent_process_digest: None,
-        entity_ids: vec![process_node.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![process_node.node_id.clone(), event_node.node_id.clone()];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Process {
+            signal_kind: "registry_persistence".to_string(),
+            process_digest,
+            parent_process_digest: None,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Process(process_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -619,7 +831,7 @@ fn file_persistence_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text(
         "file_persistence.process_name",
         &persistence.process_name,
@@ -664,7 +876,7 @@ fn process_like_payload(
     second_projection: &str,
     optional_projection: &Option<String>,
     context: EventNodeContext<'_>,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process_digest =
         digest_projection(&(signal_kind, process, first_projection, second_projection))?;
     let process_node = ProcessNode::new(process_digest.clone(), process_digest.clone())?;
@@ -682,12 +894,19 @@ fn process_like_payload(
         second_projection,
         optional_projection,
     ))?;
-    Ok(TypedEvidencePayload::Process {
-        signal_kind: signal_kind.to_string(),
-        process_digest,
-        parent_process_digest: None,
-        entity_ids: vec![process_node.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![process_node.node_id.clone(), event_node.node_id.clone()];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Process {
+            signal_kind: signal_kind.to_string(),
+            process_digest,
+            parent_process_digest: None,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Process(process_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -696,7 +915,7 @@ fn identity_payload(
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let auth_type = bounded_text("identity.auth_type", &authentication.auth_type, 512)?;
     let source_host = optional_text(
         "identity.source_host",
@@ -744,21 +963,35 @@ fn identity_payload(
         authentication.success,
         &user,
     ))?;
-    Ok(TypedEvidencePayload::Identity {
-        signal_kind: "authentication_event".to_string(),
-        principal_digest,
-        credential_digest: Some(credential_digest),
-        entity_ids: vec![actor.node_id, credential.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![
+        actor.node_id.clone(),
+        credential.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Identity {
+            signal_kind: "authentication_event".to_string(),
+            principal_digest,
+            credential_digest: Some(credential_digest),
+            success: Some(authentication.success),
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Actor(actor),
+            GraphNode::Credential(credential),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
 fn kubernetes_payload(
     audit: &KubernetesAuditEvent,
+    host_id: Option<&str>,
     source_id: &str,
     audit_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let verb = bounded_text("kubernetes.verb", &audit.verb, 512)?;
     let resource = bounded_text("kubernetes.resource", &audit.resource, 4 * 1024)?;
     let stage = optional_text("kubernetes.stage", audit.stage.as_deref(), 512)?;
@@ -799,17 +1032,19 @@ fn kubernetes_payload(
     )?;
     let annotations_digest = bounded_json_digest("kubernetes.annotations", &audit.annotations)?;
     let request_digest = bounded_json_digest("kubernetes.request_object", &audit.request_object)?;
+    let host_id = optional_text("kubernetes.host_id", host_id, 4 * 1024)?;
+    let cluster_scope_digest =
+        digest_projection(&("kubernetes_cluster", source_id, host_id.as_deref()))?;
     let resource_digest = digest_projection(&(
+        &cluster_scope_digest,
         &resource,
         &namespace,
         &subresource,
         &resource_name,
         &api_group,
-        &verb,
-        &request_digest,
     ))?;
     let actor = ActorNode::new(
-        digest_projection(&("kubernetes_user", &username, &groups))?,
+        digest_projection(&("kubernetes_user", &cluster_scope_digest, &username, &groups))?,
         "kubernetes_principal",
     )?;
     let asset = AssetNode::new(resource_digest.clone(), "kubernetes_resource")?;
@@ -833,13 +1068,25 @@ fn kubernetes_payload(
         &request_digest,
         &impersonated_username,
     ))?;
-    Ok(TypedEvidencePayload::KubernetesAudit {
-        signal_kind: "kubernetes_audit".to_string(),
-        audit_id: audit_id.to_string(),
-        verb,
-        resource_digest,
-        entity_ids: vec![actor.node_id, asset.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![
+        actor.node_id.clone(),
+        asset.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::KubernetesAudit {
+            signal_kind: "kubernetes_audit".to_string(),
+            audit_id: audit_id.to_string(),
+            verb,
+            resource_digest,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Actor(actor),
+            GraphNode::Asset(asset),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
@@ -848,7 +1095,7 @@ fn cloudtrail_payload(
     source_id: &str,
     event_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let event_name = bounded_text("cloudtrail.event_name", &cloudtrail.event_name, 4 * 1024)?;
     let event_source = bounded_text(
         "cloudtrail.event_source",
@@ -954,7 +1201,11 @@ fn cloudtrail_payload(
     let account_node = AssetNode::new(account_digest.clone(), "aws_account")?;
     let event_node_source_record_id = event_node_source_record_id(source_id, event_id)?;
     let event_node = EventNode::new("cloudtrail", event_node_source_record_id, observed_at)?;
-    let entity_ids = vec![actor.node_id, account_node.node_id, event_node.node_id];
+    let entity_ids = vec![
+        actor.node_id.clone(),
+        account_node.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
     let content_digest = digest_projection(&(
         event_id,
         &event_name,
@@ -975,39 +1226,56 @@ fn cloudtrail_payload(
     ))?;
     // CloudTrail's account and principal semantics remain in their dedicated
     // digest fields; `host_id` is deliberately not consulted.
-    Ok(TypedEvidencePayload::Cloudtrail {
-        signal_kind: "cloudtrail".to_string(),
-        event_id: event_id.to_string(),
-        event_name,
-        event_source,
-        principal_digest,
-        account_digest,
-        source_ip_digest,
-        request_digest,
-        response_digest,
-        mfa_authenticated: cloudtrail.mfa_authenticated,
-        region,
-        error_code,
-        error_message,
-        entity_ids,
-        content_digest,
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Cloudtrail {
+            signal_kind: "cloudtrail".to_string(),
+            event_id: event_id.to_string(),
+            event_name,
+            event_source,
+            principal_digest,
+            account_digest,
+            source_ip_digest,
+            request_digest,
+            response_digest,
+            mfa_authenticated: cloudtrail.mfa_authenticated,
+            region,
+            error_code,
+            error_message,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Actor(actor),
+            GraphNode::Asset(account_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
 fn network_payload(
     network: &NetworkConnectEvent,
+    host_id: Option<&str>,
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
+) -> Result<NormalizedPayload, GraphAdmissionError> {
     let process = bounded_text("network.process_name", &network.process_name, 4 * 1024)?;
-    let destination_ip = bounded_text("network.destination_ip", &network.destination_ip, 256)?;
+    let host_id = optional_text("network.host_id", host_id, 4 * 1024)?;
+    let destination_ip = normalized_indicator_value(
+        "network.destination_ip",
+        &ThreatIntelIndicatorType::IpAddress,
+        &network.destination_ip,
+    )?;
     let protocol = bounded_text("network.protocol", &network.protocol, 256)?;
-    let source_digest = digest_projection(&("process", &process))?;
-    let destination_digest =
-        digest_projection(&("destination", &destination_ip, network.destination_port))?;
+    let origin_scope_digest =
+        digest_projection(&("process_origin", source_id, host_id.as_deref()))?;
+    let source_digest = digest_projection(&("process", &origin_scope_digest, &process))?;
+    // IP identity is stable across ports so persisted threat-intelligence
+    // matches and network observations converge on the same asset node. Port
+    // and protocol remain authenticated event content below.
+    let destination_digest = digest_projection(&("indicator", "ip_address", &destination_ip))?;
     let process_node = ProcessNode::new(source_digest.clone(), source_digest.clone())?;
-    let asset_node = AssetNode::new(destination_digest.clone(), "network_destination")?;
+    let asset_node = AssetNode::new(destination_digest.clone(), "ip_address")?;
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event_node = EventNode::new("network_connect", event_node_source_record_id, observed_at)?;
     let content_digest = digest_projection(&(
@@ -1017,31 +1285,55 @@ fn network_payload(
         network.destination_port,
         &protocol,
     ))?;
-    Ok(TypedEvidencePayload::Network {
-        signal_kind: "network_connect".to_string(),
-        source_digest,
-        destination_digest,
-        protocol,
-        entity_ids: vec![process_node.node_id, asset_node.node_id, event_node.node_id],
-        content_digest,
+    let entity_ids = vec![
+        process_node.node_id.clone(),
+        asset_node.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Network {
+            signal_kind: "network_connect".to_string(),
+            source_digest,
+            destination_digest,
+            protocol,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Process(process_node),
+            GraphNode::Asset(asset_node),
+            GraphNode::Event(event_node),
+        ],
     })
 }
 
 fn dns_payload(
     dns: &DnsQueryEvent,
+    host_id: Option<&str>,
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
-) -> Result<TypedEvidencePayload, GraphAdmissionError> {
-    let query_name = bounded_text("dns.query_name", &dns.query_name, 4 * 1024)?;
+) -> Result<NormalizedPayload, GraphAdmissionError> {
+    let query_name = normalized_indicator_value(
+        "dns.query_name",
+        &ThreatIntelIndicatorType::Domain,
+        &dns.query_name,
+    )?;
     let query_type = bounded_text("dns.query_type", &dns.query_type, 256)?;
     let source_ip = optional_text("dns.source_ip", dns.source_ip.as_deref(), 256)?;
     let process_name = optional_text("dns.process_name", dns.process_name.as_deref(), 4 * 1024)?;
     let response_code = optional_text("dns.response_code", dns.response_code.as_deref(), 256)?;
-    let source_digest = digest_projection(&("dns_source", &source_ip, &process_name))?;
-    let destination_digest = digest_projection(&("dns_query", &query_name))?;
+    let host_id = optional_text("dns.host_id", host_id, 4 * 1024)?;
+    let source_digest = digest_projection(&(
+        "dns_source",
+        source_id,
+        host_id.as_deref(),
+        &source_ip,
+        &process_name,
+    ))?;
+    let destination_digest = digest_projection(&("indicator", "domain", &query_name))?;
     let source_node = AssetNode::new(source_digest.clone(), "dns_source")?;
-    let destination_node = AssetNode::new(destination_digest.clone(), "dns_name")?;
+    let destination_node = AssetNode::new(destination_digest.clone(), "domain")?;
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
     let event_node = EventNode::new("dns_query", event_node_source_record_id, observed_at)?;
     let content_digest = digest_projection(&(
@@ -1052,17 +1344,53 @@ fn dns_payload(
         &process_name,
         &response_code,
     ))?;
-    Ok(TypedEvidencePayload::Network {
-        signal_kind: "dns_query".to_string(),
-        source_digest,
-        destination_digest,
-        protocol: query_type,
-        entity_ids: vec![
-            source_node.node_id,
-            destination_node.node_id,
-            event_node.node_id,
+    let entity_ids = vec![
+        source_node.node_id.clone(),
+        destination_node.node_id.clone(),
+        event_node.node_id.clone(),
+    ];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Network {
+            signal_kind: "dns_query".to_string(),
+            source_digest,
+            destination_digest,
+            protocol: query_type,
+            entity_ids,
+            content_digest,
+        },
+        nodes: vec![
+            GraphNode::Asset(source_node),
+            GraphNode::Asset(destination_node),
+            GraphNode::Event(event_node),
         ],
-        content_digest,
+    })
+}
+
+fn infrastructure_payload<T: Serialize>(
+    signal_kind: &'static str,
+    node_name: &str,
+    payload: &T,
+    source_id: &str,
+    source_record_id: &str,
+    observed_at: GraphLogicalTime,
+) -> Result<NormalizedPayload, GraphAdmissionError> {
+    let node_name = bounded_text("infrastructure.node_name", node_name, 4 * 1024)?;
+    let node_digest = digest_projection(&("infrastructure_node", &node_name))?;
+    let node = AssetNode::new(node_digest, "infrastructure_node")?;
+    let event_record_id = event_node_source_record_id(source_id, source_record_id)?;
+    let event = EventNode::new(signal_kind, event_record_id, observed_at)?;
+    let content_digest = digest_projection(&(signal_kind, payload))?;
+    let entity_ids = vec![event.node_id.clone(), node.node_id.clone()];
+    Ok(NormalizedPayload {
+        payload: TypedEvidencePayload::Signal {
+            signal_kind: signal_kind.to_string(),
+            entity_ids,
+            relation_ids: Vec::new(),
+            supports: Vec::new(),
+            refutes: Vec::new(),
+            content_digest,
+        },
+        nodes: vec![GraphNode::Event(event), GraphNode::Asset(node)],
     })
 }
 
@@ -1196,6 +1524,22 @@ fn optional_text(
         .transpose()
 }
 
+fn normalized_indicator_value(
+    field: &str,
+    indicator_type: &ThreatIntelIndicatorType,
+    value: &str,
+) -> Result<String, GraphAdmissionError> {
+    let value = bounded_text(field, value, 4 * 1024)?;
+    let normalized = match indicator_type {
+        ThreatIntelIndicatorType::Domain => value.trim_end_matches('.').to_ascii_lowercase(),
+        ThreatIntelIndicatorType::IpAddress | ThreatIntelIndicatorType::FileHash => {
+            value.to_ascii_lowercase()
+        }
+        ThreatIntelIndicatorType::Url => value,
+    };
+    bounded_text(field, &normalized, 4 * 1024)
+}
+
 fn confidence_basis_points(confidence: f64) -> u16 {
     (confidence * 10_000.0).round() as u16
 }
@@ -1209,38 +1553,23 @@ fn indicator_kind(indicator_type: &ThreatIntelIndicatorType) -> &'static str {
     }
 }
 
-fn payload_kind(payload: &TelemetryPayload) -> &'static str {
-    match payload {
-        TelemetryPayload::ProcessStart(_) => "process_start",
-        TelemetryPayload::ProcessMemoryAccess(_) => "process_memory_access",
-        TelemetryPayload::NetworkConnect(_) => "network_connect",
-        TelemetryPayload::DnsQuery(_) => "dns_query",
-        TelemetryPayload::CloudTrail(_) => "cloudtrail",
-        TelemetryPayload::KubernetesAudit(_) => "kubernetes_audit",
-        TelemetryPayload::RegistryAccess(_) => "registry_access",
-        TelemetryPayload::RegistryPersistence(_) => "registry_persistence",
-        TelemetryPayload::FilePersistence(_) => "file_persistence",
-        TelemetryPayload::AuthenticationEvent(_) => "authentication_event",
-        TelemetryPayload::InfrastructureHealth(_) => "infrastructure_health",
-        TelemetryPayload::ThermalAnomaly(_) => "thermal_anomaly",
-        TelemetryPayload::ResourceExhaustion(_) => "resource_exhaustion",
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
         TETRAGON_FALLBACK_TIME_EVENT_ID_PREFIX, TETRAGON_FALLBACK_TIME_SOURCE_MARKER,
-        normalize_telemetry_event, normalize_threat_intel_entry,
+        normalize_telemetry_event, normalize_telemetry_event_for_graph,
+        normalize_threat_intel_entry,
     };
     use crate::hypothesis_graph::clock::FixedGraphClock;
     use swarm_core::hypothesis_graph::{
-        EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime, GraphProducerRole,
+        EvidenceSourceFamily, GraphAdmissionError, GraphLogicalTime, GraphNode, GraphProducerRole,
         TypedEvidencePayload,
     };
     use swarm_core::{
-        CloudTrailEvent, ProcessStartEvent, TelemetryEvent, TelemetryPayload, ThreatIntelEntry,
+        CloudTrailEvent, DnsQueryEvent, ExhaustedResource, InfrastructureHealthEvent,
+        NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent, ResourceExhaustionEvent,
+        TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity, ThreatIntelEntry,
         ThreatIntelIndicatorType,
     };
     use swarm_crypto::Keypair;
@@ -1296,6 +1625,303 @@ mod tests {
         assert!(!encoded.contains("token=secret"));
         assert!(!encoded.contains("host-secret-that-must-not-be-causal"));
         envelope.validate().unwrap();
+    }
+
+    #[test]
+    fn network_process_identity_is_host_scoped_stable_and_redacted() {
+        let event = |event_id: &str, host_id: Option<&str>, source: &str| TelemetryEvent {
+            source: source.to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: host_id.map(str::to_string),
+            payload: TelemetryPayload::NetworkConnect(NetworkConnectEvent {
+                process_name: "curl".to_string(),
+                destination_ip: "203.0.113.10".to_string(),
+                destination_port: 443,
+                protocol: "tcp".to_string(),
+            }),
+        };
+        let normalize = |event: &TelemetryEvent| {
+            normalize_telemetry_event(
+                event,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-network",
+            )
+            .unwrap()
+        };
+        let first = normalize(&event("network:1", Some("host-secret-a"), "sensor-a"));
+        let same_host = normalize(&event("network:2", Some("host-secret-a"), "sensor-a"));
+        let other_host = normalize(&event("network:3", Some("host-secret-b"), "sensor-a"));
+        let source_fallback_a = normalize(&event("network:4", None, "sensor-a"));
+        let source_fallback_b = normalize(&event("network:5", None, "sensor-b"));
+        let other_source = normalize(&event("network:6", Some("host-secret-a"), "sensor-b"));
+        let process_start = normalize(&TelemetryEvent {
+            source: "sensor-a".to_string(),
+            event_id: "process:1".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-secret-a".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "<none>".to_string(),
+                process_name: "curl".to_string(),
+                command_line: "curl https://203.0.113.10".to_string(),
+                user: None,
+                executable_path: Some("/usr/bin/curl".to_string()),
+                signer: None,
+                signature_valid: None,
+            }),
+        });
+        let parented_process_start = normalize(&TelemetryEvent {
+            source: "sensor-a".to_string(),
+            event_id: "process:2".to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some("host-secret-a".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: "bash".to_string(),
+                process_name: "curl".to_string(),
+                command_line: "curl https://203.0.113.10".to_string(),
+                user: None,
+                executable_path: Some("/usr/bin/curl".to_string()),
+                signer: None,
+                signature_valid: None,
+            }),
+        });
+        let source_digest = |evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope| {
+            let TypedEvidencePayload::Network { source_digest, .. } = &evidence.payload else {
+                panic!("network telemetry must produce network evidence");
+            };
+            source_digest.clone()
+        };
+
+        assert_eq!(source_digest(&first), source_digest(&same_host));
+        assert_ne!(source_digest(&first), source_digest(&other_host));
+        assert_ne!(source_digest(&first), source_digest(&other_source));
+        assert_ne!(
+            source_digest(&source_fallback_a),
+            source_digest(&source_fallback_b)
+        );
+        assert_eq!(first.entity_ids()[0], process_start.entity_ids()[0]);
+        assert!(
+            parented_process_start
+                .entity_ids()
+                .contains(&first.entity_ids()[0]),
+            "parented process evidence must retain the network-compatible correlation node"
+        );
+        let encoded = serde_json::to_string(&first).unwrap();
+        assert!(!encoded.contains("host-secret-a"));
+    }
+
+    #[test]
+    fn process_memory_identity_is_role_independent_host_scoped_and_redacted() {
+        let event = |event_id: &str, host_id: &str, source: &str, target: &str| TelemetryEvent {
+            source: "sensor-a".to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some(host_id.to_string()),
+            payload: TelemetryPayload::ProcessMemoryAccess(ProcessMemoryAccessEvent {
+                source_process: source.to_string(),
+                target_process: target.to_string(),
+                allocation_type: "VirtualAllocEx".to_string(),
+                protection_flags: vec!["PAGE_EXECUTE_READWRITE".to_string()],
+                region_size: 4_096,
+                call_stack_hint: None,
+            }),
+        };
+        let normalize = |event: &TelemetryEvent| {
+            normalize_telemetry_event(
+                event,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-process-memory",
+            )
+            .unwrap()
+        };
+        let first = normalize(&event(
+            "memory:1",
+            "host-secret-a",
+            "process-a",
+            "process-b",
+        ));
+        let continuation = normalize(&event(
+            "memory:2",
+            "host-secret-a",
+            "process-b",
+            "process-c",
+        ));
+        let other_host = normalize(&event(
+            "memory:3",
+            "host-secret-b",
+            "process-b",
+            "process-c",
+        ));
+
+        assert_eq!(first.entity_ids()[1], continuation.entity_ids()[0]);
+        assert_ne!(continuation.entity_ids()[0], other_host.entity_ids()[0]);
+        let encoded = serde_json::to_string(&first).unwrap();
+        assert!(!encoded.contains("host-secret-a"));
+        assert!(!encoded.contains("process-a"));
+        assert!(!encoded.contains("process-b"));
+    }
+
+    #[test]
+    fn dns_source_identity_is_host_scoped_stable_and_redacted() {
+        let event = |event_id: &str, host_id: Option<&str>, source: &str| TelemetryEvent {
+            source: source.to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: host_id.map(str::to_string),
+            payload: TelemetryPayload::DnsQuery(DnsQueryEvent {
+                query_name: "example.test".to_string(),
+                query_type: "A".to_string(),
+                source_ip: None,
+                process_name: Some("curl".to_string()),
+                response_code: Some("NOERROR".to_string()),
+            }),
+        };
+        let normalize = |event: &TelemetryEvent| {
+            normalize_telemetry_event(
+                event,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-dns",
+            )
+            .unwrap()
+        };
+        let first = normalize(&event("dns:1", Some("host-secret-a"), "sensor-a"));
+        let same_host = normalize(&event("dns:2", Some("host-secret-a"), "sensor-a"));
+        let other_host = normalize(&event("dns:3", Some("host-secret-b"), "sensor-a"));
+        let source_fallback_a = normalize(&event("dns:4", None, "sensor-a"));
+        let source_fallback_b = normalize(&event("dns:5", None, "sensor-b"));
+        let source_digest = |evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope| {
+            let TypedEvidencePayload::Network { source_digest, .. } = &evidence.payload else {
+                panic!("DNS telemetry must produce network evidence");
+            };
+            source_digest.clone()
+        };
+
+        assert_eq!(source_digest(&first), source_digest(&same_host));
+        assert_ne!(source_digest(&first), source_digest(&other_host));
+        assert_ne!(
+            source_digest(&source_fallback_a),
+            source_digest(&source_fallback_b)
+        );
+        let encoded = serde_json::to_string(&first).unwrap();
+        assert!(!encoded.contains("host-secret-a"));
+    }
+
+    #[test]
+    fn graph_normalization_retains_every_payload_and_parent_node_identity() {
+        let normalized = normalize_telemetry_event_for_graph(
+            &process_event(),
+            &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+            &key(),
+            GraphProducerRole::Normalizer,
+            "normalizer-process-graph",
+        )
+        .unwrap();
+        let TypedEvidencePayload::Process { entity_ids, .. } = &normalized.evidence.payload else {
+            panic!("process telemetry must produce process evidence");
+        };
+        for entity_id in entity_ids {
+            assert!(
+                normalized.nodes.iter().any(|node| node.id() == entity_id),
+                "payload entity {entity_id:?} was not retained"
+            );
+        }
+        for parent_id in normalized.nodes.iter().filter_map(|node| match node {
+            GraphNode::Process(process) => process.parent_node_id.as_ref(),
+            _ => None,
+        }) {
+            assert!(
+                normalized.nodes.iter().any(|node| node.id() == parent_id),
+                "process parent {parent_id:?} was not retained"
+            );
+        }
+    }
+
+    #[test]
+    fn infrastructure_detector_payloads_admit_as_redacted_graph_evidence() {
+        let payloads = [
+            (
+                "infrastructure_health",
+                TelemetryPayload::InfrastructureHealth(InfrastructureHealthEvent {
+                    node_name: "node-secret-health".to_string(),
+                    cpu_usage_percent: 91.0,
+                    cpu_frequency_mhz: 3_200.0,
+                    load_average_1m: 8.0,
+                    load_average_5m: 7.0,
+                    load_average_15m: 6.0,
+                    memory_usage_percent: 88.0,
+                    memory_available_bytes: 1_024,
+                    disk_usage_percent: 72.0,
+                    disk_io_latency_ms: 45.0,
+                    network_rx_bytes: 11,
+                    network_tx_bytes: 12,
+                    network_rx_errors: 2,
+                    network_tx_errors: 3,
+                    failure_probability: 0.9,
+                    prediction_confidence: 0.95,
+                    time_to_failure_secs: 120.0,
+                    collection_duration_ms: 25.0,
+                }),
+            ),
+            (
+                "thermal_anomaly",
+                TelemetryPayload::ThermalAnomaly(ThermalAnomalyEvent {
+                    node_name: "node-secret-thermal".to_string(),
+                    temperature_celsius: 96.0,
+                    cpu_throttled: true,
+                    trend_slope: 1.5,
+                    severity: ThermalSeverity::Critical,
+                    estimated_time_to_critical_secs: 30.0,
+                }),
+            ),
+            (
+                "resource_exhaustion",
+                TelemetryPayload::ResourceExhaustion(ResourceExhaustionEvent {
+                    node_name: "node-secret-resource".to_string(),
+                    resource_kind: ExhaustedResource::Memory,
+                    utilization_percent: 99.0,
+                    current_value: 990,
+                    capacity_value: 1_000,
+                    oom_kill_count: Some(4),
+                    swap_used_bytes: Some(512),
+                    is_new: true,
+                }),
+            ),
+        ];
+
+        for (index, (expected_kind, payload)) in payloads.into_iter().enumerate() {
+            let event = TelemetryEvent {
+                source: "sentinel".to_string(),
+                event_id: format!("record:infrastructure:{index}"),
+                timestamp: 1_700_000_000,
+                host_id: Some("host-secret-that-must-not-be-causal".to_string()),
+                payload,
+            };
+            let envelope = normalize_telemetry_event(
+                &event,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-infrastructure",
+            )
+            .unwrap();
+
+            assert_eq!(envelope.source_family, EvidenceSourceFamily::Infrastructure);
+            assert!(matches!(
+                &envelope.payload,
+                TypedEvidencePayload::Signal { signal_kind, entity_ids, .. }
+                    if signal_kind == expected_kind && entity_ids.len() == 2
+            ));
+            let encoded = serde_json::to_string(&envelope).unwrap();
+            assert!(!encoded.contains("node-secret"));
+            assert!(!encoded.contains("host-secret"));
+            envelope.validate().unwrap();
+        }
     }
 
     #[test]

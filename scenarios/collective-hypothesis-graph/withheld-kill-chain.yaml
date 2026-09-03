@@ -11,37 +11,41 @@ events:
     source_family: identity
     logical_time_ms: 1700000010100
     signal_kind: anomalous_service_authentication
+    telemetry_profile: successful_authentication
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:actor:principal-a, node:credential:role-a]
-    relation_ids: [edge:principal-assumed-role]
+    entity_ids: [node:actor:identity-principal-a, node:credential:identity-role-a, node:event:withheld:initial-access]
+    relation_ids: [edge:identity-principal-authenticated]
   - event_id: event:withheld:execution
     evidence_id: evidence:withheld:execution
     source_family: process
     logical_time_ms: 1700000010200
     signal_kind: interpreter_spawn
+    telemetry_profile: unsigned_execution
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:process:runner-a]
-    relation_ids: [edge:credential-used-by-process]
+    entity_ids: [node:process:runner-a, node:event:withheld:execution, node:actor:process-user-a]
+    relation_ids: [edge:process-user-launched-process]
   - event_id: event:withheld:credential-access
     evidence_id: evidence:withheld:credential-access
     source_family: cloudtrail
     logical_time_ms: 1700000010300
     signal_kind: secret_read_after_role_assumption
+    telemetry_profile: assume_role
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:credential:role-a]
-    relation_ids: [edge:principal-assumed-role]
+    entity_ids: [node:actor:cloudtrail-principal-a, node:asset:aws-account-a, node:event:withheld:credential-access]
+    relation_ids: [edge:cloudtrail-principal-assumed-account]
   - event_id: event:withheld:command-and-control
     evidence_id: evidence:withheld:command-and-control
     source_family: network
     logical_time_ms: 1700000010500
     signal_kind: periodic_encrypted_egress
+    telemetry_profile: network_contact
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:asset:workload-a]
-    relation_ids: [edge:workload-contacted-destination]
+    entity_ids: [node:process:runner-a, node:asset:destination-a, node:event:withheld:command-and-control]
+    relation_ids: [edge:process-contacted-destination]
 expected_kill_chain:
   - stage_id: stage:initial-access
     status: observed

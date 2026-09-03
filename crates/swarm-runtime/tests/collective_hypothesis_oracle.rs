@@ -48,6 +48,22 @@ enum StageStatus {
     MissingEvidence,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FixtureTelemetryProfile {
+    UnsignedExecution,
+    SignedExecution,
+    SuccessfulAuthentication,
+    FailedAuthentication,
+    WorkloadCreate,
+    WorkloadUpdate,
+    AssumeRole,
+    CreateAccessKey,
+    NetworkContact,
+    HighConfidenceIndicator,
+    LowConfidenceIndicator,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LogicalClock {
@@ -69,9 +85,18 @@ struct TruthContract {
     hypothesis_ids: Vec<String>,
     selected_hypothesis_id: String,
     node_ids: Vec<String>,
-    causal_edge_ids: Vec<String>,
+    causal_edges: Vec<CausalEdgeContract>,
     kill_chain_stage_ids: Vec<String>,
     required_evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CausalEdgeContract {
+    edge_id: String,
+    from: String,
+    to: String,
+    relation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -116,6 +141,7 @@ struct MetricDenominators {
 struct MetricThresholds {
     min_hypothesis_time_reduction_bps: u16,
     min_attack_chain_recall_gain_bps: u16,
+    min_causal_edge_recall_bps: u16,
     max_false_causal_edge_rate_bps: u16,
     max_duplicate_work_rate_bps: u16,
     min_evidence_coverage_bps: u16,
@@ -154,6 +180,7 @@ struct FixtureEvent {
     source_family: SourceFamily,
     logical_time_ms: i64,
     signal_kind: String,
+    telemetry_profile: FixtureTelemetryProfile,
     supports: Vec<String>,
     refutes: Vec<String>,
     entity_ids: Vec<String>,
@@ -193,6 +220,7 @@ struct OracleDigests {
 struct SingleAgentBaseline {
     median_hypothesis_time_ms: u64,
     attack_chain_recall_bps: u16,
+    causal_edge_recall_bps: u16,
     false_causal_edge_rate_bps: u16,
     duplicate_work_rate_bps: u16,
     evidence_coverage_bps: u16,
@@ -288,6 +316,12 @@ fn validate_fixture(
         .checked_add(manifest.limits.max_virtual_ms as i64)
         .ok_or_else(|| "virtual clock overflows".to_string())?;
     let mut prior_time = fixture.seed_time_ms;
+    let truth_edge_ids = manifest
+        .truth
+        .causal_edges
+        .iter()
+        .map(|edge| edge.edge_id.as_str())
+        .collect::<BTreeSet<_>>();
     for event in &fixture.events {
         if event.signal_kind.trim().is_empty()
             || event.supports.is_empty()
@@ -298,6 +332,37 @@ fn validate_fixture(
         }
         if event.logical_time_ms <= prior_time || event.logical_time_ms > max_time {
             return Err(format!("event {} has invalid logical time", event.event_id));
+        }
+        let profile_matches_family = matches!(
+            (event.source_family, event.telemetry_profile),
+            (
+                SourceFamily::Process,
+                FixtureTelemetryProfile::UnsignedExecution
+                    | FixtureTelemetryProfile::SignedExecution
+            ) | (
+                SourceFamily::Identity,
+                FixtureTelemetryProfile::SuccessfulAuthentication
+                    | FixtureTelemetryProfile::FailedAuthentication
+            ) | (
+                SourceFamily::Kubernetes,
+                FixtureTelemetryProfile::WorkloadCreate | FixtureTelemetryProfile::WorkloadUpdate
+            ) | (
+                SourceFamily::Cloudtrail,
+                FixtureTelemetryProfile::AssumeRole | FixtureTelemetryProfile::CreateAccessKey
+            ) | (
+                SourceFamily::Network,
+                FixtureTelemetryProfile::NetworkContact
+            ) | (
+                SourceFamily::ThreatIntelligence,
+                FixtureTelemetryProfile::HighConfidenceIndicator
+                    | FixtureTelemetryProfile::LowConfidenceIndicator
+            )
+        );
+        if !profile_matches_family {
+            return Err(format!(
+                "event {} has a telemetry profile incompatible with its source family",
+                event.event_id
+            ));
         }
         prior_time = event.logical_time_ms;
         if event
@@ -314,6 +379,16 @@ fn validate_fixture(
         if event.supports.iter().any(|id| event.refutes.contains(id)) {
             return Err(format!(
                 "event {} both supports and refutes a hypothesis",
+                event.event_id
+            ));
+        }
+        if event
+            .relation_ids
+            .iter()
+            .any(|edge_id| !truth_edge_ids.contains(edge_id.as_str()))
+        {
+            return Err(format!(
+                "event {} names an unknown causal edge",
                 event.event_id
             ));
         }
@@ -393,7 +468,40 @@ fn validate_manifest_and_corpus(
     }
     nonempty_unique(&manifest.truth.hypothesis_ids, "truth hypothesis IDs")?;
     nonempty_unique(&manifest.truth.node_ids, "truth node IDs")?;
-    nonempty_unique(&manifest.truth.causal_edge_ids, "truth edge IDs")?;
+    let truth_edge_ids = manifest
+        .truth
+        .causal_edges
+        .iter()
+        .map(|edge| edge.edge_id.clone())
+        .collect::<Vec<_>>();
+    nonempty_unique(&truth_edge_ids, "truth edge IDs")?;
+    let valid_relations = [
+        "observed_in",
+        "spawns",
+        "uses",
+        "contacts",
+        "assumes",
+        "creates",
+        "depends_on",
+        "supports",
+        "refutes",
+        "contradicts",
+        "matches_indicator",
+    ];
+    if manifest.truth.causal_edges.iter().any(|edge| {
+        edge.from == edge.to
+            || !manifest.truth.node_ids.contains(&edge.from)
+            || !manifest.truth.node_ids.contains(&edge.to)
+            || !valid_relations.contains(&edge.relation.as_str())
+    }) || !all_unique(
+        manifest
+            .truth
+            .causal_edges
+            .iter()
+            .map(|edge| format!("{}|{}|{}", edge.from, edge.to, edge.relation)),
+    ) {
+        return Err("truth causal edges lack unique valid endpoints and relations".to_string());
+    }
     nonempty_unique(
         &manifest.truth.kill_chain_stage_ids,
         "truth kill-chain stage IDs",
@@ -436,7 +544,7 @@ fn validate_manifest_and_corpus(
     let denominators = &manifest.metrics.denominators;
     if denominators.adjudicated_cases == 0
         || denominators.attack_chain_stages != manifest.truth.kill_chain_stage_ids.len() as u64
-        || denominators.causal_edges != manifest.truth.causal_edge_ids.len() as u64
+        || denominators.causal_edges != manifest.truth.causal_edges.len() as u64
         || denominators.logical_tasks != manifest.task_identities.len() as u64
         || denominators.evidence_claims == 0
     {
@@ -445,6 +553,7 @@ fn validate_manifest_and_corpus(
     let thresholds = &manifest.metrics.thresholds;
     if thresholds.min_hypothesis_time_reduction_bps != 2_000
         || thresholds.min_attack_chain_recall_gain_bps != 1_000
+        || thresholds.min_causal_edge_recall_bps != 8_000
         || thresholds.max_false_causal_edge_rate_bps != 1_000
         || thresholds.max_duplicate_work_rate_bps != 500
         || thresholds.min_evidence_coverage_bps != 9_000
@@ -569,6 +678,7 @@ fn validate_baseline(
         || control.logical_work_units == 0
         || [
             control.attack_chain_recall_bps,
+            control.causal_edge_recall_bps,
             control.false_causal_edge_rate_bps,
             control.duplicate_work_rate_bps,
             control.evidence_coverage_bps,
@@ -625,7 +735,7 @@ fn benchmark_manifest_is_strict() {
     assert!(validate_manifest_and_corpus(&duplicate_id, &training, &withheld).is_err());
 
     let mut absent_truth = manifest.clone();
-    absent_truth.truth.causal_edge_ids.clear();
+    absent_truth.truth.causal_edges.clear();
     assert!(validate_manifest_and_corpus(&absent_truth, &training, &withheld).is_err());
 
     let mut overlapping_withheld = withheld.clone();

@@ -64,7 +64,7 @@ fn build_platform_openapi_spec() -> Value {
         "info": {
             "title": "Swarm Team Six Platform API",
             "version": format!("v2-schema-{CURRENT_OPERATOR_API_SCHEMA_VERSION}"),
-            "summary": "Authenticated read surface for findings, incidents, runtime status, posture, and evasion coverage.",
+            "summary": "Authenticated read surface for findings, incidents, collective hypotheses, runtime status, posture, and evasion coverage.",
             "description": "Machine-readable contract for the shipped `/v2/api/*` read surface on the detect server. Requests require both an operator bearer token and a platform API key unless a scoped Providence context token is used on the supported read routes."
         },
         "servers": [
@@ -164,6 +164,63 @@ fn build_platform_openapi_spec() -> Value {
                     "responses": standard_platform_responses("#/components/schemas/PlatformRuntimeStatusPage")
                 }
             },
+            "/v2/api/hypothesis-graphs": {
+                "get": {
+                    "tags": ["platform", "collective-reasoning"],
+                    "summary": "List collective hypothesis graphs",
+                    "operationId": "list_hypothesis_graphs",
+                    "description": "Returns the enabled runtime graph summary. The collection is empty when collective reasoning is disabled.",
+                    "parameters": [
+                        { "$ref": "#/components/parameters/SchemaVersionHeader" },
+                        { "$ref": "#/components/parameters/Cursor" },
+                        { "$ref": "#/components/parameters/PageSize" }
+                    ],
+                    "responses": standard_platform_responses("#/components/schemas/HypothesisGraphSummariesPage")
+                }
+            },
+            "/v2/api/hypothesis-graphs/{graph_id}": {
+                "get": {
+                    "tags": ["platform", "collective-reasoning"],
+                    "summary": "Read a collective hypothesis graph",
+                    "operationId": "get_hypothesis_graph",
+                    "description": "Returns durable evidence, causal edges, competing hypotheses, task state, projected strategy memory, and graph metrics.",
+                    "parameters": [
+                        { "$ref": "#/components/parameters/SchemaVersionHeader" },
+                        { "$ref": "#/components/parameters/GraphIdPath" }
+                    ],
+                    "responses": hypothesis_graph_responses("#/components/schemas/HypothesisGraphProjectionPage")
+                }
+            },
+            "/v2/api/hypothesis-graphs/{graph_id}/tasks": {
+                "get": {
+                    "tags": ["platform", "collective-reasoning"],
+                    "summary": "List durable graph tasks",
+                    "operationId": "list_hypothesis_graph_tasks",
+                    "description": "Returns the graph's bounded durable claim, lease, and terminal task records.",
+                    "parameters": [
+                        { "$ref": "#/components/parameters/SchemaVersionHeader" },
+                        { "$ref": "#/components/parameters/GraphIdPath" },
+                        { "$ref": "#/components/parameters/Cursor" },
+                        { "$ref": "#/components/parameters/PageSize" }
+                    ],
+                    "responses": hypothesis_graph_responses("#/components/schemas/HypothesisGraphTasksPage")
+                }
+            },
+            "/v2/api/hypothesis-graphs/{graph_id}/memory": {
+                "get": {
+                    "tags": ["platform", "collective-reasoning"],
+                    "summary": "List projected strategy memory",
+                    "operationId": "list_hypothesis_graph_memory",
+                    "description": "Returns authenticated strategy-memory records projected only after their terminal graph publication committed.",
+                    "parameters": [
+                        { "$ref": "#/components/parameters/SchemaVersionHeader" },
+                        { "$ref": "#/components/parameters/GraphIdPath" },
+                        { "$ref": "#/components/parameters/Cursor" },
+                        { "$ref": "#/components/parameters/PageSize" }
+                    ],
+                    "responses": hypothesis_graph_responses("#/components/schemas/HypothesisGraphMemoryPage")
+                }
+            },
             "/v2/api/stream/findings": {
                 "get": {
                     "tags": ["platform"],
@@ -237,6 +294,13 @@ fn build_platform_openapi_spec() -> Value {
                     "required": true,
                     "description": "Host identifier for the posture lookup.",
                     "schema": { "type": "string" }
+                },
+                "GraphIdPath": {
+                    "name": "graph_id",
+                    "in": "path",
+                    "required": true,
+                    "description": "Stable key-derived collective hypothesis graph identifier.",
+                    "schema": { "type": "string", "minLength": 1 }
                 }
             },
             "schemas": {
@@ -404,6 +468,79 @@ fn build_platform_openapi_spec() -> Value {
                     "additionalProperties": false
                 },
                 "PlatformRuntimeStatusPage": platform_page_schema("PlatformRuntimeStatus"),
+                "GraphServiceMetrics": {
+                    "type": "object",
+                    "required": ["submissions", "submission_failures", "completed_acquisitions", "completed_challenges", "completed_falsifications", "falsification_no_findings", "failed_acquisitions", "failed_challenges", "failed_falsifications", "memory_records_projected", "memory_projection_failures", "campaign_rotations"],
+                    "properties": {
+                        "submissions": { "type": "integer", "minimum": 0 },
+                        "submission_failures": { "type": "integer", "minimum": 0 },
+                        "completed_acquisitions": { "type": "integer", "minimum": 0 },
+                        "completed_challenges": { "type": "integer", "minimum": 0 },
+                        "completed_falsifications": { "type": "integer", "minimum": 0 },
+                        "falsification_no_findings": { "type": "integer", "minimum": 0 },
+                        "failed_acquisitions": { "type": "integer", "minimum": 0 },
+                        "failed_challenges": { "type": "integer", "minimum": 0 },
+                        "failed_falsifications": { "type": "integer", "minimum": 0 },
+                        "memory_records_projected": { "type": "integer", "minimum": 0 },
+                        "memory_projection_failures": { "type": "integer", "minimum": 0 },
+                        "campaign_rotations": { "type": "integer", "minimum": 0 }
+                    },
+                    "additionalProperties": false
+                },
+                "HypothesisGraphSummary": {
+                    "type": "object",
+                    "required": ["graph_id", "generation", "graph_version", "evidence_count", "node_count", "edge_count", "contradiction_count", "hypothesis_count", "pending_task_count", "completed_task_count", "failed_task_count", "memory_count", "logical_time_high_water", "metrics"],
+                    "properties": {
+                        "graph_id": { "type": "string" },
+                        "generation": { "type": "integer", "minimum": 0 },
+                        "graph_version": { "type": "integer", "minimum": 0 },
+                        "evidence_count": { "type": "integer", "minimum": 0 },
+                        "node_count": { "type": "integer", "minimum": 0 },
+                        "edge_count": { "type": "integer", "minimum": 0 },
+                        "contradiction_count": { "type": "integer", "minimum": 0 },
+                        "hypothesis_count": { "type": "integer", "minimum": 0 },
+                        "pending_task_count": { "type": "integer", "minimum": 0 },
+                        "completed_task_count": { "type": "integer", "minimum": 0 },
+                        "failed_task_count": { "type": "integer", "minimum": 0 },
+                        "memory_count": { "type": "integer", "minimum": 0 },
+                        "logical_time_high_water": { "type": "integer", "minimum": 0 },
+                        "metrics": { "$ref": "#/components/schemas/GraphServiceMetrics" }
+                    },
+                    "additionalProperties": false
+                },
+                "HypothesisGraphProjection": {
+                    "type": "object",
+                    "required": ["graph_id", "generation", "digest", "graph", "hypotheses", "tasks", "terminal_publications", "memory", "logical_time_high_water", "metrics"],
+                    "properties": {
+                        "graph_id": { "type": "string" },
+                        "generation": { "type": "integer", "minimum": 0 },
+                        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                        "graph": generic_object("Typed durable causal graph including evidence and signed edges."),
+                        "hypotheses": {
+                            "type": "object",
+                            "description": "Competing hypothesis records keyed by hypothesis ID.",
+                            "additionalProperties": generic_object_schema("Typed hypothesis record.")
+                        },
+                        "tasks": {
+                            "type": "array",
+                            "items": { "$ref": "#/components/schemas/HypothesisTaskRecord" }
+                        },
+                        "terminal_publications": { "type": "integer", "minimum": 0 },
+                        "memory": {
+                            "type": "array",
+                            "items": { "$ref": "#/components/schemas/StrategyMemoryRecord" }
+                        },
+                        "logical_time_high_water": { "type": "integer", "minimum": 0 },
+                        "metrics": { "$ref": "#/components/schemas/GraphServiceMetrics" }
+                    },
+                    "additionalProperties": false
+                },
+                "HypothesisTaskRecord": generic_object_schema("Typed durable graph task with claim, lease, completion, and terminal history."),
+                "StrategyMemoryRecord": generic_object_schema("Authenticated strategy-memory record projected from the committed terminal outbox."),
+                "HypothesisGraphSummariesPage": platform_page_schema("HypothesisGraphSummary"),
+                "HypothesisGraphProjectionPage": platform_page_schema("HypothesisGraphProjection"),
+                "HypothesisGraphTasksPage": platform_page_schema("HypothesisTaskRecord"),
+                "HypothesisGraphMemoryPage": platform_page_schema("StrategyMemoryRecord"),
                 "EvasionThreatClassCoverage": {
                     "type": "object",
                     "required": ["threat_class", "total_payloads", "detected_payloads", "catch_rate", "scenario_count", "techniques"],
@@ -511,6 +648,14 @@ fn standard_platform_responses(schema_ref: &str) -> Value {
         "429": rate_limit_response(),
         "503": error_response("Requested platform API surface is unavailable")
     })
+}
+
+fn hypothesis_graph_responses(schema_ref: &str) -> Value {
+    let mut responses = standard_platform_responses(schema_ref);
+    responses["404"] = error_response(
+        "Collective hypothesis graph is disabled or the requested graph ID does not exist",
+    );
+    responses
 }
 
 fn error_response(description: &str) -> Value {

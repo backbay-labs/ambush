@@ -32,18 +32,41 @@ truth:
     - hypothesis:authorized-automation
   selected_hypothesis_id: hypothesis:credential-compromise
   node_ids:
-    - node:actor:principal-a
-    - node:asset:workload-a
-    - node:credential:role-a
+    - node:actor:process-user-a
     - node:process:runner-a
-    - node:event:seed-a
-  causal_edge_ids:
-    - edge:credential-used-by-process
-    - edge:process-spawned-network-client
-    - edge:principal-assumed-role
-    - edge:role-created-workload
-    - edge:workload-contacted-destination
-    - edge:indicator-matched-destination
+    - node:actor:identity-principal-a
+    - node:credential:identity-role-a
+    - node:actor:kubernetes-principal-a
+    - node:asset:workload-a
+    - node:actor:cloudtrail-principal-a
+    - node:asset:aws-account-a
+    - node:asset:destination-a
+    - node:event:threat-intelligence:support
+  causal_edges:
+    - edge_id: edge:process-user-launched-process
+      from: node:actor:process-user-a
+      to: node:process:runner-a
+      relation: uses
+    - edge_id: edge:identity-principal-authenticated
+      from: node:actor:identity-principal-a
+      to: node:credential:identity-role-a
+      relation: assumes
+    - edge_id: edge:kubernetes-principal-created-workload
+      from: node:actor:kubernetes-principal-a
+      to: node:asset:workload-a
+      relation: creates
+    - edge_id: edge:cloudtrail-principal-assumed-account
+      from: node:actor:cloudtrail-principal-a
+      to: node:asset:aws-account-a
+      relation: assumes
+    - edge_id: edge:process-contacted-destination
+      from: node:process:runner-a
+      to: node:asset:destination-a
+      relation: contacts
+    - edge_id: edge:threat-event-matched-destination
+      from: node:event:threat-intelligence:support
+      to: node:asset:destination-a
+      relation: matches_indicator
   kill_chain_stage_ids:
     - stage:initial-access
     - stage:execution
@@ -89,6 +112,7 @@ metrics:
   thresholds:
     min_hypothesis_time_reduction_bps: 2000
     min_attack_chain_recall_gain_bps: 1000
+    min_causal_edge_recall_bps: 8000
     max_false_causal_edge_rate_bps: 1000
     max_duplicate_work_rate_bps: 500
     min_evidence_coverage_bps: 9000

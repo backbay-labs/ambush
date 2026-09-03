@@ -11,108 +11,120 @@ events:
     source_family: process
     logical_time_ms: 1700000000100
     signal_kind: unsigned_parent_child_execution
+    telemetry_profile: unsigned_execution
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:process:runner-a, node:event:seed-a]
-    relation_ids: [edge:credential-used-by-process]
+    entity_ids: [node:process:runner-a, node:event:process:support, node:actor:process-user-a]
+    relation_ids: [edge:process-user-launched-process]
   - event_id: event:process:refute
     evidence_id: evidence:process:refute
     source_family: process
     logical_time_ms: 1700000000200
     signal_kind: approved_automation_signature
+    telemetry_profile: signed_execution
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:process:runner-a]
+    entity_ids: [node:process:runner-a, node:event:process:refute, node:actor:process-user-a]
     relation_ids: []
   - event_id: event:identity:support
     evidence_id: evidence:identity:support
     source_family: identity
     logical_time_ms: 1700000000300
     signal_kind: anomalous_role_assumption
+    telemetry_profile: successful_authentication
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:actor:principal-a, node:credential:role-a]
-    relation_ids: [edge:principal-assumed-role]
+    entity_ids: [node:actor:identity-principal-a, node:credential:identity-role-a, node:event:identity:support]
+    relation_ids: [edge:identity-principal-authenticated]
   - event_id: event:identity:refute
     evidence_id: evidence:identity:refute
     source_family: identity
     logical_time_ms: 1700000000400
     signal_kind: approved_change_window
+    telemetry_profile: failed_authentication
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:actor:principal-a]
+    entity_ids: [node:actor:identity-principal-a, node:credential:identity-role-a, node:event:identity:refute]
     relation_ids: []
   - event_id: event:kubernetes:support
     evidence_id: evidence:kubernetes:support
     source_family: kubernetes
     logical_time_ms: 1700000000500
     signal_kind: privileged_workload_creation
+    telemetry_profile: workload_create
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:asset:workload-a, node:credential:role-a]
-    relation_ids: [edge:role-created-workload]
+    entity_ids: [node:actor:kubernetes-principal-a, node:asset:workload-a, node:event:kubernetes:support]
+    relation_ids: [edge:kubernetes-principal-created-workload]
   - event_id: event:kubernetes:refute
     evidence_id: evidence:kubernetes:refute
     source_family: kubernetes
     logical_time_ms: 1700000000600
     signal_kind: deployment_controller_annotation
+    telemetry_profile: workload_update
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:asset:workload-a]
+    entity_ids: [node:actor:kubernetes-principal-a, node:asset:workload-a, node:event:kubernetes:refute]
     relation_ids: []
   - event_id: event:cloudtrail:support
     evidence_id: evidence:cloudtrail:support
     source_family: cloudtrail
     logical_time_ms: 1700000000700
     signal_kind: role_used_from_new_source
+    telemetry_profile: assume_role
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:actor:principal-a, node:credential:role-a]
-    relation_ids: [edge:principal-assumed-role]
+    entity_ids: [node:actor:cloudtrail-principal-a, node:asset:aws-account-a, node:event:cloudtrail:support]
+    relation_ids: [edge:cloudtrail-principal-assumed-account]
   - event_id: event:cloudtrail:refute
     evidence_id: evidence:cloudtrail:refute
     source_family: cloudtrail
     logical_time_ms: 1700000000800
     signal_kind: change_ticket_tag_present
+    telemetry_profile: create_access_key
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:credential:role-a]
+    entity_ids: [node:actor:cloudtrail-principal-a, node:asset:aws-account-a, node:event:cloudtrail:refute]
     relation_ids: []
   - event_id: event:network:support
     evidence_id: evidence:network:support
     source_family: network
     logical_time_ms: 1700000000900
     signal_kind: rare_egress_destination
+    telemetry_profile: network_contact
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:asset:workload-a]
-    relation_ids: [edge:workload-contacted-destination]
+    entity_ids: [node:process:runner-a, node:asset:destination-a, node:event:network:support]
+    relation_ids: [edge:process-contacted-destination]
   - event_id: event:network:refute
     evidence_id: evidence:network:refute
     source_family: network
     logical_time_ms: 1700000001000
     signal_kind: documented_vendor_endpoint
+    telemetry_profile: network_contact
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:asset:workload-a]
+    entity_ids: [node:process:runner-a, node:asset:destination-a, node:event:network:refute]
     relation_ids: []
   - event_id: event:threat-intelligence:support
     evidence_id: evidence:threat-intelligence:support
     source_family: threat_intelligence
     logical_time_ms: 1700000001100
     signal_kind: active_campaign_indicator_match
+    telemetry_profile: high_confidence_indicator
     supports: [hypothesis:credential-compromise]
     refutes: [hypothesis:authorized-automation]
-    entity_ids: [node:actor:principal-a]
-    relation_ids: [edge:indicator-matched-destination]
+    entity_ids: [node:event:threat-intelligence:support, node:asset:destination-a]
+    relation_ids: [edge:threat-event-matched-destination]
   - event_id: event:threat-intelligence:refute
     evidence_id: evidence:threat-intelligence:refute
     source_family: threat_intelligence
     logical_time_ms: 1700000001200
     signal_kind: indicator_revoked_as_false_positive
+    telemetry_profile: low_confidence_indicator
     supports: [hypothesis:authorized-automation]
     refutes: [hypothesis:credential-compromise]
-    entity_ids: [node:actor:principal-a]
+    entity_ids: [node:event:threat-intelligence:refute, node:asset:destination-a]
     relation_ids: []
 expected_kill_chain:
   - stage_id: stage:initial-access

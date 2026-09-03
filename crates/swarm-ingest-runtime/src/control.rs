@@ -824,6 +824,12 @@ fn guided_first_run_config(config: &SwarmConfig) -> SwarmConfig {
     guided.response_adapter = swarm_core::config::ResponseAdapterConfig::Sandbox;
     guided.investigation.enabled = true;
     guided.correlation.enabled = true;
+    // The walkthrough constructs an ephemeral runtime with a fresh signing
+    // identity. It must never open the configured durable graph: doing so
+    // would either reject the temporary signer against an existing campaign
+    // or initialize production state with an identity the daemon cannot
+    // recover. The operator's graph configuration remains unchanged on disk.
+    guided.hypothesis_graph.enabled = false;
     guided
 }
 
@@ -1682,8 +1688,8 @@ fn now_ms() -> i64 {
 mod tests {
     use super::{
         CURRENT_OPERATOR_API_SCHEMA_VERSION, ControlDataOrigin, DefaultControlPlane,
-        FirstRunStatus, FirstRunWizardOptions, IncidentLookupSelector, InvestigationLookupSelector,
-        OperatorControlOutput, ReplayLookupSelector, render_output,
+        FirstRunStatus, FirstRunWizardOptions, IncidentLookupSelector, IngestState,
+        InvestigationLookupSelector, OperatorControlOutput, ReplayLookupSelector, render_output,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -2400,9 +2406,16 @@ mod tests {
     /// `guided_first_run_config` is a detect-only policy rehearsal. It can report
     /// the policy-layer human-gate verdict but cannot confer live governed
     /// authority. Operator denials remain authoritative.
-    #[test]
-    fn guided_first_run_config_keeps_denials_in_detect_only_rehearsal() {
+    #[tokio::test]
+    async fn guided_first_run_config_keeps_denials_in_detect_only_rehearsal() {
         let mut config = control_config();
+        config.hypothesis_graph.enabled = true;
+        let graph_root = unique_temp_dir("guided-first-run-graph-isolation");
+        let sentinel = graph_root.join("production-state.sentinel");
+        fs::write(&sentinel, b"production-graph-must-remain-untouched").unwrap();
+        config.hypothesis_graph.state_store = BundleStoreConfig::LocalFiles {
+            directory: graph_root.display().to_string(),
+        };
         // A blanket operator allow: empty `actions` matches every action kind.
         config.policy.rules = vec![
             PolicyRuleConfig {
@@ -2431,6 +2444,13 @@ mod tests {
 
         let guided = super::guided_first_run_config(&config);
         assert_eq!(guided.runtime.mode, RuntimeMode::DetectOnly);
+        assert!(!guided.hypothesis_graph.enabled);
+        let _walkthrough_state = IngestState::from_config("inline", guided.clone()).unwrap();
+        assert_eq!(
+            fs::read(&sentinel).unwrap(),
+            b"production-graph-must-remain-untouched"
+        );
+        assert_eq!(fs::read_dir(&graph_root).unwrap().count(), 1);
 
         // The operator's denial survives verbatim.
         assert!(
@@ -2493,6 +2513,7 @@ mod tests {
         let decision = swarm_policy::ApprovalGate::evaluate(&gate, &escalate, &context).unwrap();
         assert_eq!(decision.verdict, swarm_policy::PolicyVerdict::Allow);
         assert_eq!(decision.rule_name, "guided_first_run.escalate_only");
+        fs::remove_dir_all(graph_root).unwrap();
     }
 
     #[tokio::test]

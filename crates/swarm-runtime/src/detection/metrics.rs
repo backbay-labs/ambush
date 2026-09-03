@@ -6,6 +6,7 @@ use prometheus_client::metrics::histogram::Histogram;
 use prometheus_client::registry::Registry;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
+use swarm_core::hypothesis_graph::{TaskCompletionKind, TaskKind};
 
 const LATENCY_BUCKETS_US: [f64; 6] = [100.0, 500.0, 1_000.0, 5_000.0, 10_000.0, 50_000.0];
 const INGEST_REQUEST_BUCKETS_US: [f64; 8] = [
@@ -67,6 +68,17 @@ struct EvasionCoverageLabels {
     suite: String,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct HypothesisGraphSubmissionLabels {
+    outcome: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct HypothesisGraphTaskLabels {
+    task_kind: String,
+    outcome: String,
+}
+
 #[derive(Clone)]
 pub struct CriticalPathMetrics {
     registry: Arc<Mutex<Registry>>,
@@ -94,6 +106,12 @@ pub struct CriticalPathMetrics {
     evasion_catch_rate: Family<EvasionCoverageLabels, Gauge<f64, AtomicU64>>,
     evasion_total_payloads: Family<EvasionCoverageLabels, Gauge<u64, AtomicU64>>,
     evasion_detected_payloads: Family<EvasionCoverageLabels, Gauge<u64, AtomicU64>>,
+    hypothesis_graph_submissions_total: Family<HypothesisGraphSubmissionLabels, Counter>,
+    hypothesis_graph_completions_total: Family<HypothesisGraphTaskLabels, Counter>,
+    hypothesis_graph_hypotheses: Gauge<u64, AtomicU64>,
+    hypothesis_graph_pending_tasks: Gauge<u64, AtomicU64>,
+    hypothesis_graph_terminal_publications: Gauge<u64, AtomicU64>,
+    hypothesis_graph_memory_projection_failures_total: Counter,
 }
 
 impl CriticalPathMetrics {
@@ -124,6 +142,14 @@ impl CriticalPathMetrics {
             Family::<EvasionCoverageLabels, Gauge<u64, AtomicU64>>::default();
         let evasion_detected_payloads =
             Family::<EvasionCoverageLabels, Gauge<u64, AtomicU64>>::default();
+        let hypothesis_graph_submissions_total =
+            Family::<HypothesisGraphSubmissionLabels, Counter>::default();
+        let hypothesis_graph_completions_total =
+            Family::<HypothesisGraphTaskLabels, Counter>::default();
+        let hypothesis_graph_hypotheses = Gauge::<u64, AtomicU64>::default();
+        let hypothesis_graph_pending_tasks = Gauge::<u64, AtomicU64>::default();
+        let hypothesis_graph_terminal_publications = Gauge::<u64, AtomicU64>::default();
+        let hypothesis_graph_memory_projection_failures_total = Counter::default();
         let mut registry = Registry::with_prefix("swarm");
         registry.register(
             "ingest_request_latency_microseconds",
@@ -245,6 +271,36 @@ impl CriticalPathMetrics {
             "Detected adversarial payloads for one detector and threat class in the evasion corpus",
             evasion_detected_payloads.clone(),
         );
+        registry.register(
+            "hypothesis_graph_submissions",
+            "Collective hypothesis submissions partitioned by the closed success or failure outcome",
+            hypothesis_graph_submissions_total.clone(),
+        );
+        registry.register(
+            "hypothesis_graph_completions",
+            "Durably completed collective hypothesis tasks partitioned by task kind and terminal outcome",
+            hypothesis_graph_completions_total.clone(),
+        );
+        registry.register(
+            "hypothesis_graph_hypotheses",
+            "Current durable hypothesis count",
+            hypothesis_graph_hypotheses.clone(),
+        );
+        registry.register(
+            "hypothesis_graph_pending_tasks",
+            "Current durable pending reasoning task count",
+            hypothesis_graph_pending_tasks.clone(),
+        );
+        registry.register(
+            "hypothesis_graph_terminal_publications",
+            "Current durable terminal publication count",
+            hypothesis_graph_terminal_publications.clone(),
+        );
+        registry.register(
+            "hypothesis_graph_memory_projection_failures",
+            "Post-commit strategy-memory projection failures awaiting outbox repair",
+            hypothesis_graph_memory_projection_failures_total.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             ingest_request_latency_us,
@@ -271,6 +327,12 @@ impl CriticalPathMetrics {
             evasion_catch_rate,
             evasion_total_payloads,
             evasion_detected_payloads,
+            hypothesis_graph_submissions_total,
+            hypothesis_graph_completions_total,
+            hypothesis_graph_hypotheses,
+            hypothesis_graph_pending_tasks,
+            hypothesis_graph_terminal_publications,
+            hypothesis_graph_memory_projection_failures_total,
         }
     }
 
@@ -436,6 +498,70 @@ impl CriticalPathMetrics {
             .get_or_create(&labels)
             .set(detected_payloads);
     }
+
+    pub fn observe_hypothesis_graph_submission(&self, succeeded: bool) {
+        self.hypothesis_graph_submissions_total
+            .get_or_create(&HypothesisGraphSubmissionLabels {
+                outcome: if succeeded { "success" } else { "failure" }.to_string(),
+            })
+            .inc();
+    }
+
+    pub fn observe_hypothesis_graph_completion(
+        &self,
+        kind: TaskKind,
+        outcome: &TaskCompletionKind,
+    ) {
+        let task_kind = match kind {
+            TaskKind::AcquireEvidence => "acquire_evidence",
+            TaskKind::ChallengeEdge => "challenge_edge",
+            TaskKind::FalsifyHypothesis => "falsify_hypothesis",
+        };
+        let outcome = match outcome {
+            TaskCompletionKind::EvidenceAdded => "evidence_added",
+            TaskCompletionKind::EdgeChallenged => "edge_challenged",
+            TaskCompletionKind::HypothesisFalsified => "hypothesis_falsified",
+            TaskCompletionKind::NoFinding => "no_finding",
+        };
+        self.hypothesis_graph_completions_total
+            .get_or_create(&HypothesisGraphTaskLabels {
+                task_kind: task_kind.to_string(),
+                outcome: outcome.to_string(),
+            })
+            .inc();
+    }
+
+    pub fn observe_hypothesis_graph_failure(&self, kind: TaskKind) {
+        let task_kind = match kind {
+            TaskKind::AcquireEvidence => "acquire_evidence",
+            TaskKind::ChallengeEdge => "challenge_edge",
+            TaskKind::FalsifyHypothesis => "falsify_hypothesis",
+        };
+        self.hypothesis_graph_completions_total
+            .get_or_create(&HypothesisGraphTaskLabels {
+                task_kind: task_kind.to_string(),
+                outcome: "failed".to_string(),
+            })
+            .inc();
+    }
+
+    pub fn observe_hypothesis_graph_state(
+        &self,
+        hypotheses: usize,
+        pending_tasks: usize,
+        terminal_publications: usize,
+    ) {
+        self.hypothesis_graph_hypotheses
+            .set(u64::try_from(hypotheses).unwrap_or(u64::MAX));
+        self.hypothesis_graph_pending_tasks
+            .set(u64::try_from(pending_tasks).unwrap_or(u64::MAX));
+        self.hypothesis_graph_terminal_publications
+            .set(u64::try_from(terminal_publications).unwrap_or(u64::MAX));
+    }
+
+    pub fn observe_hypothesis_graph_memory_projection_failure(&self) {
+        self.hypothesis_graph_memory_projection_failures_total.inc();
+    }
 }
 
 impl Default for CriticalPathMetrics {
@@ -458,6 +584,33 @@ pub fn encode_metrics(metrics: &CriticalPathMetrics) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{CriticalPathMetrics, encode_metrics};
+    use swarm_core::hypothesis_graph::{TaskCompletionKind, TaskKind};
+
+    #[test]
+    fn encode_metrics_distinguishes_reasoning_failures_from_no_findings() {
+        let metrics = CriticalPathMetrics::new();
+        metrics.observe_hypothesis_graph_completion(
+            TaskKind::ChallengeEdge,
+            &TaskCompletionKind::NoFinding,
+        );
+        metrics.observe_hypothesis_graph_failure(TaskKind::ChallengeEdge);
+        metrics.observe_hypothesis_graph_state(2, 3, 4);
+
+        let encoded = encode_metrics(&metrics);
+        assert!(encoded.contains(
+            "swarm_hypothesis_graph_completions_total{outcome=\"no_finding\",task_kind=\"challenge_edge\"} 1"
+        ) || encoded.contains(
+            "swarm_hypothesis_graph_completions_total{task_kind=\"challenge_edge\",outcome=\"no_finding\"} 1"
+        ));
+        assert!(encoded.contains(
+            "swarm_hypothesis_graph_completions_total{outcome=\"failed\",task_kind=\"challenge_edge\"} 1"
+        ) || encoded.contains(
+            "swarm_hypothesis_graph_completions_total{task_kind=\"challenge_edge\",outcome=\"failed\"} 1"
+        ));
+        assert!(encoded.contains("swarm_hypothesis_graph_hypotheses 2"));
+        assert!(encoded.contains("swarm_hypothesis_graph_pending_tasks 3"));
+        assert!(encoded.contains("swarm_hypothesis_graph_terminal_publications 4"));
+    }
 
     #[test]
     fn encode_metrics_renders_all_histograms() {

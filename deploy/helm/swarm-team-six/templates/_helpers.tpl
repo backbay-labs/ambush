@@ -99,6 +99,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $_ := set $correlation "incident_store" $incidentStore -}}
 {{- $_ := set $config "correlation" $correlation -}}
 
+{{- $hypothesisGraph := default (dict) $config.hypothesis_graph -}}
+{{- $hypothesisStateStore := default (dict) $hypothesisGraph.state_store -}}
+{{- if eq (default "" $hypothesisStateStore.kind) "local_files" -}}
+{{- $_ := set $hypothesisStateStore "directory" (printf "%s/hypothesis-graph" $stateRoot) -}}
+{{- end -}}
+{{- $_ := set $hypothesisGraph "state_store" $hypothesisStateStore -}}
+{{- $_ := set $config "hypothesis_graph" $hypothesisGraph -}}
+
 {{- $identity := default (dict) $config.identity -}}
 {{- if empty $identity.agent_key_dir -}}
 {{- $_ := set $identity "agent_key_dir" (printf "%s/agent-keys" $stateRoot) -}}

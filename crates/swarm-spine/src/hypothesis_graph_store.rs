@@ -11,9 +11,7 @@
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -26,12 +24,12 @@ use std::sync::{
 #[cfg(test)]
 use std::time::Duration;
 use swarm_core::hypothesis_graph::{
-    ConfidenceDistribution, EvidenceWitness, FencingToken, GraphAdmissionError, GraphId,
-    GraphLogicalTime, GraphResourceLimits, HYPOTHESIS_GRAPH_SCHEMA_VERSION, Hypothesis,
+    ConfidenceDistribution, DecisionId, EvidenceWitness, FencingToken, GraphAdmissionError,
+    GraphId, GraphLogicalTime, GraphResourceLimits, HYPOTHESIS_GRAPH_SCHEMA_VERSION, Hypothesis,
     HypothesisGraph, HypothesisId, LeaseId, LogicalTaskDescriptor, SchedulerBudget,
-    TaskCapabilityProof, TaskClaimRequest, TaskCompletion, TaskId, TaskKind, TaskLease, TaskRecord,
-    TaskState, TaskTarget, TaskTerminalEnvelope, TaskTerminalOutboxEntry, TaskTerminalProof,
-    UncertaintyReason, derive_logical_task_id,
+    TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY, TaskCapabilityProof, TaskClaimRequest, TaskCompletion,
+    TaskId, TaskKind, TaskLease, TaskRecord, TaskState, TaskTarget, TaskTerminalEnvelope,
+    TaskTerminalOutboxEntry, TaskTerminalProof, UncertaintyReason, derive_logical_task_id,
 };
 use swarm_core::types::AgentId;
 use swarm_crypto::{
@@ -45,6 +43,66 @@ pub const GRAPH_STATE_MIGRATION_CURRENT: u32 = GRAPH_STATE_MIGRATION_HYPOTHESES;
 
 pub const fn legacy_graph_state_migration_marker() -> u32 {
     GRAPH_STATE_MIGRATION_LEGACY
+}
+
+/// Signed-store publication for a task whose final lease elapsed without a
+/// worker-authored result. This remains distinct from `TaskTerminalOutboxEntry`:
+/// synthesizing a worker envelope after lease expiry would forge claimant
+/// authority. The surrounding signed graph generation authenticates this
+/// store-driven terminal and its one-way delivery acknowledgement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRetryExhaustionOutboxEntry {
+    pub schema_version: u32,
+    pub task_id: TaskId,
+    pub failed_at: GraphLogicalTime,
+    pub failure_summary_digest: String,
+    pub publication_acknowledged: bool,
+}
+
+impl TaskRetryExhaustionOutboxEntry {
+    fn new(task: &TaskRecord) -> Result<Self, GraphStoreError> {
+        let proof = task
+            .terminal_history
+            .last()
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "retry-exhausted task has no terminal proof".to_string(),
+            })?;
+        let entry = Self {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            task_id: task.request.task_id.clone(),
+            failed_at: proof.completed_at,
+            failure_summary_digest: TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY.to_string(),
+            publication_acknowledged: false,
+        };
+        entry.validate_for_task(task)?;
+        Ok(entry)
+    }
+
+    fn validate_for_task(&self, task: &TaskRecord) -> Result<(), GraphStoreError> {
+        if self.schema_version != HYPOTHESIS_GRAPH_SCHEMA_VERSION {
+            return Err(GraphStoreError::UnsupportedSchema(self.schema_version));
+        }
+        let proof = task
+            .terminal_history
+            .last()
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "retry-exhaustion publication has no terminal proof".to_string(),
+            })?;
+        if self.task_id != task.request.task_id
+            || task.state != TaskState::Failed
+            || task.completion.is_some()
+            || self.failed_at != proof.completed_at
+            || self.failure_summary_digest != TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY
+            || proof.failure_summary_digest.as_deref() != Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY)
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "retry-exhaustion publication is not bound to its failed task proof"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 fn default_graph_state_migration_marker() -> u32 {
@@ -506,6 +564,8 @@ pub struct GraphStoreState {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub terminal_outbox: BTreeMap<TaskId, TaskTerminalOutboxEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub retry_exhaustion_outbox: BTreeMap<TaskId, TaskRetryExhaustionOutboxEntry>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub task_failure_outbox: BTreeMap<TaskId, TaskFailureOutboxEntry>,
     pub fencing_counter: u64,
     #[serde(
@@ -548,6 +608,7 @@ pub struct ReasoningStateUpdate {
     tasks: BTreeMap<TaskId, DurableTaskRecord>,
     logical_task_descriptors: BTreeMap<TaskId, LogicalTaskDescriptor>,
     terminal_outbox: BTreeMap<TaskId, TaskTerminalOutboxEntry>,
+    retry_exhaustion_outbox: BTreeMap<TaskId, TaskRetryExhaustionOutboxEntry>,
     task_failure_outbox: BTreeMap<TaskId, TaskFailureOutboxEntry>,
     limits: GraphResourceLimits,
     cross_graph_links: std::collections::BTreeSet<(GraphId, GraphId)>,
@@ -644,6 +705,7 @@ impl Default for ReasoningStateUpdate {
             tasks: BTreeMap::new(),
             logical_task_descriptors: BTreeMap::new(),
             terminal_outbox: BTreeMap::new(),
+            retry_exhaustion_outbox: BTreeMap::new(),
             task_failure_outbox: BTreeMap::new(),
             limits: GraphResourceLimits::default(),
             cross_graph_links: std::collections::BTreeSet::new(),
@@ -671,6 +733,7 @@ impl GraphStoreState {
             logical_task_descriptors: BTreeMap::new(),
             task_tombstones: BTreeMap::new(),
             terminal_outbox: BTreeMap::new(),
+            retry_exhaustion_outbox: BTreeMap::new(),
             task_failure_outbox: BTreeMap::new(),
             fencing_counter: 0,
             limits,
@@ -713,6 +776,7 @@ impl GraphStoreState {
             && (!self.hypotheses.is_empty()
                 || !self.logical_task_descriptors.is_empty()
                 || !self.terminal_outbox.is_empty()
+                || !self.retry_exhaustion_outbox.is_empty()
                 || !self.task_failure_outbox.is_empty()
                 || !self.cross_graph_links.is_empty()
                 || self.scheduler_budget.is_some()
@@ -774,6 +838,7 @@ impl GraphStoreState {
         }
         if self.logical_task_descriptors.len() > limits.max_tasks
             || self.terminal_outbox.len() > limits.max_tasks
+            || self.retry_exhaustion_outbox.len() > limits.max_tasks
             || self.task_failure_outbox.len() > limits.max_tasks
         {
             return Err(GraphStoreError::ResourceLimit {
@@ -824,9 +889,6 @@ impl GraphStoreState {
                         GraphAdmissionError::UnknownEvidence,
                     ));
                 }
-                decision
-                    .validate_identity_admission(&self.graph.evidence)
-                    .map_err(GraphStoreError::Admission)?;
             }
         }
         for (task_id, descriptor) in &self.logical_task_descriptors {
@@ -955,6 +1017,22 @@ impl GraphStoreState {
                 });
             }
         }
+        for (task_id, publication) in &self.retry_exhaustion_outbox {
+            if task_id != &publication.task_id || self.terminal_outbox.contains_key(task_id) {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "retry-exhaustion outbox key is invalid or conflicts with a worker terminal outbox"
+                        .to_string(),
+                });
+            }
+            let task = self
+                .tasks
+                .get(task_id)
+                .ok_or_else(|| GraphStoreError::InvalidState {
+                    reason: "retry-exhaustion outbox references an unknown task".to_string(),
+                })?;
+            publication.validate_for_task(&task.task)?;
+        }
+        let mut terminal_worker_decisions = BTreeSet::<DecisionId>::new();
         for (task_id, entry) in &self.terminal_outbox {
             let task = self
                 .tasks
@@ -1021,6 +1099,7 @@ impl GraphStoreState {
                             .to_string(),
                     });
                 }
+                terminal_worker_decisions.insert(decision.decision_id.clone());
                 if let Some(link) = &entry.envelope.decision_link {
                     match &link.target {
                         TaskTarget::Edge { edge_id } => {
@@ -1062,6 +1141,22 @@ impl GraphStoreState {
                 }
             })?;
             entry.validate_for_failed_task(&task.task, descriptor, self.logical_time_high_water)?;
+        }
+        // Coordinator-authored decisions must be signed by a producer that
+        // also supplied admitted evidence. Worker-authored terminal decisions
+        // instead derive identity admission from the fully validated task
+        // capability, claim, lease, fencing proof, and terminal outbox above.
+        // Nothing else may introduce a decision under an unrelated key.
+        for decision in self
+            .hypotheses
+            .values()
+            .flat_map(|hypothesis| hypothesis.decision_history.iter())
+        {
+            if let Err(error) = decision.validate_identity_admission(&self.graph.evidence)
+                && !terminal_worker_decisions.contains(&decision.decision_id)
+            {
+                return Err(GraphStoreError::Admission(error));
+            }
         }
         Ok(())
     }
@@ -1161,6 +1256,7 @@ impl GraphStoreState {
         base.logical_task_descriptors = update.logical_task_descriptors;
         base.task_tombstones = task_tombstones;
         base.terminal_outbox = update.terminal_outbox;
+        base.retry_exhaustion_outbox = update.retry_exhaustion_outbox;
         base.task_failure_outbox = update.task_failure_outbox;
         base.limits = update.limits;
         base.cross_graph_links = update.cross_graph_links;
@@ -1323,6 +1419,10 @@ impl GraphStoreSnapshot {
         &self.state.terminal_outbox
     }
 
+    pub fn retry_exhaustion_outbox(&self) -> &BTreeMap<TaskId, TaskRetryExhaustionOutboxEntry> {
+        &self.state.retry_exhaustion_outbox
+    }
+
     pub fn task_failure_outbox(&self) -> &BTreeMap<TaskId, TaskFailureOutboxEntry> {
         &self.state.task_failure_outbox
     }
@@ -1475,6 +1575,7 @@ impl LegacyGraphStoreState {
                 .map(|(task_id, tombstone)| (task_id, tombstone.into_current()))
                 .collect(),
             terminal_outbox: BTreeMap::new(),
+            retry_exhaustion_outbox: BTreeMap::new(),
             task_failure_outbox: BTreeMap::new(),
             fencing_counter: self.fencing_counter,
             limits: GraphResourceLimits::default(),
@@ -3234,6 +3335,44 @@ fn read_authenticated_state(
 /// admitted here is a terminal publication accompanied by its descriptor and
 /// outbox entry.  This keeps the one-transition reasoning boundary while
 /// retaining the durable monotonic fences from Plan 03.
+fn terminal_outbox_entry_transition_allowed(
+    prior: &TaskTerminalOutboxEntry,
+    next: &TaskTerminalOutboxEntry,
+) -> bool {
+    if prior == next {
+        return true;
+    }
+    let mut normalized_next = next.clone();
+    normalized_next.publication_acknowledged = prior.publication_acknowledged;
+    prior.publication_acknowledged == Some(false)
+        && next.publication_acknowledged == Some(true)
+        && normalized_next == *prior
+}
+
+fn retry_exhaustion_outbox_entry_transition_allowed(
+    prior: &TaskRetryExhaustionOutboxEntry,
+    next: &TaskRetryExhaustionOutboxEntry,
+) -> bool {
+    if prior == next {
+        return true;
+    }
+    let mut normalized_next = next.clone();
+    normalized_next.publication_acknowledged = prior.publication_acknowledged;
+    !prior.publication_acknowledged && next.publication_acknowledged && normalized_next == *prior
+}
+
+fn task_failure_outbox_entry_transition_allowed(
+    prior: &TaskFailureOutboxEntry,
+    next: &TaskFailureOutboxEntry,
+) -> bool {
+    if prior == next {
+        return true;
+    }
+    let mut normalized_next = next.clone();
+    normalized_next.publication_acknowledged = prior.publication_acknowledged;
+    !prior.publication_acknowledged && next.publication_acknowledged && normalized_next == *prior
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InitialDecisionAdmission<'a> {
     Reject,
@@ -3409,8 +3548,11 @@ fn validate_reasoning_cas_transition(
                             } if target == hypothesis_id
                         )
                 });
+        // The coordinator deterministically projects evidence-scoped causal
+        // edges into the seed's initial claims. Those claims are already
+        // validated against the admitted graph above; the durable falsify
+        // descriptor is the coordinator-lineage proof for this alternative.
         let coordinator_shape = hypothesis.graph_version == 0
-            && hypothesis.claims.is_empty()
             && hypothesis.contradiction_ids.is_empty()
             && hypothesis.confidence == ConfidenceDistribution::uniform_two()
             && hypothesis.uncertainty.iter().all(|reason| {
@@ -3507,11 +3649,49 @@ fn validate_reasoning_cas_transition(
                 reason: "reasoning CAS removed an existing terminal outbox entry".to_string(),
             }
         })?;
-        if next != prior {
+        if !terminal_outbox_entry_transition_allowed(prior, next) {
             return Err(GraphStoreError::InvalidState {
-                reason: "reasoning CAS rewrote an existing terminal outbox entry".to_string(),
+                reason: format!(
+                    "reasoning CAS rewrote terminal outbox entry `{task_id}` outside the one-way publication acknowledgement: {:?} -> {:?}",
+                    prior.publication_acknowledged, next.publication_acknowledged
+                ),
             });
         }
+    }
+    for (task_id, publication) in &candidate.terminal_outbox {
+        if !current.terminal_outbox.contains_key(task_id)
+            && publication.publication_acknowledged != Some(false)
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "terminal publication cannot be acknowledged in its commit transition"
+                    .to_string(),
+            });
+        }
+    }
+    for (task_id, prior) in &current.retry_exhaustion_outbox {
+        let next = candidate
+            .retry_exhaustion_outbox
+            .get(task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "reasoning CAS removed a retry-exhaustion publication".to_string(),
+            })?;
+        if !retry_exhaustion_outbox_entry_transition_allowed(prior, next) {
+            return Err(GraphStoreError::InvalidState {
+                reason: format!(
+                    "reasoning CAS rewrote retry-exhaustion publication `{task_id}` outside its one-way acknowledgement"
+                ),
+            });
+        }
+    }
+    if candidate
+        .retry_exhaustion_outbox
+        .keys()
+        .any(|task_id| !current.retry_exhaustion_outbox.contains_key(task_id))
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: "generic reasoning CAS cannot synthesize retry-exhaustion publications"
+                .to_string(),
+        });
     }
     for (task_id, prior) in &current.task_failure_outbox {
         let next = candidate.task_failure_outbox.get(task_id).ok_or_else(|| {
@@ -3519,9 +3699,11 @@ fn validate_reasoning_cas_transition(
                 reason: "reasoning CAS removed an existing task failure outbox entry".to_string(),
             }
         })?;
-        if next != prior {
+        if !task_failure_outbox_entry_transition_allowed(prior, next) {
             return Err(GraphStoreError::InvalidState {
-                reason: "reasoning CAS rewrote an existing task failure outbox entry".to_string(),
+                reason: format!(
+                    "reasoning CAS rewrote task failure publication `{task_id}` outside its one-way acknowledgement"
+                ),
             });
         }
     }
@@ -3736,10 +3918,12 @@ fn validate_reasoning_cas_transition(
     }
     for (task_id, entry) in &candidate.terminal_outbox {
         if let Some(prior_entry) = current.terminal_outbox.get(task_id)
-            && prior_entry != entry
+            && !terminal_outbox_entry_transition_allowed(prior_entry, entry)
         {
             return Err(GraphStoreError::InvalidState {
-                reason: "reasoning CAS rewrote an existing terminal outbox entry".to_string(),
+                reason: format!(
+                    "reasoning CAS rewrote terminal outbox entry `{task_id}` outside the one-way publication acknowledgement"
+                ),
             });
         }
         if !current.terminal_outbox.contains_key(task_id)
@@ -4844,6 +5028,12 @@ fn fail_reasoning_task_op(
         });
     }
     let task_id = publication.task_id.clone();
+    if publication.publication_acknowledged {
+        return Err(GraphStoreError::InvalidState {
+            reason: "task failure publication cannot be acknowledged in its commit transition"
+                .to_string(),
+        });
+    }
     let descriptor = state
         .logical_task_descriptors
         .get(&task_id)
@@ -4924,20 +5114,56 @@ fn expire_task_op(
     now: GraphLogicalTime,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
+    let retry_exhaustion = state
+        .tasks
+        .get(&TaskId::new(task_id))
+        .is_some_and(|entry| entry.task.attempts >= limits.max_task_retries);
     observe_logical_time(state, now)?;
     {
         let entry = task_entry_mut(state, task_id)?;
         ensure_task_generation(entry, expected_generation)?;
-        if entry.task.state != TaskState::Claimed {
+        if entry.task.state != TaskState::Claimed
+            && !(entry.task.state == TaskState::Expired
+                && entry.task.attempts >= limits.max_task_retries)
+        {
             return Err(GraphStoreError::InvalidTransition {
-                reason: "only claimed tasks can expire".to_string(),
+                reason: "only claimed tasks or retry-exhausted expired tasks can expire"
+                    .to_string(),
             });
         }
-        entry.task = entry
+        entry.task = if entry.task.attempts >= limits.max_task_retries {
+            entry
+                .task
+                .clone()
+                .exhaust_retries(now, limits.max_task_lease_ms)
+                .map_err(GraphStoreError::Admission)?
+        } else {
+            entry
+                .task
+                .clone()
+                .expire(now, limits.max_task_lease_ms)
+                .map_err(GraphStoreError::Admission)?
+        };
+    }
+    if retry_exhaustion {
+        let task = state
+            .tasks
+            .get(&TaskId::new(task_id))
+            .ok_or_else(|| GraphStoreError::TaskNotFound {
+                task_id: task_id.to_string(),
+            })?
             .task
-            .clone()
-            .expire(now, limits.max_task_lease_ms)
-            .map_err(GraphStoreError::Admission)?;
+            .clone();
+        let publication = TaskRetryExhaustionOutboxEntry::new(&task)?;
+        if state
+            .retry_exhaustion_outbox
+            .insert(task.request.task_id.clone(), publication)
+            .is_some()
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "retry exhaustion attempted to replace its durable publication".to_string(),
+            });
+        }
     }
     // Expiry is itself a fencing barrier.  Advance the durable counter before
     // publishing the expired record so the token of the expired lease can
@@ -4976,18 +5202,43 @@ fn reclaim_task_op(
             reason: "reclaim request task ID differs from target".to_string(),
         });
     }
-    let old = state
+    let mut old = state
         .tasks
         .get(&TaskId::new(task_id))
         .ok_or_else(|| GraphStoreError::TaskNotFound {
             task_id: task_id.to_string(),
         })?
         .clone();
-    if old.task.state != TaskState::Expired {
-        return Err(GraphStoreError::InvalidTransition {
-            reason: "reclaim requires an expired task".to_string(),
-        });
-    }
+    let generation_increment = match old.task.state {
+        TaskState::Expired => 1,
+        TaskState::Claimed
+            if old
+                .task
+                .lease
+                .as_ref()
+                .is_some_and(|lease| now >= lease.expires_at) =>
+        {
+            old.task = old
+                .task
+                .clone()
+                .expire(now, limits.max_task_lease_ms)
+                .map_err(GraphStoreError::Admission)?;
+            // Expiry is a distinct fencing barrier even though its terminal
+            // record and the replacement claim commit atomically.
+            next_fence(state)?;
+            2
+        }
+        TaskState::Claimed => {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "reclaim cannot replace an active task lease".to_string(),
+            });
+        }
+        TaskState::Pending | TaskState::Completed | TaskState::Failed => {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "reclaim requires an expired task or elapsed claimed lease".to_string(),
+            });
+        }
+    };
     if old.task.request.kind != request.kind
         || old.task.request.target != request.target
         || old.task.request.role != request.role
@@ -5030,13 +5281,12 @@ fn reclaim_task_op(
     })?;
     entry.history.push(old.task);
     entry.task = task;
-    entry.generation =
-        entry
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| GraphStoreError::InvalidState {
-                reason: "task generation overflow".to_string(),
-            })?;
+    entry.generation = entry
+        .generation
+        .checked_add(generation_increment)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "task generation overflow".to_string(),
+        })?;
     Ok(StateMutation {
         value: TaskMutationMarker {
             task: entry.task.clone(),
@@ -5065,7 +5315,13 @@ fn reclaim_task_with_budget_op(
     let prior_budget = state.scheduler_budget.clone();
     let task_key = TaskId::new(task_id);
     let idempotent = state.tasks.get(&task_key).is_some_and(|entry| {
-        entry.task.state == TaskState::Claimed && same_claim_identity(&entry.task.request, &request)
+        entry.task.state == TaskState::Claimed
+            && entry
+                .task
+                .lease
+                .as_ref()
+                .is_some_and(|lease| now < lease.expires_at)
+            && same_claim_identity(&entry.task.request, &request)
     });
     if idempotent {
         let entry = state
@@ -5074,16 +5330,6 @@ fn reclaim_task_with_budget_op(
             .ok_or_else(|| GraphStoreError::TaskNotFound {
                 task_id: task_id.to_string(),
             })?;
-        if entry
-            .task
-            .lease
-            .as_ref()
-            .is_some_and(|lease| now >= lease.expires_at)
-        {
-            return Err(GraphStoreError::TaskExpiredNeedsReclaim {
-                task_id: task_key.clone(),
-            });
-        }
         validate_exact_scheduler_budget_delta(
             prior_budget.as_ref(),
             Some(&scheduler_budget),
@@ -5176,6 +5422,11 @@ pub struct TaskFailureOutboxEntry {
     pub failure: TaskFailure,
     pub capability: TaskCapabilityProof,
     pub witness: EvidenceWitness,
+    /// One-way delivery marker. This is deliberately outside the worker's
+    /// signed material: the signed graph generation authenticates the
+    /// acknowledgement without pretending the worker authored it.
+    #[serde(default)]
+    pub publication_acknowledged: bool,
 }
 
 #[derive(Serialize)]
@@ -5226,6 +5477,7 @@ impl TaskFailureOutboxEntry {
             failure,
             capability,
             witness,
+            publication_acknowledged: false,
         };
         entry.validate_for_claimed_task(task, descriptor, GraphLogicalTime::new(0))?;
         Ok(entry)
@@ -5288,7 +5540,8 @@ impl TaskFailureOutboxEntry {
             .ok_or_else(|| GraphStoreError::InvalidState {
                 reason: "reasoning failure publication requires the prior active lease".to_string(),
             })?;
-        if task.state != TaskState::Claimed
+        if self.publication_acknowledged
+            || task.state != TaskState::Claimed
             || task.completion.is_some()
             || self.lease_id != lease.lease_id
             || self.fencing_token != lease.fencing_token
@@ -5495,6 +5748,19 @@ pub enum GraphStoreError {
 /// to a caller-supplied generation/digest predecessor.
 pub trait HypothesisGraphStore: Send + Sync {
     fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError>;
+    /// Authenticate the current state and return only the requested task page.
+    ///
+    /// Backends override this to avoid cloning a complete authenticated state
+    /// merely to serve a bounded operator collection. The default preserves
+    /// compatibility for test stores while applying identical cursor rules.
+    fn task_page(
+        &self,
+        after: Option<(GraphLogicalTime, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphStoreError> {
+        let snapshot = self.snapshot()?;
+        bounded_task_page(snapshot.state(), after, limit)
+    }
     fn compare_and_swap(
         &self,
         expected: &GraphStoreRevision,
@@ -5660,6 +5926,60 @@ pub trait HypothesisGraphStore: Send + Sync {
         now: GraphLogicalTime,
         lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError>;
+}
+
+const MAX_GRAPH_TASK_PAGE_LIMIT: usize = 4_096;
+
+fn bounded_task_page(
+    state: &GraphStoreState,
+    after: Option<(GraphLogicalTime, &str)>,
+    limit: usize,
+) -> Result<Vec<TaskRecord>, GraphStoreError> {
+    if limit == 0 || limit > MAX_GRAPH_TASK_PAGE_LIMIT {
+        return Err(GraphStoreError::InvalidState {
+            reason: format!(
+                "operator task page limit must be between 1 and {MAX_GRAPH_TASK_PAGE_LIMIT}"
+            ),
+        });
+    }
+    let mut page = Vec::with_capacity(limit.min(state.tasks.len()));
+    for durable in state.tasks.values() {
+        let task = &durable.task;
+        let after_cursor = after.is_none_or(|(requested_at, stable_id)| {
+            task.request.requested_at < requested_at
+                || (task.request.requested_at == requested_at
+                    && task.request.task_id.as_str() < stable_id)
+        });
+        if !after_cursor {
+            continue;
+        }
+        let insertion = page
+            .binary_search_by(|candidate| {
+                let candidate: &&TaskRecord = candidate;
+                let left = *candidate;
+                let right = task;
+                right
+                    .request
+                    .requested_at
+                    .cmp(&left.request.requested_at)
+                    .then_with(|| {
+                        right
+                            .request
+                            .task_id
+                            .as_str()
+                            .cmp(left.request.task_id.as_str())
+                    })
+            })
+            .unwrap_or_else(|position| position);
+        if insertion >= limit {
+            continue;
+        }
+        page.insert(insertion, task);
+        if page.len() > limit {
+            page.pop();
+        }
+    }
+    Ok(page.into_iter().cloned().collect())
 }
 
 pub trait TaskStore: HypothesisGraphStore {}
@@ -5865,6 +6185,7 @@ impl MemoryHypothesisGraphStore {
             current.logical_task_descriptors = state.logical_task_descriptors;
             current.task_tombstones = state.task_tombstones;
             current.terminal_outbox = state.terminal_outbox;
+            current.retry_exhaustion_outbox = state.retry_exhaustion_outbox;
             current.task_failure_outbox = state.task_failure_outbox;
             current.fencing_counter = state.fencing_counter;
             current.limits = state.limits;
@@ -5886,6 +6207,25 @@ impl MemoryHypothesisGraphStore {
 impl HypothesisGraphStore for MemoryHypothesisGraphStore {
     fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError> {
         self.read_signed()?.snapshot()
+    }
+
+    fn task_page(
+        &self,
+        after: Option<(GraphLogicalTime, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphStoreError> {
+        let guard = self
+            .inner
+            .read()
+            .map_err(|_| GraphStoreError::PoisonedLock)?;
+        verify_state(
+            &guard,
+            &self.graph_id,
+            &self.signer_id,
+            &self.limits,
+            &self.scheduler_policy,
+        )?;
+        bounded_task_page(&guard.state, after, limit)
     }
 
     fn compare_and_swap(
@@ -7806,10 +8146,14 @@ fn atomic_write_json_at(
         }
         let mode = target_stat.st_mode & 0o7777;
         if mode != 0o600 {
+            // `libc::mode_t` is `u16` on macOS and `u32` on Linux. Keep the
+            // conversion explicit so the error contract remains portable.
+            #[allow(clippy::useless_conversion)]
+            let observed = u32::from(mode);
             return Err(GraphStoreError::InsecurePermissions {
                 path: path.to_path_buf(),
                 expected: 0o600,
-                observed: u32::from(mode),
+                observed,
             });
         }
     } else {
@@ -9005,6 +9349,7 @@ impl FileHypothesisGraphStore {
             current.logical_task_descriptors = state.logical_task_descriptors;
             current.task_tombstones = state.task_tombstones;
             current.terminal_outbox = state.terminal_outbox;
+            current.retry_exhaustion_outbox = state.retry_exhaustion_outbox;
             current.task_failure_outbox = state.task_failure_outbox;
             current.fencing_counter = state.fencing_counter;
             current.limits = state.limits;
@@ -9038,6 +9383,15 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError> {
         self.read_signed()?.snapshot()
+    }
+
+    fn task_page(
+        &self,
+        after: Option<(GraphLogicalTime, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphStoreError> {
+        let authenticated = self.read_signed()?;
+        bounded_task_page(&authenticated.state, after, limit)
     }
 
     fn compare_and_swap(
@@ -9363,6 +9717,17 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
         match self {
             Self::Memory(store) => store.snapshot(),
             Self::LocalFiles(store) => store.snapshot(),
+        }
+    }
+
+    fn task_page(
+        &self,
+        after: Option<(GraphLogicalTime, &str)>,
+        limit: usize,
+    ) -> Result<Vec<TaskRecord>, GraphStoreError> {
+        match self {
+            Self::Memory(store) => store.task_page(after, limit),
+            Self::LocalFiles(store) => store.task_page(after, limit),
         }
     }
 
@@ -11341,6 +11706,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: AgentId::from_public_key_hex(&claimant_key.public_key().to_hex()),
+            publication_acknowledged: Some(false),
         };
         valid_entry
             .validate_for_committed_task_at(

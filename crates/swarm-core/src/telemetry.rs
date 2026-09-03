@@ -2,6 +2,12 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Maximum future timestamp skew accepted by live ingest and preserved by
+/// downstream evidence normalization. Keeping this policy in the shared
+/// telemetry contract prevents replay consumers from applying a stricter
+/// clock relation than the ingest boundary that durably accepted the event.
+pub const MAX_TELEMETRY_FUTURE_SKEW_MS: i64 = 5 * 60 * 1_000;
+
 /// A normalized telemetry event from the environment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

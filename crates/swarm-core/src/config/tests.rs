@@ -99,6 +99,7 @@ fn hypothesis_graph_config_defaults_are_disabled_and_bounded() {
     assert_eq!(config.max_nodes, 256);
     assert_eq!(config.max_edges, 512);
     assert_eq!(config.max_evidence_bytes, 1_048_576);
+    assert_eq!(config.max_tasks, 256);
     assert_eq!(config.max_lease_ms, 300_000);
     assert_eq!(config.max_benchmark_work_units, 10_000);
     assert_eq!(config.max_memory_ttl_ticks, 86_400_000);
@@ -156,6 +157,57 @@ fn hypothesis_graph_config_rejects_zero_and_contradictory_limits() {
 }
 
 #[test]
+fn enabled_hypothesis_graph_config_must_admit_one_complete_replay() {
+    for (field, expected) in [
+        ("max_nodes", "must be at least 5"),
+        ("max_evidence_bytes", "must be at least 2048"),
+        ("max_hypotheses", "must be at least 2"),
+        ("max_tasks", "must be at least 6"),
+        ("max_graph_depth", "must be at least 2"),
+        ("max_work_units_per_tick", "must be between 6"),
+    ] {
+        let mut value = serde_json::to_value(HypothesisGraphConfig {
+            enabled: true,
+            ..HypothesisGraphConfig::default()
+        })
+        .unwrap();
+        value[field] = serde_json::json!(1);
+        let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "{field} produced unexpected error: {error}"
+        );
+    }
+
+    let mut value = serde_json::to_value(HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    })
+    .unwrap();
+    value["max_nodes"] = serde_json::json!(4);
+    let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
+    assert!(error.to_string().contains("must be at least 5"));
+
+    let mut value = serde_json::to_value(HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    })
+    .unwrap();
+    value["max_tasks"] = serde_json::json!(5);
+    let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
+    assert!(error.to_string().contains("must be at least 6"));
+
+    let mut value = serde_json::to_value(HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    })
+    .unwrap();
+    value["max_work_units_per_tick"] = serde_json::json!(5);
+    let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
+    assert!(error.to_string().contains("must be between 6"));
+}
+
+#[test]
 fn hypothesis_graph_config_round_trips_all_limits() {
     let expected = HypothesisGraphConfig {
         enabled: true,
@@ -178,6 +230,71 @@ fn hypothesis_graph_config_round_trips_all_limits() {
     let decoded: HypothesisGraphConfig = serde_json::from_value(encoded).unwrap();
     assert_eq!(decoded, expected);
     assert!(decoded.resource_limits().validate().is_ok());
+}
+
+#[test]
+fn enabled_hypothesis_graph_requires_durable_detect_async_lanes() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.hypothesis_graph.enabled = true;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `hypothesis_graph.state_store`: must use local_files when the collective graph is enabled"
+    );
+
+    config.hypothesis_graph.state_store = BundleStoreConfig::LocalFiles {
+        directory: "phase286-graph-state".to_string(),
+    };
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `hypothesis_graph.enabled`: collective graph execution is currently restricted to detect_only"
+    );
+
+    config.runtime.mode = RuntimeMode::DetectOnly;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `investigation.enabled`: must be enabled with the collective hypothesis graph"
+    );
+
+    config.investigation.enabled = true;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `correlation.enabled`: must be enabled with the collective hypothesis graph"
+    );
+
+    config.correlation.enabled = true;
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `audit.bundle_store`: must use local_files with the collective hypothesis graph"
+    );
+
+    config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: "phase286-replay-state".to_string(),
+    };
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `investigation.bundle_store`: must use local_files with the collective hypothesis graph"
+    );
+
+    config.investigation.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: "phase286-investigation-state".to_string(),
+    };
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `correlation.incident_store`: must use local_files with the collective hypothesis graph"
+    );
+
+    config.correlation.incident_store = BundleStoreConfig::LocalFiles {
+        directory: "phase286-incident-state".to_string(),
+    };
+    assert!(config.validate().is_ok());
 }
 
 #[test]

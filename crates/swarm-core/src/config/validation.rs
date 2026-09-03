@@ -507,6 +507,60 @@ impl SwarmConfig {
                 reason: error.to_string(),
             });
         }
+        match &self.hypothesis_graph.state_store {
+            BundleStoreConfig::Memory if self.hypothesis_graph.enabled => {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "hypothesis_graph.state_store",
+                    reason: "must use local_files when the collective graph is enabled".to_string(),
+                });
+            }
+            BundleStoreConfig::LocalFiles { directory } if directory.trim().is_empty() => {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "hypothesis_graph.state_store.directory",
+                    reason: "must not be empty".to_string(),
+                });
+            }
+            BundleStoreConfig::Memory | BundleStoreConfig::LocalFiles { .. } => {}
+        }
+        if self.hypothesis_graph.enabled {
+            if self.runtime.mode != RuntimeMode::DetectOnly {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "hypothesis_graph.enabled",
+                    reason: "collective graph execution is currently restricted to detect_only"
+                        .to_string(),
+                });
+            }
+            if !self.investigation.enabled {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "investigation.enabled",
+                    reason: "must be enabled with the collective hypothesis graph".to_string(),
+                });
+            }
+            if !self.correlation.enabled {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "correlation.enabled",
+                    reason: "must be enabled with the collective hypothesis graph".to_string(),
+                });
+            }
+            if !self.audit.bundle_store.is_durable() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "audit.bundle_store",
+                    reason: "must use local_files with the collective hypothesis graph".to_string(),
+                });
+            }
+            if !self.investigation.bundle_store.is_durable() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "investigation.bundle_store",
+                    reason: "must use local_files with the collective hypothesis graph".to_string(),
+                });
+            }
+            if !self.correlation.incident_store.is_durable() {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "correlation.incident_store",
+                    reason: "must use local_files with the collective hypothesis graph".to_string(),
+                });
+            }
+        }
 
         if self.canary.enabled {
             if self.canary.slot_id.trim().is_empty() {

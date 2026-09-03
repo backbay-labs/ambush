@@ -138,7 +138,7 @@ impl Default for GraphResourceLimits {
             max_hypotheses: 16,
             max_contradictions: 64,
             max_decisions_per_hypothesis: 64,
-            max_tasks: 128,
+            max_tasks: 256,
             max_task_lease_ms: 300_000,
             max_task_retries: 3,
             max_memory_ttl_ticks: MAX_STRATEGY_MEMORY_TTL_TICKS,
@@ -611,6 +611,7 @@ pub enum EvidenceSourceFamily {
     Kubernetes,
     Cloudtrail,
     Network,
+    Infrastructure,
     ThreatIntelligence,
 }
 
@@ -792,6 +793,8 @@ pub enum TypedEvidencePayload {
         signal_kind: String,
         principal_digest: String,
         credential_digest: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        success: Option<bool>,
         entity_ids: Vec<GraphNodeId>,
         content_digest: String,
     },
@@ -862,6 +865,8 @@ enum TypedEvidencePayloadWire {
         signal_kind: String,
         principal_digest: String,
         credential_digest: Option<String>,
+        #[serde(default)]
+        success: Option<bool>,
         entity_ids: Vec<GraphNodeId>,
         content_digest: String,
     },
@@ -945,12 +950,14 @@ impl From<TypedEvidencePayloadWire> for TypedEvidencePayload {
                 signal_kind,
                 principal_digest,
                 credential_digest,
+                success,
                 entity_ids,
                 content_digest,
             } => Self::Identity {
                 signal_kind,
                 principal_digest,
                 credential_digest,
+                success,
                 entity_ids,
                 content_digest,
             },
@@ -1101,6 +1108,7 @@ impl TypedEvidencePayload {
                 signal_kind,
                 principal_digest,
                 credential_digest,
+                success: _,
                 entity_ids,
                 content_digest,
             } => {
@@ -4100,10 +4108,12 @@ pub fn validate_completion_kind(
         (TaskKind::AcquireEvidence, TaskCompletionKind::EvidenceAdded)
             | (TaskKind::AcquireEvidence, TaskCompletionKind::NoFinding)
             | (TaskKind::ChallengeEdge, TaskCompletionKind::EdgeChallenged)
+            | (TaskKind::ChallengeEdge, TaskCompletionKind::NoFinding)
             | (
                 TaskKind::FalsifyHypothesis,
                 TaskCompletionKind::HypothesisFalsified
             )
+            | (TaskKind::FalsifyHypothesis, TaskCompletionKind::NoFinding)
     );
     if valid {
         Ok(())
@@ -4352,6 +4362,16 @@ impl TaskTerminalEnvelope {
                     });
                 }
             }
+            TaskKind::ChallengeEdge | TaskKind::FalsifyHypothesis
+                if self.completion.kind == TaskCompletionKind::NoFinding =>
+            {
+                if self.decision_link.is_some() {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "a no-finding reasoning task cannot carry decision lineage"
+                            .to_string(),
+                    });
+                }
+            }
             TaskKind::ChallengeEdge | TaskKind::FalsifyHypothesis => {
                 let link = self.decision_link.as_ref().ok_or_else(|| {
                     GraphAdmissionError::InvalidField {
@@ -4478,6 +4498,13 @@ pub struct TaskTerminalOutboxEntry {
     pub memory: Option<StrategyMemory>,
     pub memory_expiry: Option<StrategyMemoryExpiryEnvelope>,
     pub producer_key_id: AgentId,
+    /// Durable worker-publication delivery state. `None` identifies a legacy
+    /// outbox entry created before replayable worker publications existed and
+    /// is treated as already delivered. New entries reserve `Some(false)` in
+    /// the terminal commit; acknowledgement changes it to `Some(true)`, which
+    /// cannot increase the serialized campaign size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_acknowledged: Option<bool>,
 }
 
 impl TaskTerminalOutboxEntry {
@@ -4500,6 +4527,7 @@ impl TaskTerminalOutboxEntry {
             memory,
             memory_expiry,
             producer_key_id,
+            publication_acknowledged: Some(false),
         };
         entry.validate_for_task(task, descriptor, limits)?;
         Ok(entry)
@@ -4753,6 +4781,70 @@ impl TaskTerminalOutboxEntry {
         Ok(())
     }
 
+    fn validate_decision_for_task(
+        &self,
+        task: &TaskRecord,
+        evidence_ids: &BTreeSet<EvidenceId>,
+    ) -> Result<(), GraphAdmissionError> {
+        match (&self.envelope.decision_link, &self.decision) {
+            (None, None) => Ok(()),
+            (Some(link), Some(decision)) => {
+                link.validate()?;
+                decision.validate()?;
+                let expected_kind = match task.request.kind {
+                    TaskKind::ChallengeEdge => DecisionKind::Challenge,
+                    TaskKind::FalsifyHypothesis => DecisionKind::Falsify,
+                    TaskKind::AcquireEvidence => {
+                        return Err(GraphAdmissionError::InvalidTransition {
+                            reason: "evidence acquisition cannot publish a decision".to_string(),
+                        });
+                    }
+                };
+                if decision.producer_identity != task.request.claimant {
+                    return Err(GraphAdmissionError::InvalidWitness {
+                        reason: "terminal decision producer is not the claiming identity"
+                            .to_string(),
+                    });
+                }
+                if decision.kind != expected_kind || decision.producer_role != task.request.role {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason:
+                            "terminal decision kind, producer role, and producer identity do not match the claimed task"
+                                .to_string(),
+                    });
+                }
+                if let TaskTarget::Hypothesis { hypothesis_id } = &task.request.target
+                    && hypothesis_id != &decision.hypothesis_id
+                {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal decision hypothesis does not match the claimed task"
+                            .to_string(),
+                    });
+                }
+                if link.task_id != self.envelope.task_id
+                    || link.decision_id.as_ref() != Some(&decision.decision_id)
+                    || !link.evidence_ids.is_subset(&decision.evidence_ids)
+                    || decision.hypothesis_id.as_str().trim().is_empty()
+                {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal decision and link lineage do not match".to_string(),
+                    });
+                }
+                if !decision.evidence_ids.is_subset(evidence_ids) {
+                    return Err(GraphAdmissionError::UnknownEvidence);
+                }
+                validate_terminal_decision_upper_bound(
+                    decision,
+                    self.envelope.completion.completed_at,
+                )?;
+                Ok(())
+            }
+            _ => Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal decision must be present with its decision link".to_string(),
+            }),
+        }
+    }
+
     pub fn validate_for_task(
         &self,
         task: &TaskRecord,
@@ -4834,41 +4926,7 @@ impl TaskTerminalOutboxEntry {
             return Err(GraphAdmissionError::UnknownEvidence);
         }
         validate_outbox_evidence_scope(&task.request, &self.envelope.completion, &evidence_ids)?;
-        match (&self.envelope.decision_link, &self.decision) {
-            (None, None) => {}
-            (Some(link), Some(decision)) => {
-                link.validate()?;
-                decision.validate()?;
-                if decision.producer_identity != task.request.claimant {
-                    return Err(GraphAdmissionError::InvalidWitness {
-                        reason: "terminal decision producer is not the claiming identity"
-                            .to_string(),
-                    });
-                }
-                if link.task_id != self.envelope.task_id
-                    || link.decision_id.as_ref() != Some(&decision.decision_id)
-                    || !link.evidence_ids.is_subset(&decision.evidence_ids)
-                    || decision.hypothesis_id.as_str().trim().is_empty()
-                {
-                    return Err(GraphAdmissionError::InvalidTransition {
-                        reason: "terminal decision and link lineage do not match".to_string(),
-                    });
-                }
-                if !decision.evidence_ids.is_subset(&evidence_ids) {
-                    return Err(GraphAdmissionError::UnknownEvidence);
-                }
-                validate_terminal_decision_for_task(&task.request, decision)?;
-                validate_terminal_decision_upper_bound(
-                    decision,
-                    self.envelope.completion.completed_at,
-                )?;
-            }
-            _ => {
-                return Err(GraphAdmissionError::InvalidTransition {
-                    reason: "terminal decision must be present with its decision link".to_string(),
-                });
-            }
-        }
+        self.validate_decision_for_task(task, &evidence_ids)?;
         Ok(evidence_ids)
     }
 
@@ -5041,29 +5099,7 @@ impl TaskTerminalOutboxEntry {
             return Err(GraphAdmissionError::UnknownEvidence);
         }
         validate_outbox_evidence_scope(&task.request, &self.envelope.completion, &evidence_ids)?;
-        match (&self.envelope.decision_link, &self.decision) {
-            (None, None) => {}
-            (Some(link), Some(decision)) => {
-                link.validate()?;
-                decision.validate()?;
-                if link.task_id != self.envelope.task_id
-                    || link.decision_id.as_ref() != Some(&decision.decision_id)
-                    || !link.evidence_ids.is_subset(&decision.evidence_ids)
-                    || !decision.evidence_ids.is_subset(&evidence_ids)
-                {
-                    return Err(GraphAdmissionError::InvalidTransition {
-                        reason: "terminal decision and link lineage do not match".to_string(),
-                    });
-                }
-                validate_terminal_decision_for_task(&task.request, decision)?;
-                validate_terminal_decision_upper_bound(decision, completion.completed_at)?;
-            }
-            _ => {
-                return Err(GraphAdmissionError::InvalidTransition {
-                    reason: "terminal decision must be present with its decision link".to_string(),
-                });
-            }
-        }
+        self.validate_decision_for_task(task, &evidence_ids)?;
         self.validate_memory_lineage_for_committed_state(
             descriptor,
             &evidence_ids,
@@ -5072,28 +5108,6 @@ impl TaskTerminalOutboxEntry {
             logical_time_high_water,
         )?;
         Ok(())
-    }
-}
-
-fn validate_terminal_decision_for_task(
-    request: &TaskClaimRequest,
-    decision: &DecisionRecord,
-) -> Result<(), GraphAdmissionError> {
-    let valid = match (&request.kind, &request.target, decision.kind) {
-        (TaskKind::ChallengeEdge, TaskTarget::Edge { .. }, DecisionKind::Challenge) => true,
-        (
-            TaskKind::FalsifyHypothesis,
-            TaskTarget::Hypothesis { hypothesis_id },
-            DecisionKind::Falsify,
-        ) => hypothesis_id == &decision.hypothesis_id,
-        _ => false,
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(GraphAdmissionError::InvalidTransition {
-            reason: "terminal decision kind and target do not match the task".to_string(),
-        })
     }
 }
 
@@ -5149,6 +5163,10 @@ pub struct TaskTerminalProof {
     pub failure_summary_digest: Option<String>,
 }
 
+/// Bounded authenticated reason retained when a task's final permitted lease
+/// expires. This is a store-driven terminal, not a worker-authored failure.
+pub const TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY: &str = "task:retry-budget-exhausted";
+
 impl TaskTerminalProof {
     pub fn new(
         prior_generation: u64,
@@ -5194,11 +5212,38 @@ impl TaskTerminalProof {
         Ok(proof)
     }
 
+    pub fn new_retry_exhausted(
+        prior_state: TaskState,
+        prior_generation: u64,
+        prior_lease: TaskLease,
+        completer: AgentId,
+        completed_at: GraphLogicalTime,
+        max_task_lease_ms: u64,
+    ) -> Result<Self, GraphAdmissionError> {
+        let proof = Self {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            prior_state,
+            terminal_state: TaskState::Failed,
+            prior_generation,
+            prior_lease,
+            completer,
+            completed_at,
+            failure_summary_digest: Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY.to_string()),
+        };
+        proof.validate(max_task_lease_ms)?;
+        Ok(proof)
+    }
+
     pub fn validate(&self, max_task_lease_ms: u64) -> Result<(), GraphAdmissionError> {
         validate_schema(self.schema_version)?;
-        if self.prior_state != TaskState::Claimed {
+        let retry_exhausted = self.terminal_state == TaskState::Failed
+            && self.failure_summary_digest.as_deref() == Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY);
+        if self.prior_state != TaskState::Claimed
+            && !(retry_exhausted && self.prior_state == TaskState::Expired)
+        {
             return Err(GraphAdmissionError::InvalidTransition {
-                reason: "terminal proof must originate from a claimed task".to_string(),
+                reason: "terminal proof must originate from a claimed task, except retry exhaustion may follow expiry"
+                    .to_string(),
             });
         }
         if !matches!(
@@ -5230,7 +5275,8 @@ impl TaskTerminalProof {
         if matches!(
             self.terminal_state,
             TaskState::Completed | TaskState::Failed
-        ) && self.completed_at >= self.prior_lease.expires_at
+        ) && !retry_exhausted
+            && self.completed_at >= self.prior_lease.expires_at
         {
             return Err(GraphAdmissionError::InvalidTransition {
                 reason: "completed or failed proof must finish before lease expiry".to_string(),
@@ -5241,6 +5287,11 @@ impl TaskTerminalProof {
         {
             return Err(GraphAdmissionError::InvalidTransition {
                 reason: "expired proof must finish at or after lease expiry".to_string(),
+            });
+        }
+        if retry_exhausted && self.completed_at < self.prior_lease.expires_at {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "retry exhaustion must occur at or after lease expiry".to_string(),
             });
         }
         if let Some(summary) = &self.failure_summary_digest {
@@ -5339,11 +5390,14 @@ impl TaskRecord {
             });
         }
         let mut expected_prior_generation = 1_u64;
+        let mut expected_prior_state = TaskState::Claimed;
         for proof in &self.terminal_history {
             proof.validate(max_task_lease_ms)?;
-            if proof.prior_generation != expected_prior_generation {
+            if proof.prior_generation != expected_prior_generation
+                || proof.prior_state != expected_prior_state
+            {
                 return Err(GraphAdmissionError::InvalidTransition {
-                    reason: "terminal proof generations are not append-only".to_string(),
+                    reason: "terminal proof state and generations are not append-only".to_string(),
                 });
             }
             if proof.prior_lease.holder != self.request.claimant {
@@ -5352,6 +5406,7 @@ impl TaskRecord {
                 });
             }
             expected_prior_generation = expected_prior_generation.saturating_add(1);
+            expected_prior_state = proof.terminal_state;
         }
         if self.terminal_history.is_empty() && self.generation != 1 {
             return Err(GraphAdmissionError::InvalidTransition {
@@ -5536,6 +5591,64 @@ impl TaskRecord {
         self.state = TaskState::Expired;
         self.generation = self.generation.saturating_add(1);
         self.lease = None;
+        Ok(self)
+    }
+
+    /// Convert the last permitted expired lease into a durable failed state.
+    /// Both a still-materialized `Claimed` record and an explicitly `Expired`
+    /// record are accepted so restart recovery cannot strand either shape.
+    pub fn exhaust_retries(
+        mut self,
+        now: GraphLogicalTime,
+        max_task_lease_ms: u64,
+    ) -> Result<Self, GraphAdmissionError> {
+        now.validate()?;
+        let (prior_state, lease) = match self.state {
+            TaskState::Claimed => {
+                let lease = self
+                    .lease
+                    .clone()
+                    .ok_or(GraphAdmissionError::InvalidTransition {
+                        reason: "claimed retry exhaustion requires the active lease".to_string(),
+                    })?;
+                (TaskState::Claimed, lease)
+            }
+            TaskState::Expired => {
+                let lease = self
+                    .terminal_history
+                    .last()
+                    .map(|proof| proof.prior_lease.clone())
+                    .ok_or(GraphAdmissionError::InvalidTransition {
+                        reason: "expired retry exhaustion requires retained lease proof"
+                            .to_string(),
+                    })?;
+                (TaskState::Expired, lease)
+            }
+            TaskState::Pending | TaskState::Completed | TaskState::Failed => {
+                return Err(GraphAdmissionError::InvalidTransition {
+                    reason: "only an elapsed claimed or expired task can exhaust retries"
+                        .to_string(),
+                });
+            }
+        };
+        if now < lease.expires_at {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "task lease has not expired".to_string(),
+            });
+        }
+        let proof = TaskTerminalProof::new_retry_exhausted(
+            prior_state,
+            self.generation,
+            lease.clone(),
+            lease.holder,
+            now,
+            max_task_lease_ms,
+        )?;
+        self.terminal_history.push(proof);
+        self.state = TaskState::Failed;
+        self.generation = self.generation.saturating_add(1);
+        self.lease = None;
+        self.completion = None;
         Ok(self)
     }
 }
@@ -9374,6 +9487,41 @@ mod tests {
             "content_digest": "digest:intel"
         });
         assert!(serde_json::from_value::<TypedEvidencePayload>(expired).is_err());
+
+        let legacy_identity = serde_json::json!({
+            "kind": "identity",
+            "signal_kind": "authentication_event",
+            "principal_digest": "principal:legacy",
+            "credential_digest": "credential:legacy",
+            "entity_ids": ["node:actor:legacy", "node:credential:legacy"],
+            "content_digest": "digest:legacy"
+        });
+        let legacy_payload: TypedEvidencePayload =
+            serde_json::from_value(legacy_identity).expect("legacy identity payload should decode");
+        assert!(matches!(
+            &legacy_payload,
+            TypedEvidencePayload::Identity { success: None, .. }
+        ));
+        let signed_legacy = EvidenceEnvelope::new(
+            EvidenceSourceFamily::Identity,
+            "source:legacy-identity",
+            SourceLineage::new("fixture", "legacy-identity").unwrap(),
+            EvidenceClock::observed(GraphLogicalTime::new(10)),
+            OrderingClaim::Unknown,
+            legacy_payload,
+        )
+        .unwrap()
+        .sign_with(
+            &signer(),
+            GraphProducerRole::Normalizer,
+            "normalizer:legacy-identity",
+        )
+        .unwrap();
+        let legacy_wire = serde_json::to_string(&signed_legacy).unwrap();
+        assert!(!legacy_wire.contains("\"success\""));
+        let reloaded: EvidenceEnvelope = serde_json::from_str(&legacy_wire).unwrap();
+        assert_eq!(reloaded, signed_legacy);
+        reloaded.validate().unwrap();
     }
 
     #[test]
@@ -10181,6 +10329,25 @@ mod tests {
         (task, descriptor, entry, key)
     }
 
+    #[test]
+    fn terminal_publication_acknowledgement_consumes_reserved_wire_capacity() {
+        let (_, _, pending, _) = outbox_fixture();
+        assert_eq!(pending.publication_acknowledged, Some(false));
+        let pending_bytes = serde_json::to_vec(&pending).unwrap();
+        let mut acknowledged = pending.clone();
+        acknowledged.publication_acknowledged = Some(true);
+        let acknowledged_bytes = serde_json::to_vec(&acknowledged).unwrap();
+        assert!(acknowledged_bytes.len() <= pending_bytes.len());
+
+        let mut legacy_value = serde_json::to_value(&pending).unwrap();
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("publication_acknowledged");
+        let legacy: TaskTerminalOutboxEntry = serde_json::from_value(legacy_value).unwrap();
+        assert_eq!(legacy.publication_acknowledged, None);
+    }
+
     fn outbox_evidence_fixture_at(
         observed_at: GraphLogicalTime,
     ) -> Result<
@@ -10434,8 +10601,51 @@ mod tests {
                 memory: None,
                 memory_expiry: None,
                 producer_key_id: claimant,
+                publication_acknowledged: Some(false),
             },
         )
+    }
+
+    #[test]
+    fn retry_exhaustion_terminalizes_claimed_and_legacy_expired_shapes() {
+        let (mut claimed, _, _, _) = outbox_fixture();
+        claimed.attempts = 2;
+        assert!(
+            claimed
+                .clone()
+                .exhaust_retries(GraphLogicalTime::new(199), 100)
+                .is_err()
+        );
+
+        let directly_failed = claimed
+            .clone()
+            .exhaust_retries(GraphLogicalTime::new(200), 100)
+            .expect("elapsed final claim should fail terminally");
+        assert_eq!(directly_failed.state, TaskState::Failed);
+        assert_eq!(directly_failed.generation, 2);
+        assert_eq!(directly_failed.terminal_history.len(), 1);
+        assert_eq!(
+            directly_failed.terminal_history[0]
+                .failure_summary_digest
+                .as_deref(),
+            Some(TASK_RETRY_EXHAUSTED_FAILURE_SUMMARY)
+        );
+        directly_failed
+            .validate_with_limits(100, 2)
+            .expect("retry-exhausted claim should validate");
+
+        let expired = claimed
+            .expire(GraphLogicalTime::new(200), 100)
+            .expect("legacy final claim may already be persisted as expired");
+        let recovered = expired
+            .exhaust_retries(GraphLogicalTime::new(201), 100)
+            .expect("legacy expired retry should become failed");
+        assert_eq!(recovered.state, TaskState::Failed);
+        assert_eq!(recovered.generation, 3);
+        assert_eq!(recovered.terminal_history.len(), 2);
+        recovered
+            .validate_with_limits(100, 2)
+            .expect("recovered retry exhaustion should validate");
     }
 
     #[test]
@@ -10497,6 +10707,190 @@ mod tests {
     }
 
     #[test]
+    fn terminal_outbox_rejects_individually_valid_decision_for_wrong_task_kind() {
+        let key = signer();
+        let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
+        let evidence = envelope_at(
+            "record:wrong-terminal-decision",
+            GraphProducerRole::Normalizer,
+            GraphLogicalTime::new(140),
+        );
+        let hypothesis_id = HypothesisId::new("hypothesis:wrong-terminal-decision");
+        let target = TaskTarget::Hypothesis {
+            hypothesis_id: hypothesis_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            GraphId::new("graph:wrong-terminal-decision"),
+            target.clone(),
+            TaskKind::FalsifyHypothesis,
+            canonical_digest(&"wrong-terminal-decision-seed").expect("seed digest"),
+        )
+        .expect("descriptor");
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            descriptor.kind,
+            target.clone(),
+            GraphProducerRole::Falsifier,
+            claimant.clone(),
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [evidence.evidence_id.clone()],
+                [],
+            )
+            .expect("scope"),
+            GraphLogicalTime::new(100),
+        )
+        .expect("request");
+        let lease = TaskLease::new(
+            LeaseId::new("lease:wrong-terminal-decision"),
+            claimant.clone(),
+            GraphLogicalTime::new(100),
+            GraphLogicalTime::new(200),
+            FencingToken::new(1),
+        )
+        .expect("lease");
+        let task = TaskRecord::claimed(request.clone(), lease.clone()).expect("task");
+        let capability = TaskCapabilityProof::new(
+            request.task_id.clone(),
+            claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().expect("claim digest"),
+            &key,
+            "falsifier:wrong-terminal-decision",
+        )
+        .expect("capability");
+
+        // This support decision is internally valid and signed by the exact
+        // claimant key, but it cannot satisfy a falsification task.
+        let decision = DecisionRecord::new(
+            DecisionKind::Support,
+            hypothesis_id.clone(),
+            [evidence.evidence_id.clone()],
+            GraphProducerRole::Hunter,
+            claimant.clone(),
+            GraphLogicalTime::new(150),
+            "support cannot close falsification work",
+        )
+        .expect("decision")
+        .signed_with(&key, "hunter:wrong-terminal-decision")
+        .expect("signed decision");
+        assert!(decision.validate().is_ok());
+        let link = TaskDecisionLink::new(
+            request.task_id.clone(),
+            target.clone(),
+            [evidence.evidence_id.clone()],
+            Some(decision.decision_id.clone()),
+        )
+        .expect("decision link");
+        let terminal = TaskTerminalEnvelope::new(
+            request.task_id.clone(),
+            request.idempotency_key.clone(),
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            TaskCompletion::new(
+                TaskCompletionKind::HypothesisFalsified,
+                claimant.clone(),
+                GraphLogicalTime::new(150),
+                [evidence.evidence_id.clone()],
+                "digest:wrong-terminal-decision",
+            )
+            .expect("completion"),
+            Some(link),
+            claimant.clone(),
+            capability.clone(),
+        )
+        .expect("terminal envelope")
+        .signed_with(&key, "falsifier:wrong-terminal-decision")
+        .expect("terminal signature");
+        assert!(terminal.validate_for_task(&task, 1_000, 3).is_ok());
+
+        let publication = TaskTerminalOutboxEntry {
+            envelope: terminal,
+            evidence: vec![evidence.clone()],
+            decision: Some(decision),
+            memory: None,
+            memory_expiry: None,
+            producer_key_id: claimant.clone(),
+            publication_acknowledged: Some(false),
+        };
+        let error = publication
+            .validate_for_task(&task, &descriptor, &GraphResourceLimits::default())
+            .expect_err("support decision must not complete falsification work");
+        assert!(
+            matches!(
+                &error,
+                GraphAdmissionError::InvalidTransition { reason }
+                    if reason.contains("decision kind, producer role, and producer identity")
+            ),
+            "unexpected rejection: {error:?}"
+        );
+
+        let attacker_key = Keypair::from_seed(&[91_u8; 32]);
+        let attacker = AgentId::from_public_key_hex(&attacker_key.public_key().to_hex());
+        let wrong_producer_decision = DecisionRecord::new(
+            DecisionKind::Falsify,
+            hypothesis_id,
+            [evidence.evidence_id.clone()],
+            GraphProducerRole::Falsifier,
+            attacker,
+            GraphLogicalTime::new(150),
+            "a correctly typed decision from the wrong worker key",
+        )
+        .expect("decision")
+        .with_resulting_status(HypothesisStatus::Falsified)
+        .expect("status")
+        .signed_with(&attacker_key, "non-claimant-falsifier")
+        .expect("signature");
+        assert!(wrong_producer_decision.validate().is_ok());
+        let wrong_producer_link = TaskDecisionLink::new(
+            request.task_id.clone(),
+            target.clone(),
+            [evidence.evidence_id.clone()],
+            Some(wrong_producer_decision.decision_id.clone()),
+        )
+        .expect("decision link");
+        let wrong_producer_terminal = TaskTerminalEnvelope::new(
+            request.task_id,
+            request.idempotency_key,
+            lease.lease_id,
+            lease.fencing_token,
+            TaskCompletion::new(
+                TaskCompletionKind::HypothesisFalsified,
+                claimant.clone(),
+                GraphLogicalTime::new(150),
+                [evidence.evidence_id.clone()],
+                "digest:wrong-terminal-producer",
+            )
+            .expect("completion"),
+            Some(wrong_producer_link),
+            claimant.clone(),
+            capability,
+        )
+        .expect("terminal envelope")
+        .signed_with(&key, "falsifier:wrong-terminal-producer")
+        .expect("terminal signature");
+        let wrong_producer_publication = TaskTerminalOutboxEntry {
+            envelope: wrong_producer_terminal,
+            evidence: vec![evidence],
+            decision: Some(wrong_producer_decision),
+            memory: None,
+            memory_expiry: None,
+            producer_key_id: claimant,
+            publication_acknowledged: Some(false),
+        };
+        assert!(matches!(
+            wrong_producer_publication.validate_for_task(
+                &task,
+                &descriptor,
+                &GraphResourceLimits::default()
+            ),
+            Err(GraphAdmissionError::InvalidWitness { ref reason })
+                if reason.contains("claiming identity")
+        ));
+    }
+
+    #[test]
     fn terminal_outbox_binds_decision_kind_target_and_logical_time() {
         let limits = GraphResourceLimits::default();
         let (task, descriptor, valid) =
@@ -10531,7 +10925,7 @@ mod tests {
                 GraphLogicalTime::new(130),
             ),
             Err(GraphAdmissionError::InvalidTransition { reason })
-                if reason.contains("decision kind and target")
+                if reason.contains("decision kind")
         ));
         let wrong_committed = wrong_task
             .clone()
@@ -10549,7 +10943,7 @@ mod tests {
                 GraphLogicalTime::new(150),
             ),
             Err(GraphAdmissionError::InvalidTransition { reason })
-                if reason.contains("decision kind and target")
+                if reason.contains("decision kind")
         ));
 
         let (backdated_task, backdated_descriptor, backdated) =
@@ -10628,11 +11022,17 @@ mod tests {
         .signed_with(&signer(), "terminal-falsify-worker")
         .expect("terminal signature");
         entry.decision = Some(decision);
-        assert!(matches!(
-            entry.validate_for_task(&task, &descriptor, &limits),
-            Err(GraphAdmissionError::InvalidWitness { reason })
-                if reason.contains("claiming identity")
-        ));
+        let error = entry
+            .validate_for_task(&task, &descriptor, &limits)
+            .expect_err("non-claimant decision must be rejected");
+        assert!(
+            matches!(
+                &error,
+                GraphAdmissionError::InvalidWitness { reason }
+                    if reason.contains("claiming identity")
+            ),
+            "unexpected rejection: {error:?}"
+        );
     }
 
     #[test]
@@ -10920,6 +11320,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: claimant.clone(),
+            publication_acknowledged: Some(false),
         };
         assert!(
             boundary_entry
@@ -11063,6 +11464,7 @@ mod tests {
             memory: None,
             memory_expiry: None,
             producer_key_id: valid.producer_key_id.clone(),
+            publication_acknowledged: Some(false),
         };
         let wrong_target_committed = task
             .clone()

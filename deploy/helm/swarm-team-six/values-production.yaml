@@ -98,6 +98,22 @@ swarmConfig:
     incident_store:
       kind: local_files
       directory: /var/lib/swarm/incidents
+  hypothesis_graph:
+    enabled: true
+    state_store:
+      kind: local_files
+      directory: /var/lib/swarm/hypothesis-graph
+    # Use the wire-safe campaign ceilings in the production profile. The
+    # graph remains intentionally bounded and exposes current counts through
+    # the operator API and Prometheus for capacity alerting.
+    max_nodes: 4096
+    max_edges: 8192
+    max_evidence_bytes: 16777216
+    max_hypotheses: 256
+    max_contradictions: 4096
+    max_decisions: 4096
+    max_tasks: 4096
+    max_memory_records: 4096
   operator_surface:
     enabled: false
     # Deploy `swarmctl serve` as a separate operator workload before enabling this.

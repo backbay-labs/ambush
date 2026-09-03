@@ -39,7 +39,7 @@ use swarm_core::config::{
 };
 use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_core::pheromone::EscalationRecord;
-use swarm_core::types::AgentId;
+use swarm_core::types::{AgentId, ResponseAction};
 use swarm_governance::GovernanceAuthority;
 use swarm_pheromone::PheromoneSubstrate;
 use swarm_policy::configurable_gate::ConfigurableApprovalGate;
@@ -74,6 +74,9 @@ use swarm_runtime::evolution::{
     EvolutionProposalReviewState, FormalSafetyGate, StrategyGenome,
 };
 use swarm_runtime::evolution_status::DefaultEvolutionStatusHarness;
+use swarm_runtime::hypothesis_graph::{
+    CollectiveHypothesisService, GraphServiceError, GraphWorkerAdapter,
+};
 use swarm_runtime::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use swarm_runtime::mutation::DefaultEvolutionMutationHarness;
 use swarm_runtime::providence::{
@@ -94,7 +97,8 @@ use swarm_runtime::threat_intel_runtime::SharedThreatIntelFeedHealth;
 use swarm_runtime::{RuntimeError, StrategyProposalRouteError, SwarmRuntime};
 use swarm_spine::{
     AuditResponseRecord, AuditTrail, ConfiguredIncidentStore, ConfiguredInvestigationBundleStore,
-    ConfiguredReplayBundleStore, CorrelatedIncident, IncidentStore, ReplayBundleStore,
+    ConfiguredReplayBundleStore, CorrelatedIncident, GraphStoreError, IncidentStore,
+    ReplayBundleLookup, ReplayBundleStore, ReplayStoreError,
 };
 use swarm_whisker::{CompositeDetector, DetectionFinding, TelemetryEvent};
 use tracing::Instrument;
@@ -119,8 +123,9 @@ type IngestBuiltRuntime = (
     Arc<CompositeDetector>,
 );
 
-const MAX_INGEST_FUTURE_SKEW_MS: i64 = 5 * 60 * 1_000;
 const TIMESTAMP_MILLISECONDS_CUTOFF: i64 = 100_000_000_000;
+const HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE: usize = 256;
+const HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES: usize = 256;
 
 type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send + Sync>;
 
@@ -1184,6 +1189,7 @@ async fn process_runtime_event(
             let stack = state.stack.load_full();
             let detector = state.detector.load_full();
             let swarm_mode = state.current_mode_state().current;
+            let collective_reasoning = state.current_hypothesis_graph().is_some();
             match stack
                 .process_event_with_finding_observer(
                     detector.as_ref(),
@@ -1199,6 +1205,20 @@ async fn process_runtime_event(
                                 .service
                                 .playbook_action_for_finding(finding, swarm_mode)
                                 .filter(|action| !action.requires_governance_receipt())
+                        } else if collective_reasoning {
+                            // The graph is deliberately restricted to
+                            // detect-only operation, but it still requires the
+                            // persisted replay and investigation produced by
+                            // the audited action-request path. Escalation is an
+                            // advisory record in this mode; it cannot execute a
+                            // response adapter.
+                            Some(ResponseAction::Escalate {
+                                summary: format!(
+                                    "collective investigation for finding {}",
+                                    finding.finding_id
+                                ),
+                                urgency: finding.severity,
+                            })
                         } else {
                             None
                         }
@@ -1207,7 +1227,23 @@ async fn process_runtime_event(
                 )
                 .await
             {
-                Ok(_) => {
+                Ok(replay) => {
+                    if replay.is_some() && state.current_hypothesis_graph().is_some() {
+                        if let Some(notify) = &state.hypothesis_graph_admission_notify {
+                            // The replay is durable at this point. A coalescing
+                            // signal wakes the background reconciler, which
+                            // reloads durable replay records and performs all
+                            // graph snapshot/sign/fsync work off this request.
+                            notify.notify_one();
+                        } else {
+                            tracing::warn!(
+                                correlation_id = %correlation_id,
+                                event_id = %event.event_id,
+                                module = module_path!(),
+                                "collective hypothesis admission worker is unavailable after critical-path persistence"
+                            );
+                        }
+                    }
                     if let Some(tx) = &state.telemetry_tx {
                         match tx.try_send(event.clone()) {
                             Ok(()) => {}
@@ -1421,6 +1457,115 @@ pub enum IngestBuildError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    HypothesisGraph(#[from] GraphServiceError),
+
+    #[error(
+        "hypothesis_graph and its Stalker/Weaver worker configuration cannot be hot-reloaded; restart the runtime"
+    )]
+    HypothesisGraphReload,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HypothesisGraphReplayReconciliation {
+    pub examined: usize,
+    pub admitted: usize,
+    pub idempotent: usize,
+    pub quarantined: usize,
+    pub retryable_failures: usize,
+    pub failures: usize,
+    /// A complete scan page was consumed and another bounded background pass
+    /// is required. This is deliberately distinct from retryable failure: a
+    /// healthy backlog must continue immediately rather than wait for the
+    /// failure retry interval.
+    pub continuation_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayReconciliationDisposition {
+    Admitted,
+    Idempotent,
+    Retry,
+    Quarantined,
+}
+
+fn replay_submission_failure_is_retryable(error: &GraphServiceError) -> bool {
+    match error {
+        // These failures are derived from the replay's own bounded, typed
+        // graph material. Replaying the same bytes cannot make them valid.
+        GraphServiceError::Admission(admission)
+        | GraphServiceError::Store(GraphStoreError::Admission(admission)) => matches!(
+            admission,
+            swarm_core::hypothesis_graph::GraphAdmissionError::ResourceLimitExceeded {
+                resource,
+                ..
+            } if matches!(
+                resource.as_str(),
+                "scheduler.work_units_per_tick" | "scheduler.claims_per_tick"
+            )
+        ),
+        GraphServiceError::Store(
+            GraphStoreError::Canonicalization { .. } | GraphStoreError::ResourceLimit { .. },
+        ) => false,
+
+        // Everything else describes service composition, durable state,
+        // concurrency, identity, or I/O. Advancing the replay cursor across
+        // any of those failures would turn an operational outage into data
+        // loss. Keep the record retryable, including persisted-state
+        // validation failures that require operator repair.
+        GraphServiceError::Store(
+            GraphStoreError::PoisonedLock
+            | GraphStoreError::UnsupportedSchema(_)
+            | GraphStoreError::InvalidState { .. }
+            | GraphStoreError::InvalidSignature { .. }
+            | GraphStoreError::SignerMismatch { .. }
+            | GraphStoreError::DigestMismatch { .. }
+            | GraphStoreError::StalePredecessor { .. }
+            | GraphStoreError::TaskExists { .. }
+            | GraphStoreError::TaskNotFound { .. }
+            | GraphStoreError::AlreadyClaimed { .. }
+            | GraphStoreError::TaskExpiredNeedsReclaim { .. }
+            | GraphStoreError::StaleTaskGeneration { .. }
+            | GraphStoreError::LeaseMissing { .. }
+            | GraphStoreError::StaleLease { .. }
+            | GraphStoreError::StaleFence { .. }
+            | GraphStoreError::LeaseExpired { .. }
+            | GraphStoreError::InvalidLease { .. }
+            | GraphStoreError::InvalidTransition { .. }
+            | GraphStoreError::MissingState { .. }
+            | GraphStoreError::MissingAnchor { .. }
+            | GraphStoreError::MissingHighWater { .. }
+            | GraphStoreError::AnchorMismatch { .. }
+            | GraphStoreError::ReplayDetected { .. }
+            | GraphStoreError::NotRegularFile { .. }
+            | GraphStoreError::LockContended { .. }
+            | GraphStoreError::LockBinding { .. }
+            | GraphStoreError::InsecurePermissions { .. }
+            | GraphStoreError::Read { .. }
+            | GraphStoreError::Write { .. }
+            | GraphStoreError::Parse { .. }
+            | GraphStoreError::Serialize { .. },
+        )
+        | GraphServiceError::Memory(_)
+        | GraphServiceError::Poisoned
+        | GraphServiceError::NonDurableEnabledStore
+        | GraphServiceError::MissingCapability(_)
+        | GraphServiceError::MissingWorkerRegistration(_)
+        | GraphServiceError::EmptyWorkerCapabilities
+        | GraphServiceError::WorkerCapabilityConflict { .. }
+        | GraphServiceError::WorkerIdentityMismatch { .. }
+        | GraphServiceError::TaskUnavailable(_)
+        | GraphServiceError::GraphMismatch { .. }
+        | GraphServiceError::InvalidCollectionCursor
+        | GraphServiceError::CampaignRotationBlocked { .. }
+        | GraphServiceError::CampaignIndexExhausted
+        | GraphServiceError::InvalidCampaignEntry { .. }
+        | GraphServiceError::MissingCampaignHead { .. }
+        | GraphServiceError::InvalidCampaignHead { .. }
+        | GraphServiceError::CampaignIndexMismatch { .. }
+        | GraphServiceError::CampaignIo { .. } => true,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1567,7 +1712,8 @@ fn validate_live_event_timestamp(
     observed_now_ms: i64,
 ) -> Result<(), IngestProcessingError> {
     let normalized_timestamp_ms = normalized_ingest_timestamp_ms(timestamp)?;
-    let maximum_timestamp_ms = observed_now_ms.saturating_add(MAX_INGEST_FUTURE_SKEW_MS);
+    let maximum_timestamp_ms =
+        observed_now_ms.saturating_add(swarm_core::MAX_TELEMETRY_FUTURE_SKEW_MS);
     if normalized_timestamp_ms > maximum_timestamp_ms {
         return Err(IngestProcessingError::FutureEventTimestamp {
             timestamp,
@@ -1607,6 +1753,9 @@ pub struct IngestState {
     startup_attestation: Option<Arc<StartupAttestationReport>>,
     anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
     runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
+    hypothesis_graph: Option<Arc<CollectiveHypothesisService>>,
+    hypothesis_graph_admission_notify: Option<Arc<tokio::sync::Notify>>,
+    hypothesis_graph_reconciliation_lock: Arc<Mutex<()>>,
 }
 
 impl IngestState {
@@ -1655,7 +1804,14 @@ impl IngestState {
             .transpose()?
             .map(Arc::new);
         let strategy = strategy_status_label(&resolved);
+        let hypothesis_graph_config = resolved.hypothesis_graph.clone();
         let (stack, request_runtime, detector) = Self::build_runtime(resolved)?;
+        let graph_signer = swarm_crypto::Keypair::from_seed(&signing_key.to_bytes());
+        let hypothesis_graph = CollectiveHypothesisService::from_config(
+            &hypothesis_graph_config,
+            graph_signer,
+            stack.service.prometheus_metrics().cloned(),
+        )?;
         let detector_status = Arc::new(ArcSwap::from(Arc::new(DetectorRuntimeStatus::loaded(
             strategy,
         ))));
@@ -1708,6 +1864,9 @@ impl IngestState {
                     transitioned_at_ms: now_ms(),
                 }),
             )),
+            hypothesis_graph,
+            hypothesis_graph_admission_notify: None,
+            hypothesis_graph_reconciliation_lock: Arc::new(Mutex::new(())),
         };
         state.install_notification_payload_builder();
         Ok(state)
@@ -1720,6 +1879,16 @@ impl IngestState {
     }
 
     pub fn reload(&self, config: SwarmConfig) -> Result<(), IngestBuildError> {
+        let current_stack = self.stack.load_full();
+        let current = &current_stack.service.config;
+        let graph_worker_bindings_changed = current.hypothesis_graph.enabled
+            && (config.audit.bundle_store != current.audit.bundle_store
+                || config.investigation != current.investigation
+                || config.correlation != current.correlation
+                || config.pheromone != current.pheromone);
+        if config.hypothesis_graph != current.hypothesis_graph || graph_worker_bindings_changed {
+            return Err(IngestBuildError::HypothesisGraphReload);
+        }
         let strategy = strategy_status_label(&config);
         let platform_rate_limit = config.platform_api.rate_limit.clone();
         let new_platform_auth = crate::ingest::platform_api::PlatformApiAuthState::from_config(
@@ -1904,6 +2073,17 @@ impl IngestState {
 
     pub fn with_telemetry_channel(mut self, tx: tokio::sync::mpsc::Sender<TelemetryEvent>) -> Self {
         self.telemetry_tx = Some(tx);
+        self
+    }
+
+    /// Install the coalescing wakeup used by the daemon's durable replay
+    /// reconciler. The HTTP path only signals this primitive after replay
+    /// persistence; graph I/O remains entirely in the background worker.
+    pub fn with_hypothesis_graph_admission_notify(
+        mut self,
+        notify: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.hypothesis_graph_admission_notify = Some(notify);
         self
     }
 
@@ -2197,6 +2377,203 @@ impl IngestState {
 
     pub fn current_prometheus_metrics(&self) -> Option<CriticalPathMetrics> {
         self.stack.load_full().service.prometheus_metrics().cloned()
+    }
+
+    pub fn current_hypothesis_graph(&self) -> Option<Arc<CollectiveHypothesisService>> {
+        self.hypothesis_graph.clone()
+    }
+
+    pub fn current_hypothesis_graph_worker(
+        &self,
+        capabilities: impl IntoIterator<Item = swarm_core::hypothesis_graph::TaskKind>,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Option<GraphWorkerAdapter>, GraphServiceError> {
+        let signer = swarm_crypto::Keypair::from_seed(&signing_key.to_bytes());
+        self.hypothesis_graph
+            .as_ref()
+            .map(|service| {
+                service.worker_at(
+                    capabilities,
+                    signer,
+                    swarm_core::hypothesis_graph::GraphLogicalTime::new(now_ms()),
+                )
+            })
+            .transpose()
+    }
+
+    /// Reconcile durable replays added since the last admission checkpoint.
+    ///
+    /// The durable monotonic cursor prevents a lifetime rescan on every wake,
+    /// while a bounded durable retry set preserves individual graph failures
+    /// without allowing an unbounded poison queue. Reconciliation is serialized
+    /// across cloned runtime state so concurrent wakeups cannot lose checkpoint
+    /// updates. Unreadable replay storage still fails the reconciliation.
+    pub fn reconcile_hypothesis_graph_replays(
+        &self,
+    ) -> Result<HypothesisGraphReplayReconciliation, ReplayStoreError> {
+        let Some(graph) = self.current_hypothesis_graph() else {
+            return Ok(HypothesisGraphReplayReconciliation::default());
+        };
+        let _reconciliation_guard = self
+            .hypothesis_graph_reconciliation_lock
+            .lock()
+            .map_err(|_| ReplayStoreError::PoisonedLock)?;
+        let replay_store = self.current_replay_store();
+        let mut report = HypothesisGraphReplayReconciliation::default();
+        let mut checkpoint = replay_store.hypothesis_graph_checkpoint()?;
+        let consumer_graph_id = graph.replay_consumer_graph_id();
+        if checkpoint.consumer_graph_id.as_ref() != Some(&consumer_graph_id) {
+            checkpoint = swarm_spine::HypothesisGraphReplayCheckpoint {
+                consumer_graph_id: Some(consumer_graph_id),
+                cursor_sequence: 0,
+                retry_bundle_ids: BTreeSet::new(),
+            };
+            replay_store.persist_hypothesis_graph_checkpoint(&checkpoint)?;
+        }
+        if checkpoint.retry_bundle_ids.len() > HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
+            return Err(ReplayStoreError::InvalidState {
+                reason: format!(
+                    "hypothesis graph replay retry set contains {} entries; maximum is {}",
+                    checkpoint.retry_bundle_ids.len(),
+                    HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES
+                ),
+            });
+        }
+
+        let mut reconcile_bundle = |bundle_id: &str,
+                                    replay: Option<ReplayBundleLookup>,
+                                    advance_logical_tick: bool|
+         -> Result<
+            ReplayReconciliationDisposition,
+            ReplayStoreError,
+        > {
+            report.examined = report.examined.saturating_add(1);
+            let Some(replay) = replay else {
+                report.failures = report.failures.saturating_add(1);
+                report.quarantined = report.quarantined.saturating_add(1);
+                tracing::warn!(
+                    bundle_id,
+                    module = module_path!(),
+                    "durable replay disappeared during hypothesis graph reconciliation; quarantining its sequence"
+                );
+                return Ok(ReplayReconciliationDisposition::Quarantined);
+            };
+            let submission = if advance_logical_tick {
+                graph.retry_persisted_replay(&replay.bundle)
+            } else {
+                graph.submit_replay(&replay.bundle)
+            };
+            match submission {
+                Ok(submission) if submission.idempotent => {
+                    report.idempotent = report.idempotent.saturating_add(1);
+                    Ok(ReplayReconciliationDisposition::Idempotent)
+                }
+                Ok(_) => {
+                    report.admitted = report.admitted.saturating_add(1);
+                    Ok(ReplayReconciliationDisposition::Admitted)
+                }
+                Err(error) => {
+                    report.failures = report.failures.saturating_add(1);
+                    let retryable = replay_submission_failure_is_retryable(&error);
+                    if !retryable {
+                        report.quarantined = report.quarantined.saturating_add(1);
+                    } else {
+                        report.retryable_failures = report.retryable_failures.saturating_add(1);
+                    }
+                    tracing::warn!(
+                        bundle_id = %replay.record.bundle_id,
+                        hunt_id = %replay.record.hunt_id,
+                        reason = %error,
+                        retryable,
+                        module = module_path!(),
+                        "durable replay hypothesis graph reconciliation degraded"
+                    );
+                    Ok(if retryable {
+                        ReplayReconciliationDisposition::Retry
+                    } else {
+                        ReplayReconciliationDisposition::Quarantined
+                    })
+                }
+            }
+        };
+
+        let mut retry_tick_consumed = false;
+        for bundle_id in checkpoint
+            .retry_bundle_ids
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            let replay = replay_store.load_by_bundle_id(&bundle_id)?;
+            let disposition = reconcile_bundle(&bundle_id, replay, !retry_tick_consumed)?;
+            if disposition == ReplayReconciliationDisposition::Admitted {
+                // The first successful retry establishes this reconciliation
+                // pass's next logical scheduler tick. Every remaining retry
+                // must share its persisted budget instead of manufacturing a
+                // fresh tick for each bundle.
+                retry_tick_consumed = true;
+            }
+            if disposition != ReplayReconciliationDisposition::Retry {
+                checkpoint.retry_bundle_ids.remove(&bundle_id);
+            }
+        }
+
+        let scan_sequence = checkpoint.cursor_sequence;
+        let mut checkpoint_blocked = false;
+        let records = replay_store
+            .scan_after_sequence(scan_sequence, HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE)?;
+        if !records.is_empty() {
+            let page_len = records.len();
+            let mut previous_sequence = scan_sequence;
+            for record in records {
+                if record.store_sequence <= previous_sequence {
+                    return Err(ReplayStoreError::InvalidState {
+                        reason: format!(
+                            "replay sequence page is not strictly increasing after {}: observed {} for `{}`",
+                            previous_sequence, record.store_sequence, record.bundle_id
+                        ),
+                    });
+                }
+                let replay = replay_store.load_by_store_sequence(record.store_sequence)?;
+                if replay
+                    .as_ref()
+                    .is_some_and(|lookup| lookup.record != record)
+                {
+                    return Err(ReplayStoreError::InvalidState {
+                        reason: format!(
+                            "replay sequence {} changed between page and bundle load",
+                            record.store_sequence
+                        ),
+                    });
+                }
+                if reconcile_bundle(&record.bundle_id, replay, false)?
+                    == ReplayReconciliationDisposition::Retry
+                {
+                    if checkpoint.retry_bundle_ids.len() < HYPOTHESIS_GRAPH_REPLAY_MAX_RETRIES {
+                        checkpoint.retry_bundle_ids.insert(record.bundle_id.clone());
+                    } else {
+                        // Continue the bounded scan so a full retry queue
+                        // cannot hide later admissible evidence. Keep the
+                        // durable cursor before this unrecorded retry so the
+                        // record is never silently abandoned.
+                        checkpoint_blocked = true;
+                    }
+                }
+                if !checkpoint_blocked {
+                    checkpoint.cursor_sequence = record.store_sequence;
+                }
+                previous_sequence = record.store_sequence;
+            }
+            // A full page may have a successor. The background daemon consumes
+            // the next page in a separate spawn_blocking pass, which bounds
+            // startup and every later wake independently of retained history.
+            // If the retry set prevented cursor progress, use the delayed
+            // retry path instead of hot-looping the same blocked page.
+            report.continuation_pending =
+                !checkpoint_blocked && page_len == HYPOTHESIS_GRAPH_REPLAY_SCAN_PAGE_SIZE;
+        }
+        replay_store.persist_hypothesis_graph_checkpoint(&checkpoint)?;
+        Ok(report)
     }
 
     pub(in crate::ingest) fn platform_api_auth(

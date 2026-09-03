@@ -610,6 +610,7 @@ mod tests {
             vote_lineage: Vec::new(),
             decision: swarm_spine::InvestigationDecision::default(),
             failure_reason: None,
+            graph_findings_published: false,
         }
     }
 

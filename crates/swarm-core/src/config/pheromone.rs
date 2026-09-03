@@ -1,7 +1,7 @@
 use super::*;
 
 /// Pheromone substrate tuning.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PheromoneConfig {
     /// Default half-life for pheromone decay (seconds).
@@ -26,7 +26,7 @@ pub struct PheromoneConfig {
 }
 
 /// Deterministic action-selection rules for autonomous response.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ResponsePlaybookConfig {
     /// Ordered matching rules evaluated by PounceAgent.
@@ -34,7 +34,7 @@ pub struct ResponsePlaybookConfig {
 }
 
 /// One threat/severity/confidence band mapped to an ordered action sequence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResponsePlaybookRule {
     /// Threat class this rule applies to.
@@ -73,7 +73,7 @@ pub struct ResponsePlaybookRuleResolution {
 }
 
 /// One ordered conditional branch under a matched response playbook rule.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ResponsePlaybookBranch {
     /// Optional stable branch label for evidence and operator review.
@@ -85,7 +85,7 @@ pub struct ResponsePlaybookBranch {
 }
 
 /// Additional bounded selectors for one playbook branch.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ResponsePlaybookCondition {
     /// Optional threat-class override or refinement for this branch.

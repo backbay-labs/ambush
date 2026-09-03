@@ -3,6 +3,9 @@ use super::*;
 const DEFAULT_HYPOTHESIS_GRAPH_MAX_MEMORY_TTL_TICKS: u64 = 86_400_000;
 const DEFAULT_HYPOTHESIS_GRAPH_MAX_WORK_UNITS_PER_TICK: u32 = 10_000;
 const DEFAULT_HYPOTHESIS_GRAPH_MAX_CLAIMS_PER_TICK: u16 = 128;
+/// Minimum cumulative evidence budget that can admit one compact, signed
+/// production envelope with fixed-width digests, node IDs, and Ed25519 proof.
+pub const MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES: usize = 2 * 1024;
 
 /// Bounded collective-reasoning configuration. The feature is deliberately
 /// disabled by default so existing runtime paths retain their byte shape.
@@ -11,6 +14,11 @@ const DEFAULT_HYPOTHESIS_GRAPH_MAX_CLAIMS_PER_TICK: u16 = 128;
 pub struct HypothesisGraphConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Authenticated graph and strategy-memory persistence. Enabled shipped
+    /// runtimes require a durable local-files root; memory remains available
+    /// for deterministic unit and benchmark harnesses.
+    #[serde(default, skip_serializing_if = "hypothesis_graph_store_is_memory")]
+    pub state_store: BundleStoreConfig,
     #[serde(default = "default_hypothesis_graph_max_nodes")]
     pub max_nodes: usize,
     #[serde(default = "default_hypothesis_graph_max_edges")]
@@ -47,11 +55,17 @@ pub struct HypothesisGraphConfig {
     pub max_claims_per_tick: u16,
 }
 
+fn hypothesis_graph_store_is_memory(store: &BundleStoreConfig) -> bool {
+    matches!(store, BundleStoreConfig::Memory)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HypothesisGraphConfigWire {
     #[serde(default)]
     enabled: bool,
+    #[serde(default)]
+    state_store: BundleStoreConfig,
     #[serde(default = "default_hypothesis_graph_max_nodes")]
     max_nodes: usize,
     #[serde(default = "default_hypothesis_graph_max_edges")]
@@ -96,6 +110,7 @@ impl<'de> Deserialize<'de> for HypothesisGraphConfig {
         let wire = HypothesisGraphConfigWire::deserialize(deserializer)?;
         let config = Self {
             enabled: wire.enabled,
+            state_store: wire.state_store,
             max_nodes: wire.max_nodes,
             max_edges: wire.max_edges,
             max_evidence_bytes: wire.max_evidence_bytes,
@@ -139,6 +154,7 @@ impl Default for HypothesisGraphConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            state_store: BundleStoreConfig::default(),
             max_nodes: default_hypothesis_graph_max_nodes(),
             max_edges: default_hypothesis_graph_max_edges(),
             max_evidence_bytes: default_hypothesis_graph_max_evidence_bytes(),
@@ -186,6 +202,41 @@ impl HypothesisGraphConfig {
     pub fn validate_reasoning_limits(
         &self,
     ) -> Result<(), crate::hypothesis_graph::GraphAdmissionError> {
+        if self.enabled && self.max_nodes < 5 {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_nodes".to_string(),
+                reason: "must be at least 5 when enabled so every normalized entity for one replay can be admitted"
+                    .to_string(),
+            });
+        }
+        if self.enabled && self.max_evidence_bytes < MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_evidence_bytes".to_string(),
+                reason: format!(
+                    "must be at least {MIN_HYPOTHESIS_GRAPH_EVIDENCE_BYTES} when enabled so one signed production evidence envelope can be admitted"
+                ),
+            });
+        }
+        if self.enabled && self.max_hypotheses < 2 {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_hypotheses".to_string(),
+                reason: "must be at least 2 when enabled so one replay can be admitted".to_string(),
+            });
+        }
+        if self.enabled && self.max_tasks < 6 {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_tasks".to_string(),
+                reason: "must be at least 6 when enabled so one parented production seed can be admitted"
+                    .to_string(),
+            });
+        }
+        if self.enabled && self.max_graph_depth < 2 {
+            return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
+                field: "max_graph_depth".to_string(),
+                reason: "must be at least 2 when enabled so one causal edge can be admitted"
+                    .to_string(),
+            });
+        }
         if self.max_memory_ttl_ticks == 0
             || self.max_memory_ttl_ticks > crate::hypothesis_graph::MAX_STRATEGY_MEMORY_TTL_TICKS
         {
@@ -197,14 +248,15 @@ impl HypothesisGraphConfig {
                 ),
             });
         }
-        if self.max_work_units_per_tick == 0
+        let minimum_work_units = if self.enabled { 6 } else { 1 };
+        if self.max_work_units_per_tick < minimum_work_units
             || self.max_work_units_per_tick
                 > crate::hypothesis_graph::SchedulerBudget::MAX_WORK_UNITS
         {
             return Err(crate::hypothesis_graph::GraphAdmissionError::InvalidLimit {
                 field: "max_work_units_per_tick".to_string(),
                 reason: format!(
-                    "must be between 1 and {}",
+                    "must be between {minimum_work_units} and {}",
                     crate::hypothesis_graph::SchedulerBudget::MAX_WORK_UNITS
                 ),
             });
