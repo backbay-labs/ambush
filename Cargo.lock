@@ -2984,6 +2984,7 @@ dependencies = [
  "http",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2",
  "swarm-crypto",
  "thiserror 2.0.18",

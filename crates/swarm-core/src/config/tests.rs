@@ -441,6 +441,7 @@ fn operator_surface_principals_require_scopes() {
         token_env: "SWARM_OPERATOR_READER_TOKEN".to_string(),
         token_expires_at_ms: None,
         scopes: Vec::new(),
+        nostr_pubkey: None,
     }];
 
     let error = config.validate().unwrap_err();
@@ -461,12 +462,14 @@ fn operator_surface_rejects_duplicate_principal_token_envs() {
             token_env: "SWARM_OPERATOR_SHARED_TOKEN".to_string(),
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Read],
+            nostr_pubkey: None,
         },
         OperatorPrincipalConfig {
             operator_id: "approver".to_string(),
             token_env: "SWARM_OPERATOR_SHARED_TOKEN".to_string(),
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Approve],
+            nostr_pubkey: None,
         },
     ];
 
@@ -491,6 +494,7 @@ fn operator_surface_requires_read_scope_when_platform_api_is_enabled() {
         token_env: "SWARM_OPERATOR_MAINTAINER_TOKEN".to_string(),
         token_expires_at_ms: None,
         scopes: vec![OperatorScope::Maintenance],
+        nostr_pubkey: None,
     }];
 
     let error = config.validate().unwrap_err();
@@ -498,6 +502,29 @@ fn operator_surface_requires_read_scope_when_platform_api_is_enabled() {
         error.to_string(),
         "invalid field `operator_surface.auth.principals.scopes`: at least one principal must grant `read` scope"
     );
+}
+
+#[test]
+fn operator_surface_rejects_malformed_principal_nostr_pubkey() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.operator.enabled = true;
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "console".to_string(),
+        token_env: "SWARM_OPERATOR_CONSOLE_TOKEN".to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        nostr_pubkey: Some("npub1notahexkey".to_string()),
+    }];
+
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `operator_surface.auth.principals.nostr_pubkey`: principal 0 (`console`) nostr_pubkey must be exactly 64 lowercase hex characters"
+    );
+
+    config.operator.auth.principals[0].nostr_pubkey = Some("c".repeat(64));
+    config.validate().unwrap();
 }
 
 #[test]
@@ -527,6 +554,7 @@ fn operator_surface_rejects_non_positive_token_expiry() {
         token_env: "SWARM_OPERATOR_READER_TOKEN".to_string(),
         token_expires_at_ms: Some(0),
         scopes: vec![OperatorScope::Read],
+        nostr_pubkey: None,
     }];
 
     let error = config.validate().unwrap_err();

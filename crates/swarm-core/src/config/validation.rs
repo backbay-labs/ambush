@@ -709,6 +709,15 @@ impl SwarmConfig {
                         reason: format!("principal {index} must grant at least one scope"),
                     });
                 }
+                if principal.validate().is_err() {
+                    return Err(ConfigValidationError::InvalidField {
+                        field: "operator_surface.auth.principals.nostr_pubkey",
+                        reason: format!(
+                            "principal {index} (`{}`) nostr_pubkey must be exactly 64 lowercase hex characters",
+                            principal.operator_id.trim()
+                        ),
+                    });
+                }
             }
 
             if !principals
