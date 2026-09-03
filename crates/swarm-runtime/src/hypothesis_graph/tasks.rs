@@ -671,6 +671,7 @@ impl HypothesisTaskLedger {
             memory: memory.clone(),
             memory_expiry: memory_expiry.clone(),
             producer_key_id: claim.claimant.clone(),
+            publication_acknowledged: Some(false),
         };
         if let Some(committed) = exact_terminal_retry(&snapshot, claim, &retry_candidate)? {
             return Ok(committed);

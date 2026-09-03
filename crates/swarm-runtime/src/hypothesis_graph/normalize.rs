@@ -577,10 +577,10 @@ fn process_payload(
         .transpose()?;
     let parent_node = parent_digest
         .as_deref()
-        .map(|digest| {
-            let executable_digest = digest_projection(&("parent_executable", digest))?;
-            ProcessNode::new(digest, executable_digest)
-        })
+        // A process must retain the same source/host/name identity when it
+        // appears first as a child and later as a parent. Parent-specific
+        // executable material created a disconnected third representation.
+        .map(|digest| ProcessNode::new(digest, digest))
         .transpose()?;
     let correlation_node = ProcessNode::new(process_digest.clone(), process_digest.clone())?;
     let process_node = match parent_node.as_ref() {

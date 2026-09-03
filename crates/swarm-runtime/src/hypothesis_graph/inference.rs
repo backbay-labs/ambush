@@ -6,7 +6,6 @@
 
 use swarm_core::hypothesis_graph::{
     CausalRelation, GraphAdmissionError, GraphNodeId, ProcessNode, TypedEvidencePayload,
-    canonical_digest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,9 +96,7 @@ pub fn infer_causal_relations(
             parent_process_digest: Some(parent_process_digest),
             ..
         } if signal_kind == "process_start" => {
-            let executable_digest =
-                canonical_digest(&("parent_executable", parent_process_digest))?;
-            Some(ProcessNode::new(parent_process_digest, executable_digest)?.node_id)
+            Some(ProcessNode::new(parent_process_digest, parent_process_digest)?.node_id)
         }
         _ => None,
     };
@@ -184,13 +181,18 @@ pub fn infer_causal_relations(
                 // the correlation node is the stable source/host/process
                 // identity used by less expressive network telemetry. This
                 // explicit bridge keeps spawn-to-contact paths connected.
-                relations.push(inferred(
-                    entity_ids,
-                    0,
-                    3,
-                    CausalRelation::DependsOn,
-                    signal_kind,
-                )?);
+                // A process that reports itself as its own parent already has
+                // the stable identity as the spawn source. Adding the reverse
+                // bridge in that case would create a two-edge causal cycle.
+                if entity_ids.get(2) != entity_ids.get(3) {
+                    relations.push(inferred(
+                        entity_ids,
+                        0,
+                        3,
+                        CausalRelation::DependsOn,
+                        signal_kind,
+                    )?);
+                }
                 if entity_ids.len() >= 5 {
                     relations.push(inferred(
                         entity_ids,
@@ -343,9 +345,7 @@ mod tests {
     #[test]
     fn process_start_inference_preserves_parent_lineage_with_or_without_actor() {
         let parent_digest = "parent";
-        let parent_executable_digest = canonical_digest(&("parent_executable", parent_digest))
-            .expect("fixture parent executable digest should be canonical");
-        let parent_node_id = ProcessNode::new(parent_digest, parent_executable_digest)
+        let parent_node_id = ProcessNode::new(parent_digest, parent_digest)
             .expect("fixture parent process should be valid")
             .node_id;
         let payload = |entity_ids| TypedEvidencePayload::Process {
@@ -390,6 +390,27 @@ mod tests {
         assert_eq!(with_actor[2].from, GraphNodeId::new("actor"));
         assert_eq!(with_actor[2].to, GraphNodeId::new("child"));
         assert_eq!(with_actor[2].relation, CausalRelation::Uses);
+
+        let self_parent_node_id = ProcessNode::new("self", "self")
+            .expect("fixture self-parent process should be valid")
+            .node_id;
+        let self_parent = infer_causal_relations(&TypedEvidencePayload::Process {
+            signal_kind: "process_start".to_string(),
+            process_digest: "self".to_string(),
+            parent_process_digest: Some("self".to_string()),
+            entity_ids: vec![
+                GraphNodeId::new("self-instance"),
+                GraphNodeId::new("self-event"),
+                self_parent_node_id.clone(),
+                self_parent_node_id.clone(),
+            ],
+            content_digest: "0".repeat(64),
+        })
+        .expect("self-parent process should not infer a causal cycle");
+        assert_eq!(self_parent.len(), 1);
+        assert_eq!(self_parent[0].from, self_parent_node_id);
+        assert_eq!(self_parent[0].to, GraphNodeId::new("self-instance"));
+        assert_eq!(self_parent[0].relation, CausalRelation::Spawns);
 
         let legacy_with_actor = infer_causal_relations(&payload(vec![
             GraphNodeId::new("legacy-child"),

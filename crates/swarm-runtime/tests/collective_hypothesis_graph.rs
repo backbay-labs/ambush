@@ -5022,6 +5022,105 @@ fn parent_bound_process_path_connects_to_network_correlation_identity() {
 }
 
 #[test]
+fn consecutive_process_starts_share_the_child_to_parent_identity() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(230), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(231),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(232)).unwrap();
+
+    let mut first =
+        production_replay_bundle("hunt:phase286:process-chain:first", 1_700_000_090_060);
+    let TelemetryPayload::ProcessStart(first_process) = &mut first.event.payload else {
+        unreachable!()
+    };
+    first_process.parent_process = "process-a".to_string();
+    first_process.process_name = "process-b".to_string();
+
+    let mut second =
+        production_replay_bundle("hunt:phase286:process-chain:second", 1_700_000_090_061);
+    second.event.source = first.event.source.clone();
+    second.event.host_id = first.event.host_id.clone();
+    let TelemetryPayload::ProcessStart(second_process) = &mut second.event.payload else {
+        unreachable!()
+    };
+    second_process.parent_process = "process-b".to_string();
+    second_process.process_name = "process-c".to_string();
+
+    let first_submission = service.submit_replay(&first).unwrap();
+    let second_submission = service.submit_replay(&second).unwrap();
+    let projection = service.operator_projection().unwrap();
+    let first_entities = projection.graph.evidence[&first_submission.evidence_id].entity_ids();
+    let second_entities = projection.graph.evidence[&second_submission.evidence_id].entity_ids();
+
+    assert_eq!(
+        first_entities[3], second_entities[2],
+        "process B's correlation identity must become the next spawn parent"
+    );
+    assert!(projection.graph.edges.values().any(|edge| {
+        edge.relation == CausalRelation::DependsOn
+            && edge.from == first_entities[0]
+            && edge.to == first_entities[3]
+    }));
+    assert!(projection.graph.edges.values().any(|edge| {
+        edge.relation == CausalRelation::Spawns
+            && edge.from == second_entities[2]
+            && edge.to == second_entities[0]
+    }));
+}
+
+#[test]
+fn self_parent_process_start_is_admitted_without_a_causal_cycle() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(233), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(234),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(235)).unwrap();
+
+    let mut replay =
+        production_replay_bundle("hunt:phase286:self-parent-process", 1_700_000_090_062);
+    let TelemetryPayload::ProcessStart(process) = &mut replay.event.payload else {
+        unreachable!()
+    };
+    process.parent_process = "process-self".to_string();
+    process.process_name = "process-self".to_string();
+
+    let submission = service.submit_replay(&replay).unwrap();
+    let projection = service.operator_projection().unwrap();
+    let entities = projection.graph.evidence[&submission.evidence_id].entity_ids();
+
+    assert_eq!(entities[2], entities[3]);
+    assert!(projection.graph.edges.values().any(|edge| {
+        edge.relation == CausalRelation::Spawns
+            && edge.from == entities[2]
+            && edge.to == entities[0]
+    }));
+    assert!(!projection.graph.edges.values().any(|edge| {
+        edge.relation == CausalRelation::DependsOn
+            && edge.from == entities[0]
+            && edge.to == entities[3]
+    }));
+}
+
+#[test]
 fn accepted_future_ingest_skew_remains_valid_graph_evidence() {
     let config = HypothesisGraphConfig {
         enabled: true,
@@ -5254,6 +5353,12 @@ fn late_enrichment_extends_its_original_campaign_after_rotation() {
             directory: root.display().to_string(),
         },
         max_hypotheses: 2,
+        // The original campaign retains six completed tasks and one memory.
+        // Late enrichment of its already-falsified benign alternative creates
+        // seven additional tasks and no new memory producer. Reconstructing
+        // that alternative as active would project an eighth task.
+        max_tasks: 13,
+        max_memory_records: 1,
         max_work_units_per_tick: 32,
         max_claims_per_tick: 16,
         ..HypothesisGraphConfig::default()

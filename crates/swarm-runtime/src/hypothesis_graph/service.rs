@@ -1427,22 +1427,43 @@ impl CollectiveHypothesisService {
         // admission. Counting empty-claim candidates here would omit every
         // generated challenge task, understate scheduler/campaign capacity,
         // and make the preflight disagree with the CAS path.
-        let candidate_hypotheses = competing_hypotheses(&initial_seed, &initial.state().limits)?
-            .into_iter()
-            .map(|(hypothesis_id, hypothesis)| {
-                (
-                    hypothesis_id,
-                    hypothesis.with_claims(candidate_edge_ids.iter().cloned()),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let candidate_hypothesis_ids = candidate_hypotheses
+        let fresh_candidate_hypotheses =
+            competing_hypotheses(&initial_seed, &initial.state().limits)?
+                .into_iter()
+                .map(|(hypothesis_id, hypothesis)| {
+                    (
+                        hypothesis_id,
+                        hypothesis.with_claims(candidate_edge_ids.iter().cloned()),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+        let candidate_hypothesis_ids = fresh_candidate_hypotheses
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
-        let task_target_count =
-            coordination_task_targets(&initial_seed, &candidate_edge_ids, &candidate_hypotheses)?
-                .len();
+        // Preserve durable status and decision history in the capacity
+        // projection exactly as atomic seed admission does. A later replay
+        // may add claims to a falsified or retired alternative, but it cannot
+        // make that alternative active again merely for preflight counting.
+        let mut projected_hypotheses = initial.state().hypotheses.clone();
+        for (hypothesis_id, candidate) in fresh_candidate_hypotheses {
+            match projected_hypotheses.get_mut(&hypothesis_id) {
+                Some(existing) => existing.claims.extend(candidate.claims),
+                None => {
+                    projected_hypotheses.insert(hypothesis_id, candidate);
+                }
+            }
+        }
+        let task_targets =
+            coordination_task_targets(&initial_seed, &candidate_edge_ids, &projected_hypotheses)?;
+        let task_target_count = task_targets.len();
+        let added_memory_reservations = task_targets
+            .iter()
+            .filter(|(kind, target)| {
+                *kind == TaskKind::FalsifyHypothesis
+                    && matches!(target, TaskTarget::Hypothesis { hypothesis_id } if hypothesis_id == &benign)
+            })
+            .count();
         let max_seed_work_units =
             usize::try_from(self.config.max_work_units_per_tick).unwrap_or(usize::MAX);
         if task_target_count > max_seed_work_units {
@@ -1459,6 +1480,7 @@ impl CollectiveHypothesisService {
             &edges,
             &candidate_hypothesis_ids,
             task_target_count,
+            added_memory_reservations,
         )? {
             if original_campaign_index.is_some() {
                 return Err(GraphStoreError::ResourceLimit {
@@ -3760,6 +3782,7 @@ fn campaign_requires_rotation(
     candidate_edges: &[CausalEdge],
     candidate_hypothesis_ids: &BTreeSet<HypothesisId>,
     task_target_count: usize,
+    added_memory_reservations: usize,
 ) -> Result<bool, GraphServiceError> {
     let state = snapshot.state();
     let has_retained_work =
@@ -3848,7 +3871,7 @@ fn campaign_requires_rotation(
         || state.tasks.len().saturating_add(task_target_count) > limits.max_tasks
         || committed_memory_records
             .saturating_add(pending_memory_reservations)
-            .saturating_add(1)
+            .saturating_add(added_memory_reservations)
             > limits.max_memory_records
         || topology_requires_rotation(state, candidate_edges))
 }
