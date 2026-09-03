@@ -2634,15 +2634,12 @@ test("sends a thread message to its parent channel with a root-thread link", asy
     .filter({ hasText: replySummary })
     .last();
   await expect
-    .poll(
-      async () => {
-        if (await sharedRow.isVisible()) return true;
-        const scrollToLatest = page.getByTestId("message-scroll-to-latest");
-        if (await scrollToLatest.isVisible()) await scrollToLatest.click();
-        return false;
-      },
-      { timeout: 15_000 },
-    )
+    .poll(async () => {
+      if (await sharedRow.isVisible()) return true;
+      const scrollToLatest = page.getByTestId("message-scroll-to-latest");
+      if (await scrollToLatest.isVisible()) await scrollToLatest.click();
+      return false;
+    })
     .toBe(true);
   await expect(sharedRow.getByTestId("message-author")).toHaveText(
     "npub1mock...",

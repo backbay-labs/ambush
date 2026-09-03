@@ -25,4 +25,7 @@ export type Identity = {
    * failed. Identity resolution was skipped; the sentinel is preserved so
    * the next relaunch retries the wipe automatically. */
   resetFailed?: boolean;
+  /** True when a pre-identity startup migration failed. Identity mutation and
+   * signing stay disabled until migration retry succeeds and the app relaunches. */
+  migrationFailed?: boolean;
 };

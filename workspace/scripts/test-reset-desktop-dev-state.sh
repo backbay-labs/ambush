@@ -13,7 +13,10 @@ git -C "$main" -c user.name=fixture -c user.email=fixture@invalid commit -q --al
 worktree="$tmp/Scoped_Worktree"
 git -C "$main" worktree add -q -b feature/reset "$worktree"
 git -C "$main" branch legacy/inactive
+empty_slug_worktree="$tmp/___"
+git -C "$main" worktree add -q -b empty/slug "$empty_slug_worktree"
 worktree_hash=$(python3 -c 'import hashlib, os, sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:8])' "$worktree")
+empty_slug_hash=$(python3 -c 'import hashlib, os, sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:8])' "$empty_slug_worktree")
 workspace="$worktree/workspace"
 mkdir -p "$workspace/scripts"
 cp "$source_script" "$workspace/scripts/reset-desktop-dev-state.sh"
@@ -28,8 +31,9 @@ mkdir -p \
     "$XDG_DATA_HOME/com.backbay.ambush.app" \
     "$XDG_CONFIG_HOME/com.backbay.ambush.app.dev.scoped-worktree" \
     "$XDG_CACHE_HOME/com.backbay.ambush.app.dev.scoped-worktree" \
-    "$HOME/.ambush-dev"
+    "$HOME/.ambush-dev/keyring-services-v1"
 touch "$HOME/.ambush-dev/old-state"
+printf '1\n' > "$HOME/.ambush-dev/keyring-services-v1/ambush-desktop-dev.deleted-worktree-deadbeef"
 
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/secret-tool" <<'MOCK'
@@ -54,8 +58,16 @@ for service in \
     buzz-desktop-dev \
     sprout-desktop-dev \
     ambush-desktop-dev.main \
+    buzz-desktop-dev.main \
+    sprout-desktop-dev.main \
+    ambush-desktop-dev.head \
+    buzz-desktop-dev.head \
+    sprout-desktop-dev.head \
+    ambush-desktop-dev.deleted-worktree-deadbeef \
     ambush-desktop-dev.scoped-worktree \
     ambush-desktop-dev.scoped-worktree-${worktree_hash} \
+    ambush-desktop-dev.worktree-${empty_slug_hash} \
+    ambush-desktop-dev.worktree \
     ambush-desktop-dev.feature-reset \
     ambush-desktop-dev.legacy-inactive \
     buzz-desktop-dev.feature-reset \
@@ -69,5 +81,24 @@ if grep -Fx -- "clear service ambush-desktop username secrets target default" \
     echo "full dev reset must preserve the production keyring service" >&2
     exit 1
 fi
+
+# A similarly prefixed registry entry is not Ambush-owned and must make the
+# reset fail before it deletes either the registry or any keyring service.
+mkdir -p "$HOME/.ambush-dev/keyring-services-v1"
+printf '1\n' > "$HOME/.ambush-dev/keyring-services-v1/ambush-desktop-devil.collision"
+if AMBUSH_TEST_PLATFORM=Linux "$workspace/scripts/reset-desktop-dev-state.sh" >/dev/null 2>&1; then
+    echo "full dev reset must reject a keyring prefix collision" >&2
+    exit 1
+fi
+[[ -f "$HOME/.ambush-dev/keyring-services-v1/ambush-desktop-devil.collision" ]]
+
+rm -rf -- "$HOME/.ambush-dev/keyring-services-v1"
+mkdir -p "$HOME/.ambush-dev/keyring-services-v1"
+printf '\n1' > "$HOME/.ambush-dev/keyring-services-v1/ambush-desktop-dev.corrupt"
+if AMBUSH_TEST_PLATFORM=Linux "$workspace/scripts/reset-desktop-dev-state.sh" >/dev/null 2>&1; then
+    echo "full dev reset must reject non-exact registry marker contents" >&2
+    exit 1
+fi
+[[ -f "$HOME/.ambush-dev/keyring-services-v1/ambush-desktop-dev.corrupt" ]]
 
 echo "full desktop dev reset scope test passed"

@@ -21,7 +21,9 @@ use tauri::Manager;
 
 use crate::util::replace_with_symlink;
 mod product_rename;
-pub(crate) use product_rename::app_data_migration_sources;
+pub(crate) use product_rename::{
+    app_data_migration_sources, keyring_service_lineage, valid_instance_scope,
+};
 use product_rename::{copy_dir_all, migrate_legacy_app_data_dir, migrate_legacy_keyring_data};
 
 const CANONICAL_DEV_IDENTIFIER: &str = "com.backbay.ambush.app.dev";

@@ -1,9 +1,17 @@
 /// Service name for the desktop OS keyring. Debug builds default to a distinct
 /// service, while standalone worktree launches may request a scoped dev service.
 fn dev_keyring_service(configured: Option<String>) -> String {
-    configured
-        .filter(|service| service.starts_with("ambush-desktop-dev."))
-        .unwrap_or_else(|| "ambush-desktop-dev".to_string())
+    match configured {
+        None => "ambush-desktop-dev".to_string(),
+        Some(service)
+            if service
+                .strip_prefix("ambush-desktop-dev.")
+                .is_some_and(crate::migration::valid_instance_scope) =>
+        {
+            service
+        }
+        Some(service) => panic!("invalid AMBUSH_DEV_KEYRING_SERVICE {service:?}"),
+    }
 }
 
 pub(crate) fn keyring_service() -> &'static str {
@@ -35,10 +43,16 @@ mod tests {
             dev_keyring_service(Some("ambush-desktop-dev.example".to_string())),
             "ambush-desktop-dev.example"
         );
-        assert_eq!(
-            dev_keyring_service(Some("ambush-desktop".to_string())),
-            "ambush-desktop-dev"
-        );
+        for invalid in [
+            "ambush-desktop",
+            "ambush-desktop-dev../escape",
+            "ambush-desktop-devil.example",
+        ] {
+            assert!(std::panic::catch_unwind(|| {
+                dev_keyring_service(Some(invalid.to_string()))
+            })
+            .is_err());
+        }
     }
 
     #[test]

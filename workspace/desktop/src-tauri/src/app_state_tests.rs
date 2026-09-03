@@ -980,6 +980,15 @@ fn signing_keys_returns_err_when_keyring_locked() {
 }
 
 #[test]
+fn signing_keys_returns_err_when_startup_migration_failed() {
+    let state = build_app_state();
+    state
+        .startup_migration_failed
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(state.signing_keys().unwrap_err().contains("recovery mode"));
+}
+
+#[test]
 fn signing_keys_identity_lost_takes_priority_over_keyring_locked() {
     // When both flags are set, identity_lost is checked first and its error
     // message is returned (the ephemeral-key case is more specific).

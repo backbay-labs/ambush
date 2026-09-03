@@ -11,6 +11,7 @@ const LEGACY_ONBOARDING_COMPLETION_STORAGE_KEY =
 type MachineOnboardingStage =
   | "blocking"
   | "keyring-locked"
+  | "migration-failed"
   | "onboarding"
   | "ready"
   | "relaunch-required"
@@ -111,6 +112,7 @@ export function useMachineOnboardingState({
   const identityLost = identity?.lost === true;
   const identityLocked = identity?.locked === true;
   const identityResetFailed = identity?.resetFailed === true;
+  const identityMigrationFailed = identity?.migrationFailed === true;
   const [completedPubkey, setCompletedPubkey] = React.useState<string | null>(
     () =>
       currentPubkey &&
@@ -147,7 +149,9 @@ export function useMachineOnboardingState({
       !currentPubkey ||
       currentPubkey !== startupPubkeyRef.current ||
       identityQuery.status !== "success" ||
-      identityLost
+      identityLost ||
+      identityMigrationFailed ||
+      identityResetFailed
     ) {
       return;
     }
@@ -165,7 +169,9 @@ export function useMachineOnboardingState({
     currentPubkey,
     activeCommunityPubkey,
     identityLost,
+    identityMigrationFailed,
     identityQuery.status,
+    identityResetFailed,
     isSharedIdentity,
   ]);
 
@@ -214,6 +220,8 @@ export function useMachineOnboardingState({
   let stage: MachineOnboardingStage;
   if (identityResetFailed && identityQuery.status === "success") {
     stage = "reset-failed";
+  } else if (identityMigrationFailed && identityQuery.status === "success") {
+    stage = "migration-failed";
   } else if (identityLocked && identityQuery.status === "success") {
     stage = "keyring-locked";
   } else if (relaunchRequired) {

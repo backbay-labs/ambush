@@ -738,7 +738,7 @@ export function useSendMessageMutation(
         context.previousWindow,
       );
     },
-    onSuccess: (message, _variables, context) => {
+    onSuccess: async (message, _variables, context) => {
       // An accepted send proves the write-block is lifted; clear any recorded
       // timeout so the chip and disable state fall away immediately.
       clearTimeoutState();
@@ -762,6 +762,13 @@ export function useSendMessageMutation(
       });
       queryClient.setQueryData(windowKey, next);
       projectChannelWindowMessages(queryClient, context.channelId);
+      // Callers use mutation completion to announce that a send is visible.
+      // Let React consume the synchronous cache projection at a paint boundary
+      // before mutateAsync resolves; otherwise the success toast can race a
+      // still-unrendered row (especially while an auxiliary panel is closing).
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
     },
   });
 }

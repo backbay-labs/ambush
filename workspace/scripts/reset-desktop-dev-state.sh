@@ -22,6 +22,11 @@ DEV_KEYRING_SERVICES=(
   buzz-desktop-dev
   sprout-desktop-dev
   ambush-desktop-dev.main
+  buzz-desktop-dev.main
+  sprout-desktop-dev.main
+  ambush-desktop-dev.head
+  buzz-desktop-dev.head
+  sprout-desktop-dev.head
 )
 add_dev_keyring_service() {
   local service="$1" existing
@@ -38,6 +43,7 @@ if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       "worktree "*)
         worktree_path="${field#worktree }"
         worktree_slug=$(slugify "$(basename "$worktree_path")")
+        [[ -n "$worktree_slug" ]] || worktree_slug=worktree
         worktree_path=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$worktree_path")
         worktree_hash=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:8])' "$worktree_path")
         # Current path-bound service plus the basename-only service briefly
@@ -47,6 +53,7 @@ if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         ;;
       "branch refs/heads/"*)
         legacy_branch_slug=$(slugify "${field#branch refs/heads/}")
+        [[ -n "$legacy_branch_slug" ]] || legacy_branch_slug=worktree
         add_dev_keyring_service "ambush-desktop-dev.${legacy_branch_slug}"
         add_dev_keyring_service "buzz-desktop-dev.${legacy_branch_slug}"
         add_dev_keyring_service "sprout-desktop-dev.${legacy_branch_slug}"
@@ -59,10 +66,52 @@ if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   # Store services to the branch, so enumerate all local branches separately.
   while IFS= read -r branch; do
     legacy_branch_slug=$(slugify "$branch")
+    [[ -n "$legacy_branch_slug" ]] || legacy_branch_slug=worktree
     add_dev_keyring_service "ambush-desktop-dev.${legacy_branch_slug}"
     add_dev_keyring_service "buzz-desktop-dev.${legacy_branch_slug}"
     add_dev_keyring_service "sprout-desktop-dev.${legacy_branch_slug}"
   done < <(git -C "$REPO_ROOT" for-each-ref --format='%(refname:short)' refs/heads)
+fi
+
+# Worktrees and their branches can both be deleted before a full reset. The
+# runtime records every exact dev service it uses under the dev nest so those
+# otherwise-undiscoverable keyrings are still cleared. Fail closed on corrupt,
+# linked, oversized, or prefix-collision entries before deleting any state.
+service_registry="$HOME/.ambush-dev/keyring-services-v1"
+if [[ -L "$service_registry" ]]; then
+  echo "reset-desktop-dev-state: refusing linked keyring service registry" >&2
+  exit 1
+fi
+if [[ -e "$service_registry" ]]; then
+  [[ -d "$service_registry" ]] || {
+    echo "reset-desktop-dev-state: keyring service registry is not a directory" >&2
+    exit 1
+  }
+  registry_count=0
+  while IFS= read -r -d '' marker; do
+    registry_count=$((registry_count + 1))
+    (( registry_count <= 256 )) || {
+      echo "reset-desktop-dev-state: keyring service registry exceeds 256 entries" >&2
+      exit 1
+    }
+    [[ ! -L "$marker" && -f "$marker" ]] || {
+      echo "reset-desktop-dev-state: refusing non-regular keyring registry entry" >&2
+      exit 1
+    }
+    service=$(basename "$marker")
+    scope="${service#ambush-desktop-dev.}"
+    if [[ "$service" == ambush-desktop-dev ]]; then
+      :
+    elif [[ "$service" != ambush-desktop-dev.* || ! "$scope" =~ ^[a-z0-9]([a-z0-9-]{0,126}[a-z0-9])?$ ]]; then
+      echo "reset-desktop-dev-state: refusing invalid registry service: $service" >&2
+      exit 1
+    fi
+    cmp -s -- "$marker" <(printf '1\n') || {
+      echo "reset-desktop-dev-state: refusing corrupt registry marker: $service" >&2
+      exit 1
+    }
+    add_dev_keyring_service "$service"
+  done < <(find "$service_registry" -mindepth 1 -maxdepth 1 -print0)
 fi
 
 remove_path() {

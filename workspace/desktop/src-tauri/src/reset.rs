@@ -37,13 +37,48 @@ pub(crate) fn sentinel_path(app_data_dir: &Path) -> PathBuf {
 /// Atomically write the sentinel file. Content is intentionally empty —
 /// existence is the signal.
 pub(crate) fn write_sentinel(app_data_dir: &Path) -> Result<(), String> {
+    use atomic_write_file::AtomicWriteFile;
+
     let path = sentinel_path(app_data_dir);
-    std::fs::write(&path, b"").map_err(|e| format!("write sentinel {}: {e}", path.display()))
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("sentinel {} has no parent", path.display()))?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|error| format!("inspect sentinel parent {}: {error}", parent.display()))?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err(format!(
+            "sentinel parent {} is not a regular directory",
+            parent.display()
+        ));
+    }
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => return Err(format!("sentinel {} is not a regular file", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("inspect sentinel {}: {error}", path.display())),
+    }
+    AtomicWriteFile::open(&path)
+        .and_then(AtomicWriteFile::commit)
+        .map_err(|error| format!("write sentinel {}: {error}", path.display()))
 }
 
-/// Return `true` when the sentinel file exists.
-pub(crate) fn check_sentinel(app_data_dir: &Path) -> bool {
-    sentinel_path(app_data_dir).exists()
+/// Return whether an exact regular sentinel exists. Corrupt or linked markers
+/// fail closed so identity resolution cannot bypass an armed reset.
+pub(crate) fn check_sentinel(app_data_dir: &Path) -> Result<bool, String> {
+    let path = sentinel_path(app_data_dir);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata)
+            if metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() == 0 =>
+        {
+            Ok(true)
+        }
+        Ok(_) => Err(format!(
+            "sentinel {} is not an exact regular marker",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("inspect sentinel {}: {error}", path.display())),
+    }
 }
 
 /// Remove the sentinel file. A missing file is not an error.
@@ -102,6 +137,8 @@ pub(crate) struct ResetContext<'a> {
     /// injected so unit tests can override without touching the global OnceLock.
     pub nest_dir: Option<PathBuf>,
     pub keychain: &'a dyn ResetKeychain,
+    /// Exact predecessor services that can resurrect identity or agent keys.
+    pub predecessor_keychains: Vec<&'a dyn ResetKeychain>,
     pub home_dir: Option<PathBuf>,
     pub is_dev: bool,
 }
@@ -111,8 +148,16 @@ pub(crate) struct ResetContext<'a> {
 /// Constructs a `SecretStore` for the running build's keyring service and
 /// delegates to `run_boot_reset_with_keychain` for testable wipe logic.
 pub(crate) fn run_boot_reset(app_data_dir: &Path) -> ResetOutcome {
-    if !check_sentinel(app_data_dir) {
-        return ResetOutcome::default();
+    match check_sentinel(app_data_dir) {
+        Ok(false) => return ResetOutcome::default(),
+        Ok(true) => {}
+        Err(error) => {
+            eprintln!("ambush-desktop reset: {error}");
+            return ResetOutcome {
+                completed: false,
+                failed: true,
+            };
+        }
     }
 
     let is_dev = app_data_dir
@@ -121,16 +166,43 @@ pub(crate) fn run_boot_reset(app_data_dir: &Path) -> ResetOutcome {
         .map(crate::migration::is_dev_data_dir_name)
         .unwrap_or(false);
 
-    let store = crate::secret_store::SecretStore::keyring(crate::app_state::keyring_service());
+    let lineage =
+        match crate::migration::keyring_service_lineage(crate::app_state::keyring_service()) {
+            Ok(lineage) => lineage,
+            Err(error) => {
+                eprintln!("ambush-desktop reset: invalid keyring lineage: {error}");
+                return ResetOutcome {
+                    completed: false,
+                    failed: true,
+                };
+            }
+        };
+    let stores = lineage
+        .iter()
+        .map(crate::secret_store::SecretStore::keyring)
+        .collect::<Vec<_>>();
     let home_dir = dirs::home_dir();
-    let legacy_dirs = crate::migration::app_data_migration_sources(app_data_dir);
+    let legacy_dirs = match crate::migration::app_data_migration_sources(app_data_dir) {
+        Ok(dirs) => dirs,
+        Err(error) => {
+            eprintln!("ambush-desktop reset: invalid app-data lineage: {error}");
+            return ResetOutcome {
+                completed: false,
+                failed: true,
+            };
+        }
+    };
     let nest_dir = crate::managed_agents::nest_dir();
 
     let ctx = ResetContext {
         app_data_dir,
         legacy_app_data_dirs: legacy_dirs,
         nest_dir,
-        keychain: &store,
+        keychain: &stores[0],
+        predecessor_keychains: stores[1..]
+            .iter()
+            .map(|store| store as &dyn ResetKeychain)
+            .collect(),
         home_dir,
         is_dev,
     };
@@ -245,7 +317,13 @@ where
     }
 
     // ── Step 4: keychain — LAST so we can read keys before deleting ──────────
-    if let Err(e) = ctx.keychain.delete_all_with_legacy() {
+    let mut keychain_delete_error = None;
+    for keychain in std::iter::once(ctx.keychain).chain(ctx.predecessor_keychains.iter().copied()) {
+        if let Err(error) = keychain.delete_all_with_legacy() {
+            keychain_delete_error.get_or_insert(error);
+        }
+    }
+    if let Some(e) = keychain_delete_error {
         eprintln!("ambush-desktop reset: keychain delete: {e}");
         // Keychain failure is fatal: keep sentinel, signal failure.
         // Restore all three dirs so the app returns to a coherent pre-reset state.
@@ -285,7 +363,9 @@ where
     }
 
     // ── Step 6: verify ────────────────────────────────────────────────────────
-    let keychain_ok = ctx.keychain.verify_fully_wiped();
+    let keychain_ok = std::iter::once(ctx.keychain)
+        .chain(ctx.predecessor_keychains.iter().copied())
+        .all(ResetKeychain::verify_fully_wiped);
     let app_data_gone = !app_data_dir.exists();
     let legacy_gone = ctx.legacy_app_data_dirs.iter().all(|path| !path.exists());
     let nest_gone = ctx.nest_dir.as_ref().map(|n| !n.exists()).unwrap_or(true);
@@ -422,6 +502,7 @@ mod tests {
             legacy_app_data_dirs: vec![],
             nest_dir: None,
             keychain,
+            predecessor_keychains: vec![],
             home_dir: None, // skip nest/sprout/CLI ops in unit tests
             is_dev,
         }
@@ -440,6 +521,31 @@ mod tests {
         assert!(!outcome.failed, "no sentinel → not failed");
         assert_eq!(kc.delete_calls.get(), 0, "keychain not touched");
         assert!(app_data.exists(), "app-data dir untouched");
+    }
+
+    #[test]
+    fn corrupt_reset_sentinel_fails_closed_before_identity_resolution() {
+        let tmp = TempDir::new().unwrap();
+        let app_data = make_app_data(&tmp);
+        let sentinel = sentinel_path(&app_data);
+        std::fs::write(&sentinel, b"corrupt").unwrap();
+        let outcome = run_boot_reset(&app_data);
+        assert!(outcome.failed);
+        assert!(!outcome.completed);
+        assert!(app_data.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            std::fs::remove_file(&sentinel).unwrap();
+            let outside = tmp.path().join("outside");
+            std::fs::write(&outside, b"").unwrap();
+            symlink(&outside, &sentinel).unwrap();
+            let outcome = run_boot_reset(&app_data);
+            assert!(outcome.failed);
+            assert!(!outcome.completed);
+            assert_eq!(std::fs::read(&outside).unwrap(), b"");
+        }
     }
 
     // ── Test 2: full wipe succeeds ────────────────────────────────────────────
@@ -471,6 +577,7 @@ mod tests {
             legacy_app_data_dirs: vec![buzz_dir.clone(), sprout_dir.clone()],
             nest_dir: None,
             keychain: &kc,
+            predecessor_keychains: vec![],
             home_dir: None,
             is_dev: false,
         };
@@ -484,6 +591,45 @@ mod tests {
         assert!(!sprout_dir.exists(), "Sprout app-data must be gone");
         assert!(!sentinel_path(&app_data).exists(), "sentinel must be gone");
         assert_eq!(kc.delete_calls.get(), 1, "keychain deleted once");
+    }
+
+    #[test]
+    fn reset_deletes_and_verifies_every_predecessor_keychain() {
+        let tmp = TempDir::new().unwrap();
+        let app_data = make_app_data(&tmp);
+        write_sentinel(&app_data).unwrap();
+        let current = FakeKeychain::ok();
+        let buzz = FakeKeychain::ok();
+        let sprout = FakeKeychain::ok();
+        let outcome = run_boot_reset_with_keychain(ResetContext {
+            app_data_dir: &app_data,
+            legacy_app_data_dirs: vec![],
+            nest_dir: None,
+            keychain: &current,
+            predecessor_keychains: vec![&buzz, &sprout],
+            home_dir: None,
+            is_dev: false,
+        });
+        assert!(outcome.completed);
+        assert_eq!(current.delete_calls.get(), 1);
+        assert_eq!(buzz.delete_calls.get(), 1);
+        assert_eq!(sprout.delete_calls.get(), 1);
+
+        let failed_app_data = make_app_data(&tmp);
+        write_sentinel(&failed_app_data).unwrap();
+        let current = FakeKeychain::ok();
+        let predecessor = FakeKeychain::ok_but_verify_fails();
+        let outcome = run_boot_reset_with_keychain(ResetContext {
+            app_data_dir: &failed_app_data,
+            legacy_app_data_dirs: vec![],
+            nest_dir: None,
+            keychain: &current,
+            predecessor_keychains: vec![&predecessor],
+            home_dir: None,
+            is_dev: false,
+        });
+        assert!(outcome.failed);
+        assert!(sentinel_path(&failed_app_data).exists());
     }
 
     // ── NIP-49: the boot wipe destroys the app-managed key backup ─────────────
@@ -605,6 +751,7 @@ mod tests {
             legacy_app_data_dirs: vec![],
             nest_dir: Some(dev_nest.clone()),
             keychain: &kc,
+            predecessor_keychains: vec![],
             home_dir: None,
             is_dev: true,
         };
@@ -641,6 +788,7 @@ mod tests {
             legacy_app_data_dirs: vec![],
             nest_dir: Some(prod_nest.clone()),
             keychain: &kc,
+            predecessor_keychains: vec![],
             home_dir: None,
             is_dev: false,
         };
@@ -674,6 +822,7 @@ mod tests {
             legacy_app_data_dirs: vec![legacy_dir.clone()],
             nest_dir: None,
             keychain: &kc,
+            predecessor_keychains: vec![],
             home_dir: None,
             is_dev: false,
         };
@@ -757,6 +906,7 @@ mod tests {
             legacy_app_data_dirs: vec![],
             nest_dir: Some(dev_nest.clone()),
             keychain: &kc,
+            predecessor_keychains: vec![],
             home_dir: None,
             is_dev: true,
         };
@@ -849,6 +999,7 @@ mod tests {
                 legacy_app_data_dirs: vec![buzz.clone(), sprout.clone()],
                 nest_dir: None,
                 keychain: &kc,
+                predecessor_keychains: vec![],
                 home_dir: None,
                 is_dev: false,
             },
@@ -895,6 +1046,7 @@ mod tests {
             legacy_app_data_dirs: vec![legacy.clone()],
             nest_dir: None,
             keychain: &kc1,
+            predecessor_keychains: vec![],
             home_dir: Some(tmp.path().to_path_buf()),
             is_dev: false,
         };
@@ -918,6 +1070,7 @@ mod tests {
             legacy_app_data_dirs: vec![legacy.clone()],
             nest_dir: None,
             keychain: &kc2,
+            predecessor_keychains: vec![],
             home_dir: Some(tmp.path().to_path_buf()),
             is_dev: false,
         };

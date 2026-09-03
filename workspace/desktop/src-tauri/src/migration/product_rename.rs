@@ -4,13 +4,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
+mod copy;
+use copy::{merge_tree_no_clobber, merge_tree_no_clobber_unrelated};
+
 const AMBUSH_RELEASE_IDENTIFIER: &str = "com.backbay.ambush.app";
 const AMBUSH_DEV_IDENTIFIER: &str = "com.backbay.ambush.app.dev";
 const BUZZ_RELEASE_IDENTIFIER: &str = "xyz.block.buzz.app";
 const BUZZ_DEV_IDENTIFIER: &str = "xyz.block.buzz.app.dev";
 const SPROUT_RELEASE_IDENTIFIER: &str = "xyz.block.sprout.app";
 const SPROUT_DEV_IDENTIFIER: &str = "xyz.block.sprout.app.dev";
-const KEYRING_MIGRATION_MARKER: &str = ".ambush-product-keyring-migrated-v1";
+pub(super) const KEYRING_MIGRATION_MARKER: &str = ".ambush-product-keyring-migrated-v1";
 
 fn push_unique<T: PartialEq>(values: &mut Vec<T>, value: T) {
     if !values.contains(&value) {
@@ -22,7 +25,33 @@ fn dev_scope(name: &str) -> Option<&str> {
     if name == AMBUSH_DEV_IDENTIFIER {
         Some("")
     } else {
-        name.strip_prefix(AMBUSH_DEV_IDENTIFIER)?.strip_prefix('.')
+        let scope = name
+            .strip_prefix(AMBUSH_DEV_IDENTIFIER)?
+            .strip_prefix('.')?;
+        (!scope.is_empty()).then_some(scope)
+    }
+}
+
+pub(crate) fn valid_instance_scope(scope: &str) -> bool {
+    (1..=128).contains(&scope.len())
+        && scope
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && scope
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && scope
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn checked_scope(scope: Option<&str>, name: &str) -> Result<Option<String>, String> {
+    match scope {
+        Some(scope) if valid_instance_scope(scope) => Ok(Some(scope.to_string())),
+        Some(scope) => Err(format!("invalid {name} scope {scope:?}")),
+        None => Ok(None),
     }
 }
 
@@ -36,11 +65,11 @@ fn scoped(base: &str, scope: &str) -> String {
 
 /// Shipped predecessor data directories with the same instance suffix.
 #[cfg(test)]
-pub(super) fn legacy_app_data_dirs(current: &Path) -> Vec<PathBuf> {
+pub(super) fn legacy_app_data_dirs(current: &Path) -> Result<Vec<PathBuf>, String> {
     app_data_sources_for_scopes(current, None, None)
 }
 
-pub(crate) fn app_data_migration_sources(current: &Path) -> Vec<PathBuf> {
+pub(crate) fn app_data_migration_sources(current: &Path) -> Result<Vec<PathBuf>, String> {
     app_data_sources_for_scopes(
         current,
         std::env::var("AMBUSH_WORKTREE_PATH_SLUG").ok().as_deref(),
@@ -52,32 +81,40 @@ fn app_data_sources_for_scopes(
     current: &Path,
     worktree_scope: Option<&str>,
     branch_scope: Option<&str>,
-) -> Vec<PathBuf> {
+) -> Result<Vec<PathBuf>, String> {
     let Some(parent) = current.parent() else {
-        return Vec::new();
+        return Err(format!("app-data path {} has no parent", current.display()));
     };
     let Some(name) = current.file_name().and_then(|value| value.to_str()) else {
-        return Vec::new();
+        return Err(format!(
+            "app-data path {} has no UTF-8 name",
+            current.display()
+        ));
     };
     if name == AMBUSH_RELEASE_IDENTIFIER {
-        return vec![
+        return Ok(vec![
             parent.join(BUZZ_RELEASE_IDENTIFIER),
             parent.join(SPROUT_RELEASE_IDENTIFIER),
-        ];
+        ]);
     }
     let Some(current_scope) = dev_scope(name) else {
-        return Vec::new();
+        return Err(format!("unsupported Ambush app-data identifier {name:?}"));
     };
+    if !current_scope.is_empty() && !valid_instance_scope(current_scope) {
+        return Err(format!("invalid current app-data scope {current_scope:?}"));
+    }
+    let worktree_scope = checked_scope(worktree_scope, "worktree")?;
+    let branch_scope = checked_scope(branch_scope, "branch")?;
 
     let mut sources = Vec::new();
     if !current_scope.is_empty() {
-        if let Some(scope) = worktree_scope.filter(|scope| !scope.is_empty()) {
+        if let Some(scope) = worktree_scope.as_deref() {
             push_unique(
                 &mut sources,
                 parent.join(scoped(AMBUSH_DEV_IDENTIFIER, scope)),
             );
         }
-        if let Some(scope) = branch_scope.filter(|scope| !scope.is_empty()) {
+        if let Some(scope) = branch_scope.as_deref() {
             push_unique(
                 &mut sources,
                 parent.join(scoped(BUZZ_DEV_IDENTIFIER, scope)),
@@ -89,7 +126,7 @@ fn app_data_sources_for_scopes(
         parent.join(scoped(BUZZ_DEV_IDENTIFIER, current_scope)),
     );
     if !current_scope.is_empty() {
-        if let Some(scope) = branch_scope.filter(|scope| !scope.is_empty()) {
+        if let Some(scope) = branch_scope.as_deref() {
             push_unique(
                 &mut sources,
                 parent.join(scoped(SPROUT_DEV_IDENTIFIER, scope)),
@@ -100,7 +137,16 @@ fn app_data_sources_for_scopes(
         &mut sources,
         parent.join(scoped(SPROUT_DEV_IDENTIFIER, current_scope)),
     );
-    sources
+    if !current_scope.is_empty() {
+        for base in [
+            AMBUSH_DEV_IDENTIFIER,
+            BUZZ_DEV_IDENTIFIER,
+            SPROUT_DEV_IDENTIFIER,
+        ] {
+            push_unique(&mut sources, parent.join(scoped(base, "head")));
+        }
+    }
+    Ok(sources)
 }
 
 /// Ordered predecessor services. The immediately previous Buzz service wins
@@ -109,70 +155,68 @@ pub(super) fn legacy_keyring_services(
     current_service: &str,
     worktree_scope: Option<&str>,
     branch_scope: Option<&str>,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     if current_service == "ambush-desktop" {
-        return vec!["buzz-desktop".to_string(), "sprout-desktop".to_string()];
+        return Ok(vec![
+            "buzz-desktop".to_string(),
+            "sprout-desktop".to_string(),
+        ]);
     }
     if current_service == "ambush-desktop-dev" {
-        return vec![
+        return Ok(vec![
             "buzz-desktop-dev".to_string(),
             "sprout-desktop-dev".to_string(),
-        ];
+        ]);
     }
     let Some(current_scope) = current_service.strip_prefix("ambush-desktop-dev.") else {
-        return Vec::new();
+        return Err(format!(
+            "unsupported Ambush keyring service {current_service:?}"
+        ));
     };
+    if !valid_instance_scope(current_scope) {
+        return Err(format!("invalid current keyring scope {current_scope:?}"));
+    }
+    let worktree_scope = checked_scope(worktree_scope, "worktree")?;
+    let branch_scope = checked_scope(branch_scope, "branch")?;
 
     let mut services = Vec::new();
-    if let Some(scope) = worktree_scope.filter(|scope| !scope.is_empty()) {
+    if let Some(scope) = worktree_scope.as_deref() {
         push_unique(&mut services, format!("ambush-desktop-dev.{scope}"));
     }
-    if let Some(scope) = branch_scope.filter(|scope| !scope.is_empty()) {
+    if let Some(scope) = branch_scope.as_deref() {
         push_unique(&mut services, format!("buzz-desktop-dev.{scope}"));
     }
     push_unique(&mut services, format!("buzz-desktop-dev.{current_scope}"));
-    if let Some(scope) = branch_scope.filter(|scope| !scope.is_empty()) {
+    if let Some(scope) = branch_scope.as_deref() {
         push_unique(&mut services, format!("sprout-desktop-dev.{scope}"));
     }
     push_unique(&mut services, format!("sprout-desktop-dev.{current_scope}"));
-    services
+    for base in [
+        "ambush-desktop-dev",
+        "buzz-desktop-dev",
+        "sprout-desktop-dev",
+    ] {
+        push_unique(&mut services, format!("{base}.head"));
+    }
+    Ok(services)
+}
+
+pub(crate) fn keyring_service_lineage(current_service: &str) -> Result<Vec<String>, String> {
+    let mut services = vec![current_service.to_string()];
+    let worktree_scope = std::env::var("AMBUSH_WORKTREE_PATH_SLUG").ok();
+    let branch_scope = std::env::var("AMBUSH_LEGACY_BRANCH_SLUG").ok();
+    for service in legacy_keyring_services(
+        current_service,
+        worktree_scope.as_deref(),
+        branch_scope.as_deref(),
+    )? {
+        push_unique(&mut services, service);
+    }
+    Ok(services)
 }
 
 pub(super) fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        if entry.file_name() == KEYRING_MIGRATION_MARKER {
-            continue;
-        }
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        let metadata = std::fs::symlink_metadata(&src_path)?;
-        if metadata.file_type().is_symlink() {
-            #[cfg(unix)]
-            {
-                if dst_path.exists() || dst_path.is_symlink() {
-                    continue;
-                }
-                let target = std::fs::read_link(&src_path)?;
-                crate::util::create_symlink(&target, &dst_path)?;
-            }
-            #[cfg(not(unix))]
-            {
-                continue;
-            }
-        } else if metadata.is_dir() {
-            copy_dir_all(&src_path, &dst_path)?;
-        } else if metadata.is_file() {
-            if let Some(parent) = dst_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            if !dst_path.exists() {
-                std::fs::copy(&src_path, &dst_path)?;
-            }
-        }
-    }
-    Ok(())
+    merge_tree_no_clobber_unrelated(src, dst).map_err(std::io::Error::other)
 }
 
 pub(super) trait KeyringMigrationStore {
@@ -224,16 +268,42 @@ pub(super) fn migrate_keyring_entries(
     Ok(additions.len())
 }
 
+fn migrate_keyring_sources<S: KeyringMigrationStore, T: KeyringMigrationStore>(
+    sources: &[(String, S)],
+    target_name: &str,
+    target: &T,
+) -> Result<usize, String> {
+    let mut total = 0;
+    for (service, source) in sources {
+        let migrated = migrate_keyring_entries(source, target)
+            .map_err(|error| format!("{service} -> {target_name}: {error}"))?;
+        total += migrated;
+    }
+    Ok(total)
+}
+
 fn write_keyring_migration_marker(current_dir: &Path) -> Result<(), String> {
     use atomic_write_file::AtomicWriteFile;
     use std::io::Write;
 
-    std::fs::create_dir_all(current_dir).map_err(|error| {
-        format!(
-            "cannot create app data directory {} for keyring migration marker: {error}",
-            current_dir.display()
-        )
-    })?;
+    match std::fs::symlink_metadata(current_dir) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(format!(
+                "app data directory {} is not a regular directory",
+                current_dir.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(current_dir).map_err(|error| {
+                format!(
+                    "cannot create app data directory {} for keyring migration marker: {error}",
+                    current_dir.display()
+                )
+            })?;
+        }
+        Err(error) => return Err(format!("cannot inspect app data directory: {error}")),
+    }
     let marker = current_dir.join(KEYRING_MIGRATION_MARKER);
     let mut file = AtomicWriteFile::open(&marker).map_err(|error| {
         format!(
@@ -255,49 +325,87 @@ fn write_keyring_migration_marker(current_dir: &Path) -> Result<(), String> {
     })
 }
 
-pub(super) fn migrate_legacy_keyring_data(current_dir: &Path) -> Result<(), String> {
-    let has_legacy_data = app_data_migration_sources(current_dir)
-        .iter()
-        .any(|path| path.exists());
-    if !has_legacy_data {
-        return Ok(());
-    }
+fn keyring_migration_complete(current_dir: &Path) -> Result<bool, String> {
+    use std::io::Read;
 
+    let marker = current_dir.join(KEYRING_MIGRATION_MARKER);
+    let metadata = match std::fs::symlink_metadata(&marker) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("cannot inspect keyring migration marker: {error}")),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "keyring migration marker {} is not a regular file",
+            marker.display()
+        ));
+    }
+    if metadata.len() != b"complete\n".len() as u64 {
+        return Err(format!(
+            "keyring migration marker {} has invalid contents",
+            marker.display()
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(&marker)
+        .map_err(|error| format!("cannot safely open keyring migration marker: {error}"))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| format!("cannot inspect open keyring migration marker: {error}"))?;
+    if !opened_metadata.is_file() || opened_metadata.len() != b"complete\n".len() as u64 {
+        return Err(format!(
+            "keyring migration marker {} has invalid contents",
+            marker.display()
+        ));
+    }
+    let mut contents = Vec::with_capacity(b"complete\n".len() + 1);
+    file.take(b"complete\n".len() as u64 + 1)
+        .read_to_end(&mut contents)
+        .map_err(|error| format!("cannot read keyring migration marker: {error}"))?;
+    if contents != b"complete\n" {
+        return Err(format!(
+            "keyring migration marker {} has invalid contents",
+            marker.display()
+        ));
+    }
+    Ok(true)
+}
+
+pub(super) fn migrate_legacy_keyring_data(_current_dir: &Path) -> Result<(), String> {
     #[cfg(feature = "system-keyring")]
     {
+        let current_dir = _current_dir;
         // The predecessor directories are intentionally retained, so bind
         // successful keyring completion to the current app-data directory.
         // Without this marker, a later corrupt/unavailable legacy service
         // could block an already-migrated Ambush identity on every launch.
-        let marker = current_dir.join(KEYRING_MIGRATION_MARKER);
-        if marker.is_file() {
+        if keyring_migration_complete(current_dir)? {
             return Ok(());
-        }
-        if marker.exists() {
-            return Err(format!(
-                "keyring migration marker {} is not a regular file",
-                marker.display()
-            ));
         }
 
         let current_service = crate::app_state::keyring_service();
-        let worktree_scope = std::env::var("AMBUSH_WORKTREE_PATH_SLUG").ok();
-        let branch_scope = std::env::var("AMBUSH_LEGACY_BRANCH_SLUG").ok();
-        let services = legacy_keyring_services(
-            current_service,
-            worktree_scope.as_deref(),
-            branch_scope.as_deref(),
-        );
+        let mut services = keyring_service_lineage(current_service)?;
+        services.remove(0);
         let target = crate::secret_store::SecretStore::shared(current_service);
-        for service in services {
-            let source = crate::secret_store::SecretStore::keyring(&service);
-            let migrated = migrate_keyring_entries(&source, target)
-                .map_err(|error| format!("{service} -> {current_service}: {error}"))?;
-            if migrated > 0 {
-                eprintln!(
-                    "ambush-desktop: keyring-migration: copied {migrated} entries from {service} to {current_service}"
-                );
-            }
+        let sources = services
+            .into_iter()
+            .map(|service| {
+                let store = crate::secret_store::SecretStore::keyring(&service);
+                (service, store)
+            })
+            .collect::<Vec<_>>();
+        let migrated = migrate_keyring_sources(&sources, current_service, target)?;
+        if migrated > 0 {
+            eprintln!(
+                "ambush-desktop: keyring-migration: copied {migrated} predecessor entries into {current_service}"
+            );
         }
         write_keyring_migration_marker(current_dir)?;
     }
@@ -305,12 +413,30 @@ pub(super) fn migrate_legacy_keyring_data(current_dir: &Path) -> Result<(), Stri
 }
 
 fn migrate_legacy_app_data_dirs_at(current_dir: &Path) -> Result<usize, String> {
-    let mut migrated = 0;
-    for legacy_dir in app_data_migration_sources(current_dir) {
-        if !legacy_dir.exists() {
-            continue;
+    match std::fs::symlink_metadata(current_dir) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(format!(
+                "current app-data destination {} is not a regular directory",
+                current_dir.display()
+            ))
         }
-        copy_dir_all(&legacy_dir, current_dir).map_err(|error| {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("cannot inspect app-data destination: {error}")),
+    }
+    let mut migrated = 0;
+    for legacy_dir in app_data_migration_sources(current_dir)? {
+        match std::fs::symlink_metadata(&legacy_dir) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect migration source {}: {error}",
+                    legacy_dir.display()
+                ))
+            }
+        }
+        merge_tree_no_clobber(&legacy_dir, current_dir).map_err(|error| {
             format!(
                 "failed to copy {} to {}: {error}",
                 legacy_dir.display(),
@@ -401,14 +527,14 @@ mod tests {
     fn release_sources_prefer_buzz_before_sprout() {
         let current = PathBuf::from("/data/com.backbay.ambush.app");
         assert_eq!(
-            legacy_app_data_dirs(&current),
+            legacy_app_data_dirs(&current).unwrap(),
             vec![
                 PathBuf::from("/data/xyz.block.buzz.app"),
                 PathBuf::from("/data/xyz.block.sprout.app"),
             ]
         );
         assert_eq!(
-            legacy_keyring_services("ambush-desktop", None, None),
+            legacy_keyring_services("ambush-desktop", None, None).unwrap(),
             vec!["buzz-desktop", "sprout-desktop"]
         );
     }
@@ -417,13 +543,16 @@ mod tests {
     fn scoped_sources_cover_pre_hash_ambush_and_branch_scoped_predecessors() {
         let current = PathBuf::from("/data/com.backbay.ambush.app.dev.tree-ab12cd34");
         assert_eq!(
-            app_data_sources_for_scopes(&current, Some("tree"), Some("feature-card")),
+            app_data_sources_for_scopes(&current, Some("tree"), Some("feature-card")).unwrap(),
             vec![
                 PathBuf::from("/data/com.backbay.ambush.app.dev.tree"),
                 PathBuf::from("/data/xyz.block.buzz.app.dev.feature-card"),
                 PathBuf::from("/data/xyz.block.buzz.app.dev.tree-ab12cd34"),
                 PathBuf::from("/data/xyz.block.sprout.app.dev.feature-card"),
                 PathBuf::from("/data/xyz.block.sprout.app.dev.tree-ab12cd34"),
+                PathBuf::from("/data/com.backbay.ambush.app.dev.head"),
+                PathBuf::from("/data/xyz.block.buzz.app.dev.head"),
+                PathBuf::from("/data/xyz.block.sprout.app.dev.head"),
             ]
         );
         assert_eq!(
@@ -431,15 +560,51 @@ mod tests {
                 "ambush-desktop-dev.tree-ab12cd34",
                 Some("tree"),
                 Some("feature-card"),
-            ),
+            )
+            .unwrap(),
             vec![
                 "ambush-desktop-dev.tree",
                 "buzz-desktop-dev.feature-card",
                 "buzz-desktop-dev.tree-ab12cd34",
                 "sprout-desktop-dev.feature-card",
                 "sprout-desktop-dev.tree-ab12cd34",
+                "ambush-desktop-dev.head",
+                "buzz-desktop-dev.head",
+                "sprout-desktop-dev.head",
             ]
         );
+    }
+
+    #[test]
+    fn scopes_are_validated_before_paths_or_services_are_constructed() {
+        let current = PathBuf::from("/data/com.backbay.ambush.app.dev.safe-scope");
+        for invalid in [
+            "",
+            "../escape",
+            "dot.scope",
+            "UPPER",
+            "-leading",
+            "trailing-",
+        ] {
+            assert!(app_data_sources_for_scopes(&current, Some(invalid), None).is_err());
+            assert!(
+                legacy_keyring_services("ambush-desktop-dev.safe-scope", Some(invalid), None)
+                    .is_err()
+            );
+        }
+        assert!(app_data_sources_for_scopes(
+            Path::new("/data/com.backbay.ambush.app.dev.../escape"),
+            None,
+            None
+        )
+        .is_err());
+        assert!(app_data_sources_for_scopes(
+            Path::new("/data/com.backbay.ambush.app.dev."),
+            None,
+            None
+        )
+        .is_err());
+        assert!(legacy_keyring_services("ambush-desktop-devil.scope", None, None).is_err());
     }
 
     #[test]
@@ -480,6 +645,38 @@ mod tests {
         assert!(migrate_keyring_entries(&source, &target)
             .unwrap_err()
             .contains("read-back verification failed"));
+    }
+
+    #[test]
+    fn missing_predecessor_is_a_noop_but_later_sources_are_still_probed() {
+        let sources = vec![
+            ("missing".to_string(), FakeKeyringMigrationStore::default()),
+            (
+                "buzz".to_string(),
+                FakeKeyringMigrationStore::with_entries(&[("identity", "buzz")]),
+            ),
+        ];
+        let target = FakeKeyringMigrationStore::default();
+        assert_eq!(
+            migrate_keyring_sources(&sources, "ambush", &target).unwrap(),
+            1
+        );
+        assert_eq!(target.snapshot().get("identity").unwrap(), "buzz");
+
+        let failing_sources = vec![(
+            "locked".to_string(),
+            FakeKeyringMigrationStore {
+                load_error: Some("access denied".to_string()),
+                ..FakeKeyringMigrationStore::default()
+            },
+        )];
+        assert!(migrate_keyring_sources(
+            &failing_sources,
+            "ambush",
+            &FakeKeyringMigrationStore::default()
+        )
+        .unwrap_err()
+        .contains("access denied"));
     }
 
     #[test]
@@ -528,11 +725,34 @@ mod tests {
             std::fs::read_to_string(root.path().join(KEYRING_MIGRATION_MARKER)).unwrap(),
             "complete\n"
         );
+        assert!(keyring_migration_complete(root.path()).unwrap());
 
         let blocked = root.path().join("blocked");
         std::fs::create_dir_all(blocked.join(KEYRING_MIGRATION_MARKER)).unwrap();
         assert!(write_keyring_migration_marker(&blocked)
             .unwrap_err()
             .contains(KEYRING_MIGRATION_MARKER));
+
+        let corrupt = root.path().join("corrupt");
+        std::fs::create_dir(&corrupt).unwrap();
+        std::fs::write(corrupt.join(KEYRING_MIGRATION_MARKER), "not-complete\n").unwrap();
+        assert!(keyring_migration_complete(&corrupt)
+            .unwrap_err()
+            .contains("invalid contents"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let linked = root.path().join("linked");
+            std::fs::create_dir(&linked).unwrap();
+            symlink(
+                root.path().join(KEYRING_MIGRATION_MARKER),
+                linked.join(KEYRING_MIGRATION_MARKER),
+            )
+            .unwrap();
+            assert!(keyring_migration_complete(&linked)
+                .unwrap_err()
+                .contains("not a regular file"));
+        }
     }
 }

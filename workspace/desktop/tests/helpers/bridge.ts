@@ -474,6 +474,10 @@ type MockBridgeOptions = {
    * invoked. Drives the keyring-locked screen in tests.
    */
   identityLocked?: boolean;
+  /** Drives the distinct fail-closed startup migration recovery screen. */
+  startupMigrationFailed?: boolean;
+  /** Sanitized retry failure seam for migration recovery tests. */
+  startupMigrationRetryError?: string;
   /** Delay (ms) applied to identity import so specs can observe pending navigation. */
   identityImportDelayMs?: number;
   /**

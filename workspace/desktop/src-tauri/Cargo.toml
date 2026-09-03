@@ -138,7 +138,7 @@ zip = "8"
 flate2 = "1"
 sherpa-onnx = "1.12"
 regex = "1"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["backup", "bundled"] }
 axum = "0.8"
 rodio = "0.22"
 earshot = "1.0"

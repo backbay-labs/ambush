@@ -39,6 +39,9 @@ pub fn get_identity(state: State<'_, AppState>) -> Result<IdentityInfo, String> 
     let reset_failed = state
         .reset_failed
         .load(std::sync::atomic::Ordering::Acquire);
+    let migration_failed = state
+        .startup_migration_failed
+        .load(std::sync::atomic::Ordering::Acquire);
 
     Ok(IdentityInfo {
         pubkey: pubkey_hex,
@@ -47,6 +50,7 @@ pub fn get_identity(state: State<'_, AppState>) -> Result<IdentityInfo, String> 
         lost,
         locked,
         reset_failed,
+        migration_failed,
     })
 }
 
@@ -382,6 +386,7 @@ pub async fn import_identity(
             lost: false,
             locked: false,
             reset_failed: false,
+            migration_failed: false,
         })
     })
     .await
@@ -410,6 +415,12 @@ pub(crate) fn commit_imported_identity(
     keys: nostr::Keys,
     persist: impl FnOnce(&nostr::Keys) -> Result<crate::app_state::IdentityStorage, String>,
 ) -> Result<(nostr::PublicKey, crate::app_state::IdentityStorage), String> {
+    if state
+        .startup_migration_failed
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return Err("identity changes are disabled until startup migration completes".to_string());
+    }
     // Capture the previous pubkey up front for post-commit cleanup.
     let previous_pubkey = state.keys.lock().map_err(|e| e.to_string())?.public_key();
 
@@ -476,6 +487,15 @@ pub async fn persist_current_identity(
         // imported one.
         let _mutation_guard = state.identity_mutation.lock().map_err(|e| e.to_string())?;
 
+        if state
+            .startup_migration_failed
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(
+                "identity changes are disabled until startup migration completes".to_string(),
+            );
+        }
+
         if !state
             .identity_lost
             .load(std::sync::atomic::Ordering::Acquire)
@@ -515,10 +535,37 @@ pub async fn persist_current_identity(
             lost: false,
             locked: false,
             reset_failed: false,
+            migration_failed: false,
         })
     })
     .await
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
+}
+
+/// Retry the pre-identity boot migration without enabling the current process.
+/// A successful retry still requires relaunch so every identity-dependent
+/// subsystem starts from one coherent, migrated snapshot.
+#[tauri::command]
+pub fn retry_startup_migration(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let state = app_handle.state::<AppState>();
+    let _retry_guard = state
+        .startup_migration_retry
+        .lock()
+        .map_err(|_| "Migration retry is temporarily unavailable.".to_string())?;
+    if !state
+        .startup_migration_failed
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return Err("No startup migration retry is required.".to_string());
+    }
+    if let Err(error) = crate::migration::run_boot_migrations(&app_handle) {
+        eprintln!("ambush-desktop: startup migration retry failed: {error}");
+        return Err(
+            "Migration could not complete. Close older Ambush, Buzz, or Sprout apps and try again."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Write a reset-intent sentinel and request a graceful restart into Phase 2
@@ -788,3 +835,29 @@ mod nostr_identity_binding_tests {
 #[cfg(test)]
 #[path = "identity_key_backup_tests.rs"]
 mod identity_key_backup_tests;
+
+#[cfg(test)]
+mod startup_migration_tests {
+    use super::commit_imported_identity;
+    use std::cell::Cell;
+
+    #[test]
+    fn failed_startup_migration_blocks_identity_replacement_before_persist() {
+        let state = crate::app_state::build_app_state();
+        state
+            .startup_migration_failed
+            .store(true, std::sync::atomic::Ordering::Release);
+        let persist_called = Cell::new(false);
+        let result = commit_imported_identity(
+            &state,
+            tempfile::tempdir().unwrap().path(),
+            nostr::Keys::generate(),
+            |_| {
+                persist_called.set(true);
+                Ok(crate::app_state::IdentityStorage::LocalFile)
+            },
+        );
+        assert!(result.unwrap_err().contains("startup migration"));
+        assert!(!persist_called.get());
+    }
+}

@@ -8,6 +8,7 @@ type RawIdentity = {
   lost?: boolean;
   locked?: boolean;
   reset_failed?: boolean;
+  migration_failed?: boolean;
 };
 
 function fromRawIdentity(raw: RawIdentity): Identity {
@@ -18,6 +19,7 @@ function fromRawIdentity(raw: RawIdentity): Identity {
     lost: raw.lost === true,
     locked: raw.locked === true,
     resetFailed: raw.reset_failed === true,
+    migrationFailed: raw.migration_failed === true,
   };
 }
 
@@ -42,6 +44,10 @@ export async function persistCurrentIdentity(): Promise<Identity> {
   return fromRawIdentity(
     await invokeTauri<RawIdentity>("persist_current_identity"),
   );
+}
+
+export async function retryStartupMigration(): Promise<void> {
+  await invokeTauri("retry_startup_migration");
 }
 
 /**

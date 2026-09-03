@@ -24,6 +24,9 @@ pub struct IdentityInfo {
     /// reset-failed recovery screen. The sentinel is preserved so the next
     /// relaunch retries the wipe automatically.
     pub reset_failed: bool,
+    /// True when a pre-identity startup migration failed. No identity was
+    /// resolved and mutation/signing remain disabled until retry + relaunch.
+    pub migration_failed: bool,
 }
 
 #[derive(Serialize, Deserialize)]

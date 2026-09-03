@@ -2378,7 +2378,7 @@ test("name-only community profile save preserves an existing avatar", async ({
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual([existingAvatarUrl]);
+    .toEqual([undefined]);
   const profile = await invokeMockCommand<{ avatar_url: string | null }>(
     page,
     "get_profile",
@@ -2497,7 +2497,7 @@ test("pending avatar stays navigable, clears failures, and retries", async ({
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual([existingAvatarUrl]);
+    .toEqual([undefined]);
 
   avatarReady = true;
   await page.getByRole("button", { name: "Retry" }).click();
@@ -2717,7 +2717,7 @@ test("a failed pending replacement leaves the confirmed avatar untouched", async
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual([existingAvatarUrl]);
+    .toEqual([undefined]);
   const profile = await invokeMockCommand<{ avatar_url: string | null }>(
     page,
     "get_profile",

@@ -550,6 +550,10 @@ type E2eConfig = {
     // When true, `get_identity` returns `locked: true` until `import_identity` is
     // called. Drives the keyring-locked screen in tests.
     identityLocked?: boolean;
+    /** Drives the distinct fail-closed startup migration recovery screen. */
+    startupMigrationFailed?: boolean;
+    /** Sanitized retry failure seam for migration recovery tests. */
+    startupMigrationRetryError?: string;
     /** Delay (ms) applied to identity import so specs can observe pending navigation. */
     identityImportDelayMs?: number;
     /**
@@ -1584,6 +1588,7 @@ const STARTER_WELCOME_CHANNEL_NAME = "welcome-everyone";
 let mockIdentityLostCleared = false;
 // Same pattern for `mock.identityLocked`.
 let mockIdentityLockedCleared = false;
+let mockStartupMigrationCleared = false;
 
 // ── get_event defer/release seam ────────────────────────────────────────────
 // When `window.__AMBUSH_E2E_DEFER_GET_EVENT__` is set to a target event ID,
@@ -12162,16 +12167,31 @@ export function maybeInstallE2eTauriMocks() {
         const isLocked =
           !mockIdentityLockedCleared &&
           activeConfig?.mock?.identityLocked === true;
+        const migrationFailed =
+          !mockStartupMigrationCleared &&
+          activeConfig?.mock?.startupMigrationFailed === true;
         if (identity) {
           return {
             pubkey: identity.pubkey,
             display_name: identity.username,
             lost: false,
             locked: false,
+            migration_failed: migrationFailed,
           };
         }
 
-        return { ...DEFAULT_MOCK_IDENTITY, lost: isLost, locked: isLocked };
+        return {
+          ...DEFAULT_MOCK_IDENTITY,
+          lost: isLost,
+          locked: isLocked,
+          migration_failed: migrationFailed,
+        };
+      }
+      case "retry_startup_migration": {
+        const error = activeConfig?.mock?.startupMigrationRetryError;
+        if (error) throw new Error(error);
+        mockStartupMigrationCleared = true;
+        return null;
       }
       case "sign_nostr_identity_binding": {
         const request = payload as {

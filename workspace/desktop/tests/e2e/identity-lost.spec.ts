@@ -46,6 +46,72 @@ test("normal first launch uses the already-persisted identity", async ({
   ).toBe(false);
 });
 
+test("startup migration failure is distinct, sanitized, and cannot import identity", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    {
+      startupMigrationFailed: true,
+      startupMigrationRetryError:
+        "/Users/private/Buzz.sqlite: permission denied",
+    },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+
+  await expect(page.getByTestId("migration-failed")).toBeVisible();
+  await expect(page.getByTestId("keyring-locked")).toHaveCount(0);
+  await expect(page.getByTestId("nostr-import-nsec-input")).toHaveCount(0);
+  await expect(page.getByText("/Users/private/Buzz.sqlite")).toHaveCount(0);
+  await page.getByTestId("retry-startup-migration").click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Migration still could not complete. Your identity was not changed.",
+  );
+  await expect(page.getByText("/Users/private/Buzz.sqlite")).toHaveCount(0);
+  const commands = await page.evaluate(
+    () => window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [],
+  );
+  expect(commands.some(({ command }) => command === "import_identity")).toBe(
+    false,
+  );
+});
+
+test("successful startup migration retry relaunches without replacing identity", async ({
+  page,
+}) => {
+  await installMockBridge(
+    page,
+    { startupMigrationFailed: true },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+  await page.getByTestId("retry-startup-migration").click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? []).map(
+          ({ command }) => command,
+        ),
+      ),
+    )
+    .toEqual(
+      expect.arrayContaining([
+        "retry_startup_migration",
+        "plugin:process|restart",
+      ]),
+    );
+  const commands = await page.evaluate(
+    () => window.__AMBUSH_E2E_COMMAND_PAYLOADS__ ?? [],
+  );
+  expect(commands.some(({ command }) => command === "import_identity")).toBe(
+    false,
+  );
+  expect(
+    commands.some(({ command }) => command === "persist_current_identity"),
+  ).toBe(false);
+});
+
 test("lost boot opens onboarding gate directly on the key-import page", async ({
   page,
 }, testInfo) => {

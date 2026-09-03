@@ -41,6 +41,7 @@ import {
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { PendingInviteGate } from "@/features/onboarding/ui/PendingInviteGate";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
+import { MigrationFailedScreen } from "@/features/onboarding/ui/MigrationFailedScreen";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
 import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
 import { loadCommunityDiscoveryAfterLeave } from "@/features/communities/communityStorage";
@@ -306,6 +307,10 @@ function AppReady({
 
   if (onboarding.stage === "reset-failed") {
     return <ResetFailedScreen />;
+  }
+
+  if (onboarding.stage === "migration-failed") {
+    return <MigrationFailedScreen />;
   }
 
   if (onboarding.stage === "keyring-locked") {
@@ -757,6 +762,7 @@ function MachineBootstrap({ sharedIdentity }: { sharedIdentity: boolean }) {
   }, [acceptsCommunityDeepLinks, communityOnboarding.start, openAddCommunity]);
 
   if (machine.stage === "reset-failed") return <ResetFailedScreen />;
+  if (machine.stage === "migration-failed") return <MigrationFailedScreen />;
   if (machine.stage === "keyring-locked") return <KeyringLockedScreen />;
   if (machine.stage === "relaunch-required") return <RelaunchRequiredScreen />;
   if (machine.stage === "blocking") return <AppLoadingGate />;

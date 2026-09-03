@@ -13,6 +13,7 @@ mod huddle;
 mod identity_storage;
 mod initial_window;
 mod key_backup;
+mod keyring_service_registry;
 mod link_preview_tags;
 mod linux_media;
 #[cfg(target_os = "macos")]
@@ -284,7 +285,7 @@ pub fn run() {
                 );
                 let state = app_handle.state::<AppState>();
                 state
-                    .keyring_locked
+                    .startup_migration_failed
                     .store(true, std::sync::atomic::Ordering::Release);
                 return Ok(());
             }
@@ -567,6 +568,7 @@ pub fn run() {
             save_ncryptsec_copy,
             import_identity,
             persist_current_identity,
+            retry_startup_migration,
             get_profile,
             update_profile,
             update_profile_at_relay,

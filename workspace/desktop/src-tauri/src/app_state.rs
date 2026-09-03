@@ -72,6 +72,12 @@ pub struct AppState {
     /// resolution via `resolve_persisted_identity`) and `import_identity`
     /// (clears the flag when the user successfully imports a new key).
     pub keyring_locked: AtomicBool,
+    /// A pre-identity product migration failed. Identity resolution and all
+    /// signing/mutation paths remain disabled until a successful retry and
+    /// process relaunch; this is distinct from an inaccessible keyring.
+    pub startup_migration_failed: AtomicBool,
+    /// Serializes explicit migration retries from the recovery screen.
+    pub startup_migration_retry: Mutex<()>,
     /// Set when identity resolution detected a "lost" state: the migration
     /// marker was present but the keyring was empty and no plaintext fallback
     /// existed. An ephemeral key was generated to let the app boot; the
@@ -222,6 +228,8 @@ pub fn build_app_state() -> AppState {
         media_proxy_port: AtomicU16::new(0),
         prevent_sleep: Default::default(),
         keyring_locked: AtomicBool::new(false),
+        startup_migration_failed: AtomicBool::new(false),
+        startup_migration_retry: Mutex::new(()),
         identity_lost: AtomicBool::new(false),
         reset_failed: AtomicBool::new(false),
         #[cfg(feature = "mesh-llm")]
@@ -277,8 +285,11 @@ impl AppState {
     /// blocks publishing under an invalid or inaccessible identity.
     pub fn signing_keys(&self) -> Result<Keys, String> {
         if self
-            .identity_lost
+            .startup_migration_failed
             .load(std::sync::atomic::Ordering::Acquire)
+            || self
+                .identity_lost
+                .load(std::sync::atomic::Ordering::Acquire)
             || self
                 .keyring_locked
                 .load(std::sync::atomic::Ordering::Acquire)
@@ -341,6 +352,13 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
         .map_err(|e| format!("app data dir: {e}"))?;
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("create app data dir: {e}"))?;
 
+    if crate::app_state::keyring_service() == "ambush-desktop-dev"
+        || crate::app_state::keyring_service().starts_with("ambush-desktop-dev.")
+    {
+        crate::keyring_service_registry::register_current_dev_service(
+            crate::app_state::keyring_service(),
+        )?;
+    }
     let resolved = load_or_create_identity(&data_dir)?;
     // Write keys and storage before setting the recovery flags (Release) so
     // any thread that reads a flag as false with Acquire sees consistent data.

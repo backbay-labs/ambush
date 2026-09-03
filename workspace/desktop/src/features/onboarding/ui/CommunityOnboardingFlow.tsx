@@ -153,6 +153,8 @@ export function CommunityOnboardingFlow({
   const systemColorScheme = useSystemColorScheme();
   const [displayName, setDisplayName] = React.useState("");
   const [avatarUrl, setAvatarUrl] = React.useState("");
+  const [avatarSelectionTransactionId, setAvatarSelectionTransactionId] =
+    React.useState<string | null>(null);
   const [localAvatarPreviewUrl, setLocalAvatarPreviewUrl] = React.useState<
     string | null
   >(null);
@@ -419,30 +421,27 @@ export function CommunityOnboardingFlow({
     try {
       const candidateAvatarUrl = avatarUrl.trim();
       const presentationState = avatarPresentation?.state;
+      const avatarWasSelected = avatarSelectionTransactionId === transaction.id;
       const shouldSaveCandidate =
+        avatarWasSelected &&
         candidateAvatarUrl.length > 0 &&
         presentationState !== "failed" &&
         presentationState !== "pending";
 
       const deferredAvatar =
-        candidateAvatarUrl && presentationState && presentationState !== "ready"
+        avatarWasSelected &&
+        candidateAvatarUrl &&
+        presentationState &&
+        presentationState !== "ready"
           ? registerAvatarWhenReady({
               avatarUrl: candidateAvatarUrl,
               relayUrl: transaction.relayUrl,
             })
           : null;
 
-      let avatarUrlToSave = shouldSaveCandidate
+      const avatarUrlToSave = shouldSaveCandidate
         ? candidateAvatarUrl
         : undefined;
-      if (!avatarUrlToSave) {
-        try {
-          avatarUrlToSave = (await getProfile()).avatarUrl?.trim() || undefined;
-        } catch {
-          // The native profile update is itself read-merge-write. If this
-          // refresh fails, omitting the avatar still preserves the stored one.
-        }
-      }
 
       try {
         const profile = await updateProfile({
@@ -744,7 +743,10 @@ export function CommunityOnboardingFlow({
                         onEmojiAvatarChange={animateEmojiAvatarChange}
                         onLocalPreviewChange={setLocalAvatarPreviewUrl}
                         onUploadingChange={setIsUploadingAvatar}
-                        onUrlChange={setAvatarUrl}
+                        onUrlChange={(nextAvatarUrl) => {
+                          setAvatarSelectionTransactionId(transaction.id);
+                          setAvatarUrl(nextAvatarUrl);
+                        }}
                         presentation="onboarding-modal"
                         previewName={displayName.trim() || "Your profile"}
                         testIdPrefix="community-avatar"

@@ -483,6 +483,7 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
   // Boot-time Phase 2 reset failed — wipe was attempted but verification failed.
   // The sentinel is preserved so the next relaunch retries automatically.
   const identityResetFailed = identity?.resetFailed === true;
+  const identityMigrationFailed = identity?.migrationFailed === true;
 
   // Sticky boot fact: once identity was lost at boot, this remains true for the
   // entire session. Per-component state in OnboardingFlow cannot carry this
@@ -501,12 +502,17 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
   }, [identityLocked]);
 
   const profileQuery = useProfileQuery(
-    !identityLost && !identityLocked && identityQuery.status === "success",
+    !identityLost &&
+      !identityLocked &&
+      !identityMigrationFailed &&
+      !identityResetFailed &&
+      identityQuery.status === "success",
   );
   const onboardingGate = useFirstRunOnboardingGate({
     currentPubkey,
     identityIsFetching: identityQuery.fetchStatus === "fetching",
-    identityLost,
+    identityLost:
+      identityLost || identityMigrationFailed || identityResetFailed,
     identityStatus: identityQuery.status,
     isSharedIdentity,
     profileHasEvent: profileQuery.data?.hasProfileEvent,
@@ -667,12 +673,14 @@ export function useAppOnboardingState(isSharedIdentity: boolean) {
     stage:
       identityResetFailed && identityQuery.status === "success"
         ? ("reset-failed" as const)
-        : identityLocked && identityQuery.status === "success"
-          ? ("keyring-locked" as const)
-          : relaunchRequired
-            ? ("relaunch-required" as const)
-            : isCompletingStarterSetup
-              ? ("blocking" as const)
-              : onboardingGate.stage,
+        : identityMigrationFailed && identityQuery.status === "success"
+          ? ("migration-failed" as const)
+          : identityLocked && identityQuery.status === "success"
+            ? ("keyring-locked" as const)
+            : relaunchRequired
+              ? ("relaunch-required" as const)
+              : isCompletingStarterSetup
+                ? ("blocking" as const)
+                : onboardingGate.stage,
   };
 }
