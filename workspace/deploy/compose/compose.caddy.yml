@@ -1,0 +1,29 @@
+services:
+  relay:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      AMBUSH_DOMAIN: ${AMBUSH_DOMAIN:?set AMBUSH_DOMAIN}
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ambush-caddy-data:/data
+      - ambush-caddy-config:/config
+    restart: unless-stopped
+    networks:
+      - ambush-net
+
+volumes:
+  ambush-caddy-data:
+    labels:
+      com.backbay.ambush.volume: caddy-data
+  ambush-caddy-config:
+    labels:
+      com.backbay.ambush.volume: caddy-config

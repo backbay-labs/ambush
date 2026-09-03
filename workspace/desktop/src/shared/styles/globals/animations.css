@@ -1,0 +1,663 @@
+.sprout-arc-spinner {
+  animation: sprout-arc-spinner-spin 500ms linear infinite;
+}
+
+@keyframes ambush-qr-cell-reveal {
+  0% {
+    opacity: 0;
+    transform: scale(0);
+  }
+
+  27% {
+    opacity: 0.27;
+    transform: scale(0);
+  }
+
+  30% {
+    opacity: 0.3;
+    transform: scale(0.043);
+  }
+
+  35% {
+    opacity: 0.35;
+    transform: scale(0.167);
+  }
+
+  40% {
+    opacity: 0.4;
+    transform: scale(0.358);
+  }
+
+  45% {
+    opacity: 0.45;
+    transform: scale(0.632);
+  }
+
+  49% {
+    opacity: 0.49;
+    transform: scale(0.918);
+  }
+
+  50% {
+    opacity: 0.5;
+    transform: scale(1.1);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.ambush-qr-cell-reveal {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ambush-qr-cell-reveal 58ms linear
+    var(--ambush-qr-reveal-delay, 0ms) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambush-qr-cell-reveal {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+}
+
+@keyframes sprout-arc-spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ambush-wave-hand {
+  display: inline-block;
+  transform-origin: 70% 70%;
+  will-change: transform;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ambush-wave-hover-trigger:hover .ambush-wave-hand {
+    animation: ambush-wave-hand 1200ms ease-in-out both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambush-wave-hover-trigger:hover .ambush-wave-hand {
+    animation: none;
+  }
+}
+
+@keyframes ambush-wave-hand {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+
+  12%,
+  38%,
+  64% {
+    transform: rotate(15deg);
+  }
+
+  25%,
+  51%,
+  77% {
+    transform: rotate(-15deg);
+  }
+}
+
+.ambush-emoji-mart {
+  align-items: stretch;
+  display: flex;
+  justify-content: stretch;
+  overflow: hidden;
+  width: 100%;
+}
+
+.ambush-emoji-mart > div {
+  align-items: stretch;
+  display: flex;
+  height: 100%;
+  justify-content: stretch;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.ambush-emoji-mart em-emoji-picker {
+  --border-radius: var(--radius);
+  --category-icon-size: 24px;
+  --color-border: transparent;
+  --color-border-over: rgb(255 255 255 / 0.1);
+  --font-family: inherit;
+  --font-size: 14px;
+  --rgb-accent: var(--ambush-emoji-picker-rgb-color, 201, 193, 183);
+  --rgb-background: var(--ambush-emoji-picker-rgb-background, 31, 31, 31);
+  --rgb-color: var(--ambush-emoji-picker-rgb-color, 201, 193, 183);
+  --rgb-input: var(--ambush-emoji-picker-rgb-input, 62, 62, 62);
+  --shadow: none;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+@keyframes ambush-avatar-squish {
+  0% {
+    transform: translate(
+        var(--ambush-avatar-emoji-offset-x, 0px),
+        var(--ambush-avatar-emoji-offset-y, 0px)
+      )
+      scale(1);
+  }
+
+  42% {
+    transform: translate(
+        var(--ambush-avatar-emoji-offset-x, 0px),
+        var(--ambush-avatar-emoji-offset-y, 0px)
+      )
+      scaleX(0.96) scaleY(0.88);
+  }
+
+  100% {
+    transform: translate(
+        var(--ambush-avatar-emoji-offset-x, 0px),
+        var(--ambush-avatar-emoji-offset-y, 0px)
+      )
+      scale(1);
+  }
+}
+
+.ambush-avatar-emoji-glyph {
+  --ambush-avatar-emoji-offset-x: 1px;
+  --ambush-avatar-emoji-offset-y: 7px;
+  transform: translate(
+    var(--ambush-avatar-emoji-offset-x),
+    var(--ambush-avatar-emoji-offset-y)
+  );
+}
+
+.ambush-avatar-squish {
+  animation: ambush-avatar-squish 200ms ease-out;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambush-avatar-squish {
+    animation: none;
+  }
+}
+
+.ambush-shimmer {
+  --ambush-shimmer-duration: 2600ms;
+  --ambush-shimmer-highlight: color-mix(
+    in srgb,
+    hsl(var(--background)) 60%,
+    hsl(var(--muted-foreground)) 40%
+  );
+  --ambush-shimmer-spread: 2rem;
+
+  color: hsl(var(--muted-foreground));
+  display: inline-block;
+  position: relative;
+}
+
+/*
+ * The highlight lives on an aria-hidden overlay child that duplicates the
+ * label text and animates ONLY opacity. The previous implementation animated
+ * background-position under -webkit-background-clip: text, which WebKit
+ * cannot run on the compositor: every animation frame forced a full document
+ * style resolve + compositing-hierarchy walk, burning ~20% CPU at rest
+ * whenever a large timeline was mounted with a working agent. Opacity is
+ * compositor-accelerated: the layer paints once and the pulse runs outside
+ * the web process's main thread. A real element (not ::after generated
+ * content) is used so the duplicate text can be aria-hidden — pseudo-element
+ * text is inconsistently exposed to screen readers and cannot be hidden.
+ */
+.ambush-shimmer > .ambush-shimmer-overlay {
+  animation: ambush-shimmer var(--ambush-shimmer-duration) ease-in-out infinite;
+  background-clip: text;
+  background-image: linear-gradient(
+    90deg,
+    transparent calc(50% - var(--ambush-shimmer-spread)),
+    var(--ambush-shimmer-highlight) 50%,
+    transparent calc(50% + var(--ambush-shimmer-spread))
+  );
+  color: transparent;
+  inset: 0;
+  overflow: inherit;
+  padding: inherit;
+  position: absolute;
+  text-overflow: inherit;
+  white-space: inherit;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@keyframes ambush-shimmer {
+  0%,
+  100% {
+    opacity: 0;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambush-shimmer > .ambush-shimmer-overlay {
+    animation: none;
+    display: none;
+  }
+}
+
+.ambush-poof-layer {
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: 2147483647;
+}
+
+.ambush-poof-burst {
+  contain: layout paint style;
+  height: var(--ambush-poof-size);
+  left: 0;
+  position: absolute;
+  top: 0;
+  transform: translate3d(
+    calc(var(--ambush-poof-x) - 50%),
+    calc(var(--ambush-poof-y) - 50%),
+    0
+  );
+  width: var(--ambush-poof-size);
+}
+
+.ambush-poof-frame {
+  animation: ambush-poof-frame 400ms linear both;
+  height: 100%;
+  inset: 0;
+  object-fit: contain;
+  opacity: 0;
+  position: absolute;
+  transform: translate3d(0, 0, 0) scale(0.92);
+  transform-origin: center;
+  width: 100%;
+}
+
+.ambush-poof-frame-1 {
+  animation-name: ambush-poof-frame-1;
+}
+
+.ambush-poof-frame-2 {
+  animation-name: ambush-poof-frame-2;
+}
+
+.ambush-poof-frame-3 {
+  animation-name: ambush-poof-frame-3;
+}
+
+.ambush-poof-frame-4 {
+  animation-name: ambush-poof-frame-4;
+}
+
+.ambush-poof-frame-5 {
+  animation-name: ambush-poof-frame-5;
+}
+
+@keyframes ambush-poof-frame-1 {
+  0%,
+  19.99% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(0.94);
+  }
+
+  20%,
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes ambush-poof-frame-2 {
+  0%,
+  19.99% {
+    opacity: 0;
+  }
+
+  20%,
+  39.99% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  40%,
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(1.01);
+  }
+}
+
+@keyframes ambush-poof-frame-3 {
+  0%,
+  39.99% {
+    opacity: 0;
+  }
+
+  40%,
+  59.99% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1.01);
+  }
+
+  60%,
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(1.02);
+  }
+}
+
+@keyframes ambush-poof-frame-4 {
+  0%,
+  59.99% {
+    opacity: 0;
+  }
+
+  60%,
+  79.99% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1.02);
+  }
+
+  80%,
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(1.03);
+  }
+}
+
+@keyframes ambush-poof-frame-5 {
+  0%,
+  79.99% {
+    opacity: 0;
+  }
+
+  80%,
+  99.99% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1.03);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(1.04);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambush-poof-frame {
+    animation: ambush-poof-frame-reduced 180ms ease-out both;
+  }
+
+  .ambush-poof-frame:not(.ambush-poof-frame-3) {
+    display: none;
+  }
+}
+
+@keyframes ambush-poof-frame-reduced {
+  0% {
+    opacity: 0.9;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+.ambush-avatar-hue-scrubber {
+  background: linear-gradient(
+    90deg,
+    #ff0000 0%,
+    #ffff00 16.67%,
+    #00ff00 33.33%,
+    #00ffff 50%,
+    #0000ff 66.67%,
+    #ff00ff 83.33%,
+    #ff0000 100%
+  );
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ambush-animated-count {
+  display: inline-block;
+  font-kerning: none;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ambush-animated-count__motion {
+  display: inline-flex;
+  line-height: 1;
+}
+
+.ambush-animated-count__static {
+  display: none;
+}
+
+.ambush-sidebar-action-card--success {
+  background-color: color-mix(
+    in srgb,
+    var(--status-added) 12%,
+    hsl(var(--background)) 88%
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--status-added) 34%,
+    hsl(var(--border)) 66%
+  );
+  color: hsl(var(--foreground));
+}
+
+.ambush-sidebar-action-card--success:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--status-added) 16%,
+    hsl(var(--background)) 84%
+  );
+}
+
+.dark .ambush-sidebar-action-card--success {
+  background-color: color-mix(
+    in srgb,
+    var(--status-added) 15%,
+    hsl(var(--background)) 85%
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--status-added) 42%,
+    hsl(var(--border)) 58%
+  );
+}
+
+.dark .ambush-sidebar-action-card--success:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--status-added) 19%,
+    hsl(var(--background)) 81%
+  );
+}
+
+.ambush-sidebar-action-card__success-icon {
+  color: var(--status-added);
+}
+
+.ambush-sidebar-action-description {
+  --ambush-sidebar-action-description-line-height: 1.375em;
+  display: inline-block;
+  line-height: var(--ambush-sidebar-action-description-line-height);
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+.ambush-sidebar-action-description__motion {
+  display: block;
+  height: var(--ambush-sidebar-action-description-line-height);
+  overflow: hidden;
+}
+
+.ambush-sidebar-action-description__reel {
+  animation: ambush-sidebar-action-description-roll-up 260ms
+    cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  display: flex;
+  flex-direction: column;
+  line-height: var(--ambush-sidebar-action-description-line-height);
+  will-change: transform;
+}
+
+/* The roll-up reel animates between two fixed one-line slots, so text is
+   clipped to a single line only while the transition plays; the settled
+   state above wraps freely. */
+.ambush-sidebar-action-description__reel > span {
+  display: block;
+  height: var(--ambush-sidebar-action-description-line-height);
+  line-height: var(--ambush-sidebar-action-description-line-height);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes ambush-sidebar-action-description-roll-up {
+  from {
+    transform: translateY(0);
+  }
+
+  to {
+    transform: translateY(
+      calc(-1 * var(--ambush-sidebar-action-description-line-height))
+    );
+  }
+}
+
+.ambush-animated-count__slot {
+  display: inline-block;
+  height: 1em;
+  line-height: 1;
+}
+
+.ambush-animated-count__slot--digit {
+  overflow: hidden;
+  text-align: center;
+  width: 1ch;
+}
+
+.ambush-animated-count__reel {
+  display: flex;
+  flex-direction: column;
+  height: 2em;
+  line-height: 1;
+  will-change: transform;
+}
+
+.ambush-animated-count__reel > span {
+  display: block;
+  height: 1em;
+  line-height: 1;
+}
+
+.ambush-animated-count__slot[data-direction="up"] .ambush-animated-count__reel {
+  animation: ambush-animated-count-roll-up 260ms cubic-bezier(0.2, 0.8, 0.2, 1)
+    both;
+}
+
+.ambush-animated-count__slot[data-direction="down"]
+  .ambush-animated-count__reel {
+  animation: ambush-animated-count-roll-down 260ms
+    cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.ambush-animated-count__symbol {
+  display: inline-block;
+  line-height: 1;
+}
+
+.ambush-animated-count__symbol[data-direction="up"] {
+  animation: ambush-animated-count-symbol-up 220ms
+    cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.ambush-animated-count__symbol[data-direction="down"] {
+  animation: ambush-animated-count-symbol-down 220ms
+    cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes ambush-animated-count-roll-up {
+  from {
+    transform: translateY(0);
+  }
+
+  to {
+    transform: translateY(-1em);
+  }
+}
+
+@keyframes ambush-animated-count-roll-down {
+  from {
+    transform: translateY(-1em);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes ambush-animated-count-symbol-up {
+  from {
+    opacity: 0;
+    transform: translateY(0.25em);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ambush-animated-count-symbol-down {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25em);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambush-animated-count__motion {
+    display: none;
+  }
+
+  .ambush-animated-count__static {
+    display: inline;
+  }
+}
+
+/* ── Tiptap rich-text composer ──────────────────────────────────────── */
+
+/* ── Setup / cold-boot loading screen ─────────────────────────────────── */
+
+.ambush-setup-loading-shell {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}

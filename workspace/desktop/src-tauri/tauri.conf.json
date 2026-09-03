@@ -1,0 +1,90 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Ambush",
+  "version": "0.5.20",
+  "identifier": "com.backbay.ambush.app",
+  "build": {
+    "beforeDevCommand": {
+      "script": "exec ./node_modules/.bin/vite",
+      "cwd": "..",
+      "wait": false
+    },
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "",
+        "width": 800,
+        "height": 600,
+        "maximized": true,
+        "visible": false,
+        "transparent": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "dragDropEnabled": false,
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 25
+        },
+        "backgroundThrottling": "disabled",
+        "minWidth": 800,
+        "minHeight": 500
+      }
+    ],
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": "default-src 'self'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/@mediapipe/; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ambush-media: http://ambush-media.localhost https: http: wss: ws:; img-src 'self' ambush-media: http://ambush-media.localhost data: blob: https: http:; media-src 'self' ambush-media: http://ambush-media.localhost data: blob: https: http:; worker-src 'self' blob:"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["ambush"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": [
+      "binaries/ambush-acp",
+      "binaries/ambush-agent",
+      "binaries/ambush-backend-kubernetes",
+      "binaries/ambush-dev-mcp",
+      "binaries/git-credential-nostr",
+      "binaries/ambush"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist",
+      "dmg": {
+        "background": "icons/dmg-background.png",
+        "windowSize": {
+          "width": 660,
+          "height": 532
+        },
+        "appPosition": {
+          "x": 191,
+          "y": 330
+        },
+        "applicationFolderPosition": {
+          "x": 469,
+          "y": 330
+        }
+      }
+    }
+  }
+}

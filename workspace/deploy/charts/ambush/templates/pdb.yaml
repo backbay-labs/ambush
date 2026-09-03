@@ -1,0 +1,18 @@
+{{- include "ambush.validate" . -}}
+{{- if and .Values.podDisruptionBudget.enabled (gt (include "ambush.minimumReplicas" . | int) 1) -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ambush.fullname" . }}
+  labels:
+    {{- include "ambush.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ambush.relaySelectorLabels" . | nindent 6 }}
+  {{- if .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- else if .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,19 @@
+#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"
+#include "Generated.xcconfig"
+
+// Defaults for the iOS Release build. Internal/custom builds (e.g. an
+// enterprise-signed distribution) override these without patching tracked
+// files by writing `mobile/ios/Flutter/AppOverrides.xcconfig` (gitignored).
+BUNDLE_IDENTIFIER = com.backbay.ambush.mobile
+APP_DISPLAY_NAME = Ambush
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = iPhone Developer
+AMBUSH_DEVELOPMENT_TEAM = EYF346PHUG
+
+// Push support is always present in the iOS artifact. Relay advertisement is
+// the rollout authority, so a relay without a valid descriptor remains inert.
+AMBUSH_APP_GROUP_IDENTIFIER = group.$(BUNDLE_IDENTIFIER)
+AMBUSH_KEYCHAIN_ACCESS_GROUP = $(BUNDLE_IDENTIFIER)
+AMBUSH_IOS_PUSH_ENVIRONMENT = production
+AMBUSH_APP_ATTEST_ENVIRONMENT = production
+#include? "AppOverrides.xcconfig"
