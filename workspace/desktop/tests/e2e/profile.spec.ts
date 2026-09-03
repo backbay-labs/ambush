@@ -1337,7 +1337,7 @@ test("renders agent profile ingress subviews from the Playwright mock bridge", a
   await expect(stickyChromeSurface).toHaveAttribute("data-active", "true");
   await expect(stickyChromeSurface).toHaveCSS("opacity", "1");
   await expect(stickyChromeSurface).toHaveCSS("pointer-events", "none");
-  await expect(stickyChromeSurface).not.toHaveCSS("backdrop-filter", "none");
+  await expect(stickyChromeSurface).toHaveCSS("backdrop-filter", "none");
   await expect(stickyHero).toBeInViewport();
   await expect(stickyTabs).toBeInViewport();
   const stickyChromeRects = await Promise.all(
@@ -2651,7 +2651,7 @@ test("shows agent runtimes in agent settings", async ({ page }) => {
       .getByTestId(testId)
       .locator('[data-slot="settings-section-card"]');
     await expect(section).toBeVisible();
-    await expect(section).toHaveCSS("border-radius", "12px");
+    await expect(section).toHaveCSS("border-radius", "2px");
     await expect(section).toHaveCSS("border-top-width", "1px");
   }
 

@@ -291,7 +291,7 @@ async function expectWelcomeComposerBannerLayout(page: Page) {
   expect(radii.bottomRight).toBe("0px");
   expect(radii.backdropFilter).toBe("none");
   expect(radii.backgroundColor).not.toBe(composerBackgroundColor);
-  expect(dockBackdropFilter).not.toBe("none");
+  expect(dockBackdropFilter).toBe("none");
   expect(guidanceBackdropFilter).toBe(dockBackdropFilter);
   expect(radii.filter).toBe("none");
   expect(radii.transform).toBe("none");
@@ -2063,7 +2063,7 @@ test("connected first-community profile keeps Back bottom-left and balances the 
   });
   expect(dialogStyles.backgroundColor).toBe("rgb(236, 207, 185)");
   expect(dialogStyles.color).toBe("rgb(41, 32, 25)");
-  expect(dialogStyles.boxShadow).not.toBe("none");
+  expect(dialogStyles.boxShadow).toBe("none");
   const dialogOverlay = page.getByTestId("dialog-overlay");
   const overlayStyles = await dialogOverlay.evaluate((element) => {
     const styles = window.getComputedStyle(element);
@@ -2391,7 +2391,7 @@ test("name-only community profile save preserves an existing avatar", async ({
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual([undefined]);
+    .toEqual([existingAvatarUrl]);
   const profile = await invokeMockCommand<{ avatar_url: string | null }>(
     page,
     "get_profile",

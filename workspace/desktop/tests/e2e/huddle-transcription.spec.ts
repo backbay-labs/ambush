@@ -307,10 +307,10 @@ test("floats the in-app huddle tray over the glass background", async ({
   await expect(shell).toHaveAttribute("data-huddle-open", "true");
   await expect(shell).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(backdrop).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(drawer).toHaveCSS("border-top-left-radius", "16px");
-  await expect(drawer).toHaveCSS("border-top-right-radius", "16px");
-  await expect(drawer).toHaveCSS("border-bottom-right-radius", "16px");
-  await expect(drawer).toHaveCSS("border-bottom-left-radius", "16px");
+  await expect(drawer).toHaveCSS("border-top-left-radius", "2px");
+  await expect(drawer).toHaveCSS("border-top-right-radius", "2px");
+  await expect(drawer).toHaveCSS("border-bottom-right-radius", "2px");
+  await expect(drawer).toHaveCSS("border-bottom-left-radius", "2px");
   await expect(drawer).toHaveCSS("padding-top", "8px");
   await expect(drawer).toHaveCSS("padding-right", "8px");
   await expect(drawer).toHaveCSS("padding-bottom", "8px");

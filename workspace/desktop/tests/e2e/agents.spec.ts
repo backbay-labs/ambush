@@ -1147,7 +1147,7 @@ test("custom personas share with people and keep export separate", async ({
   const shareMainCardShadow = shareMainCardStyles.boxShadow;
   const exportAgentRowShadow = exportAgentRowStyles.boxShadow;
   expect(exportAgentRowShadow).toBe(shareMainCardShadow);
-  expect(exportAgentRowShadow).not.toBe("none");
+  expect(exportAgentRowShadow).toBe("none");
   await expect(exportAgentRow).toHaveCSS("position", "relative");
   expect(exportAgentRowBox?.y ?? 0).toBeGreaterThanOrEqual(
     (shareMainCardBox?.y ?? 0) + (shareMainCardBox?.height ?? 0) + 12,
@@ -2641,10 +2641,10 @@ test("start pill morphs into the running dot without remounting the avatar", asy
   ).toBe(true);
   expect(samples.at(-1)?.width).toBeCloseTo(activeDotSize, 0);
   expect(samples.at(-1)?.height).toBeCloseTo(activeDotSize, 0);
-  expect(samples.at(-1)?.backgroundColor).not.toBe(samples[0]?.backgroundColor);
+  expect(samples.at(-1)?.backgroundColor).toBe(samples[0]?.backgroundColor);
   await expect(
     page.getByTestId(`agent-runtime-active-${pubkey}`).locator("xpath=../.."),
-  ).toHaveClass(/bg-emerald-500/);
+  ).toHaveClass(/bg-foreground/);
   expect(
     await initialAvatar?.evaluate(
       (before, after) => before === after,
