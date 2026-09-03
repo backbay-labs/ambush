@@ -166,13 +166,20 @@ fn rename_to_trash(src: &Path) -> Result<PathBuf, String> {
 
 /// Core wipe logic — separated for testing.
 pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcome {
+    run_boot_reset_with_keychain_and_rename(ctx, rename_to_trash)
+}
+
+fn run_boot_reset_with_keychain_and_rename<F>(ctx: ResetContext<'_>, mut rename: F) -> ResetOutcome
+where
+    F: FnMut(&Path) -> Result<PathBuf, String>,
+{
     let app_data_dir = ctx.app_data_dir;
 
     // ── Step 1: rename app-data dir (atomic — sentinel survives the parent) ──
     let trash_app = trash_path(app_data_dir);
 
     if app_data_dir.exists() {
-        if let Err(e) = rename_to_trash(app_data_dir) {
+        if let Err(e) = rename(app_data_dir) {
             eprintln!("ambush-desktop reset: {e}");
             return ResetOutcome {
                 completed: false,
@@ -189,7 +196,7 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
         .collect::<Vec<_>>();
     for (legacy, _) in &trash_legacy {
         if legacy.exists() {
-            if let Err(e) = rename_to_trash(legacy) {
+            if let Err(e) = rename(legacy) {
                 eprintln!("ambush-desktop reset: {e}");
                 if trash_app.exists() {
                     let _ = std::fs::rename(&trash_app, app_data_dir);
@@ -216,7 +223,7 @@ pub(crate) fn run_boot_reset_with_keychain(ctx: ResetContext<'_>) -> ResetOutcom
         let webkit_dir = home.join("Library").join("WebKit").join(bundle_id);
         let tw = trash_path(&webkit_dir);
         if webkit_dir.exists() {
-            if let Err(e) = rename_to_trash(&webkit_dir) {
+            if let Err(e) = rename(&webkit_dir) {
                 eprintln!("ambush-desktop reset: {e}");
                 // Non-fatal — continue
             }
@@ -833,18 +840,26 @@ mod tests {
         }
         write_sentinel(&app_data).unwrap();
 
-        // A non-directory collision makes the second legacy rename fail after
-        // app-data and Buzz have already moved to their deterministic trash.
-        std::fs::write(trash_path(&sprout), b"collision").unwrap();
+        // Inject the failure after app-data and Buzz have already moved. A
+        // destination-file collision is not portable: Windows may replace it.
         let kc = FakeKeychain::ok();
-        let outcome = run_boot_reset_with_keychain(ResetContext {
-            app_data_dir: &app_data,
-            legacy_app_data_dirs: vec![buzz.clone(), sprout.clone()],
-            nest_dir: None,
-            keychain: &kc,
-            home_dir: None,
-            is_dev: false,
-        });
+        let outcome = run_boot_reset_with_keychain_and_rename(
+            ResetContext {
+                app_data_dir: &app_data,
+                legacy_app_data_dirs: vec![buzz.clone(), sprout.clone()],
+                nest_dir: None,
+                keychain: &kc,
+                home_dir: None,
+                is_dev: false,
+            },
+            |path| {
+                if path == sprout.as_path() {
+                    Err("injected legacy rename failure".to_string())
+                } else {
+                    rename_to_trash(path)
+                }
+            },
+        );
 
         assert!(outcome.failed);
         assert!(app_data.exists(), "app-data must be restored");
