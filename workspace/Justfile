@@ -63,6 +63,9 @@ hooks:
     # relative hooksPath would break linked-worktree dispatch just like .hooks did.
     HOOKS_DIR="$(git rev-parse --path-format=absolute --git-common-dir)/hooks"
     git config --local core.hooksPath "$HOOKS_DIR"
+    # The config lives in this directory, not the repo root (the workspace is the
+    # workspace/ subtree of the merged repo since 2026-09-02).
+    export LEFTHOOK_CONFIG="{{justfile_directory()}}/lefthook.yml"
     lefthook install --force
 
 # Wipe development state and recreate a clean environment. Installed Ambush is preserved.

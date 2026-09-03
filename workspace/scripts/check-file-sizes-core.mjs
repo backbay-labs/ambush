@@ -87,7 +87,12 @@ export function parseChangedFiles(output) {
 
 function changedProjectFiles({ repoRoot, projectRelative, baseRef }) {
   const output = git(
-    ["diff", "--name-status", "-z", "-M", baseRef, "--", projectRelative],
+    // `--relative`: `git diff` prints repo-root-relative paths by default, but
+    // `git ls-files` below prints them relative to `repoRoot`. Since the
+    // workspace moved under workspace/ (2026-09-02) the two disagree unless
+    // both are made relative to `repoRoot`; without this the diff half matched
+    // no rule and the ratchet passed vacuously.
+    ["diff", "--name-status", "-z", "-M", "--relative", baseRef, "--", projectRelative],
     repoRoot,
   );
   const changes = parseChangedFiles(output);
@@ -108,7 +113,10 @@ function changedProjectFiles({ repoRoot, projectRelative, baseRef }) {
 }
 
 function readBaseFile(repoRoot, baseRef, filePath) {
-  return git(["show", `${baseRef}:${filePath}`], repoRoot, {
+  // `<rev>:./<path>` resolves the path relative to `repoRoot` (git's cwd here)
+  // instead of the repository root, which differ now that the workspace is a
+  // subdirectory.
+  return git(["show", `${baseRef}:./${filePath}`], repoRoot, {
     encoding: null,
   }).toString("utf8");
 }

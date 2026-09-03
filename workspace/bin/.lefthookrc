@@ -9,13 +9,21 @@
 #      the invoking shell had first (e.g. Homebrew flutter). This is the safe
 #      subset of `activate-hermit`: a plain PATH prepend, no interactive-shell
 #      machinery. It makes the hook self-pinning regardless of shell setup.
+# Since 2026-09-02 the workspace is the workspace/ subtree of the merged repo, so
+# the Hermit bin is <repo root>/workspace/bin and the lefthook config is
+# workspace/lefthook.yml; LEFTHOOK_CONFIG tells the dispatcher where to find it.
 _lefthook_root="$(git rev-parse --show-toplevel 2>/dev/null)"
-if [ -n "$_lefthook_root" ] && [ -d "$_lefthook_root/bin" ]; then
-  PATH="$_lefthook_root/bin:$PATH"
+_lefthook_ws="$_lefthook_root/workspace"
+if [ -n "$_lefthook_root" ] && [ -d "$_lefthook_ws/bin" ]; then
+  PATH="$_lefthook_ws/bin:$PATH"
   export PATH
-  if [ -x "$_lefthook_root/bin/lefthook" ]; then
-    LEFTHOOK_BIN="$_lefthook_root/bin/lefthook"
+  if [ -x "$_lefthook_ws/bin/lefthook" ]; then
+    LEFTHOOK_BIN="$_lefthook_ws/bin/lefthook"
     export LEFTHOOK_BIN
   fi
+  if [ -f "$_lefthook_ws/lefthook.yml" ]; then
+    LEFTHOOK_CONFIG="$_lefthook_ws/lefthook.yml"
+    export LEFTHOOK_CONFIG
+  fi
 fi
-unset _lefthook_root
+unset _lefthook_root _lefthook_ws
