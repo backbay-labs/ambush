@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { readLaneMovementEnvelope } from "./perchLaneMovement.ts";
+import { readLaneMovementEnvelope } from "./laneMovementEnvelope.ts";
 
 const ISSUER =
   "swarm:ed25519:6f1b8c2e4a9d7f3b1e5c0a8d2f4b6e9c1a3d5f7b9e1c3a5d7f9b1e3c5a7d9f1b";
