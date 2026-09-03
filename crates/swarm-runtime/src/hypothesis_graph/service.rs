@@ -1701,7 +1701,6 @@ impl CollectiveHypothesisService {
 
     pub fn summary(&self) -> Result<GraphSummaryProjection, GraphServiceError> {
         let campaign = self.active_campaign()?;
-        self.repair_memory_projection_for_campaign(campaign.index)?;
         self.summary_for_campaign(&campaign)
     }
 
@@ -1751,7 +1750,6 @@ impl CollectiveHypothesisService {
         selected
             .into_iter()
             .map(|campaign| {
-                self.repair_memory_projection_for_campaign(campaign.index)?;
                 self.summary_for_campaign(&campaign)
                     .map(|summary| (campaign.index, summary))
             })
@@ -1763,10 +1761,19 @@ impl CollectiveHypothesisService {
         campaign: &HypothesisCampaign,
     ) -> Result<GraphSummaryProjection, GraphServiceError> {
         let snapshot = campaign.store.snapshot()?;
-        let memory_count = campaign
-            .memory
-            .store()
-            .list(self.config.max_memory_records)?
+        // The signed graph outbox is authoritative for committed strategy
+        // memory. Summary visibility must not depend on the repairable
+        // external memory index being writable or current.
+        let memory_count = snapshot
+            .terminal_outbox()
+            .values()
+            .filter_map(|publication| {
+                publication
+                    .memory
+                    .as_ref()
+                    .map(|memory| memory.memory_id.clone())
+            })
+            .collect::<BTreeSet<_>>()
             .len();
         let metrics = self
             .state
@@ -4420,6 +4427,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolved, base);
+        let state = service.state.lock().unwrap();
+        assert!(state.dirty_memory_campaigns.contains_key(&0));
+        assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);
+    }
+
+    #[test]
+    fn graph_summaries_do_not_depend_on_dirty_advisory_memory_projection() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            ..HypothesisGraphConfig::default()
+        };
+        let service =
+            CollectiveHypothesisService::new(&config, Keypair::from_seed(&[17; 32]), None).unwrap();
+        service
+            .record_post_commit_memory_projection(
+                0,
+                Err(StrategyMemoryStoreError::InvalidState {
+                    reason: "injected persistent projection outage".to_string(),
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(service.summary().unwrap().memory_count, 0);
+        assert_eq!(service.summaries().unwrap().len(), 1);
         let state = service.state.lock().unwrap();
         assert!(state.dirty_memory_campaigns.contains_key(&0));
         assert_eq!(state.metrics.snapshot.memory_projection_failures, 1);

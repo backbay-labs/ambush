@@ -531,6 +531,25 @@ fn kubernetes_resource_identity_is_stable_across_operations() {
     assert_eq!(create_identity.1, update_identity.1);
     assert_ne!(create_identity.2, update_identity.2);
     assert_ne!(create.evidence_id, update.evidence_id);
+
+    let mut other_cluster_event = kubernetes_event("kube:stable:other-cluster", "create");
+    other_cluster_event.host_id = Some("cluster-secret-b".to_string());
+    let other_cluster = normalize_telemetry_event(
+        &other_cluster_event,
+        &clock(),
+        &signer,
+        GraphProducerRole::Normalizer,
+        "normalizer-kubernetes",
+    )
+    .unwrap();
+    let other_cluster_identity = identity(&other_cluster);
+    assert_ne!(create_identity.0, other_cluster_identity.0);
+    assert_ne!(create_identity.1, other_cluster_identity.1);
+    assert!(
+        !serde_json::to_string(&other_cluster)
+            .unwrap()
+            .contains("cluster-secret-b")
+    );
 }
 
 #[test]
@@ -6867,7 +6886,11 @@ fn committed_completion_survives_a_persistently_unavailable_memory_projection() 
             .count(),
         3
     );
-    assert!(service.summary().is_err());
+    let summary = service
+        .summary()
+        .expect("authenticated graph summary must survive advisory memory outage");
+    assert_eq!(summary.memory_count, 1);
+    assert!(summary.metrics.memory_projection_failures > 0);
 
     drop(stalker);
     drop(service);

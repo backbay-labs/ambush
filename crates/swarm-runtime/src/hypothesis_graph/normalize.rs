@@ -135,7 +135,13 @@ fn normalize_telemetry_graph_with_unit<C: GraphClock + ?Sized>(
         TelemetryPayload::ProcessMemoryAccess(access) => (
             EvidenceSourceFamily::Process,
             "process_memory_access",
-            process_memory_payload(access, &source_id, &source_record_id, observed_at)?,
+            process_memory_payload(
+                access,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::RegistryAccess(access) => (
             EvidenceSourceFamily::Process,
@@ -160,7 +166,13 @@ fn normalize_telemetry_graph_with_unit<C: GraphClock + ?Sized>(
         TelemetryPayload::KubernetesAudit(audit) => (
             EvidenceSourceFamily::Kubernetes,
             "kubernetes_audit",
-            kubernetes_payload(audit, &source_id, &source_record_id, observed_at)?,
+            kubernetes_payload(
+                audit,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::CloudTrail(cloudtrail) => (
             EvidenceSourceFamily::Cloudtrail,
@@ -628,6 +640,7 @@ fn process_payload(
 
 fn process_memory_payload(
     access: &ProcessMemoryAccessEvent,
+    host_id: Option<&str>,
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
@@ -661,8 +674,14 @@ fn process_memory_payload(
         .iter()
         .map(|flag| bounded_text("process_memory.protection_flag", flag, 128))
         .collect::<Result<Vec<_>, _>>()?;
-    let source_digest = digest_projection(&("source_process", &source))?;
-    let target_digest = digest_projection(&("target_process", &target))?;
+    let host_id = optional_text("process_memory.host_id", host_id, 4 * 1024)?;
+    let origin_scope_digest =
+        digest_projection(&("process_origin", source_id, host_id.as_deref()))?;
+    // A process retains one graph identity when it is the target of one
+    // memory-access event and the source of the next. Role belongs to the
+    // inferred edge, while source/host scope prevents cross-host aliasing.
+    let source_digest = digest_projection(&("process", &origin_scope_digest, &source))?;
+    let target_digest = digest_projection(&("process", &origin_scope_digest, &target))?;
     let source_node = ProcessNode::new(source_digest.clone(), source_digest.clone())?;
     let target_node = ProcessNode::new(target_digest.clone(), target_digest.clone())?;
     let event_node_source_record_id = event_node_source_record_id(source_id, source_record_id)?;
@@ -968,6 +987,7 @@ fn identity_payload(
 
 fn kubernetes_payload(
     audit: &KubernetesAuditEvent,
+    host_id: Option<&str>,
     source_id: &str,
     audit_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
@@ -1012,7 +1032,11 @@ fn kubernetes_payload(
     )?;
     let annotations_digest = bounded_json_digest("kubernetes.annotations", &audit.annotations)?;
     let request_digest = bounded_json_digest("kubernetes.request_object", &audit.request_object)?;
+    let host_id = optional_text("kubernetes.host_id", host_id, 4 * 1024)?;
+    let cluster_scope_digest =
+        digest_projection(&("kubernetes_cluster", source_id, host_id.as_deref()))?;
     let resource_digest = digest_projection(&(
+        &cluster_scope_digest,
         &resource,
         &namespace,
         &subresource,
@@ -1020,7 +1044,7 @@ fn kubernetes_payload(
         &api_group,
     ))?;
     let actor = ActorNode::new(
-        digest_projection(&("kubernetes_user", &username, &groups))?,
+        digest_projection(&("kubernetes_user", &cluster_scope_digest, &username, &groups))?,
         "kubernetes_principal",
     )?;
     let asset = AssetNode::new(resource_digest.clone(), "kubernetes_resource")?;
@@ -1544,8 +1568,8 @@ mod tests {
     };
     use swarm_core::{
         CloudTrailEvent, DnsQueryEvent, ExhaustedResource, InfrastructureHealthEvent,
-        NetworkConnectEvent, ProcessStartEvent, ResourceExhaustionEvent, TelemetryEvent,
-        TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity, ThreatIntelEntry,
+        NetworkConnectEvent, ProcessMemoryAccessEvent, ProcessStartEvent, ResourceExhaustionEvent,
+        TelemetryEvent, TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity, ThreatIntelEntry,
         ThreatIntelIndicatorType,
     };
     use swarm_crypto::Keypair;
@@ -1686,6 +1710,59 @@ mod tests {
         );
         let encoded = serde_json::to_string(&first).unwrap();
         assert!(!encoded.contains("host-secret-a"));
+    }
+
+    #[test]
+    fn process_memory_identity_is_role_independent_host_scoped_and_redacted() {
+        let event = |event_id: &str, host_id: &str, source: &str, target: &str| TelemetryEvent {
+            source: "sensor-a".to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: Some(host_id.to_string()),
+            payload: TelemetryPayload::ProcessMemoryAccess(ProcessMemoryAccessEvent {
+                source_process: source.to_string(),
+                target_process: target.to_string(),
+                allocation_type: "VirtualAllocEx".to_string(),
+                protection_flags: vec!["PAGE_EXECUTE_READWRITE".to_string()],
+                region_size: 4_096,
+                call_stack_hint: None,
+            }),
+        };
+        let normalize = |event: &TelemetryEvent| {
+            normalize_telemetry_event(
+                event,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-process-memory",
+            )
+            .unwrap()
+        };
+        let first = normalize(&event(
+            "memory:1",
+            "host-secret-a",
+            "process-a",
+            "process-b",
+        ));
+        let continuation = normalize(&event(
+            "memory:2",
+            "host-secret-a",
+            "process-b",
+            "process-c",
+        ));
+        let other_host = normalize(&event(
+            "memory:3",
+            "host-secret-b",
+            "process-b",
+            "process-c",
+        ));
+
+        assert_eq!(first.entity_ids()[1], continuation.entity_ids()[0]);
+        assert_ne!(continuation.entity_ids()[0], other_host.entity_ids()[0]);
+        let encoded = serde_json::to_string(&first).unwrap();
+        assert!(!encoded.contains("host-secret-a"));
+        assert!(!encoded.contains("process-a"));
+        assert!(!encoded.contains("process-b"));
     }
 
     #[test]
