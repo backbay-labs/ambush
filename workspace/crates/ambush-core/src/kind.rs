@@ -166,6 +166,12 @@ pub const P_GATED_KINDS: &[u32] = &[
     // readable by any unauthenticated or non-owner party, including via `ids`
     // filters — see NIP-AM §Relay Behavior.
     KIND_AGENT_TURN_METRIC,
+    // Operator alarm frames name their recipients in `p`. Without this entry a
+    // community member can open `REQ {"kinds":[26006]}` and enumerate every
+    // frame, because a channel-less event returns every subscription match from
+    // `filter_fanout_by_access` without consulting `p` tags. Ephemeral, so the
+    // storage-layer half of the P_GATED contract does not apply.
+    KIND_OPERATOR_ALARM_FRAME,
 ];
 
 /// NIP-AP: Agent Persona (parameterized replaceable, owner-authored).
@@ -470,6 +476,21 @@ pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
 /// Ephemeral: huddle emoji reaction burst. Channel-scoped to the ephemeral
 /// huddle channel with an `h` tag; never stored in the timeline.
 pub const KIND_HUDDLE_REACTION: u32 = 24810;
+/// Ephemeral: operator alarm frame, reserved for an out-of-tree producer.
+///
+/// The relay neither emits nor interprets this kind; it reserves the number and
+/// enforces its read rule. A frame carries one `p` tag per principal expected to
+/// act on it, so it is listed in [`P_GATED_KINDS`] and a global REQ that can
+/// match it is closed unless the filter's `#p` values equal the reader's own
+/// pubkey. Being ephemeral (20000-29999) it is never stored, so the filter layer
+/// is the whole defense -- there is no row on which to null a `search_tsv`.
+///
+/// A producer that also sets an `h` tag gets the ordinary ephemeral channel
+/// path instead (publisher membership plus channel-scoped fan-out, the same
+/// route [`KIND_HUDDLE_REACTION`] takes). The two are complementary: the `h`
+/// tag compartments the frame, and this entry is what still holds when a
+/// producer omits it.
+pub const KIND_OPERATOR_ALARM_FRAME: u32 = 26006;
 // Stream messaging
 /// NIP-29 group chat message kind. V1 used kind:10001 (replaceable range — wrong), then 40001.
 ///
@@ -698,6 +719,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_BLOSSOM_AUTH,
     KIND_PAIRING,
     KIND_AGENT_OBSERVER_FRAME,
+    KIND_OPERATOR_ALARM_FRAME,
     KIND_HTTP_AUTH,
     KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_V2,
@@ -911,6 +933,34 @@ mod tests {
     fn nip43_membership_snapshot_is_relay_only() {
         assert!(is_relay_only_kind(KIND_NIP43_MEMBERSHIP_LIST));
         assert!(!is_relay_only_kind(KIND_NIP43_LEAVE_REQUEST));
+    }
+
+    #[test]
+    fn operator_alarm_frame_is_p_gated() {
+        // The read rule is the only reason the kind is declared here. Dropping
+        // the P_GATED_KINDS entry would leave a kind whose `p` tags name its
+        // recipients readable by every authenticated member of the community.
+        assert!(P_GATED_KINDS.contains(&KIND_OPERATOR_ALARM_FRAME));
+    }
+
+    #[test]
+    fn operator_alarm_frame_is_ephemeral() {
+        // This is what makes the entry above complete rather than half-applied:
+        // `p_gated_persistent_kinds_have_storage_null_tsvector` (ambush-search)
+        // requires every PERSISTENT p-gated kind to carry a NULL `search_tsv`
+        // in schema.sql. An ephemeral kind is never stored, so it is correctly
+        // outside that requirement -- and this test is what says so out loud, so
+        // that moving the number out of the ephemeral range fails here first.
+        assert!(is_ephemeral(KIND_OPERATOR_ALARM_FRAME));
+        assert!(!is_replaceable(KIND_OPERATOR_ALARM_FRAME));
+        assert!(!is_parameterized_replaceable(KIND_OPERATOR_ALARM_FRAME));
+    }
+
+    #[test]
+    fn operator_alarm_frame_is_the_wire_value() {
+        // An out-of-tree producer hard-codes this integer. No type checker on
+        // either side guards it.
+        assert_eq!(KIND_OPERATOR_ALARM_FRAME, 26006);
     }
 
     #[test]
