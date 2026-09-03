@@ -75,15 +75,18 @@ if [[ ! "${COMMUNITY_ID}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
   exit 1
 fi
 
-UUID_GENERAL=$(uuid5_hex "ambush.channel.general")
-UUID_RANDOM=$(uuid5_hex "ambush.channel.random")
-UUID_ENGINEERING=$(uuid5_hex "ambush.channel.engineering")
-UUID_AGENTS=$(uuid5_hex "ambush.channel.agents")
-UUID_WATERCOOLER=$(uuid5_hex "ambush.channel.watercooler")
-UUID_ANNOUNCEMENTS=$(uuid5_hex "ambush.channel.announcements")
-UUID_DM_ALICE_TYLER=$(uuid5_hex "ambush.channel.dm.alice-tyler")
-UUID_DM_BOB_TYLER=$(uuid5_hex "ambush.channel.dm.bob-tyler")
-UUID_DM_BOB_CHARLIE_TYLER=$(uuid5_hex "ambush.channel.dm.bob-charlie-tyler")
+# These UUIDv5 names are durable fixture identities, not rendered product copy.
+# Keep the legacy namespace so existing deep links and every E2E bridge agree
+# with the rows this script seeds after a product rename.
+UUID_GENERAL=$(uuid5_hex "buzz.channel.general")
+UUID_RANDOM=$(uuid5_hex "buzz.channel.random")
+UUID_ENGINEERING=$(uuid5_hex "buzz.channel.engineering")
+UUID_AGENTS=$(uuid5_hex "buzz.channel.agents")
+UUID_WATERCOOLER=$(uuid5_hex "buzz.channel.watercooler")
+UUID_ANNOUNCEMENTS=$(uuid5_hex "buzz.channel.announcements")
+UUID_DM_ALICE_TYLER=$(uuid5_hex "buzz.channel.dm.alice-tyler")
+UUID_DM_BOB_TYLER=$(uuid5_hex "buzz.channel.dm.bob-tyler")
+UUID_DM_BOB_CHARLIE_TYLER=$(uuid5_hex "buzz.channel.dm.bob-charlie-tyler")
 
 run_sql "
 INSERT INTO channels

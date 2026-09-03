@@ -30,7 +30,7 @@ import { ancestorIsland, seedScenario } from "../helpers/seedRelay";
 
 const RELAY_HTTP = process.env.AMBUSH_E2E_RELAY_URL ?? "http://localhost:3000";
 
-// uuid5(NAMESPACE_DNS, "ambush.channel.general") — the seeded `general` channel.
+// Durable uuid5(NAMESPACE_DNS, "buzz.channel.general") — the seeded `general` channel.
 const GENERAL_CHANNEL_ID = "9f28288a-d724-587a-9709-92dc7f967110";
 
 // >60 newest rows so the cold window (CHANNEL_HISTORY_LIMIT=60) does NOT reach
