@@ -188,7 +188,7 @@ impl StalkerAgent {
             ))
             .map_err(agent_tick_error)?
         {
-            if !self.published_hunts.contains(&hunt_id) && !hunts.contains(&hunt_id) {
+            if !hunts.contains(&hunt_id) {
                 hunts.push(hunt_id);
             }
         }
@@ -251,7 +251,16 @@ impl StalkerAgent {
                 return Ok(actions);
             }
         };
-        if investigation.bundle.graph_findings_published || self.published_hunts.contains(hunt_id) {
+        let worker_now =
+            swarm_core::hypothesis_graph::GraphLogicalTime::new(env.now.saturating_mul(1_000));
+        let has_outstanding_graph_tasks = graph
+            .outstanding_stalker_hunts_at(worker_now)
+            .map_err(agent_tick_error)?
+            .iter()
+            .any(|outstanding_hunt| outstanding_hunt == hunt_id);
+        if (investigation.bundle.graph_findings_published || self.published_hunts.contains(hunt_id))
+            && !has_outstanding_graph_tasks
+        {
             if investigation.bundle.graph_findings_published {
                 graph
                     .acknowledge_stalker_publication(hunt_id)
@@ -286,8 +295,6 @@ impl StalkerAgent {
             }
         }
         let investigation_completed_at_ms = investigation.bundle.completed_at_ms;
-        let worker_now =
-            swarm_core::hypothesis_graph::GraphLogicalTime::new(env.now.saturating_mul(1_000));
         if matches!(
             investigation.bundle.status,
             InvestigationStatus::Failed | InvestigationStatus::TimedOut
@@ -1081,6 +1088,7 @@ mod tests {
                 Keypair::from_seed(&stalker_seed),
             )
             .unwrap();
+        let replacement_observer = replacement_worker.clone();
         let mut replacement = StalkerAgent::new_with_signing_key(
             stalker_id.clone(),
             signing_key.clone(),
@@ -1113,6 +1121,40 @@ mod tests {
                 .unwrap()
                 .bundle
                 .graph_findings_published
+        );
+
+        let mut enriched_replay = replay.clone();
+        enriched_replay.findings[0].evidence["threat_intel_matches"] = serde_json::json!([{
+            "indicator_type": "domain",
+            "value": "late-enrichment.example",
+            "source": "taxii-production",
+            "indicator_id": "indicator:late-enrichment",
+            "confidence": 0.99,
+            "expires_at": 1_800_000_000_000i64
+        }]);
+        graph.submit_replay(&enriched_replay).unwrap();
+        assert_eq!(
+            replacement_observer.outstanding_stalker_hunts().unwrap(),
+            vec![hunt_id.to_string()]
+        );
+        assert!(
+            replacement
+                .tick(&recovered_env)
+                .await
+                .unwrap()
+                .iter()
+                .any(|action| matches!(action, SwarmAction::PublishFindings { .. }))
+        );
+        assert_eq!(
+            replacement_observer.outstanding_stalker_hunts().unwrap(),
+            vec![hunt_id.to_string()]
+        );
+        assert!(replacement.tick(&recovered_env).await.unwrap().is_empty());
+        assert!(
+            replacement_observer
+                .outstanding_stalker_hunts()
+                .unwrap()
+                .is_empty()
         );
         drop(replacement);
 
@@ -1490,7 +1532,7 @@ mod tests {
         replay_store.persist(&blocked_replay).unwrap();
         let graph_config = HypothesisGraphConfig {
             enabled: true,
-            max_tasks: 5,
+            max_tasks: 6,
             max_work_units_per_tick: 32,
             max_claims_per_tick: 16,
             ..HypothesisGraphConfig::default()

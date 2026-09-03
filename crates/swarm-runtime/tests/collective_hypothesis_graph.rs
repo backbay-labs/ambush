@@ -22,8 +22,8 @@ use swarm_core::hypothesis_graph::{
     KillChainClaim as CoreKillChainClaim, KillChainStage, LogicalTaskDescriptor, MemoryOutcome,
     MemoryProvenance, OrderingClaim, SchedulerBudget, SourceLineage, StrategyMemory,
     StrategyMemoryExpiryEnvelope, TaskCapabilityProof, TaskClaimRequest, TaskCompletion,
-    TaskCompletionKind, TaskDecisionLink, TaskId, TaskKind, TaskTarget, TaskTerminalEnvelope,
-    TypedEvidencePayload,
+    TaskCompletionKind, TaskDecisionLink, TaskId, TaskKind, TaskState, TaskTarget,
+    TaskTerminalEnvelope, TypedEvidencePayload,
 };
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 use swarm_core::{
@@ -36,11 +36,12 @@ use swarm_runtime::detection::metrics::{CriticalPathMetrics, encode_metrics};
 use swarm_runtime::hypothesis_graph::{
     CollectiveHypothesisService, DeterministicScheduler, DurableHypothesisCoordinator,
     EvidenceAdmissionError, EvidenceAdmissionOutcome, EvidenceRegistry, FixedGraphClock,
-    GraphRecordSigner, HypothesisGraphRuntime, HypothesisSeedInput, HypothesisTaskLedger,
-    KeypairGraphRecordSigner, MAX_RAW_PROJECTION_BYTES, MAX_RAW_PROJECTION_DEPTH,
-    MAX_RAW_PROJECTION_NODES, MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit, WitnessAdmission,
-    normalize_source_timestamp, normalize_telemetry_event, normalize_telemetry_event_with_unit,
-    normalize_threat_intel_entry, project_memory_priority, run_collective_benchmark,
+    GraphRecordSigner, GraphServiceError, HypothesisGraphRuntime, HypothesisSeedInput,
+    HypothesisTaskLedger, KeypairGraphRecordSigner, MAX_RAW_PROJECTION_BYTES,
+    MAX_RAW_PROJECTION_DEPTH, MAX_RAW_PROJECTION_NODES, MAX_SOURCE_TEXT_BYTES, SourceTimestampUnit,
+    WitnessAdmission, normalize_source_timestamp, normalize_telemetry_event,
+    normalize_telemetry_event_with_unit, normalize_threat_intel_entry, project_memory_priority,
+    run_collective_benchmark,
 };
 use swarm_spine::hypothesis_graph_store::GraphStoreError;
 use swarm_spine::{
@@ -1428,7 +1429,7 @@ fn config_bound_runtime_budget_gates_logical_pop_and_admission() {
     let signer = key(85);
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 5,
+        max_work_units_per_tick: 6,
         max_claims_per_tick: 1,
         ..HypothesisGraphConfig::default()
     };
@@ -1483,12 +1484,12 @@ fn config_bound_runtime_budget_gates_logical_pop_and_admission() {
         .unwrap();
     assert!(
         runtime
-            .pop_ready_budgeted(GraphLogicalTime::new(100), 5, 1)
+            .pop_ready_budgeted(GraphLogicalTime::new(100), 6, 1)
             .unwrap()
             .is_some()
     );
     let used_budget = runtime.budget.as_ref().unwrap();
-    assert_eq!(used_budget.work_units_used(), 5);
+    assert_eq!(used_budget.work_units_used(), 6);
     assert_eq!(used_budget.claims_used(), 1);
 
     let second_task = TaskId::new("task:budget-ready-second");
@@ -1529,7 +1530,7 @@ fn serde_mutated_budget_above_active_config_is_rejected_without_pop() {
     let signer = key(86);
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 5,
+        max_work_units_per_tick: 6,
         max_claims_per_tick: 1,
         ..HypothesisGraphConfig::default()
     };
@@ -1553,7 +1554,7 @@ fn serde_mutated_budget_above_active_config_is_rejected_without_pop() {
         .unwrap();
 
     let mut tampered_wire = serde_json::to_value(runtime.budget.as_ref().unwrap()).unwrap();
-    tampered_wire["max_work_units"] = serde_json::json!(6);
+    tampered_wire["max_work_units"] = serde_json::json!(7);
     let tampered_budget: SchedulerBudget = serde_json::from_value(tampered_wire).unwrap();
     runtime.budget = Some(tampered_budget);
     let before_tasks = json_bytes(&runtime.scheduler.ordered());
@@ -3933,6 +3934,46 @@ fn decision_terminal_with(
     (envelope, decision)
 }
 
+fn envelope_for_decision(
+    fixture: &DecisionTaskFixture,
+    claim: &swarm_runtime::hypothesis_graph::TaskClaim,
+    decision: &DecisionRecord,
+    completed_at: GraphLogicalTime,
+) -> TaskTerminalEnvelope {
+    let completion_kind = match fixture.request.kind {
+        TaskKind::ChallengeEdge => TaskCompletionKind::EdgeChallenged,
+        TaskKind::FalsifyHypothesis => TaskCompletionKind::HypothesisFalsified,
+        TaskKind::AcquireEvidence => panic!("decision fixture requires a decision task"),
+    };
+    let link = TaskDecisionLink::new(
+        claim.task_id.clone(),
+        fixture.target.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        Some(decision.decision_id.clone()),
+    )
+    .unwrap();
+    TaskTerminalEnvelope::new(
+        claim.task_id.clone(),
+        claim.idempotency_key.clone(),
+        claim.lease_id.clone(),
+        claim.fencing_token,
+        TaskCompletion::new(
+            completion_kind,
+            claim.claimant.clone(),
+            completed_at,
+            [fixture.evidence.evidence_id.clone()],
+            "00".repeat(32),
+        )
+        .unwrap(),
+        Some(link),
+        claim.claimant.clone(),
+        claim.capability_proof.clone(),
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:terminal")
+    .unwrap()
+}
+
 #[test]
 fn terminal_decision_kind_and_time_fail_closed_before_cas() {
     let mut wrong_kind_fixture =
@@ -4128,15 +4169,25 @@ fn challenge_completion_retains_edge_lineage() {
 }
 
 #[test]
-fn challenge_completion_rejects_unrelated_hypothesis_without_mutation() {
+fn challenge_completion_rejects_an_unrelated_hypothesis() {
     let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
-    fixture.hypothesis_id = HypothesisId::new("hypothesis:decision-control");
     let claim = claim_decision_task(&mut fixture);
     let before = fixture.store.snapshot().unwrap();
     let before_bytes = before.canonical_bytes().unwrap();
     let budget_before = fixture.ledger.scheduler_budget().clone();
-    let (envelope, decision) = decision_terminal(&fixture, &claim);
-
+    let decision = DecisionRecord::new(
+        DecisionKind::Challenge,
+        HypothesisId::new("hypothesis:decision-control"),
+        [fixture.evidence.evidence_id.clone()],
+        GraphProducerRole::Challenger,
+        fixture.request.claimant.clone(),
+        GraphLogicalTime::new(200),
+        "unrelated hypothesis must not satisfy an edge challenge",
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:producer")
+    .unwrap();
+    let envelope = envelope_for_decision(&fixture, &claim, &decision, GraphLogicalTime::new(200));
     assert!(matches!(
         fixture.ledger.complete_task(
             &fixture.store,
@@ -4148,14 +4199,85 @@ fn challenge_completion_rejects_unrelated_hypothesis_without_mutation() {
             None,
             None,
         ),
-        Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition {
-            ref reason
-        })) if reason.contains("challenged edge is not claimed")
+        Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+            if reason.contains("edge is not claimed by the decision hypothesis")
     ));
     assert_eq!(fixture.ledger.scheduler_budget(), &budget_before);
     assert_eq!(
         fixture.store.snapshot().unwrap().canonical_bytes().unwrap(),
         before_bytes
+    );
+}
+
+#[test]
+fn duplicate_terminal_decision_reuses_its_original_sequence() {
+    let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
+    let claim = claim_decision_task(&mut fixture);
+    let duplicate = DecisionRecord::new(
+        DecisionKind::Challenge,
+        fixture.hypothesis_id.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        GraphProducerRole::Challenger,
+        fixture.request.claimant.clone(),
+        GraphLogicalTime::new(150),
+        "decision completed after durable reconciliation",
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:producer")
+    .unwrap();
+    let later = DecisionRecord::new(
+        DecisionKind::Challenge,
+        fixture.hypothesis_id.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        GraphProducerRole::Challenger,
+        fixture.request.claimant.clone(),
+        GraphLogicalTime::new(160),
+        "later independent challenge",
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:producer")
+    .unwrap();
+    let claimed = fixture.store.snapshot().unwrap();
+    let mut reconciled = claimed.state().clone();
+    let updated = reconciled.hypotheses[&fixture.hypothesis_id]
+        .clone()
+        .append_decision(duplicate.clone())
+        .unwrap()
+        .append_decision(later)
+        .unwrap();
+    reconciled
+        .hypotheses
+        .insert(fixture.hypothesis_id.clone(), updated);
+    reconciled.logical_time_high_water = GraphLogicalTime::new(160);
+    let reconciled = fixture
+        .store
+        .compare_and_swap(claimed.revision(), reconciled)
+        .unwrap();
+    let envelope = envelope_for_decision(&fixture, &claim, &duplicate, GraphLogicalTime::new(200));
+    let completed = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            reconciled.revision(),
+            &claim,
+            envelope,
+            vec![fixture.evidence.clone()],
+            Some(duplicate.clone()),
+            None,
+            None,
+        )
+        .unwrap();
+    let outbox_decision = completed.terminal_outbox()[&claim.task_id]
+        .decision
+        .as_ref()
+        .unwrap();
+    assert_eq!(outbox_decision.decision_id, duplicate.decision_id);
+    assert_eq!(outbox_decision.sequence, 1);
+    assert_eq!(
+        completed.hypotheses()[&fixture.hypothesis_id]
+            .decision_history
+            .len(),
+        2
     );
 }
 
@@ -4969,6 +5091,179 @@ fn replay_retry_reconciles_new_persisted_threat_intelligence() {
 }
 
 #[test]
+fn late_enrichment_extends_its_original_campaign_after_rotation() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "swarm-phase286-late-enrichment-campaign-{}-{unique}",
+        std::process::id()
+    ));
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        state_store: BundleStoreConfig::LocalFiles {
+            directory: root.display().to_string(),
+        },
+        max_hypotheses: 2,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service_key = key(226);
+    let stalker_key = key(227);
+    let weaver_key = key(228);
+    let service =
+        Arc::new(CollectiveHypothesisService::new(&config, service_key.clone(), None).unwrap());
+    let stalker = service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key.clone(),
+        )
+        .unwrap();
+    let weaver = service
+        .worker([TaskKind::ChallengeEdge], weaver_key.clone())
+        .unwrap();
+    let mut first =
+        production_replay_bundle("hunt:phase286:late-campaign:first", 1_700_000_090_220);
+    let second = production_replay_bundle("hunt:phase286:late-campaign:second", 1_700_000_090_221);
+
+    let first_submission = service.submit_replay(&first).unwrap();
+    while let Some(challenge) = weaver
+        .next_challenge_context(GraphLogicalTime::new(1_700_000_090_222))
+        .unwrap()
+    {
+        assert!(
+            weaver
+                .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_090_222),)
+                .unwrap()
+        );
+    }
+    stalker
+        .complete_stalker_hunt(
+            &first.audit.hunt_id,
+            GraphLogicalTime::new(1_700_000_090_223),
+            9_000,
+            false,
+            true,
+        )
+        .unwrap();
+    let first_completed = service
+        .operator_projection_for(&first_submission.graph_id)
+        .unwrap();
+    assert!(
+        first_completed
+            .tasks
+            .iter()
+            .all(|task| matches!(task.state, TaskState::Completed | TaskState::Failed)),
+        "first campaign retained live tasks before rotation: {:?}",
+        first_completed.tasks,
+    );
+    let second_submission = service.submit_replay(&second).unwrap();
+    assert_ne!(second_submission.graph_id, first_submission.graph_id);
+
+    first.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": [ThreatIntelEntry {
+            indicator_type: ThreatIntelIndicatorType::IpAddress,
+            value: "203.0.113.79".to_string(),
+            source: "taxii-production".to_string(),
+            indicator_id: Some("indicator:203.0.113.79".to_string()),
+            confidence: 0.99,
+            expires_at: 1_800_000_000_000,
+        }],
+    });
+    first.audit.detection = first.findings[0].clone();
+    let enriched = service.submit_replay(&first).unwrap();
+    assert_eq!(enriched.graph_id, first_submission.graph_id);
+    assert_eq!(service.graph_id(), second_submission.graph_id);
+    assert_eq!(
+        service
+            .operator_projection_for(&first_submission.graph_id)
+            .unwrap()
+            .graph
+            .evidence
+            .len(),
+        2
+    );
+    assert_eq!(
+        service.operator_projection().unwrap().graph.evidence.len(),
+        1
+    );
+
+    drop(stalker);
+    drop(weaver);
+    drop(service);
+    let restarted = Arc::new(
+        CollectiveHypothesisService::new(&config, service_key, None)
+            .expect("restart must not find the primary evidence in two campaigns"),
+    );
+    assert!(matches!(
+        restarted.worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(229),
+        ),
+        Err(GraphServiceError::WorkerCapabilityConflict { .. })
+    ));
+    let restarted_stalker = restarted
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            stalker_key,
+        )
+        .unwrap();
+    let restarted_weaver = restarted
+        .worker([TaskKind::ChallengeEdge], weaver_key)
+        .unwrap();
+    assert_eq!(restarted.graph_id(), second_submission.graph_id);
+    assert_eq!(
+        restarted
+            .operator_projection_for(&first_submission.graph_id)
+            .unwrap()
+            .graph
+            .evidence
+            .len(),
+        2
+    );
+    let mut archived_challenges = 0_usize;
+    while let Some(challenge) = restarted_weaver
+        .next_challenge_context(GraphLogicalTime::new(1_700_000_090_224))
+        .unwrap()
+    {
+        if challenge.graph_id == first_submission.graph_id {
+            archived_challenges = archived_challenges.saturating_add(1);
+        }
+        assert!(
+            restarted_weaver
+                .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_090_224),)
+                .unwrap()
+        );
+    }
+    assert!(
+        archived_challenges > 0,
+        "late enrichment challenge must remain reachable after restart"
+    );
+    restarted_stalker
+        .complete_stalker_hunt(
+            &first.audit.hunt_id,
+            GraphLogicalTime::new(1_700_000_090_225),
+            9_000,
+            false,
+            true,
+        )
+        .unwrap();
+    assert!(
+        restarted
+            .operator_projection_for(&first_submission.graph_id)
+            .unwrap()
+            .tasks
+            .iter()
+            .all(|task| matches!(task.state, TaskState::Completed | TaskState::Failed))
+    );
+    assert_eq!(restarted.graph_id(), second_submission.graph_id);
+    drop(restarted);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn repeated_finding_enrichment_is_bounded_by_unique_matches() {
     let config = HypothesisGraphConfig {
         enabled: true,
@@ -5249,7 +5544,7 @@ fn replay_rotation_uses_generated_task_target_count() {
 fn oversized_replay_task_seed_is_rejected_without_retry_or_partial_graph() {
     let config = HypothesisGraphConfig {
         enabled: true,
-        max_work_units_per_tick: 5,
+        max_work_units_per_tick: 6,
         ..HypothesisGraphConfig::default()
     };
     let service = Arc::new(CollectiveHypothesisService::new(&config, key(209), None).unwrap());
@@ -5281,6 +5576,14 @@ fn oversized_replay_task_seed_is_rejected_without_retry_or_partial_graph() {
                 "indicator_id": "indicator:203.0.113.83",
                 "confidence": 0.97,
                 "expires_at": 1_800_000_000_000i64
+            },
+            {
+                "indicator_type": "ip_address",
+                "value": "203.0.113.84",
+                "source": "taxii-production",
+                "indicator_id": "indicator:203.0.113.84",
+                "confidence": 0.96,
+                "expires_at": 1_800_000_000_000i64
             }
         ],
     });
@@ -5289,7 +5592,7 @@ fn oversized_replay_task_seed_is_rejected_without_retry_or_partial_graph() {
     assert!(matches!(
         service.submit_replay(&replay),
         Err(swarm_runtime::hypothesis_graph::GraphServiceError::Admission(
-            GraphAdmissionError::ResourceLimitExceeded { resource, limit: 5 }
+            GraphAdmissionError::ResourceLimitExceeded { resource, limit: 6 }
         )) if resource == "replay.task_targets"
     ));
     assert_eq!(service.summary().unwrap().evidence_count, 0);

@@ -1059,7 +1059,7 @@ impl GraphStoreState {
                 )
                 .map_err(GraphStoreError::Admission)?;
             entry
-                .validate_memory_graph_references(&self.graph, &self.hypotheses)
+                .validate_graph_references(&self.graph, &self.hypotheses)
                 .map_err(GraphStoreError::Admission)?;
             for evidence in &entry.evidence {
                 match self.graph.evidence.get(&evidence.evidence_id) {
@@ -3520,6 +3520,15 @@ fn validate_reasoning_cas_transition(
                 reason: "hypothesis state or decision history is not append-only".to_string(),
             });
         }
+        if next.decision_history[prior.decision_history.len()..]
+            .iter()
+            .any(|decision| decision.decided_at < current.logical_time_high_water)
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS appended a decision below the predecessor logical-time high-water"
+                    .to_string(),
+            });
+        }
     }
     for (hypothesis_id, hypothesis) in &candidate.hypotheses {
         if current.hypotheses.contains_key(hypothesis_id) {
@@ -3874,15 +3883,16 @@ fn validate_reasoning_cas_transition(
                     // Re-run the publication against the claimed predecessor,
                     // not only the materialized terminal candidate.
                     outbox
-                        .validate_for_task_at(
+                        .validate_for_task_at_with_history(
                             &prior.task,
                             descriptor,
                             limits,
                             current.logical_time_high_water,
+                            &current.hypotheses,
                         )
                         .map_err(GraphStoreError::Admission)?;
                     outbox
-                        .validate_memory_graph_references(&current.graph, &current.hypotheses)
+                        .validate_graph_references(&current.graph, &current.hypotheses)
                         .map_err(GraphStoreError::Admission)?;
                     outbox
                         .validate_for_committed_task_at(
@@ -13787,7 +13797,7 @@ mod tests {
         assert!(matches!(
             store.compare_and_swap_coordinator_seed(
                 &migrated.revision,
-                candidate,
+                candidate.clone(),
                 &unrelated,
             ),
             Err(GraphStoreError::InvalidState { reason })
@@ -13796,6 +13806,48 @@ mod tests {
         assert_eq!(
             store.snapshot().unwrap().canonical_bytes().unwrap(),
             before_bytes
+        );
+
+        let coordinator_identity =
+            AgentId::from_public_key_hex(&decision_key.public_key().to_hex());
+        let admitted = store
+            .compare_and_swap_coordinator_seed(&migrated.revision, candidate, &coordinator_identity)
+            .unwrap();
+        let mut raised_state = admitted.state.clone();
+        raised_state.logical_time_high_water = GraphLogicalTime::new(100);
+        let raised = store
+            .compare_and_swap(&admitted.revision, raised_state)
+            .unwrap();
+        let backdated = swarm_core::hypothesis_graph::DecisionRecord::new(
+            swarm_core::hypothesis_graph::DecisionKind::Support,
+            HypothesisId::new("hypothesis:forged-history"),
+            [],
+            GraphProducerRole::Hunter,
+            coordinator_identity,
+            GraphLogicalTime::new(50),
+            "valid signature below the predecessor high-water",
+        )
+        .unwrap()
+        .signed_with(&decision_key, "generic-cas")
+        .unwrap();
+        let mut backdated_candidate = raised.state.clone();
+        let updated = backdated_candidate.hypotheses
+            [&HypothesisId::new("hypothesis:forged-history")]
+            .clone()
+            .append_decision(backdated)
+            .unwrap();
+        backdated_candidate
+            .hypotheses
+            .insert(updated.hypothesis_id.clone(), updated);
+        let raised_bytes = raised.canonical_bytes().unwrap();
+        assert!(matches!(
+            store.compare_and_swap(&raised.revision, backdated_candidate),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("predecessor logical-time high-water")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            raised_bytes
         );
     }
 

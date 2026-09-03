@@ -740,11 +740,12 @@ impl HypothesisTaskLedger {
         )
         .map_err(GraphStoreError::Admission)?;
         publication
-            .validate_for_task_at(
+            .validate_for_task_at_with_history(
                 &entry.task,
                 descriptor,
                 &self.limits,
                 snapshot.state().logical_time_high_water,
+                &snapshot.state().hypotheses,
             )
             .map_err(GraphStoreError::Admission)?;
         commit_terminal_once(store, revision, claim, publication)
@@ -1587,15 +1588,16 @@ pub fn commit_terminal_once(
         .validate_for_claim(&entry.task.request)
         .map_err(GraphStoreError::Admission)?;
     publication
-        .validate_for_task_at(
+        .validate_for_task_at_with_history(
             &entry.task,
             descriptor,
             &snapshot.state().limits,
             snapshot.state().logical_time_high_water,
+            &snapshot.state().hypotheses,
         )
         .map_err(GraphStoreError::Admission)?;
     publication
-        .validate_memory_graph_references(&snapshot.state().graph, &snapshot.state().hypotheses)
+        .validate_graph_references(&snapshot.state().graph, &snapshot.state().hypotheses)
         .map_err(GraphStoreError::Admission)?;
     validate_completion_kind(
         entry.task.request.kind,
@@ -1649,6 +1651,7 @@ pub fn commit_terminal_once(
             .map_err(GraphStoreError::Admission)?;
     }
     if let Some(decision) = publication.decision.clone() {
+        let decision_id = decision.decision_id.clone();
         if let Some(link) = &publication.envelope.decision_link {
             match &link.target {
                 TaskTarget::Edge { edge_id } => {
@@ -1708,7 +1711,17 @@ pub fn commit_terminal_once(
         // exact sequenced value in the outbox as well; storing the caller's
         // pre-append sequence-zero value would make reload validation report
         // that the publication is absent from hypothesis history.
-        publication.decision = updated.decision_history.last().cloned();
+        publication.decision = Some(
+            updated
+                .decision_history
+                .iter()
+                .find(|sequenced| sequenced.decision_id == decision_id)
+                .cloned()
+                .ok_or_else(|| GraphStoreError::InvalidState {
+                    reason: "terminal decision disappeared from durable hypothesis history"
+                        .to_string(),
+                })?,
+        );
         next.hypotheses
             .insert(updated.hypothesis_id.clone(), updated);
     }
@@ -2150,7 +2163,7 @@ mod tests {
     fn task_creation_rejects_missing_edge_and_hypothesis_targets_without_charging() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 5,
+            max_work_units_per_tick: 6,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2224,7 +2237,7 @@ mod tests {
             ..HypothesisGraphConfig::default()
         };
         let mismatched_config = HypothesisGraphConfig {
-            max_work_units_per_tick: 5,
+            max_work_units_per_tick: 6,
             max_claims_per_tick: 3,
             ..config.clone()
         };
@@ -2473,7 +2486,7 @@ mod tests {
     fn unsupported_budget_backend_fails_closed_without_mutation() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 5,
+            max_work_units_per_tick: 6,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2527,7 +2540,7 @@ mod tests {
     fn forced_task_cas_refusal_rolls_back_budget() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 5,
+            max_work_units_per_tick: 6,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2588,7 +2601,7 @@ mod tests {
     fn forced_claim_cas_refusal_rolls_back_budget() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 5,
+            max_work_units_per_tick: 6,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -2843,7 +2856,7 @@ mod tests {
     fn rejected_claim_does_not_charge_budget() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 5,
+            max_work_units_per_tick: 6,
             max_claims_per_tick: 2,
             ..HypothesisGraphConfig::default()
         };
@@ -3033,7 +3046,7 @@ mod tests {
     fn runtime_failure_commits_failed_state_and_outbox_once() {
         let config = HypothesisGraphConfig {
             enabled: true,
-            max_work_units_per_tick: 5,
+            max_work_units_per_tick: 6,
             max_claims_per_tick: 4,
             ..HypothesisGraphConfig::default()
         };

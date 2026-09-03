@@ -4535,6 +4535,29 @@ impl TaskTerminalOutboxEntry {
         terminal_completion_at.validate()?;
         if let Some(memory) = &self.memory {
             memory.validate()?;
+            let provenance_witness = memory.provenance.witness.as_ref().ok_or_else(|| {
+                GraphAdmissionError::InvalidWitness {
+                    reason: "terminal strategy-memory provenance has no witness".to_string(),
+                }
+            })?;
+            let memory_witness =
+                memory
+                    .witness
+                    .as_ref()
+                    .ok_or_else(|| GraphAdmissionError::InvalidWitness {
+                        reason: "terminal strategy memory has no witness".to_string(),
+                    })?;
+            if memory.provenance.producer_identity != self.producer_key_id
+                || provenance_witness.producer_identity != self.producer_key_id
+                || memory_witness.producer_identity != self.producer_key_id
+                || provenance_witness.producer_role != self.envelope.capability.role
+                || memory_witness.producer_role != self.envelope.capability.role
+            {
+                return Err(GraphAdmissionError::InvalidWitness {
+                    reason: "terminal strategy-memory producer is not bound to the claiming identity and role"
+                        .to_string(),
+                });
+            }
             if memory.graph_id != descriptor.graph_id
                 || !evidence_ids.is_superset(&memory.provenance.evidence_ids)
             {
@@ -4553,6 +4576,12 @@ impl TaskTerminalOutboxEntry {
             // ceiling, is authoritative for this durable publication.
             expiry.validate_with_limit(limits.max_memory_ttl_ticks)?;
             expiry.validate_for(memory)?;
+            if expiry.signature.producer_identity != self.producer_key_id {
+                return Err(GraphAdmissionError::InvalidWitness {
+                    reason: "terminal strategy-memory expiry signer is not the claiming identity"
+                        .to_string(),
+                });
+            }
             if expiry.created_at > terminal_completion_at {
                 return Err(GraphAdmissionError::InvalidTransition {
                     reason: "memory expiry is future-dated relative to terminal logical time"
@@ -4630,6 +4659,64 @@ impl TaskTerminalOutboxEntry {
             return Err(GraphAdmissionError::UnknownEvidence);
         }
         Ok(())
+    }
+
+    /// Bind terminal decision targets and strategy-memory references to the
+    /// exact graph state against which the terminal publication is admitted.
+    pub fn validate_graph_references(
+        &self,
+        graph: &HypothesisGraph,
+        hypotheses: &BTreeMap<HypothesisId, Hypothesis>,
+    ) -> Result<(), GraphAdmissionError> {
+        if let Some(decision) = &self.decision {
+            match &self.envelope.decision_link {
+                Some(TaskDecisionLink {
+                    target: TaskTarget::Edge { edge_id },
+                    ..
+                }) => {
+                    if !graph.edges.contains_key(edge_id) {
+                        return Err(GraphAdmissionError::InvalidTransition {
+                            reason: "terminal challenge targets an unknown edge".to_string(),
+                        });
+                    }
+                    let hypothesis = hypotheses.get(&decision.hypothesis_id).ok_or_else(|| {
+                        GraphAdmissionError::InvalidTransition {
+                            reason: "terminal decision targets an unknown hypothesis".to_string(),
+                        }
+                    })?;
+                    if !hypothesis.claims.contains(edge_id) {
+                        return Err(GraphAdmissionError::InvalidTransition {
+                            reason:
+                                "terminal challenge edge is not claimed by the decision hypothesis"
+                                    .to_string(),
+                        });
+                    }
+                }
+                Some(TaskDecisionLink {
+                    target: TaskTarget::Hypothesis { hypothesis_id },
+                    ..
+                }) => {
+                    if hypothesis_id != &decision.hypothesis_id
+                        || !hypotheses.contains_key(hypothesis_id)
+                    {
+                        return Err(GraphAdmissionError::InvalidTransition {
+                            reason: "terminal decision hypothesis does not match the task target"
+                                .to_string(),
+                        });
+                    }
+                }
+                Some(TaskDecisionLink {
+                    target: TaskTarget::Evidence { .. },
+                    ..
+                })
+                | None => {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal decision has no compatible graph target".to_string(),
+                    });
+                }
+            }
+        }
+        self.validate_memory_graph_references(graph, hypotheses)
     }
 
     fn validate_memory_lineage_for_transition(
@@ -4848,6 +4935,55 @@ impl TaskTerminalOutboxEntry {
         limits: &GraphResourceLimits,
         logical_time_high_water: GraphLogicalTime,
     ) -> Result<(), GraphAdmissionError> {
+        self.validate_for_task_at_inner(task, descriptor, limits, logical_time_high_water, false)
+    }
+
+    /// Validate a terminal retry against the durable hypothesis histories.
+    /// An exact previously sequenced decision may predate the current graph
+    /// high-water because the retry does not append it again; all new
+    /// decisions and every other terminal timestamp retain the strict bound.
+    pub fn validate_for_task_at_with_history(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        limits: &GraphResourceLimits,
+        logical_time_high_water: GraphLogicalTime,
+        hypotheses: &BTreeMap<HypothesisId, Hypothesis>,
+    ) -> Result<(), GraphAdmissionError> {
+        let decision_already_admitted = self.decision.as_ref().is_some_and(|incoming| {
+            hypotheses
+                .get(&incoming.hypothesis_id)
+                .and_then(|hypothesis| {
+                    hypothesis
+                        .decision_history
+                        .iter()
+                        .find(|existing| existing.decision_id == incoming.decision_id)
+                })
+                .is_some_and(|existing| {
+                    let mut normalized_existing = existing.clone();
+                    normalized_existing.sequence = 0;
+                    let mut normalized_incoming = incoming.clone();
+                    normalized_incoming.sequence = 0;
+                    normalized_existing == normalized_incoming
+                })
+        });
+        self.validate_for_task_at_inner(
+            task,
+            descriptor,
+            limits,
+            logical_time_high_water,
+            decision_already_admitted,
+        )
+    }
+
+    fn validate_for_task_at_inner(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        limits: &GraphResourceLimits,
+        logical_time_high_water: GraphLogicalTime,
+        decision_already_admitted: bool,
+    ) -> Result<(), GraphAdmissionError> {
         limits.validate()?;
         descriptor.validate()?;
         if descriptor.graph_id.as_str().trim().is_empty()
@@ -4860,11 +4996,20 @@ impl TaskTerminalOutboxEntry {
             });
         }
         let evidence_ids = self.validate_for_task_fields(task, limits)?;
-        validate_terminal_decision_time(
-            self.decision.as_ref(),
-            logical_time_high_water,
-            self.envelope.completion.completed_at,
-        )?;
+        if decision_already_admitted {
+            if let Some(decision) = self.decision.as_ref() {
+                validate_terminal_decision_upper_bound(
+                    decision,
+                    self.envelope.completion.completed_at,
+                )?;
+            }
+        } else {
+            validate_terminal_decision_time(
+                self.decision.as_ref(),
+                logical_time_high_water,
+                self.envelope.completion.completed_at,
+            )?;
+        }
         self.validate_memory_lineage_for_transition(
             descriptor,
             &evidence_ids,
@@ -11017,6 +11162,68 @@ mod tests {
         assert!(matches!(
             unknown_utility.validate_memory_graph_references(&graph, &hypotheses),
             Err(GraphAdmissionError::UnknownEvidence)
+        ));
+    }
+
+    #[test]
+    fn terminal_strategy_memory_signers_must_match_the_claimant() {
+        let (task, descriptor, base, claimant_key) = outbox_evidence_fixture();
+        let limits = GraphResourceLimits::default();
+        let rogue_key = Keypair::from_seed(&[8_u8; 32]);
+        let rogue_identity = AgentId::from_public_key_hex(&rogue_key.public_key().to_hex());
+        let evidence_id = base.evidence[0].evidence_id.clone();
+        let rogue_provenance = MemoryProvenance::new(rogue_identity, [evidence_id.clone()])
+            .signed_with(
+                &rogue_key,
+                GraphProducerRole::Hunter,
+                "rogue-memory-provenance",
+            )
+            .expect("rogue provenance is intrinsically valid");
+        let rogue_memory = StrategyMemory::new(
+            descriptor.graph_id.clone(),
+            HypothesisId::new("hypothesis:rogue-memory"),
+            HypothesisDelta::new([], [], []),
+            [EvidenceUtility::new(evidence_id, 5_000)],
+            [],
+            MemoryOutcome::Inconclusive,
+            rogue_provenance,
+        )
+        .expect("rogue memory is intrinsically valid")
+        .signed_with(&rogue_key, GraphProducerRole::Hunter, "rogue-memory")
+        .expect("rogue memory signature");
+        let rogue_expiry = StrategyMemoryExpiryEnvelope::new_with_limit(
+            &rogue_memory,
+            GraphLogicalTime::new(140),
+            20,
+            MAX_STRATEGY_MEMORY_TTL_TICKS,
+            &rogue_key,
+        )
+        .expect("rogue expiry is intrinsically valid");
+        let mut rogue_entry = base.clone();
+        rogue_entry.memory = Some(rogue_memory);
+        rogue_entry.memory_expiry = Some(rogue_expiry);
+        assert!(matches!(
+            rogue_entry.validate_for_task(&task, &descriptor, &limits),
+            Err(GraphAdmissionError::InvalidWitness { reason })
+                if reason.contains("claiming identity and role")
+        ));
+
+        let (memory, _) = outbox_memory(&descriptor, &claimant_key, GraphLogicalTime::new(140), 20);
+        let wrong_expiry = StrategyMemoryExpiryEnvelope::new_with_limit(
+            &memory,
+            GraphLogicalTime::new(140),
+            20,
+            MAX_STRATEGY_MEMORY_TTL_TICKS,
+            &rogue_key,
+        )
+        .expect("wrong-key expiry is intrinsically valid");
+        let mut wrong_expiry_entry = base;
+        wrong_expiry_entry.memory = Some(memory);
+        wrong_expiry_entry.memory_expiry = Some(wrong_expiry);
+        assert!(matches!(
+            wrong_expiry_entry.validate_for_task(&task, &descriptor, &limits),
+            Err(GraphAdmissionError::InvalidWitness { reason })
+                if reason.contains("expiry signer")
         ));
     }
 

@@ -181,7 +181,13 @@ fn normalize_telemetry_graph_with_unit<C: GraphClock + ?Sized>(
         TelemetryPayload::DnsQuery(dns) => (
             EvidenceSourceFamily::Network,
             "dns_query",
-            dns_payload(dns, &source_id, &source_record_id, observed_at)?,
+            dns_payload(
+                dns,
+                event.host_id.as_deref(),
+                &source_id,
+                &source_record_id,
+                observed_at,
+            )?,
         ),
         TelemetryPayload::InfrastructureHealth(health) => (
             EvidenceSourceFamily::Infrastructure,
@@ -1279,6 +1285,7 @@ fn network_payload(
 
 fn dns_payload(
     dns: &DnsQueryEvent,
+    host_id: Option<&str>,
     source_id: &str,
     source_record_id: &str,
     observed_at: swarm_core::hypothesis_graph::GraphLogicalTime,
@@ -1292,7 +1299,14 @@ fn dns_payload(
     let source_ip = optional_text("dns.source_ip", dns.source_ip.as_deref(), 256)?;
     let process_name = optional_text("dns.process_name", dns.process_name.as_deref(), 4 * 1024)?;
     let response_code = optional_text("dns.response_code", dns.response_code.as_deref(), 256)?;
-    let source_digest = digest_projection(&("dns_source", &source_ip, &process_name))?;
+    let host_id = optional_text("dns.host_id", host_id, 4 * 1024)?;
+    let source_digest = digest_projection(&(
+        "dns_source",
+        source_id,
+        host_id.as_deref(),
+        &source_ip,
+        &process_name,
+    ))?;
     let destination_digest = digest_projection(&("indicator", "domain", &query_name))?;
     let source_node = AssetNode::new(source_digest.clone(), "dns_source")?;
     let destination_node = AssetNode::new(destination_digest.clone(), "domain")?;
@@ -1529,9 +1543,10 @@ mod tests {
         TypedEvidencePayload,
     };
     use swarm_core::{
-        CloudTrailEvent, ExhaustedResource, InfrastructureHealthEvent, NetworkConnectEvent,
-        ProcessStartEvent, ResourceExhaustionEvent, TelemetryEvent, TelemetryPayload,
-        ThermalAnomalyEvent, ThermalSeverity, ThreatIntelEntry, ThreatIntelIndicatorType,
+        CloudTrailEvent, DnsQueryEvent, ExhaustedResource, InfrastructureHealthEvent,
+        NetworkConnectEvent, ProcessStartEvent, ResourceExhaustionEvent, TelemetryEvent,
+        TelemetryPayload, ThermalAnomalyEvent, ThermalSeverity, ThreatIntelEntry,
+        ThreatIntelIndicatorType,
     };
     use swarm_crypto::Keypair;
 
@@ -1668,6 +1683,53 @@ mod tests {
                 .entity_ids()
                 .contains(&first.entity_ids()[0]),
             "parented process evidence must retain the network-compatible correlation node"
+        );
+        let encoded = serde_json::to_string(&first).unwrap();
+        assert!(!encoded.contains("host-secret-a"));
+    }
+
+    #[test]
+    fn dns_source_identity_is_host_scoped_stable_and_redacted() {
+        let event = |event_id: &str, host_id: Option<&str>, source: &str| TelemetryEvent {
+            source: source.to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 1_700_000_000,
+            host_id: host_id.map(str::to_string),
+            payload: TelemetryPayload::DnsQuery(DnsQueryEvent {
+                query_name: "example.test".to_string(),
+                query_type: "A".to_string(),
+                source_ip: None,
+                process_name: Some("curl".to_string()),
+                response_code: Some("NOERROR".to_string()),
+            }),
+        };
+        let normalize = |event: &TelemetryEvent| {
+            normalize_telemetry_event(
+                event,
+                &FixedGraphClock::new(GraphLogicalTime::new(1_700_000_001_000)),
+                &key(),
+                GraphProducerRole::Normalizer,
+                "normalizer-dns",
+            )
+            .unwrap()
+        };
+        let first = normalize(&event("dns:1", Some("host-secret-a"), "sensor-a"));
+        let same_host = normalize(&event("dns:2", Some("host-secret-a"), "sensor-a"));
+        let other_host = normalize(&event("dns:3", Some("host-secret-b"), "sensor-a"));
+        let source_fallback_a = normalize(&event("dns:4", None, "sensor-a"));
+        let source_fallback_b = normalize(&event("dns:5", None, "sensor-b"));
+        let source_digest = |evidence: &swarm_core::hypothesis_graph::EvidenceEnvelope| {
+            let TypedEvidencePayload::Network { source_digest, .. } = &evidence.payload else {
+                panic!("DNS telemetry must produce network evidence");
+            };
+            source_digest.clone()
+        };
+
+        assert_eq!(source_digest(&first), source_digest(&same_host));
+        assert_ne!(source_digest(&first), source_digest(&other_host));
+        assert_ne!(
+            source_digest(&source_fallback_a),
+            source_digest(&source_fallback_b)
         );
         let encoded = serde_json::to_string(&first).unwrap();
         assert!(!encoded.contains("host-secret-a"));

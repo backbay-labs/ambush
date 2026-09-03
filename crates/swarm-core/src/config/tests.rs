@@ -162,9 +162,9 @@ fn enabled_hypothesis_graph_config_must_admit_one_complete_replay() {
         ("max_nodes", "must be at least 5"),
         ("max_evidence_bytes", "must be at least 2048"),
         ("max_hypotheses", "must be at least 2"),
-        ("max_tasks", "must be at least 5"),
+        ("max_tasks", "must be at least 6"),
         ("max_graph_depth", "must be at least 2"),
-        ("max_work_units_per_tick", "must be between 5"),
+        ("max_work_units_per_tick", "must be between 6"),
     ] {
         let mut value = serde_json::to_value(HypothesisGraphConfig {
             enabled: true,
@@ -187,6 +187,24 @@ fn enabled_hypothesis_graph_config_must_admit_one_complete_replay() {
     value["max_nodes"] = serde_json::json!(4);
     let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
     assert!(error.to_string().contains("must be at least 5"));
+
+    let mut value = serde_json::to_value(HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    })
+    .unwrap();
+    value["max_tasks"] = serde_json::json!(5);
+    let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
+    assert!(error.to_string().contains("must be at least 6"));
+
+    let mut value = serde_json::to_value(HypothesisGraphConfig {
+        enabled: true,
+        ..HypothesisGraphConfig::default()
+    })
+    .unwrap();
+    value["max_work_units_per_tick"] = serde_json::json!(5);
+    let error = serde_json::from_value::<HypothesisGraphConfig>(value).unwrap_err();
+    assert!(error.to_string().contains("must be between 6"));
 }
 
 #[test]
