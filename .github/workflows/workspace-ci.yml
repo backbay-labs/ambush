@@ -104,6 +104,13 @@ jobs:
           scripts/test-rust-cache-contract.sh
           scripts/test-rust-cache-contract-regressions.sh
       - name: File size policy
+        # Bootstrap-only: origin/main does not contain workspace/ yet, so every
+        # imported file otherwise appears new. On pull_request this compares the
+        # imported workspace to itself; on push the missing PR field is empty and
+        # the checker falls back to HEAD^1. Remove this env block immediately
+        # after the repository-integration PR lands (migration Task 9, option B).
+        env:
+          CHECK_FILE_SIZES_BASE: ${{ github.event.pull_request.head.sha }}
         run: just file-size-check
 
   rust-lint:
