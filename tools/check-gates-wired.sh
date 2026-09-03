@@ -52,6 +52,15 @@
 #   step run MORE often than the default: `always()` and `!cancelled()`. Anything
 #   else has to be argued for in review, which is the point.
 #
+#   One JOB-level condition is argued for here: `needs.changes.outputs.engine ==
+#   'true'`, the path gate 00-DECISIONS.md D2 gives the engine workflow so that
+#   workspace-only and plan-only changes skip the engine lanes without leaving
+#   required checks pending. It is accepted only at job level, only verbatim,
+#   and only when the same workflow declares a `changes` job that can produce
+#   the output. It does not blind a gate: the `changes` filter admits every
+#   path outside `workspace/` and `docs/plans/`, which is every path an engine
+#   gate script inspects, plus the workspace shapes the key scan covers.
+#
 # REFUSING TO PASS SILENTLY
 #   Four guards, all mandatory (precedent: check-fixture-freshness.sh:53-56). An
 #   empty script list, an empty workflow list, a workflow that parses to zero
@@ -104,6 +113,19 @@ workflows = sys.argv[2 + script_count :]
 # `if:` expressions that can only widen when a step runs. Compared after
 # stripping `${{ }}` and whitespace.
 PERMISSIVE_CONDITIONS = {"always()", "!cancelled()", "success() || failure()"}
+
+# The one narrowing JOB-level condition accepted, verbatim: the engine path
+# gate (see CONDITIONAL STEPS in the header). Valid only when the workflow
+# declares the `changes` job whose output it reads.
+PATH_GATE_JOB_CONDITIONS = {"needs.changes.outputs.engine == 'true'"}
+PATH_GATE_JOB = "changes"
+
+
+def job_condition_accepted(job_if, job_names):
+    condition = normalize_condition(job_if)
+    if condition in PERMISSIVE_CONDITIONS:
+        return True
+    return condition in PATH_GATE_JOB_CONDITIONS and PATH_GATE_JOB in job_names
 
 
 def normalize_condition(value):
@@ -318,6 +340,7 @@ for script in scripts:
     wired_at = []
     rejected = []
     for path, has_trigger, jobs in parsed_workflows:
+        job_names = {job_name for job_name, _, _ in jobs}
         for job_name, job_if, steps in jobs:
             for step in steps:
                 run = step["run"]
@@ -327,9 +350,7 @@ for script in scripts:
                 if not has_trigger:
                     rejected.append(f"{where} (workflow has no `on:` trigger)")
                     continue
-                if job_if is not None and (
-                    normalize_condition(job_if) not in PERMISSIVE_CONDITIONS
-                ):
+                if job_if is not None and not job_condition_accepted(job_if, job_names):
                     rejected.append(f"{where} (job guarded by `if: {job_if}`)")
                     continue
                 if step["if"] is not None and (
