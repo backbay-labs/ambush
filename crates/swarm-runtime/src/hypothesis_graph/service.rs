@@ -1423,7 +1423,19 @@ impl CollectiveHypothesisService {
             &evidence_id,
             initial_logical_time,
         )?;
-        let candidate_hypotheses = competing_hypotheses(&initial_seed, &initial.state().limits)?;
+        // Match the exact claim projection used by atomic graph-seed
+        // admission. Counting empty-claim candidates here would omit every
+        // generated challenge task, understate scheduler/campaign capacity,
+        // and make the preflight disagree with the CAS path.
+        let candidate_hypotheses = competing_hypotheses(&initial_seed, &initial.state().limits)?
+            .into_iter()
+            .map(|(hypothesis_id, hypothesis)| {
+                (
+                    hypothesis_id,
+                    hypothesis.with_claims(candidate_edge_ids.iter().cloned()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let candidate_hypothesis_ids = candidate_hypotheses
             .keys()
             .cloned()

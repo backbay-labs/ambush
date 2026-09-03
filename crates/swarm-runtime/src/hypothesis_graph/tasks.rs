@@ -3460,9 +3460,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(first.hypothesis_ids.len(), 2);
-        assert_eq!(first.task_ids.len(), 3);
+        assert_eq!(first.task_ids.len(), 4);
         assert_eq!(first.snapshot.state().hypotheses.len(), 2);
-        assert_eq!(first.snapshot.state().tasks.len(), 3);
+        assert_eq!(first.snapshot.state().tasks.len(), 4);
         let task_kinds = first
             .snapshot
             .state()
@@ -3471,17 +3471,17 @@ mod tests {
             .map(|entry| entry.task.request.kind)
             .collect::<BTreeSet<_>>();
         assert!(task_kinds.contains(&TaskKind::AcquireEvidence));
-        assert!(!task_kinds.contains(&TaskKind::ChallengeEdge));
+        assert!(task_kinds.contains(&TaskKind::ChallengeEdge));
         assert!(task_kinds.contains(&TaskKind::FalsifyHypothesis));
-        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 3);
+        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 4);
 
         let retried = coordinator
             .coordinate_seed(&store, first.snapshot.revision(), &seed, claimant, scope)
             .unwrap();
         assert_eq!(retried.snapshot.revision(), first.snapshot.revision());
-        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 3);
+        assert_eq!(coordinator.ledger().scheduler_budget().work_units_used(), 4);
 
-        // A fresh process restores the three consumed units from the signed
+        // A fresh process restores the four consumed units from the signed
         // generation. A retry remains idempotent, while a distinct seed at
         // the same tick is rejected before its CAS because the restored
         // budget is exhausted.
