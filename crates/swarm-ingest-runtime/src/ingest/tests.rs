@@ -2419,15 +2419,15 @@ async fn reconciliation_checkpoint_survives_restart_and_admits_lexically_earlier
 }
 
 #[tokio::test]
-async fn reconciliation_resets_checkpoint_for_a_replacement_graph_identity() {
-    let mut first_config = test_config("suspicious_process_tree");
+async fn reconciliation_resets_checkpoint_for_a_replacement_same_path_graph_incarnation() {
+    let mut config = test_config("suspicious_process_tree");
     let root = temp_path("reconcile-replacement-graph-identity");
-    enable_collective_hypothesis_graph(&mut first_config, &root);
+    enable_collective_hypothesis_graph(&mut config, &root);
     let config_path = temp_path("reconcile-replacement-graph-identity-config");
     let runtime_signing_key = ed25519_dalek::SigningKey::from_bytes(&[141; 32]);
     let first = IngestState::from_config_with_signing_key(
         config_path.clone(),
-        first_config.clone(),
+        config.clone(),
         runtime_signing_key.clone(),
     )
     .unwrap();
@@ -2469,19 +2469,22 @@ async fn reconciliation_resets_checkpoint_for_a_replacement_graph_identity() {
         .replay_consumer_graph_id();
     drop(first);
 
-    let mut replacement_config = first_config;
-    replacement_config.hypothesis_graph.state_store = BundleStoreConfig::LocalFiles {
-        directory: root
-            .join("replacement-hypothesis-graph")
-            .display()
-            .to_string(),
-    };
-    let replacement = IngestState::from_config_with_signing_key(
-        config_path,
-        replacement_config,
-        runtime_signing_key,
+    // Replace only the graph stores. The replay store and its completed
+    // checkpoint, signer, configured graph pathname, and signed campaign head
+    // all remain in place. A new graph-store incarnation must therefore reset
+    // the consumer cursor and rescan the retained replay.
+    let hypothesis_graph_root = root.join("hypothesis-graph");
+    let campaign_head = fs::read(hypothesis_graph_root.join("campaign-head.json")).unwrap();
+    fs::remove_dir_all(&hypothesis_graph_root).unwrap();
+    fs::create_dir_all(&hypothesis_graph_root).unwrap();
+    fs::write(
+        hypothesis_graph_root.join("campaign-head.json"),
+        campaign_head,
     )
     .unwrap();
+    let replacement =
+        IngestState::from_config_with_signing_key(config_path, config, runtime_signing_key)
+            .unwrap();
     for (kinds, seed) in [
         (
             vec![

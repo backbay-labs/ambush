@@ -4838,6 +4838,205 @@ fn persisted_threat_intel_match_is_admitted_atomically_with_network_evidence() {
 }
 
 #[test]
+fn replay_retry_reconciles_new_persisted_threat_intelligence() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 32,
+        max_claims_per_tick: 16,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(218), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(219),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(220)).unwrap();
+    let mut replay = production_replay_bundle("hunt:phase286:late-threat-intel", 1_700_000_090_210);
+    replay.event = network_event("late-threat-intel", "203.0.113.78");
+    replay.findings[0].event_id = replay.event.event_id.clone();
+    replay.audit.detection = replay.findings[0].clone();
+
+    let first = service.submit_replay(&replay).unwrap();
+    assert_eq!(
+        service.operator_projection().unwrap().graph.evidence.len(),
+        1
+    );
+
+    replay.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": [ThreatIntelEntry {
+            indicator_type: ThreatIntelIndicatorType::IpAddress,
+            value: "203.0.113.78".to_string(),
+            source: "taxii-production".to_string(),
+            indicator_id: Some("indicator:203.0.113.78".to_string()),
+            confidence: 0.99,
+            expires_at: 1_800_000_000_000,
+        }],
+    });
+    replay.audit.detection = replay.findings[0].clone();
+
+    let enriched = service.submit_replay(&replay).unwrap();
+    assert!(!enriched.idempotent);
+    assert_eq!(enriched.evidence_id, first.evidence_id);
+    assert_eq!(
+        service.operator_projection().unwrap().graph.evidence.len(),
+        2
+    );
+    assert!(service.submit_replay(&replay).unwrap().idempotent);
+}
+
+#[test]
+fn repeated_finding_enrichment_is_bounded_by_unique_matches() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 256,
+        max_claims_per_tick: 256,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(221), None).unwrap());
+    service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(222),
+        )
+        .unwrap();
+    service.worker([TaskKind::ChallengeEdge], key(223)).unwrap();
+    let mut replay = production_replay_bundle(
+        "hunt:phase286:deduplicated-finding-enrichment",
+        1_700_000_090_215,
+    );
+    let matches = (0..33)
+        .map(|index| ThreatIntelEntry {
+            indicator_type: ThreatIntelIndicatorType::Domain,
+            value: format!("duplicate-{index}.example"),
+            source: "taxii-production".to_string(),
+            indicator_id: Some(format!("indicator:duplicate:{index}")),
+            confidence: 0.98,
+            expires_at: 1_800_000_000_000,
+        })
+        .collect::<Vec<_>>();
+    replay.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": matches,
+    });
+    replay.audit.detection = replay.findings[0].clone();
+    replay.findings.push(replay.findings[0].clone());
+
+    service.submit_replay(&replay).unwrap();
+    let projection = service.operator_projection().unwrap();
+    assert_eq!(projection.graph.evidence.len(), 34);
+    assert_eq!(
+        projection
+            .graph
+            .evidence
+            .values()
+            .filter(|evidence| {
+                evidence.source_family == EvidenceSourceFamily::ThreatIntelligence
+            })
+            .count(),
+        33
+    );
+}
+
+#[test]
+fn enriched_worker_decisions_remain_bound_to_primary_replay_evidence() {
+    let config = HypothesisGraphConfig {
+        enabled: true,
+        max_work_units_per_tick: 64,
+        max_claims_per_tick: 64,
+        ..HypothesisGraphConfig::default()
+    };
+    let service = Arc::new(CollectiveHypothesisService::new(&config, key(224), None).unwrap());
+    let stalker = service
+        .worker(
+            [TaskKind::AcquireEvidence, TaskKind::FalsifyHypothesis],
+            key(225),
+        )
+        .unwrap();
+    let weaver = service.worker([TaskKind::ChallengeEdge], key(226)).unwrap();
+    let mut replay = production_replay_bundle(
+        "hunt:phase286:primary-evidence-provenance:candidate-1",
+        1_700_000_090_220,
+    );
+    replay.event = network_event(&replay.audit.hunt_id, "203.0.113.80");
+    replay.findings[0].event_id = replay.event.event_id.clone();
+    replay.findings[0].evidence = serde_json::json!({
+        "threat_intel_matches": (0..8)
+            .map(|index| ThreatIntelEntry {
+                indicator_type: ThreatIntelIndicatorType::Domain,
+                value: format!("primary-proof-{index}.example"),
+                source: "taxii-production".to_string(),
+                indicator_id: Some(format!("indicator:primary-proof:{index}")),
+                confidence: 0.98,
+                expires_at: 1_800_000_000_000,
+            })
+            .collect::<Vec<_>>(),
+    });
+    replay.audit.detection = replay.findings[0].clone();
+
+    let submission = service.submit_replay(&replay).unwrap();
+    let before = service.operator_projection().unwrap();
+    assert_eq!(
+        before.graph.evidence.values().next().unwrap().source_family,
+        EvidenceSourceFamily::ThreatIntelligence,
+        "fixture must place enrichment before primary evidence in canonical ID order: {:?}",
+        before
+            .graph
+            .evidence
+            .iter()
+            .map(|(evidence_id, evidence)| (evidence_id.as_str(), evidence.source_family))
+            .collect::<Vec<_>>()
+    );
+    let benign = before
+        .tasks
+        .iter()
+        .find_map(|task| match (&task.request.kind, &task.request.target) {
+            (TaskKind::FalsifyHypothesis, TaskTarget::Hypothesis { hypothesis_id }) => {
+                Some(hypothesis_id.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let malicious = submission
+        .hypothesis_ids
+        .iter()
+        .find(|hypothesis_id| **hypothesis_id != benign)
+        .unwrap()
+        .clone();
+
+    let challenge = weaver
+        .next_challenge_context(GraphLogicalTime::new(1_700_000_090_221))
+        .unwrap()
+        .unwrap();
+    assert_eq!(challenge.hunt_id, replay.audit.hunt_id);
+    assert!(
+        weaver
+            .complete_challenge(&challenge.task_id, GraphLogicalTime::new(1_700_000_090_221),)
+            .unwrap()
+    );
+    let completed = stalker
+        .complete_stalker_hunt(
+            &replay.audit.hunt_id,
+            GraphLogicalTime::new(1_700_000_090_222),
+            9_800,
+            false,
+            true,
+        )
+        .unwrap();
+    assert_eq!(completed.memory_records_projected, 1);
+
+    let after = service.operator_projection().unwrap();
+    assert_eq!(after.memory[0].memory.selected_hypothesis_id, malicious);
+    let challenge_decision = after
+        .hypotheses
+        .values()
+        .flat_map(|hypothesis| &hypothesis.decision_history)
+        .find(|decision| decision.kind == DecisionKind::Challenge)
+        .unwrap();
+    assert_eq!(challenge_decision.hypothesis_id, malicious);
+}
+
+#[test]
 fn shipped_defaults_admit_the_maximum_bounded_replay_task_seed() {
     let config = HypothesisGraphConfig {
         enabled: true,

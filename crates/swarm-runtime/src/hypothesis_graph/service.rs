@@ -21,9 +21,9 @@ use swarm_core::ThreatIntelEntry;
 use swarm_core::config::{BundleStoreConfig, HypothesisGraphConfig};
 use swarm_core::hypothesis_graph::{
     AssetNode, CausalEdge, CausalRelation, DecisionKind, DecisionRecord, EdgeState, EvidenceId,
-    EvidenceScope, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode, GraphNodeId,
-    GraphProducerRole, Hypothesis, HypothesisDelta, HypothesisId, HypothesisStatus, MemoryOutcome,
-    MemoryProvenance, SchedulerBudget, StrategyMemory, StrategyMemoryExpiryEnvelope,
+    EvidenceScope, EvidenceSourceFamily, GraphAdmissionError, GraphId, GraphLogicalTime, GraphNode,
+    GraphNodeId, GraphProducerRole, Hypothesis, HypothesisDelta, HypothesisId, HypothesisStatus,
+    MemoryOutcome, MemoryProvenance, SchedulerBudget, StrategyMemory, StrategyMemoryExpiryEnvelope,
     TaskCapabilityProof, TaskClaimRequest, TaskCompletion, TaskCompletionKind, TaskDecisionLink,
     TaskId, TaskKind, TaskRecord, TaskState, TaskTarget, TaskTerminalEnvelope,
 };
@@ -55,7 +55,7 @@ use super::{DurableHypothesisCoordinator, KeypairGraphRecordSigner, TaskClaim, W
 use crate::detection::metrics::CriticalPathMetrics;
 
 const GRAPH_LEASE_MS: u64 = 30_000;
-const CAMPAIGN_HEAD_SCHEMA_VERSION: u32 = 1;
+const CAMPAIGN_HEAD_SCHEMA_VERSION: u32 = 2;
 const CAMPAIGN_HEAD_STATE_KIND: &str = "collective-hypothesis-campaign-head";
 const CAMPAIGN_HEAD_FILE: &str = "campaign-head.json";
 const MAX_CAMPAIGN_HEAD_BYTES: u64 = 64 * 1024;
@@ -386,6 +386,7 @@ struct SignedCampaignHead {
     schema_version: u32,
     state_kind: String,
     stream_id: String,
+    graph_incarnation_id: String,
     latest_index: u64,
     signature: DetachedSignature,
 }
@@ -396,6 +397,7 @@ struct CampaignHeadSigningMaterial<'a> {
     schema_version: u32,
     state_kind: &'a str,
     stream_id: &'a str,
+    graph_incarnation_id: &'a str,
     latest_index: u64,
 }
 
@@ -415,6 +417,7 @@ fn campaign_head_stream_id(root: &Path, signer: &Keypair) -> Result<String, Grap
 fn sign_campaign_head(
     root: &Path,
     signer: &Keypair,
+    graph_incarnation_id: &str,
     latest_index: u64,
 ) -> Result<SignedCampaignHead, GraphServiceError> {
     let stream_id = campaign_head_stream_id(root, signer)?;
@@ -422,6 +425,7 @@ fn sign_campaign_head(
         schema_version: CAMPAIGN_HEAD_SCHEMA_VERSION,
         state_kind: CAMPAIGN_HEAD_STATE_KIND,
         stream_id: &stream_id,
+        graph_incarnation_id,
         latest_index,
     };
     let bytes = canonical_json_bytes(&material).map_err(|error| {
@@ -434,6 +438,7 @@ fn sign_campaign_head(
         schema_version: CAMPAIGN_HEAD_SCHEMA_VERSION,
         state_kind: CAMPAIGN_HEAD_STATE_KIND.to_string(),
         stream_id,
+        graph_incarnation_id: graph_incarnation_id.to_string(),
         latest_index,
         signature: DetachedSignature {
             algorithm: "ed25519".to_string(),
@@ -454,16 +459,23 @@ fn verify_campaign_head(
     if head.schema_version != CAMPAIGN_HEAD_SCHEMA_VERSION
         || head.state_kind != CAMPAIGN_HEAD_STATE_KIND
         || head.stream_id != expected_stream_id
+        || head.graph_incarnation_id.len() != 32
+        || !head
+            .graph_incarnation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(GraphServiceError::InvalidCampaignHead {
             path: path.to_path_buf(),
-            reason: "schema, state kind, or stream identity mismatch".to_string(),
+            reason: "schema, state kind, stream identity, or graph incarnation mismatch"
+                .to_string(),
         });
     }
     let material = CampaignHeadSigningMaterial {
         schema_version: head.schema_version,
         state_kind: &head.state_kind,
         stream_id: &head.stream_id,
+        graph_incarnation_id: &head.graph_incarnation_id,
         latest_index: head.latest_index,
     };
     let bytes = canonical_json_bytes(&material).map_err(|error| {
@@ -600,13 +612,14 @@ fn persist_campaign_head(
     root: &Path,
     signer: &Keypair,
     latest_index: u64,
-) -> Result<(), GraphServiceError> {
+    replace_incarnation: bool,
+) -> Result<SignedCampaignHead, GraphServiceError> {
     fs::create_dir_all(root).map_err(|source| GraphServiceError::CampaignIo {
         path: root.to_path_buf(),
         source,
     })?;
     let path = root.join(CAMPAIGN_HEAD_FILE);
-    match fs::symlink_metadata(&path) {
+    let current = match fs::symlink_metadata(&path) {
         Ok(metadata) => {
             if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
                 return Err(GraphServiceError::InvalidCampaignHead {
@@ -625,16 +638,29 @@ fn persist_campaign_head(
                     ),
                 });
             }
+            if replace_incarnation && current.latest_index != latest_index {
+                return Err(GraphServiceError::InvalidCampaignHead {
+                    path,
+                    reason: "a graph incarnation can be replaced only without advancing the campaign high-water"
+                        .to_string(),
+                });
+            }
+            Some(current)
         }
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(source) if source.kind() == io::ErrorKind::NotFound => None,
         Err(source) => {
             return Err(GraphServiceError::CampaignIo {
                 path: path.clone(),
                 source,
             });
         }
-    }
-    let head = sign_campaign_head(root, signer, latest_index)?;
+    };
+    let graph_incarnation_id = current
+        .as_ref()
+        .filter(|_| !replace_incarnation)
+        .map(|head| head.graph_incarnation_id.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    let head = sign_campaign_head(root, signer, &graph_incarnation_id, latest_index)?;
     let bytes =
         serde_json::to_vec(&head).map_err(|error| GraphServiceError::InvalidCampaignHead {
             path: path.clone(),
@@ -682,16 +708,13 @@ fn persist_campaign_head(
         return Err(GraphServiceError::CampaignIo { path, source });
     }
     let persisted = load_campaign_head(&path, signer)?;
-    if persisted.latest_index != latest_index {
+    if persisted != head {
         return Err(GraphServiceError::InvalidCampaignHead {
             path,
-            reason: format!(
-                "post-commit campaign high-water mismatch: expected {latest_index}, observed {}",
-                persisted.latest_index
-            ),
+            reason: "post-commit campaign head does not match the signed write".to_string(),
         });
     }
-    Ok(())
+    Ok(persisted)
 }
 
 fn validate_campaign_indexes(
@@ -783,11 +806,13 @@ fn validate_unactivated_campaign(
 fn load_campaigns(
     config: &HypothesisGraphConfig,
     signer: &Keypair,
-) -> Result<(Vec<HypothesisCampaign>, Option<PathBuf>), GraphServiceError> {
+) -> Result<(Vec<HypothesisCampaign>, Option<PathBuf>, String), GraphServiceError> {
     match &config.state_store {
-        BundleStoreConfig::Memory => {
-            Ok((vec![open_campaign(0, config, signer, None, None)?], None))
-        }
+        BundleStoreConfig::Memory => Ok((
+            vec![open_campaign(0, config, signer, None, None)?],
+            None,
+            uuid::Uuid::new_v4().simple().to_string(),
+        )),
         BundleStoreConfig::LocalFiles { directory } => {
             let root = Path::new(directory);
             let campaign_root = root.join("campaigns");
@@ -833,9 +858,15 @@ fn load_campaigns(
             }
             indexes.sort_unstable();
             let head_path = root.join(CAMPAIGN_HEAD_FILE);
-            let initial_store_exists = fs::symlink_metadata(root.join("graph")).is_ok()
-                || fs::symlink_metadata(root.join("strategy-memory")).is_ok();
-            let head = match fs::symlink_metadata(&head_path) {
+            let graph_store_exists = fs::symlink_metadata(root.join("graph")).is_ok();
+            let memory_store_exists = fs::symlink_metadata(root.join("strategy-memory")).is_ok();
+            if graph_store_exists != memory_store_exists {
+                return Err(GraphServiceError::InvalidCampaignEntry {
+                    path: root.to_path_buf(),
+                });
+            }
+            let initial_store_exists = graph_store_exists && memory_store_exists;
+            let mut head = match fs::symlink_metadata(&head_path) {
                 Ok(_) => Some(load_campaign_head(&head_path, signer)?),
                 Err(source) if source.kind() == io::ErrorKind::NotFound => {
                     if !indexes.is_empty() {
@@ -871,7 +902,22 @@ fn load_campaigns(
                 if initial_store_exists {
                     validate_unactivated_campaign(&campaigns[0], root, config)?;
                 }
-                persist_campaign_head(root, signer, 0)?;
+                head = Some(persist_campaign_head(root, signer, 0, false)?);
+            } else if !initial_store_exists {
+                // The signed head identifies a particular durable graph-store
+                // incarnation, not merely a signer and configured pathname.
+                // If the complete base store was removed and recreated in
+                // place, authenticate that it is pristine and mint a new
+                // incarnation so retained replay checkpoints cannot skip the
+                // replacement graph. A missing historical base is corruption,
+                // not a recoverable replacement.
+                if latest_index != 0 || !indexes.is_empty() {
+                    return Err(GraphServiceError::InvalidCampaignEntry {
+                        path: root.to_path_buf(),
+                    });
+                }
+                validate_unactivated_campaign(&campaigns[0], root, config)?;
+                head = Some(persist_campaign_head(root, signer, 0, true)?);
             }
             for index in indexes
                 .into_iter()
@@ -903,7 +949,10 @@ fn load_campaigns(
                 // still rejected as possible rollback/tamper.
                 validate_unactivated_campaign(&unactivated, &campaign_directory, config)?;
             }
-            Ok((campaigns, Some(campaign_root)))
+            let graph_incarnation_id = head
+                .ok_or_else(|| GraphServiceError::MissingCampaignHead { path: head_path })?
+                .graph_incarnation_id;
+            Ok((campaigns, Some(campaign_root), graph_incarnation_id))
         }
     }
 }
@@ -933,7 +982,7 @@ impl CollectiveHypothesisService {
     ) -> Result<Self, GraphServiceError> {
         config.resource_limits().validate()?;
         config.validate_reasoning_limits()?;
-        let (campaigns, campaign_root) = load_campaigns(config, &signer)?;
+        let (campaigns, campaign_root, graph_incarnation_id) = load_campaigns(config, &signer)?;
         let replay_consumer_graph_id = match campaign_root.as_deref() {
             Some(campaign_root) => {
                 let state_root = campaign_root.parent().ok_or_else(|| {
@@ -944,10 +993,19 @@ impl CollectiveHypothesisService {
                 })?;
                 GraphId::new(format!(
                     "graph:runtime-replay-consumer:{}",
-                    sha256_hex(campaign_head_stream_id(state_root, &signer)?.as_bytes())
+                    sha256_hex(
+                        format!(
+                            "{}:{graph_incarnation_id}",
+                            campaign_head_stream_id(state_root, &signer)?
+                        )
+                        .as_bytes()
+                    )
                 ))
             }
-            None => graph_id_for_campaign(&signer, 0),
+            None => GraphId::new(format!(
+                "graph:runtime-replay-consumer:{}",
+                sha256_hex(graph_incarnation_id.as_bytes())
+            )),
         };
         let active = campaigns
             .last()
@@ -1241,9 +1299,6 @@ impl CollectiveHypothesisService {
         )?;
         let evidence = normalized.evidence;
         let evidence_id = evidence.evidence_id.clone();
-        if let Some(existing) = self.existing_submission(&evidence_id)? {
-            return Ok(existing);
-        }
 
         let confidence_basis_points = replay
             .findings
@@ -1314,6 +1369,14 @@ impl CollectiveHypothesisService {
             .iter()
             .map(|evidence| evidence.evidence_id.clone())
             .collect::<BTreeSet<_>>();
+        // A retry is idempotent only when the campaign already contains the
+        // complete evidence set derived from the current durable replay. This
+        // deliberately runs after persisted enrichment normalization so a
+        // later or changed threat-intelligence match is reconciled instead of
+        // being hidden by the primary telemetry evidence.
+        if let Some(existing) = self.existing_submission(&evidence_id, &evidence_ids)? {
+            return Ok(existing);
+        }
         let source_families = evidence_records
             .iter()
             .map(|evidence| evidence.source_family)
@@ -1440,13 +1503,9 @@ impl CollectiveHypothesisService {
             }
         };
         for admitted_evidence_id in evidence_ids {
-            let replaced_campaign = state
+            state
                 .evidence_campaigns
                 .insert(admitted_evidence_id, campaign.index);
-            debug_assert!(
-                replaced_campaign.is_none(),
-                "serialized replay admission replaced an existing evidence campaign"
-            );
         }
         self.observe_state(result.snapshot.state());
         Ok(GraphSubmission {
@@ -1462,6 +1521,7 @@ impl CollectiveHypothesisService {
     fn existing_submission(
         &self,
         evidence_id: &EvidenceId,
+        expected_evidence_ids: &BTreeSet<EvidenceId>,
     ) -> Result<Option<GraphSubmission>, GraphServiceError> {
         let campaign_index = self
             .state
@@ -1482,6 +1542,12 @@ impl CollectiveHypothesisService {
                 ),
             }
             .into());
+        }
+        if !expected_evidence_ids
+            .iter()
+            .all(|expected| snapshot.graph().evidence.contains_key(expected))
+        {
+            return Ok(None);
         }
         let task_ids = snapshot
             .tasks()
@@ -1578,7 +1644,7 @@ impl CollectiveHypothesisService {
             // outside the numbered campaign directory, so deletion or rollback
             // of the newest campaign is detected before an older index can be
             // reactivated or reused on restart.
-            persist_campaign_head(state_root, &self.signer, index)?;
+            persist_campaign_head(state_root, &self.signer, index, false)?;
         }
         {
             let mut campaigns = self
@@ -2199,12 +2265,9 @@ impl GraphWorkerAdapter {
             if hunts.len() >= limit {
                 break;
             }
-            if let Some(hunt_id) = hunt_for_evidence_scope(
-                &task.task.request.evidence_scope.evidence_ids,
-                snapshot.graph(),
-            ) {
-                hunts.insert(hunt_id);
-            }
+            let hunt_id =
+                hunt_for_evidence_scope(&task.task.request.evidence_scope.evidence_ids, &snapshot)?;
+            hunts.insert(hunt_id);
         }
         Ok(hunts.into_iter().collect())
     }
@@ -2821,8 +2884,7 @@ impl GraphWorkerAdapter {
             return Ok(None);
         };
         let hunt_id =
-            hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot.graph())
-                .unwrap_or_else(|| task.request.task_id.to_string());
+            hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, &snapshot)?;
         Ok(Some(GraphChallengeContext {
             graph_id: campaign.graph_id,
             task_id: task.request.task_id,
@@ -2944,17 +3006,12 @@ impl GraphWorkerAdapter {
         completed_at: GraphLogicalTime,
     ) -> Result<usize, GraphServiceError> {
         let evidence_ids = claimed.request.evidence_scope.evidence_ids.clone();
-        let evidence = evidence_for_scope(
-            &evidence_ids,
-            &self.service.active_campaign()?.store.snapshot()?,
-        )?;
-        let evidence_id = evidence_ids
-            .iter()
-            .next()
-            .ok_or(GraphAdmissionError::UnknownEvidence)?;
+        let snapshot = self.service.active_campaign()?.store.snapshot()?;
+        let evidence = evidence_for_scope(&evidence_ids, &snapshot)?;
+        let evidence_id = primary_replay_evidence_id(&evidence_ids, &snapshot)?;
         let decision = DecisionRecord::new(
             DecisionKind::Challenge,
-            scoped_hypothesis_id("malicious-activity", evidence_id),
+            scoped_hypothesis_id("malicious-activity", &evidence_id),
             evidence_ids.iter().cloned(),
             GraphProducerRole::Challenger,
             claimed.request.claimant.clone(),
@@ -2983,6 +3040,16 @@ impl GraphWorkerAdapter {
             return Err(GraphServiceError::TaskUnavailable(claimed.claim.task_id));
         };
         let evidence_ids = claimed.request.evidence_scope.evidence_ids.clone();
+        let campaign = self.service.active_campaign()?;
+        let snapshot = campaign.store.snapshot()?;
+        let evidence_id = primary_replay_evidence_id(&evidence_ids, &snapshot)?;
+        if scoped_hypothesis_id("benign-authorized-activity", &evidence_id) != *hypothesis_id {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "falsification task target is not bound to its primary replay evidence"
+                    .to_string(),
+            }
+            .into());
+        }
         let decision = DecisionRecord::new(
             DecisionKind::Falsify,
             hypothesis_id.clone(),
@@ -3003,13 +3070,7 @@ impl GraphWorkerAdapter {
             GraphProducerRole::Falsifier,
             "stalker-memory-provenance",
         )?;
-        let campaign = self.service.active_campaign()?;
-        let snapshot = campaign.store.snapshot()?;
         let evidence = evidence_for_scope(&evidence_ids, &snapshot)?;
-        let evidence_id = evidence_ids
-            .iter()
-            .next()
-            .ok_or(GraphAdmissionError::UnknownEvidence)?;
         let related_edges = snapshot
             .graph()
             .edges
@@ -3019,7 +3080,7 @@ impl GraphWorkerAdapter {
             .collect::<Vec<_>>();
         let memory = StrategyMemory::new(
             campaign.graph_id,
-            scoped_hypothesis_id("malicious-activity", evidence_id),
+            scoped_hypothesis_id("malicious-activity", &evidence_id),
             HypothesisDelta::new(related_edges, [], []),
             evidence_ids.iter().cloned().map(|evidence_id| {
                 swarm_core::hypothesis_graph::EvidenceUtility::new(evidence_id, 9_000)
@@ -3410,7 +3471,6 @@ fn persisted_threat_intel_matches(
     replay: &ReplayBundle,
 ) -> Result<Vec<(String, ThreatIntelEntry)>, GraphAdmissionError> {
     let mut matches = BTreeMap::<String, ThreatIntelEntry>::new();
-    let mut examined_matches = 0_usize;
     for finding in &replay.findings {
         let Some(value) = finding.evidence.get("threat_intel_matches") else {
             continue;
@@ -3422,13 +3482,6 @@ fn persisted_threat_intel_matches(
                 reason: "must be an array of persisted threat-intelligence entries".to_string(),
             })?;
         for value in values {
-            examined_matches = examined_matches.saturating_add(1);
-            if examined_matches > MAX_REPLAY_THREAT_INTEL_MATCHES {
-                return Err(GraphAdmissionError::ResourceLimitExceeded {
-                    resource: "replay.threat_intel_matches".to_string(),
-                    limit: MAX_REPLAY_THREAT_INTEL_MATCHES,
-                });
-            }
             let entry: ThreatIntelEntry =
                 serde_json::from_value(value.clone()).map_err(|error| {
                     GraphAdmissionError::InvalidField {
@@ -3443,6 +3496,12 @@ fn persisted_threat_intel_matches(
                 }
             })?;
             matches.entry(sha256_hex(&bytes)).or_insert(entry);
+            if matches.len() > MAX_REPLAY_THREAT_INTEL_MATCHES {
+                return Err(GraphAdmissionError::ResourceLimitExceeded {
+                    resource: "replay.threat_intel_matches".to_string(),
+                    limit: MAX_REPLAY_THREAT_INTEL_MATCHES,
+                });
+            }
         }
     }
     Ok(matches.into_iter().collect())
@@ -3675,6 +3734,46 @@ fn scoped_hypothesis_id(kind: &str, evidence_id: &EvidenceId) -> HypothesisId {
     ))
 }
 
+/// Resolve the telemetry evidence that seeded the replay's competing
+/// hypotheses. Enrichment evidence shares the task scope, so its lexical ID
+/// must never be used as decision or strategy-memory provenance. The typed
+/// source family and both durable hypothesis identities form the persisted
+/// provenance link; ambiguity fails closed.
+fn primary_replay_evidence_id(
+    evidence_ids: &BTreeSet<EvidenceId>,
+    snapshot: &GraphStoreSnapshot,
+) -> Result<EvidenceId, GraphAdmissionError> {
+    let candidates = evidence_ids
+        .iter()
+        .filter(|evidence_id| {
+            snapshot
+                .graph()
+                .evidence
+                .get(*evidence_id)
+                .is_some_and(|evidence| {
+                    evidence.source_family != EvidenceSourceFamily::ThreatIntelligence
+                })
+                && snapshot
+                    .hypotheses()
+                    .contains_key(&scoped_hypothesis_id("malicious-activity", evidence_id))
+                && snapshot.hypotheses().contains_key(&scoped_hypothesis_id(
+                    "benign-authorized-activity",
+                    evidence_id,
+                ))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match candidates.as_slice() {
+        [evidence_id] => Ok(evidence_id.clone()),
+        [] => Err(GraphAdmissionError::InvalidTransition {
+            reason: "task scope has no durable primary replay evidence provenance".to_string(),
+        }),
+        _ => Err(GraphAdmissionError::InvalidTransition {
+            reason: "task scope has ambiguous primary replay evidence provenance".to_string(),
+        }),
+    }
+}
+
 fn worker_scope(kind: TaskKind) -> &'static str {
     match kind {
         TaskKind::AcquireEvidence => "stalker-acquire-capability",
@@ -3692,23 +3791,23 @@ fn worker_terminal_scope(kind: TaskKind) -> &'static str {
 }
 
 fn task_matches_hunt(task: &TaskRecord, hunt_id: &str, snapshot: &GraphStoreSnapshot) -> bool {
-    task.request
-        .evidence_scope
-        .evidence_ids
-        .iter()
-        .filter_map(|evidence_id| snapshot.graph().evidence.get(evidence_id))
-        .any(|evidence| evidence.lineage.source_record_id == hunt_id)
+    primary_replay_evidence_id(&task.request.evidence_scope.evidence_ids, snapshot)
+        .ok()
+        .and_then(|evidence_id| snapshot.graph().evidence.get(&evidence_id))
+        .is_some_and(|evidence| evidence.lineage.source_record_id == hunt_id)
 }
 
 fn hunt_for_evidence_scope(
     evidence_ids: &BTreeSet<EvidenceId>,
-    graph: &swarm_core::hypothesis_graph::HypothesisGraph,
-) -> Option<String> {
-    evidence_ids
-        .iter()
-        .filter_map(|evidence_id| graph.evidence.get(evidence_id))
+    snapshot: &GraphStoreSnapshot,
+) -> Result<String, GraphAdmissionError> {
+    let evidence_id = primary_replay_evidence_id(evidence_ids, snapshot)?;
+    snapshot
+        .graph()
+        .evidence
+        .get(&evidence_id)
         .map(|evidence| evidence.lineage.source_record_id.clone())
-        .next()
+        .ok_or(GraphAdmissionError::UnknownEvidence)
 }
 
 fn pending_worker_publication_for_task(
@@ -3731,11 +3830,7 @@ fn pending_worker_publication_for_task(
     if outbox.publication_acknowledged != Some(false) {
         return Ok(None);
     }
-    let Some(hunt_id) =
-        hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot.graph())
-    else {
-        return Ok(None);
-    };
+    let hunt_id = hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot)?;
     Ok(Some(PendingWorkerPublication {
         campaign_index: campaign.index,
         graph_id: campaign.graph_id.clone(),
@@ -3765,11 +3860,7 @@ fn pending_worker_publication_for_retry_exhaustion(
     if outbox.publication_acknowledged {
         return Ok(None);
     }
-    let Some(hunt_id) =
-        hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot.graph())
-    else {
-        return Ok(None);
-    };
+    let hunt_id = hunt_for_evidence_scope(&task.request.evidence_scope.evidence_ids, snapshot)?;
     Ok(Some(PendingWorkerPublication {
         campaign_index: campaign.index,
         graph_id: campaign.graph_id.clone(),
