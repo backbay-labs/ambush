@@ -43,7 +43,8 @@ use swarm_spine::{
 
 use super::clock::FixedGraphClock;
 use super::hypotheses::{
-    HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput, coordination_task_targets,
+    HypothesisDisposition, HypothesisSeedAssessment, HypothesisSeedInput, competing_hypotheses,
+    coordination_task_targets,
 };
 use super::inference::{InferredCausalRelation, infer_causal_relations};
 use super::memory::{MemoryPriorityProjection, MemoryProjectionReport, StrategyMemoryProjector};
@@ -1419,8 +1420,10 @@ impl CollectiveHypothesisService {
             .iter()
             .map(|edge| edge.edge_id.clone())
             .collect::<BTreeSet<_>>();
+        let candidate_hypotheses = competing_hypotheses(&initial_seed, &initial.state().limits)?;
         let task_target_count =
-            coordination_task_targets(&initial_seed, &candidate_edge_ids)?.len();
+            coordination_task_targets(&initial_seed, &candidate_edge_ids, &candidate_hypotheses)?
+                .len();
         let max_seed_work_units =
             usize::try_from(self.config.max_work_units_per_tick).unwrap_or(usize::MAX);
         if task_target_count > max_seed_work_units {

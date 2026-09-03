@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use swarm_core::hypothesis_graph::{
     ConfidenceDistribution, EdgeId, EvidenceId, GraphAdmissionError, GraphId, GraphLogicalTime,
-    GraphResourceLimits, Hypothesis, HypothesisId, TaskKind, TaskTarget, UncertaintyReason,
+    GraphResourceLimits, Hypothesis, HypothesisId, HypothesisStatus, TaskKind, TaskTarget,
+    UncertaintyReason,
 };
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
 
@@ -298,22 +299,26 @@ pub fn unresolved_task_targets(
 pub(crate) fn coordination_task_targets(
     seed: &HypothesisSeedInput,
     edge_ids: &BTreeSet<EdgeId>,
+    hypotheses: &BTreeMap<HypothesisId, Hypothesis>,
 ) -> Result<Vec<(TaskKind, TaskTarget)>, GraphAdmissionError> {
     seed.validate()?;
     let mut targets = BTreeSet::new();
     for assessment in &seed.assessments {
-        // Every durable alternative carries an explicit falsification task,
-        // including an alternative that arrives with an initial support or
-        // refutation decision. Besides keeping all reasoning falsifiable,
-        // this is the marker-1 store's structural proof that a newly admitted
-        // hypothesis came through coordinated seed expansion rather than a
-        // caller-crafted direct CAS.
-        targets.insert((
-            TaskKind::FalsifyHypothesis,
-            TaskTarget::Hypothesis {
-                hypothesis_id: assessment.hypothesis_id.clone(),
-            },
-        ));
+        let hypothesis = hypotheses.get(&assessment.hypothesis_id).ok_or_else(|| {
+            GraphAdmissionError::InvalidTransition {
+                reason: "task expansion references an unknown candidate hypothesis".to_string(),
+            }
+        })?;
+        // A falsified alternative is terminal until an explicit reopen
+        // decision; scheduling another falsification can never complete.
+        if hypothesis.status != HypothesisStatus::Falsified {
+            targets.insert((
+                TaskKind::FalsifyHypothesis,
+                TaskTarget::Hypothesis {
+                    hypothesis_id: assessment.hypothesis_id.clone(),
+                },
+            ));
+        }
         if matches!(
             assessment.disposition,
             HypothesisDisposition::Unresolved | HypothesisDisposition::Contradicts
@@ -505,9 +510,14 @@ mod tests {
     #[test]
     fn durable_target_expansion_contains_every_open_operation_kind() {
         let seed = seed();
-        let targets =
-            coordination_task_targets(&seed, &BTreeSet::from([EdgeId::new("edge:admitted")]))
-                .expect("neutral seed targets must validate");
+        let hypotheses = competing_hypotheses(&seed, &GraphResourceLimits::default())
+            .expect("bounded seed must admit competing alternatives");
+        let targets = coordination_task_targets(
+            &seed,
+            &BTreeSet::from([EdgeId::new("edge:admitted")]),
+            &hypotheses,
+        )
+        .expect("neutral seed targets must validate");
         assert!(
             targets
                 .iter()
