@@ -38,6 +38,9 @@ case "${AMBUSH_TEST_PLATFORM:-$(uname -s)}" in
         remove_path "${XDG_DATA_HOME:-$HOME/.local/share}/$instance_id"
         remove_path "${XDG_CONFIG_HOME:-$HOME/.config}/$instance_id"
         remove_path "${XDG_CACHE_HOME:-$HOME/.cache}/$instance_id"
+        if command -v secret-tool >/dev/null 2>&1; then
+            secret-tool clear service "$keyring_service" username secrets target default >/dev/null 2>&1 || true
+        fi
         ;;
     *)
         echo "reset-desktop-standalone-state: unsupported platform" >&2

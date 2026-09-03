@@ -87,9 +87,10 @@ if git -C "$WORKSPACE_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
         GENERATE_DEV_ICON="$WORKSPACE_ROOT/scripts/generate-dev-icon.swift"
         BASE_ICON="$WORKSPACE_ROOT/desktop/src-tauri/icons/icon.icns"
 
+        echo "🌳 Worktree: ${AMBUSH_WORKTREE_LABEL}"
+        export VITE_DEV_BRANCH="$AMBUSH_WORKTREE_LABEL"
+        AMBUSH_TAURI_CONFIG="{\"build\":{\"devUrl\":\"${DEV_URL}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${AMBUSH_VITE_PORT} --strictPort\"},\"identifier\":\"com.backbay.ambush.app.dev.${AMBUSH_INSTANCE_SLUG}\",\"productName\":\"Ambush Dev (${AMBUSH_WORKTREE_LABEL})\"}"
         if swift "$GENERATE_DEV_ICON" "$BASE_ICON" "$DEV_ICON" "$AMBUSH_WORKTREE_LABEL"; then
-            echo "🌳 Worktree: ${AMBUSH_WORKTREE_LABEL}"
-            export VITE_DEV_BRANCH="$AMBUSH_WORKTREE_LABEL"
             AMBUSH_TAURI_CONFIG="{\"build\":{\"devUrl\":\"${DEV_URL}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${AMBUSH_VITE_PORT} --strictPort\"},\"identifier\":\"com.backbay.ambush.app.dev.${AMBUSH_INSTANCE_SLUG}\",\"productName\":\"Ambush Dev (${AMBUSH_WORKTREE_LABEL})\",\"bundle\":{\"icon\":[\"$DEV_ICON\"]}}"
         fi
     fi
