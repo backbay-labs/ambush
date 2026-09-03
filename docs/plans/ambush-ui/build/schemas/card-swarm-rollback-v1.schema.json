@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ambush.invalid/perch/wire/v1/card-ambush-rollback-v1.schema.json",
-  "title": "ambush:rollback:v1",
-  "description": "One RollbackReceipt, published as a NIP-10 reply to the ambush:lease:v1 card it closes.\n\nTHE ONLY CARD THAT CAN REACH TIER 1 TODAY. RollbackReceipt.governance_attestation (crates/swarm-response/src/rollback.rs:263-285) holds a serialized ConsensusGovernanceReceipt over this receipt's canonical form WITH THAT FIELD CLEARED, and verify_release_attestation (crates/swarm-runtime/src/containment.rs:235-269) checks the signature AND the subject binding. It is actually called, at crates/swarm-runtime-http/src/http/containment.rs:219-222, inside containment_lease_release_handler in swarm_detect --serve.\n\nNone does NOT mean 'attested and fine'. Under a partition contingency it is UNATTESTED - BY DESIGN; otherwise it is UNATTESTED. Both refusals are correct; only the explanation differs, and the explanation is what the operator acts on.",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-rollback-v1.schema.json",
+  "title": "swarm:rollback:v1",
+  "description": "One RollbackReceipt, published as a NIP-10 reply to the swarm:lease:v1 card it closes.\n\nTHE ONLY CARD THAT CAN REACH TIER 1 TODAY. RollbackReceipt.governance_attestation (crates/swarm-response/src/rollback.rs:263-285) holds a serialized ConsensusGovernanceReceipt over this receipt's canonical form WITH THAT FIELD CLEARED, and verify_release_attestation (crates/swarm-runtime/src/containment.rs:235-269) checks the signature AND the subject binding. It is actually called, at crates/swarm-runtime-http/src/http/containment.rs:219-222, inside containment_lease_release_handler in swarm_detect --serve.\n\nNone does NOT mean 'attested and fine'. Under a partition contingency it is UNATTESTED - BY DESIGN; otherwise it is UNATTESTED. Both refusals are correct; only the explanation differs, and the explanation is what the operator acts on.",
   "allOf": [
     {
       "$ref": "card-envelope.schema.json"
@@ -21,7 +21,7 @@
       "additionalProperties": false,
       "properties": {
         "schema": {
-          "const": "ambush.perch.rollback.v1"
+          "const": "swarm.perch.rollback.v1"
         },
         "issuer": {
           "$ref": "common.schema.json#/$defs/FactIssuer",
@@ -52,7 +52,7 @@
             },
             "lease_card_id": {
               "$ref": "common.schema.json#/$defs/Hex64Lower",
-              "description": "Nostr event id of the ambush:lease:v1 card. Also the `e` tag."
+              "description": "Nostr event id of the swarm:lease:v1 card. Also the `e` tag."
             }
           }
         },
@@ -190,7 +190,7 @@
       "issued_at": "2026-08-30T02:41:07Z",
       "capability_token": null,
       "fact": {
-        "schema": "ambush.perch.rollback.v1",
+        "schema": "swarm.perch.rollback.v1",
         "issuer": {
           "swarm_agent_id": "containment-sweep",
           "role": "pouncer",

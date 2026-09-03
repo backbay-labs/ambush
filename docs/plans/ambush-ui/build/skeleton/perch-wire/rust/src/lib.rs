@@ -39,10 +39,10 @@
 //! Every `kind:9` marker card's `content` is exactly:
 //!
 //! ```text
-//! <!-- ambush:finding:v1 -->
+//! <!-- swarm:finding:v1 -->
 //! Whisker-7a3f · data_exfiltration · HIGH · confidence 0.82 · host web-04 · finding f2c9a1b4
 //!
-//! ```ambush:finding:v1
+//! ```swarm:finding:v1
 //! {"schema":"swarm.spine.envelope.v1", ...}
 //! ```
 //! ```

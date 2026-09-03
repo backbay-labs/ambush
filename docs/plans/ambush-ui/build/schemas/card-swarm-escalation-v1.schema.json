@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ambush.invalid/perch/wire/v1/card-ambush-escalation-v1.schema.json",
-  "title": "ambush:escalation:v1",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-escalation-v1.schema.json",
+  "title": "swarm:escalation:v1",
   "description": "A lane-channel card for one of three distinct daemon events, discriminated by `cause`. The three were collapsed into one marker by APPENDIX-NORMATIVE.md section 3; this schema keeps them separable so a renderer never has to guess which shape it holds.\n\ncause=concentration_crossing carries RuntimeEvent::Escalation (runtime_events.rs:290-299). cause=mode_transition carries RuntimeEvent::ModeTransition (:300-306) and is published ONLY for a transition INTO incident. cause=tamper_fail_closed carries RuntimeEvent::TamperAlert (:249-256) and is published ONLY when fail_closed is true.\n\nTier 0. None of the three carries a signature.",
   "allOf": [
     {
@@ -21,7 +21,7 @@
       "additionalProperties": false,
       "properties": {
         "schema": {
-          "const": "ambush.perch.escalation.v1"
+          "const": "swarm.perch.escalation.v1"
         },
         "issuer": {
           "$ref": "common.schema.json#/$defs/FactIssuer",
@@ -274,7 +274,7 @@
       "issued_at": "2026-03-17T09:14:41Z",
       "capability_token": null,
       "fact": {
-        "schema": "ambush.perch.escalation.v1",
+        "schema": "swarm.perch.escalation.v1",
         "issuer": {
           "swarm_agent_id": "concentration-monitor",
           "role": null,

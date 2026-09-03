@@ -624,7 +624,7 @@ at the line:
 - `RuntimeEvent::Escalation` (`AMB crates/swarm-runtime/src/runtime_events.rs:288-297`) has exactly
   eight fields — `emitted_at_ms, threat_class, level, total_strength, distinct_sources: usize,
   peak_confidence, mode_changed, current_mode`. A count. No ids.
-- `grep source_ids schemas/*.json` hits one file: `card-ambush-escalation-v1.schema.json`, where the
+- `grep source_ids schemas/*.json` hits one file: `card-swarm-escalation-v1.schema.json`, where the
   field is `{"type": "null"}` at `:94` and the example is `null` at `:234`, with the description
   saying so outright. No finding, hold, verdict, receipt, lease or rollback schema carries source ids
   at all.
@@ -681,7 +681,7 @@ The reason text, verbatim from the specimen:
   `/\d+ sources? \/ (\d+ agents?|agent count not carried)/`, with a second assertion that an element
   matching the absence form also carries `data-source-ids="absent"` — which the specimen sets, so the
   DOM hook exists.
-- **`13-WIRE-SCHEMAS.md`**'s `card-ambush-escalation-v1.schema.json` should keep `source_ids: null`
+- **`13-WIRE-SCHEMAS.md`**'s `card-swarm-escalation-v1.schema.json` should keep `source_ids: null`
   and gain nothing; the schema is already correct and the *client* was wrong. What it should change is
   the `distinct_sources_counts` `const`, for the separate reason in §17.
 
@@ -1151,16 +1151,16 @@ the workbench has no analogue for:
 | Kind | Workbench rail | Perch rail | Source |
 |---|---|---|---|
 | `ingest` | `#15803d` | substrate | `RuntimeEvent::Ingest` (tallied, §9) |
-| `finding` | — | substrate | `ambush:finding:v1` |
+| `finding` | — | substrate | `swarm:finding:v1` |
 | `escalation` | `#c2410c` | authority | `RuntimeEvent::Escalation` |
 | `mode_transition` | `#0f4f8a` | authority | `RuntimeEvent::ModeTransition` / `26003` |
 | `agent_health` | `#2563eb` | evidence | `26002` |
-| `response_execution` | `#7c3aed` | evidence | `ambush:receipt:v1` |
+| `response_execution` | `#7c3aed` | evidence | `swarm:receipt:v1` |
 | **`suppression`** | — | `--perch-sev-medium` | a `Dismiss` marker deposit |
-| **`hold`** | — | authority | `kind:46010` / `ambush:hold:v1` |
-| **`decision`** | — | `--perch-foreground` | `ambush:verdict:v1` |
-| **`containment_open`** | — | evidence | `ambush:lease:v1` |
-| **`containment_close`** | — | evidence | `ambush:rollback:v1` |
+| **`hold`** | — | authority | `kind:46010` / `swarm:hold:v1` |
+| **`decision`** | — | `--perch-foreground` | `swarm:verdict:v1` |
+| **`containment_open`** | — | evidence | `swarm:lease:v1` |
+| **`containment_close`** | — | evidence | `swarm:rollback:v1` |
 
 The union is closed and the renderer switch is exhaustive with no `default:` arm, so a twelfth row
 kind fails to compile rather than rendering as a grey line. The specimen renders the ledger as a table
@@ -1257,7 +1257,7 @@ mechanism is real and I verified the halves that touch this component:
 - But leg 1 — the signed human-intent card — is published to the relay **before** leg 2 hits the
   daemon (`13-WIRE-SCHEMAS.md`'s publish order), the relay has no compare-and-set, and a `kind:9`
   event is immutable. So both cards land in the case channel, both are signed by real operators, and
-  `leg2.state`'s enum in `schemas/card-ambush-verdict-v1.schema.json` is
+  `leg2.state`'s enum in `schemas/card-swarm-verdict-v1.schema.json` is
   `sending | recorded | acknowledged | refused_late` — **no value means "another operator's decision
   was the one that executed"**.
 
@@ -1281,7 +1281,7 @@ with no daemon decision record behind it is exactly the object that must not be 
 decision.
 
 **Filed against peers, not decided here:**
-- `13-WIRE-SCHEMAS.md`: add `superseded` to `card-ambush-verdict-v1.schema.json`'s `leg2.state` enum,
+- `13-WIRE-SCHEMAS.md`: add `superseded` to `card-swarm-verdict-v1.schema.json`'s `leg2.state` enum,
   carrying the winning `nostr_intent_event_id`, and specify that the console receiving the `409`
   publishes it.
 - `16-INVARIANT-TESTS.md`: a P0 invariant in INV-12/INV-35's neighbourhood, with a two-console E2E —
@@ -1887,7 +1887,7 @@ is written down so rejecting A11 is a one-line change.
 this session rather than restating revision 1 (§2.2). The systemic note is right that six producers
 read it one way and the two who own the schemas read it the other, and that artifact ownership beat
 correctness. **That is now fixed.** `13-WIRE-SCHEMAS.md` withdrew W-6 and applied the change:
-`card-ambush-escalation-v1.schema.json` `$ref`s `common.schema.json#/$defs/SourceCountMechanism`,
+`card-swarm-escalation-v1.schema.json` `$ref`s `common.schema.json#/$defs/SourceCountMechanism`,
 whose `const` is `strategy_scoped_agent_id`; the `x-note` on `distinct_sources` now states what
 `substrate.rs:1295` actually does; and `zod.ts`, `ts/types.ts`, `rust/src/cards.rs`, the golden
 vector and its pinned hash all follow. `22-DEMO-FIXTURE.md`'s amendment W-A2 is satisfied. The

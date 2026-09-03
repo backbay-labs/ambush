@@ -41,14 +41,14 @@ macro_rules! vector {
 
 /// Every golden vector, by file stem.
 const VECTORS: &[(&str, &str)] = &[
-    vector!("card-ambush-finding-v1"),
-    vector!("card-ambush-escalation-v1"),
-    vector!("card-ambush-hold-v1"),
-    vector!("card-ambush-verdict-v1"),
-    vector!("card-ambush-verdict-v1-superseded"),
-    vector!("card-ambush-receipt-v1"),
-    vector!("card-ambush-lease-v1"),
-    vector!("card-ambush-rollback-v1"),
+    vector!("card-swarm-finding-v1"),
+    vector!("card-swarm-escalation-v1"),
+    vector!("card-swarm-hold-v1"),
+    vector!("card-swarm-verdict-v1"),
+    vector!("card-swarm-verdict-v1-superseded"),
+    vector!("card-swarm-receipt-v1"),
+    vector!("card-swarm-lease-v1"),
+    vector!("card-swarm-rollback-v1"),
     vector!("event-46010-hold-notice"),
     vector!("frame-26000-ingest-rate"),
     vector!("frame-26001-concentration"),
@@ -69,7 +69,7 @@ fn every_vector_parses() {
 
 #[test]
 fn the_registry_is_seven_cards_one_stored_kind_and_seven_frames() {
-    // Eight card VECTORS, seven card TYPES: `ambush:verdict:v1` has two, the
+    // Eight card VECTORS, seven card TYPES: `swarm:verdict:v1` has two, the
     // second being the losing console's `superseded` update card. Counting
     // distinct `fact.schema` values is what keeps this honest.
     let mut schemas: Vec<String> = VECTORS
@@ -97,7 +97,7 @@ fn the_registry_is_seven_cards_one_stored_kind_and_seven_frames() {
 /// hand: the vectors are extracted from the schemas' own `examples`, so editing a
 /// vector to match a hash inverts the whole mechanism.
 const GOLDEN_SHA256: &str =
-    "94ccea0d2134ed6ed19e29cb1cfb9eec05e774516ce97dda7f660ec8bf8f3eb4";
+    "10233c15d1945bad14124022dbb359ed5e00de2f9b4300b6ea55e0b3124a285f";
 
 #[test]
 fn the_golden_corpus_matches_its_pinned_hash() {
@@ -127,7 +127,7 @@ fn no_card_stamps_an_agent_role_on_a_human() {
     for (name, raw) in VECTORS {
         let v: Value = serde_json::from_str(raw).unwrap();
         let Some(fact) = v.get("fact") else { continue };
-        if fact["schema"] == "ambush.perch.verdict.v1" {
+        if fact["schema"] == "swarm.perch.verdict.v1" {
             assert!(
                 fact["issuer"]["role"].is_null(),
                 "{name}: a human decision may not carry an AgentRole"
@@ -153,7 +153,7 @@ fn the_escalation_vector_names_the_true_counting_unit() {
     // `agent_instance_id` would have REJECTED a truthful bridge at admission.
     let raw = VECTORS
         .iter()
-        .find(|(n, _)| *n == "card-ambush-escalation-v1")
+        .find(|(n, _)| *n == "card-swarm-escalation-v1")
         .unwrap()
         .1;
     let v: Value = serde_json::from_str(raw).unwrap();
@@ -168,7 +168,7 @@ fn the_escalation_vector_names_the_true_counting_unit() {
 fn a_superseded_verdict_names_the_card_that_won() {
     let raw = VECTORS
         .iter()
-        .find(|(n, _)| *n == "card-ambush-verdict-v1-superseded")
+        .find(|(n, _)| *n == "card-swarm-verdict-v1-superseded")
         .unwrap()
         .1;
     let v: Value = serde_json::from_str(raw).unwrap();
@@ -249,7 +249,7 @@ fn every_card_vector_is_a_spine_envelope_with_no_signature() {
 fn every_card_facts_schema_matches_its_marker() {
     use swarm_perch_wire::CardKind;
     for kind in CardKind::ALL {
-        let stem = format!("card-ambush-{}-v1", kind.slug());
+        let stem = format!("card-swarm-{}-v1", kind.slug());
         let (_, raw) = VECTORS
             .iter()
             .find(|(n, _)| *n == stem)
@@ -264,7 +264,7 @@ fn the_content_grammar_round_trips_for_every_card() {
     use swarm_perch_wire::marker::{build_content, parse_content};
     use swarm_perch_wire::CardKind;
     for kind in CardKind::ALL {
-        let stem = format!("card-ambush-{}-v1", kind.slug());
+        let stem = format!("card-swarm-{}-v1", kind.slug());
         let (_, raw) = VECTORS.iter().find(|(n, _)| *n == stem).expect("vector");
         let compact: String = serde_json::to_string(
             &serde_json::from_str::<Value>(raw).expect("valid JSON"),

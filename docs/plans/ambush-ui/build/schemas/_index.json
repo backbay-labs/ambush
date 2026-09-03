@@ -5,64 +5,64 @@
   "description": "Every schema in this directory, what carries it, and where the values came from. Seventeen files: 7 card schemas + 7 frame schemas + the kind:46010 event schema + common.schema.json + card-envelope.schema.json. Normative companion: docs/plans/ambush-ui/build/13-WIRE-SCHEMAS.md. The HTTP contract these cards are read back against is docs/plans/ambush-ui/build/openapi/perch-operator-v1.yaml, and the two are held together by tools/check-perch-wire-parity.sh (PROPOSED; delivered as skeleton/perch-wire/parity-gate.sh, which runs green from either tree with no env vars and carries a --self-test).",
   "cards": [
     {
-      "marker": "<!-- ambush:finding:v1 -->",
+      "marker": "<!-- swarm:finding:v1 -->",
       "kind": 9,
       "k_tag": "finding",
-      "schema": "card-ambush-finding-v1.schema.json",
+      "schema": "card-swarm-finding-v1.schema.json",
       "channel": "lane channel",
       "tier": 0,
       "issuer_type": "common.schema.json#/$defs/FactIssuer -- role is nullable and required (W-A1)"
     },
     {
-      "marker": "<!-- ambush:escalation:v1 -->",
+      "marker": "<!-- swarm:escalation:v1 -->",
       "kind": 9,
       "k_tag": "escalation",
-      "schema": "card-ambush-escalation-v1.schema.json",
+      "schema": "card-swarm-escalation-v1.schema.json",
       "channel": "lane channel",
       "tier": 0,
       "issuer_type": "common.schema.json#/$defs/FactIssuer -- role is nullable and required (W-A1)"
     },
     {
-      "marker": "<!-- ambush:hold:v1 -->",
+      "marker": "<!-- swarm:hold:v1 -->",
       "kind": 9,
       "k_tag": "hold",
-      "schema": "card-ambush-hold-v1.schema.json",
+      "schema": "card-swarm-hold-v1.schema.json",
       "channel": "case channel",
       "tier": 0,
       "issuer_type": "common.schema.json#/$defs/FactIssuer -- role is nullable and required (W-A1)"
     },
     {
-      "marker": "<!-- ambush:verdict:v1 -->",
+      "marker": "<!-- swarm:verdict:v1 -->",
       "kind": 9,
       "k_tag": "verdict",
-      "schema": "card-ambush-verdict-v1.schema.json",
+      "schema": "card-swarm-verdict-v1.schema.json",
       "channel": "case channel",
       "tier": "1 (the operator's own DetachedSignature)",
       "issuer_type": "common.schema.json#/$defs/OperatorFactIssuer -- role is `const: null`. A human produced this fact and AgentRole has no human member; AgentRole::Tom is the governance/veto actor (crates/swarm-core/src/agent.rs:26-27) and APPENDIX-NORMATIVE.md section 7 rules the two must never be conflated."
     },
     {
-      "marker": "<!-- ambush:receipt:v1 -->",
+      "marker": "<!-- swarm:receipt:v1 -->",
       "kind": 9,
       "k_tag": "receipt",
-      "schema": "card-ambush-receipt-v1.schema.json",
+      "schema": "card-swarm-receipt-v1.schema.json",
       "channel": "case channel",
       "tier": "0; 1 scoped to a nested governance receipt when present",
       "issuer_type": "common.schema.json#/$defs/FactIssuer -- role is nullable and required (W-A1)"
     },
     {
-      "marker": "<!-- ambush:lease:v1 -->",
+      "marker": "<!-- swarm:lease:v1 -->",
       "kind": 9,
       "k_tag": "lease",
-      "schema": "card-ambush-lease-v1.schema.json",
+      "schema": "card-swarm-lease-v1.schema.json",
       "channel": "case channel",
       "tier": 0,
       "issuer_type": "common.schema.json#/$defs/FactIssuer -- role is nullable and required (W-A1)"
     },
     {
-      "marker": "<!-- ambush:rollback:v1 -->",
+      "marker": "<!-- swarm:rollback:v1 -->",
       "kind": 9,
       "k_tag": "rollback",
-      "schema": "card-ambush-rollback-v1.schema.json",
+      "schema": "card-swarm-rollback-v1.schema.json",
       "channel": "case channel",
       "tier": "0; 1 when governance_attestation verifies",
       "issuer_type": "common.schema.json#/$defs/FactIssuer -- role is nullable and required (W-A1)"
@@ -124,6 +124,6 @@
     "frames": 7,
     "shared": 2,
     "golden_vectors": 16,
-    "note": "16 vectors for 15 schemas-with-examples: ambush:verdict:v1 has two, the second being the losing console's `superseded` update card. 13-WIRE-SCHEMAS.md previously said '18 JSON Schemas' and 15 vectors; both figures were wrong and are corrected here and in that file's section 0."
+    "note": "16 vectors for 15 schemas-with-examples: swarm:verdict:v1 has two, the second being the losing console's `superseded` update card. 13-WIRE-SCHEMAS.md previously said '18 JSON Schemas' and 15 vectors; both figures were wrong and are corrected here and in that file's section 0."
   }
 }

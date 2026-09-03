@@ -7,6 +7,7 @@
       "decision": "grant",
       "hold_id": "h_a07aeacf",
       "operator_id": "perch-operator-1",
+      "rationale_sha256": "1585784cc28d7aea3b5265880b27b4b0e851f6006b76e0d222a302bad5ba5ae5",
       "rationale": "Office-spawned encoded PowerShell on host-ops-1, two detectors agreeing. Isolating."
     },
     "emitted_at_ms": 1773738979000,
@@ -27,7 +28,7 @@
       "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c",
       "hold_id": "h_a07aeacf"
     },
-    "schema": "ambush.perch.verdict.v1",
+    "schema": "swarm.perch.verdict.v1",
     "signature": {
       "algorithm": "ed25519",
       "key_id": "perch-operator-1",

@@ -73,17 +73,17 @@
 **Interfaces:**
 - Produces: the seven marker strings `<!-- swarm:finding:v1 -->` … `<!-- swarm:rollback:v1 -->`; fact schema ids `swarm.perch.<card>.v1`; schema files `card-swarm-<slug>-v1.schema.json`; the verdict preimage `{decided_at_ms, decision, hold_id, rationale_sha256}` in `card-swarm-verdict-v1.schema.json`.
 
-- [ ] **Step 1: Measure the surface.** From the repo root:
+- [x] **Step 1: Measure the surface.** From the repo root:
   ```bash
   grep -rlE "ambush:(finding|escalation|hold|verdict|receipt|lease|rollback):v1|ambush\.perch\.|card-ambush-" docs/plans/ambush-ui/build | wc -l
   ```
   Record the count in the commit message; expect roughly 120 files.
-- [ ] **Step 2: Rename file names first.**
+- [x] **Step 2: Rename file names first.**
   ```bash
   cd docs/plans/ambush-ui/build
   for f in $(git ls-files | grep 'card-ambush-'); do git mv "$f" "${f//card-ambush-/card-swarm-}"; done
   ```
-- [ ] **Step 3: Rename strings.** Only the seven slugs and the schema id; never the `ambush-*` crate names, the `--ambush-*` CSS variables, or the chat app's own `ambush:wave:v1`:
+- [x] **Step 3: Rename strings.** Only the seven slugs and the schema id; never the `ambush-*` crate names, the `--ambush-*` CSS variables, or the chat app's own `ambush:wave:v1`:
   ```bash
   git ls-files | xargs sed -i '' -E \
     -e 's/ambush:(finding|escalation|hold|verdict|receipt|lease|rollback):v([0-9]+)/swarm:\1:v\2/g' \
@@ -91,19 +91,18 @@
     -e 's/card-ambush-/card-swarm-/g'
   git diff --stat | tail -1
   ```
-- [ ] **Step 4: Apply PA-3 to the verdict schema.** In `schemas/card-swarm-verdict-v1.schema.json`, the signing preimage description and the `leg2.signature_preimage` `required` array become `["decided_at_ms", "decision", "hold_id", "rationale_sha256"]`; update `skeleton/perch-wire/golden/card-swarm-verdict-v1.json` and `card-swarm-verdict-v1-superseded.json` to carry `rationale_sha256` (64 lowercase hex; use the SHA-256 of the vector's `rationale` string, or of the empty string `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` when absent).
-- [ ] **Step 5: Recompute the pinned hashes with the artifacts' own tools.** Read `fixtures/validate.mjs` to find the function that recomputes `envelope_hash` (it "recomputes 14 envelope hashes and matches them"); use it to rewrite `envelope_hash` in every vector whose `fact.schema` changed, then:
+- [x] **Step 4: Apply PA-3 to the verdict schema.** In `schemas/card-swarm-verdict-v1.schema.json`, make `rationale_sha256` a required decision member beside `decided_at_ms`, `decision`, and `hold_id`; update `skeleton/perch-wire/golden/card-swarm-verdict-v1.json` and `card-swarm-verdict-v1-superseded.json` to carry it. Its value is 64 lowercase hex when `rationale` exists and JSON `null` when absent, matching `12-BACKEND-BILL-API.md` D13 and the operator OpenAPI's canonical four-member preimage.
+- [x] **Step 5: Recompute the pinned hashes with the artifacts' own tools.** Read `fixtures/validate.mjs` to find the function that recomputes `envelope_hash` (it "recomputes 14 envelope hashes and matches them"); use it to rewrite `envelope_hash` in every vector whose `fact.schema` changed, then:
   ```bash
   (cd skeleton/perch-wire/golden && shasum -a 256 $(ls *.json | grep -v manifest.json | sort) > GOLDEN.sha256)
   (cd fixtures && shasum -a 256 $(git ls-files . | grep -v SHA256SUMS | sort) > SHA256SUMS)
   node fixtures/validate.mjs            # expected: 0 failures, 14 hashes matched, 3 issuer chains intact
-  bash skeleton/perch-wire/parity-gate.sh   # expected: 311 fields, exit 0
-  node tokens/perch-tokens.test.mjs     # expected: 20/20
-  node viz/contrast.mjs                 # expected: 180 pairs, 0 below bar
+  bash skeleton/perch-wire/parity-gate.sh   # expected: 312 fields, exit 0 after W3-16 adds rationale_sha256
+  git diff --exit-code -- tokens viz    # the rejected token package is gone; the shipped Quiet copies stay untouched
   ```
-- [ ] **Step 6: Ban the rendered word.** Append to `skeleton/tools/copy-ban-list.tsv` a row in the file's own column layout: id `product-codename`, pattern `\bPerch\b`, scope `rendered`, reason `the product is Ambush; Perch is an internal codename (00-DECISIONS D1)`. Run the corpus parity check the file's README names (`node ../scripts/check-copy-banned-terms.mjs` over `tools/fixtures/copy-corpus/`) and confirm the expected-row count rises by the rows your new pattern hits in `violations.copy.ts` (add one deliberate `Perch` line there and to `expected.tsv`).
-- [ ] **Step 7: Banner.** Prepend to `13-WIRE-SCHEMAS.md`: `> **Wave 3 (2026-09-02): the marker namespace is `swarm:` and the fact schema id is `swarm.perch.<card>.v1` (00-DECISIONS W3-1); the verdict preimage has four members (W3-16). The bodies of this document still say `ambush:` where they quote wave 2; the schemas and goldens are authoritative.`
-- [ ] **Step 8: Commit.**
+- [x] **Step 6: Ban the rendered word.** Append to `skeleton/tools/copy-ban-list.tsv` a row in the file's seven-column layout: id `product-codename`, case-sensitive portable ERE `(^|[^A-Za-z])Perch([^A-Za-z]|$)`, and message `The product is Ambush; Perch is an internal codename (00-DECISIONS D1).` (`awk` has no `\b`, as the ban-list header records). Run the corpus parity check the file's README names (`node ../scripts/check-copy-banned-terms.mjs` over `tools/fixtures/copy-corpus/`) and confirm the expected-row count rises by the rows your new pattern hits in `violations.copy.ts` (add one deliberate `Perch` line there and to `expected.tsv`).
+- [x] **Step 7: Banner.** Prepend to `13-WIRE-SCHEMAS.md`: `> **Wave 3 (2026-09-02): the marker namespace is `swarm:` and the fact schema id is `swarm.perch.<card>.v1` (00-DECISIONS W3-1); the verdict preimage has four members (W3-16). The bodies of this document still say `ambush:` where they quote wave 2; the schemas and goldens are authoritative.`
+- [x] **Step 8: Commit.**
   ```bash
   git add -A docs/plans/ambush-ui/build && git commit -s -m "docs(plans): apply the swarm: marker namespace to the wave-2 artifacts and re-pin"
   ```

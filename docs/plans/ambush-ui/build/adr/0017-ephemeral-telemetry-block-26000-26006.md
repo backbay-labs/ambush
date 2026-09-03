@@ -414,7 +414,7 @@ Additionally:
   corrected `buzz-core` arithmetic. `21-ADRS.md` §2's AD-A7 is withdrawn to it; AD-A3 was
   already folded into AD-A7 and travels with it. **One row, not three.**
 - `13-WIRE-SCHEMAS.md` owns the seven payloads and the `hold_id` pattern in
-  `card-ambush-hold-v1`, `card-ambush-verdict-v1` and `frame-26006-hold-alarm`.
+  `card-swarm-hold-v1`, `card-swarm-verdict-v1` and `frame-26006-hold-alarm`.
 - `14-CLIENT-ARCHITECTURE.md` owns the alarm REQ's shape. Its `perchSubscriptions.ts` watch-alarm
   filter is written against revision 1 (`{kinds:[26006],"#p":[me],limit:0}` — global) and under
   C3a would deliver **zero** frames while failing nothing loudly. It becomes

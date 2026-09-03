@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ambush.invalid/perch/wire/v1/card-ambush-receipt-v1.schema.json",
-  "title": "ambush:receipt:v1",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-receipt-v1.schema.json",
+  "title": "swarm:receipt:v1",
   "description": "The AuditTrail for one handled event, in the case channel.\n\nCARRIES AuditTrail ONLY, not AuditTrail + ResponseReceipt. APPENDIX-NORMATIVE.md section 3 says 'ResponseReceipt + AuditTrail'; AuditResponseRecord::Success(ResponseReceipt) (crates/swarm-spine/src/lib.rs:103-110) already embeds the whole receipt, so carrying both puts a byte-for-byte duplicate in a card that INV-26 then has to reconcile against the daemon's stored body. See 13-WIRE-SCHEMAS.md section 9 amendment W-5.\n\nTier 0, EXCEPT that audit_trail.response.audit.governance.receipt (an untyped Option<serde_json::Value> at crates/swarm-response/src/lib.rs:139-141) may hold a serialized ConsensusGovernanceReceipt, which IS tier 1. The badge scopes to that nested object and says so; the receipt around it stays tier 0.",
   "allOf": [
     {
@@ -21,7 +21,7 @@
       "additionalProperties": false,
       "properties": {
         "schema": {
-          "const": "ambush.perch.receipt.v1"
+          "const": "swarm.perch.receipt.v1"
         },
         "issuer": {
           "$ref": "common.schema.json#/$defs/FactIssuer",
@@ -205,7 +205,7 @@
       "issued_at": "2026-08-30T02:41:07Z",
       "capability_token": null,
       "fact": {
-        "schema": "ambush.perch.receipt.v1",
+        "schema": "swarm.perch.receipt.v1",
         "issuer": {
           "swarm_agent_id": "pouncer-2b18",
           "role": "pouncer",

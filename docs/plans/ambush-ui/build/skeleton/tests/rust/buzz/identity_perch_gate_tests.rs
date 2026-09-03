@@ -95,15 +95,15 @@ fn the_gate_matches_the_renderers_parse_exactly() {
     // The leading-space case is only safe because of WHERE the guard runs. It
     // runs on the final event content, AFTER `send_channel_message`'s
     // `content.trim()` (BUZZ desktop/src-tauri/src/commands/messages.rs:505) --
-    // so a renderer that submits " <!-- ambush:verdict:v1 -->" through that
+    // so a renderer that submits " <!-- swarm:verdict:v1 -->" through that
     // command is checked on the trimmed bytes and refused there. If this guard
     // is ever moved earlier in that path, this case becomes a hole and the
     // `passes_only_because_the_guard_runs_after_trim` case below is what fails.
     let signable = [
-        " <!-- ambush:verdict:v1 -->\nnot a card",
-        "here is what I saw\n<!-- ambush:verdict:v1 -->",
+        " <!-- swarm:verdict:v1 -->\nnot a card",
+        "here is what I saw\n<!-- swarm:verdict:v1 -->",
         "<!-- buzz:wave:v1 -->\n{}",
-        "the ambush:verdict:v1 card is missing from this case",
+        "the swarm:verdict:v1 card is missing from this case",
         // Uppercase in the slug is not the renderer's grammar, so it is not a
         // card and must not be refused.
         "<!-- ambush:Verdict:v1 -->\n{}",
@@ -116,17 +116,17 @@ fn the_gate_matches_the_renderers_parse_exactly() {
     }
 
     let refused = [
-        "<!-- ambush:verdict:v1 -->",
-        "<!-- ambush:verdict:v1 -->\n",
-        "<!-- ambush:verdict:v1 -->\r\n{}",
+        "<!-- swarm:verdict:v1 -->",
+        "<!-- swarm:verdict:v1 -->\n",
+        "<!-- swarm:verdict:v1 -->\r\n{}",
         // Trailing whitespace only: `trimEnd()` makes this line-0-exact.
-        "<!-- ambush:verdict:v1 -->   \n{}",
+        "<!-- swarm:verdict:v1 -->   \n{}",
         // An unknown slug still refuses. The renderer answers it with the
         // unknown-kind refusal card, which means it is still a Perch artifact;
         // the renderer must never be the thing that decides what may be signed.
         "<!-- ambush:teapot:v1 -->\n{}",
         // A future version, same reasoning.
-        "<!-- ambush:verdict:v9 -->\n{}",
+        "<!-- swarm:verdict:v9 -->\n{}",
     ];
     for content in refused {
         assert_eq!(
@@ -141,7 +141,7 @@ fn the_gate_matches_the_renderers_parse_exactly() {
     // the relay WITHOUT its space. The guard must refuse the trimmed form, which
     // is what makes placing it at the submit boundary (not at the command's
     // entry) the load-bearing choice.
-    let submitted = " <!-- ambush:verdict:v1 -->\nnot a card".trim();
+    let submitted = " <!-- swarm:verdict:v1 -->\nnot a card".trim();
     assert_eq!(
         perch_sign_gate(KIND_CHAT, submitted),
         Err(PERCH_SIGN_REFUSAL.to_string()),
@@ -349,7 +349,7 @@ fn perch_record_verdict_is_the_only_producer_of_a_verdict_card() {
         Err(PERCH_SIGN_REFUSAL.to_string())
     );
     // ...and the body is the daemon's facts, not the caller's prose.
-    assert!(card.content.starts_with("<!-- ambush:verdict:v1 -->\n"));
+    assert!(card.content.starts_with("<!-- swarm:verdict:v1 -->\n"));
     assert!(card.content.contains("\"action_kind\":\"isolate_host\""));
     assert!(card.content.contains("\"hold_id\":\"h_a07aeacf\""));
     // The `h` tag is the case channel UUID. INV-12 asserts the same thing at the

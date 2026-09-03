@@ -630,7 +630,7 @@
           "description": "The operator's own Nostr pubkey \u2014 the signer of the leg-1 event. Unlike an agent's, this one is NOT null in a working deployment: it is the same key the console publishes with. It is still nullable because the operator_id -> Nostr-pubkey mapping is an unbudgeted config addition (OperatorPrincipalConfig is #[serde(deny_unknown_fields)]) and a card built before it lands must say so rather than guess."
         }
       },
-      "x-note": "WHO PRODUCED THE FACT, when the producer is a person. Used by ambush.perch.verdict.v1 only \u2014 the one card in the registry a human, not the bridge, publishes."
+      "x-note": "WHO PRODUCED THE FACT, when the producer is a person. Used by swarm.perch.verdict.v1 only \u2014 the one card in the registry a human, not the bridge, publishes."
     },
     "HoldId": {
       "type": "string",

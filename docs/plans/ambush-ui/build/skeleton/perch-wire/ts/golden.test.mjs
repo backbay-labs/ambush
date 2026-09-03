@@ -54,8 +54,8 @@ function vectors(prefix) {
  * ONE vector by exact stem.
  *
  * `vectors()` is a PREFIX match, and prefix matching bit once already:
- * `vector("card-ambush-verdict-v1")` returns the SUPERSEDED vector, because
- * `-` (0x2D) sorts before `.` (0x2E) so `card-ambush-verdict-v1-superseded.json`
+ * `vector("card-swarm-verdict-v1")` returns the SUPERSEDED vector, because
+ * `-` (0x2D) sorts before `.` (0x2E) so `card-swarm-verdict-v1-superseded.json`
  * comes first. Every single-vector assertion goes through this instead.
  */
 function vector(stem) {
@@ -66,7 +66,7 @@ function vector(stem) {
 // ─────────────────────────────────────────────────────── the vectors exist
 
 test("the registry is seven cards, one stored kind and seven frames", () => {
-  // Eight card VECTORS, seven card TYPES: `ambush:verdict:v1` has two, the
+  // Eight card VECTORS, seven card TYPES: `swarm:verdict:v1` has two, the
   // second being the losing console's `superseded` update card. Counting
   // distinct `fact.schema` values is what keeps this honest.
   const schemas = new Set(
@@ -93,7 +93,7 @@ test("the registry is seven cards, one stored kind and seven frames", () => {
  * hash inverts the entire mechanism.
  */
 const GOLDEN_SHA256 =
-  "94ccea0d2134ed6ed19e29cb1cfb9eec05e774516ce97dda7f660ec8bf8f3eb4";
+  "10233c15d1945bad14124022dbb359ed5e00de2f9b4300b6ea55e0b3124a285f";
 
 test("the golden corpus matches its pinned hash", () => {
   const hash = createHash("sha256");
@@ -148,7 +148,7 @@ test("no card stamps an agent role on a human", () => {
   // operator's own decision, and the pinned hash held it there.
   for (const { name, raw } of vectors("card-")) {
     const fact = JSON.parse(raw).fact;
-    if (fact.schema === "ambush.perch.verdict.v1") {
+    if (fact.schema === "swarm.perch.verdict.v1") {
       assert.equal(
         fact.issuer.role,
         null,
@@ -185,7 +185,7 @@ test("the escalation vector names the true counting unit", () => {
   // (AMB crates/swarm-pheromone/src/substrate.rs:1295), over a base that is
   // already instance-scoped (whisker_agent.rs:148-149). The wrong literal
   // "agent_instance_id" would have REJECTED a truthful bridge inside admitCard.
-  const { raw } = vector("card-ambush-escalation-v1");
+  const { raw } = vector("card-swarm-escalation-v1");
   const esc = JSON.parse(raw).fact.escalation;
   assert.equal(esc.distinct_sources_counts, "strategy_scoped_agent_id");
   assert.equal(esc.source_ids, null);
@@ -196,7 +196,7 @@ test("an unnamed source_ids absence does not decode", () => {
   // The M half of render law 2 has NO data source on any Phase-1 card. Leaving
   // that as a bare null is how a component ends up fabricating an agent count or
   // spinning forever; the decoder insists the absence carries its reason.
-  const { raw } = vector("card-ambush-escalation-v1");
+  const { raw } = vector("card-swarm-escalation-v1");
   const card = JSON.parse(raw);
   card.fact.escalation.source_ids_absent_reason = null;
   assert.throws(() => cardEnvelope.parse(card));
@@ -208,7 +208,7 @@ test("an unnamed source_ids absence does not decode", () => {
 // ───────────────────────────────────────────── two operators, one hold
 
 test("a superseded verdict names the card that won", () => {
-  const { raw } = vector("card-ambush-verdict-v1-superseded");
+  const { raw } = vector("card-swarm-verdict-v1-superseded");
   const leg2 = JSON.parse(raw).fact.leg2;
   assert.equal(leg2.state, "superseded");
   assert.equal(
@@ -220,7 +220,7 @@ test("a superseded verdict names the card that won", () => {
 });
 
 test("only a superseded verdict may carry a winner", () => {
-  const { raw } = vector("card-ambush-verdict-v1");
+  const { raw } = vector("card-swarm-verdict-v1");
   const card = JSON.parse(raw);
   card.fact.leg2 = { state: "recorded", superseded_by: "d".repeat(64) };
   assert.throws(
@@ -333,7 +333,7 @@ test("an unadmitted signer is refused before the body is parsed", () => {
 });
 
 test("a missing signer is refused, not treated as anonymous", () => {
-  const { raw } = vector("card-ambush-hold-v1");
+  const { raw } = vector("card-swarm-hold-v1");
   const result = admitCard(raw, undefined, isAdmitted);
   assert.equal(result.ok, false);
   assert.equal(result.reason, "unadmitted-issuer");
@@ -374,7 +374,7 @@ test("ThreatClass is a bare string for the twelve and an object for Custom", () 
 test("ResponseAction is internally tagged on `type`", () => {
   // AMB crates/swarm-core/src/types.rs:416-467 —
   // {"type":"isolate_host","host_id":"web-04"}, NOT {"isolate_host":{...}}.
-  const card = JSON.parse(vector("card-ambush-hold-v1").raw);
+  const card = JSON.parse(vector("card-swarm-hold-v1").raw);
   assert.equal(card.fact.hold.action_request.action.type, "isolate_host");
   assert.equal(card.fact.hold.action_request.action.host_id, "web-04");
 
@@ -387,7 +387,7 @@ test("AuditResponseRecord flattens a newtype variant beside its `kind` tag", () 
   // AMB crates/swarm-spine/src/lib.rs:102-110 — #[serde(tag = "kind")] over
   // four variants, two of them newtype. A success arm carries ResponseReceipt's
   // seven fields at the SAME level as `kind`.
-  const card = JSON.parse(vector("card-ambush-receipt-v1").raw);
+  const card = JSON.parse(vector("card-swarm-receipt-v1").raw);
   const response = card.fact.audit_trail.response;
   assert.equal(response.kind, "success");
   assert.equal(typeof response.receipt_id, "string");
@@ -403,7 +403,7 @@ test("Severity is SCREAMING_SNAKE and nothing else is", () => {
   // AMB crates/swarm-core/src/types.rs:406-414 is the only enum in the
   // workspace with rename_all = "SCREAMING_SNAKE_CASE"; ~40 siblings are
   // snake_case. Any codegen that lowercases uniformly breaks exactly this field.
-  const card = JSON.parse(vector("card-ambush-hold-v1").raw);
+  const card = JSON.parse(vector("card-swarm-hold-v1").raw);
   assert.equal(card.fact.hold.severity, "HIGH");
   assert.equal(card.fact.hold.action_kind, "isolate_host");
   assert.equal(card.fact.hold.policy_decision.verdict, "require_human");
@@ -422,13 +422,13 @@ test("the marker must be the entire first line", () => {
   assert.equal(routeCard(`${CARD_MARKER.hold}\nx`), "hold");
   assert.equal(routeCard(`${CARD_MARKER.hold} and more`), null);
   assert.equal(routeCard(`  ${CARD_MARKER.hold}`), null);
-  assert.equal(routeCard("<!-- ambush:hold:v2 -->\nx"), null);
+  assert.equal(routeCard("<!-- swarm:hold:v2 -->\nx"), null);
   assert.equal(routeCard("<!-- buzz:wave:v1 -->\nx"), null);
 });
 
 test("the content grammar round-trips for every card vector", () => {
   for (const kind of CARD_KINDS) {
-    const { raw } = vectors(`card-ambush-${kind}-v1`)[0];
+    const { raw } = vectors(`card-swarm-${kind}-v1`)[0];
     const compact = JSON.stringify(JSON.parse(raw));
     const human = `${kind} · fixture`;
     const body = buildCardContent(kind, human, compact);
@@ -474,8 +474,8 @@ test("parseCardContent never throws", () => {
     CARD_MARKER.hold,
     `${CARD_MARKER.hold}\n`,
     `${CARD_MARKER.hold}\n\n`,
-    `${CARD_MARKER.hold}\nhuman\n\n\`\`\`ambush:hold:v1\nunterminated`,
-    `${CARD_MARKER.hold}\nhuman\n\n\`\`\`ambush:finding:v1\n{}\n\`\`\``,
+    `${CARD_MARKER.hold}\nhuman\n\n\`\`\`swarm:hold:v1\nunterminated`,
+    `${CARD_MARKER.hold}\nhuman\n\n\`\`\`swarm:finding:v1\n{}\n\`\`\``,
     " ".repeat(64),
   ]) {
     assert.doesNotThrow(() => parseCardContent(hostile));

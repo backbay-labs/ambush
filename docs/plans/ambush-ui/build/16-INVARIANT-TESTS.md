@@ -54,7 +54,7 @@ in §9 rather than quietly corrected, because the failure mode matters more than
 | INV-09 | Zero matches for `/\d+\s*\/\s*\d+\s*governors?/i` and for `quorum` followed by a fraction, in any rendered string. | CI guard | `tools/copy-ban-list.tsv` row `quorum-fraction` | hygiene | — |
 | INV-10 | The grant control never resolves to `buttonVariants()`'s default arm (class **and** computed background), and its accessible name never matches `/^\s*approve\b/i`. | CI guard + Playwright | `check-perch-grant-affordance.sh` R4/R7, `perch-verdict-pane.spec.ts` #03 | **P0** | — |
 | INV-11 | `G` arms and is ignored on `event.repeat`; confirm stays disabled until the pane has accrued ≥1500 ms **while BLAST RADIUS was fully visible**, and the accrual **freezes** when it is not; arming resets on `hold_id` change; no grant element exists in a multi-select DOM. | Playwright + CI guard | `perch-verdict-pane.spec.ts` #04, `check-perch-grant-affordance.sh` R2/R3 | **P0** | B1, B2r |
-| INV-12 | Every `ambush:verdict:v1` card the console publishes carries an `h` tag equal to the open case's channel UUID. | Rust unit (builder) + E2E | `tests/rust/buzz/identity_perch_gate_tests.rs` (feature-gated); relay E2E | **P0** | relay fork, B2 |
+| INV-12 | Every `swarm:verdict:v1` card the console publishes carries an `h` tag equal to the open case's channel UUID. | Rust unit (builder) + E2E | `tests/rust/buzz/identity_perch_gate_tests.rs` (feature-gated); relay E2E | **P0** | relay fork, B2 |
 | INV-13 | A verdict card whose `h` tag ≠ the case channel does not render in that case's timeline; the mismatch is named. | Playwright | `perch-marker-admission.spec.ts` #03 | **P0** | — |
 | INV-14 | Every wire string field is `AdversaryText`; the brand's four escape hatches (`as` casts, bare-`string` wire fields, template interpolation, `String()`/`toString()`) are absent. | Type + CI guard + Playwright | `tsc`, `tools/check-perch-adversary-strings.sh`, `perch-marker-admission.spec.ts` #05 | **P0** | — |
 | INV-15 | Marker sniffing fires only when the marker is the whole of line 0 (`trimEnd`, never `trimStart`) **and** the raw signer is admitted. An unadmitted marker never becomes a card, never enters the queue, never wakes anyone, and is counted. | Playwright | `perch-marker-admission.spec.ts` #01, #02 | **P0** | — |
@@ -78,7 +78,7 @@ in §9 rather than quietly corrected, because the failure mode matters more than
 | INV-33 | Grant, refuse, release and finding verdict each pass through `sending` → `recorded` → `acknowledged` as three distinct `data-perch-decision-state` values, and no undo affordance exists on any of them. | Playwright | `perch-verdict-pane.spec.ts` #05 | **P0** | B2 |
 | INV-34 | In one list carrying both row types, a hold row's snooze is disabled and states its reason; a finding row's is enabled. The registry declares snooze `disabledOn: ["hold"]` rather than omitting it. | Playwright + node:test | `perch-containment.spec.ts` #05, `perchKeymapRegistry.test.mjs` | P1 | — |
 | INV-35 | A `kind:46010` on the relay and absent from `GET /v1/response/holds` renders `UNRECONCILED` — with `store_durable` in the reason when the store is not durable, in the destructive register when it is — offers no grant, is excluded from the export manifest, and increments `perch_queue_reconcile_divergences_total`. An **unadmitted** issuer's hold renders **nothing of its own** and increments a **separate** counter. | Rust integration + Playwright | `perch_hold_lifecycle.rs`, `perch-queue-lifecycle.spec.ts` #03a/#03b/#03c | **P0** | B1, B2r |
-| **INV-36** | When two consoles decide one hold, the console whose `POST /decide` answers 409 with a decision id that is not its own leg-1 event id publishes an update card with `leg2.state: "superseded"` and `superseded_by` = the winner's event id, stops rendering its own card as the decision, offers no retry and no undo, and the export marks it superseded rather than dropping it. | Playwright + schema | `perch-queue-lifecycle.spec.ts` #04, `schemas/card-ambush-verdict-v1.schema.json` | **P0** | B2 |
+| **INV-36** | When two consoles decide one hold, the console whose `POST /decide` answers 409 with a decision id that is not its own leg-1 event id publishes an update card with `leg2.state: "superseded"` and `superseded_by` = the winner's event id, stops rendering its own card as the decision, offers no retry and no undo, and the export marks it superseded rather than dropping it. | Playwright + schema | `perch-queue-lifecycle.spec.ts` #04, `schemas/card-swarm-verdict-v1.schema.json` | **P0** | B2 |
 
 **Layer counts.** 5 CI-guard-only · 14 Playwright-only · 3 Rust-only · 12 two-or-more-layer ·
 2 type-level (INV-14, INV-23, both with a runtime backstop). Nothing is "runtime assertion only":
@@ -403,13 +403,13 @@ conclusion was not, because nobody asked *what would still pass*.
 at `:445` `[V]`, builds through `events::build_message` at `:505` `[V]`, signs inside
 `submit_event_at_created_at` at `:527` `[V]` and POSTs the event to the relay's `/events`. The first
 draft's gate was nowhere in that path. A renderer bug — or a compromised renderer — publishes a
-`<!-- ambush:verdict:v1 -->` `kind:9` card into a case channel signed by the operator's own key,
+`<!-- swarm:verdict:v1 -->` `kind:9` card into a case channel signed by the operator's own key,
 which is the exact identity the admission rule treats as authoritative for verdict cards.
 
 It is worse in one detail. `build_message` is handed `content.trim()` at `:505` `[V]`, which strips
 the leading whitespace my own test relied on to make a marker un-sniffable. A gate placed *before*
-that trim signs `" <!-- ambush:verdict:v1 -->"` as harmless and the relay stores
-`"<!-- ambush:verdict:v1 -->"`, which the renderer parses as a card. Placement has to be after every
+that trim signs `" <!-- swarm:verdict:v1 -->"` as harmless and the relay stores
+`"<!-- swarm:verdict:v1 -->"`, which the renderer parses as a card. Placement has to be after every
 transform the content undergoes.
 
 **D9, the placement.** A forged card only matters once it reaches a relay, and Buzz already has a
@@ -456,7 +456,7 @@ The sharpest predicate test is `the_gate_matches_the_renderers_parse_exactly`, w
 agreement in **both directions**. A string the gate signs and the renderer treats as a card is a
 forgery channel. A string the gate refuses and the renderer ignores is a bug report — an operator
 who types a marker into a case message to talk about one must not be blocked. Eleven cases, five
-signable and six refused, plus one that asserts the trim: `" <!-- ambush:verdict:v1 -->…".trim()`
+signable and six refused, plus one that asserts the trim: `" <!-- swarm:verdict:v1 -->…".trim()`
 must be refused, because that is the byte sequence `send_channel_message` actually publishes.
 
 **What INV-29 still does not claim**, and §7.7 repeats it: it does not stop a compromised renderer
@@ -566,7 +566,7 @@ window leaves the stronger of the two claims standing.
 knows both which card it published and which 409 it received; the daemon never saw the loser's leg-1
 event id in a decision role, and the winner never learns there was a race.
 
-`13-WIRE-SCHEMAS.md` has landed the wire half: `card-ambush-verdict-v1.schema.json`'s `leg2.state`
+`13-WIRE-SCHEMAS.md` has landed the wire half: `card-swarm-verdict-v1.schema.json`'s `leg2.state`
 enum is now `sending | recorded | acknowledged | refused_late | superseded`, with `superseded_by`
 (`$ref` `common.schema.json#/$defs/Hex64Lower`) required **non-null exactly when** state is
 `superseded` and required null otherwise, asserted by an `allOf`/`oneOf` pair `[V]`. This is the
@@ -988,7 +988,7 @@ And two **bill addenda**:
 | 6 | The `approve` row fails on the daemon's verbatim hold reason | C-A2's exemption plus the literal; §7.7 states the daemon-text limit | read `static_gate.rs:285-300`; clean corpus file carries the reason and passes |
 | 7 | `check-perch-grant-affordance.sh` could not fail on an undeclared grant control | R7 (accessible name) and R8 (write reachability), each with a fixture | R7 fires on the peer prototype's markup transposed to TSX; R8 fires on a stray decide call; both pass a declared control |
 | 8 | INV-35 called the shipped default's restart `FORGED` | split into three renderings, two counters; the word struck | reconciled against `12-BACKEND-BILL-API.md` §4.3's `store_durable: false` and `17-COMPONENT-SPECS.md`'s plantable-signal rule |
-| 9 | Nothing handled two operators deciding one hold | INV-36, P0, with the two-console E2E | `card-ambush-verdict-v1.schema.json` now carries `superseded` + `superseded_by` with the conditional `allOf` |
+| 9 | Nothing handled two operators deciding one hold | INV-36, P0, with the two-console E2E | `card-swarm-verdict-v1.schema.json` now carries `superseded` + `superseded_by` with the conditional `allOf` |
 | 10 | Both node:test files failed to run — missing sibling modules | `perchKeymapRegistry.ts` and `perchResetterRegistry.ts` ship; the tree sweep skips with a named blocker instead of failing | `node --experimental-strip-types --test`: 8/8 and 3 pass / 1 named skip |
 | 11 | Three mock-bridge designs, two fixture corpora | bound to 14's seam and 22's fixture; five window seams down to two | §7.4; helper constants now copied from `perch-demo-fixture.json` |
 | 12 | INV-11 asserted the loose dwell reading | strict reading adopted; the test asserts the freeze | `perch-verdict-pane.spec.ts` #04 rewritten with the 2 s out-of-view hold and the frozen-indicator assertion |

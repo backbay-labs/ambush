@@ -26,7 +26,7 @@
       "case_channel": null,
       "lane_channel": "b8240a37-88b1-4a9f-8b77-5cc005891115"
     },
-    "schema": "ambush.perch.escalation.v1"
+    "schema": "swarm.perch.escalation.v1"
   },
   "issued_at": "2026-03-17T09:14:41Z",
   "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",

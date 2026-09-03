@@ -25,7 +25,7 @@ import {
  * lease. `receipt` and `rollback` carry one conditionally; `verdict` only after
  * B2o. A card in this list may never render the word `signed` or `verified`.
  *
- * The array values below are MARKER SLUGS (`ambush:lease:v1`), not labels. The
+ * The array values below are MARKER SLUGS (`swarm:lease:v1`), not labels. The
  * appendix's ban on a bare `lease` governs a rendered label, heading, nav item
  * or badge; a wire slug is a wire value and stays in lower_snake register.
  */
@@ -44,7 +44,7 @@ test.describe("Perch provenance and honest badges", () => {
     await openCase(page);
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:rollback:v1",
+      marker: "swarm:rollback:v1",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: {
@@ -78,7 +78,7 @@ test.describe("Perch provenance and honest badges", () => {
     await openCase(page);
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:receipt:v1",
+      marker: "swarm:receipt:v1",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: { receipt_id: "receipt-2", governance_attestation: null, partition_state_at_execution: "healthy" },
@@ -118,7 +118,7 @@ test.describe("Perch provenance and honest badges", () => {
     ] as const) {
       await emitAmbushCard(page, {
         channelName: "case",
-        marker: "ambush:receipt:v1",
+        marker: "swarm:receipt:v1",
         signerPubkey: PERCH_ADMITTED_ISSUER,
         hTag: PERCH_CASE_CHANNEL,
         body: { receipt_id: `receipt-${state}`, governance_attestation: null, partition_state_at_execution: state },
@@ -159,7 +159,7 @@ test.describe("Perch provenance and honest badges", () => {
     await openCase(page);
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:escalation:v1",
+      marker: "swarm:escalation:v1",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: { threat_class: "lateral_movement", distinct_sources: 1, source_ids: ["whisker-7a3f:port_scan"] },
@@ -178,7 +178,7 @@ test.describe("Perch provenance and honest badges", () => {
     await openCase(page);
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:escalation:v1",
+      marker: "swarm:escalation:v1",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: { threat_class: "lateral_movement", distinct_sources: 2, source_ids: ["a:x", "b:y"], total_strength: 2.4 },

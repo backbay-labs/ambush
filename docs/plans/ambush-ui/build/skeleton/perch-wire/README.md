@@ -13,7 +13,7 @@ build/skeleton/perch-wire/
   golden/                          ← the contract, EXTRACTED from the schemas'
     *.json                            own `examples`, so a schema and its vector
     GOLDEN.sha256                     cannot disagree. 16 vectors for 15
-    manifest.json                     schemas-with-examples: `ambush:verdict:v1`
+    manifest.json                     schemas-with-examples: `swarm:verdict:v1`
                                       has two.
   rust/                            → AMB  crates/swarm-perch-wire/
   ts/                              → BUZZ desktop/src/features/perch/wire/
@@ -25,7 +25,7 @@ build/skeleton/perch-wire/
 Both commands work from this directory with **no environment variables**:
 
 ```bash
-bash parity-gate.sh              # 311 declared field(s) across 17 schema(s)
+bash parity-gate.sh              # 312 declared field(s) across 17 schema(s)
 bash parity-gate.sh --self-test  # 5 cases, each one a way the gate must fail
 ```
 
@@ -142,7 +142,7 @@ Every number below was produced by running the **committed** file from its
   all 16 `examples` entries validate against their own schema with cross-file
   `$ref` resolution. Twenty-five positive/negative mutations behave (the list is
   in `13-WIRE-SCHEMAS.md` §0). `bash parity-gate.sh` from this directory, with no
-  env vars, prints `311 declared field(s) across 17 schema(s), all present on
+  env vars, prints `312 declared field(s) across 17 schema(s), all present on
   both sides`; `--self-test` passes 5/5; and deleting `dedupe_key` from
   `rust/src/cards.rs` or renaming `source_ids_absent_reason` in `ts/zod.ts` each
   produce exit 1 naming the field. The 23 wire fixtures in

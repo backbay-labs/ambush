@@ -6,7 +6,7 @@
   "issued_at": "2026-03-17T09:20:01Z",
   "capability_token": null,
   "fact": {
-    "schema": "ambush.perch.verdict.v1",
+    "schema": "swarm.perch.verdict.v1",
     "issuer": {
       "swarm_agent_id": "perch-operator-1",
       "role": null,
@@ -23,6 +23,7 @@
       "hold_id": "h_1c28ae79",
       "operator_id": "perch-operator-1",
       "decided_at_ms": 1773739201600,
+      "rationale_sha256": "bc931bdcaf5ef952addf97428b88b629b8bb57213e8bb492d27b31221f343edf",
       "rationale": "Blocking egress to 198.51.100.20 while we read the disk on host-ops-1."
     },
     "signature": {
@@ -39,5 +40,5 @@
       "superseded_at_ms": null
     }
   },
-  "envelope_hash": "0x78c0153b56f2904153c5829df3e2ec47c1b7855516b18fa9061b8665aad51dba"
+  "envelope_hash": "0x616a920ac45a2ad52bd1fa6f0bee64b05356ea48b971ec8cb5b19b61c9897f7a"
 }

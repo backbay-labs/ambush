@@ -63,7 +63,7 @@
       "hold_id": "h_a07aeacf",
       "hunt_id": "hunt-evt-1"
     },
-    "schema": "ambush.perch.hold.v1"
+    "schema": "swarm.perch.hold.v1"
   },
   "issued_at": "2026-03-17T09:14:42Z",
   "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",

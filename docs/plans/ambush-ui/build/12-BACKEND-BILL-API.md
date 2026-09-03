@@ -268,7 +268,7 @@ change the fact that a client has to know which port answers which `/v1/operator
 considered and rejected: six peer artifacts already compile the route string into code
 (`skeleton/desktop/src/shared/api/tauriPerch.ts:117`,
 `skeleton/desktop/src/shared/api/perchKeys.ts:58`, plus `17`, `18`, `21`, `22` and a `$ref`
-description in `schemas/card-ambush-escalation-v1.schema.json:96`), and a rename buys a cosmetic
+description in `schemas/card-swarm-escalation-v1.schema.json:96`), and a rename buys a cosmetic
 separation while leaving the real hazard — two ports, one prefix — untouched.
 
 What is shipped instead is a test in `crates/swarm-runtime-http/src/http/perch.rs`:
@@ -582,7 +582,7 @@ stateDiagram-v2
 |---|---|---|---|
 | — | `created` | `perch_ops::capture_hold` sees `verdict == RequireHuman && response == Skipped` on the returned `AuditTrail` | store write; `RuntimeEvent::ResponseHeld` published; `perch_holds_created_total` |
 | `created` | `notified` | the bridge's in-process callback after the relay OKs the `kind:46010` card | store write of `notified_at_ms` only. **No new `RuntimeEvent`** — the alarm already fired. **Informational: it does not gate anything** |
-| `created`/`notified`/`armed` | `expired` | `HoldSweep` tick, `now_ms >= expires_at_ms` | store write; **no action is taken**; `perch_holds_expired_total`. The bridge publishes the expiry record on the same `ambush:hold:v1` marker (appendix §3: "also the expiry record") |
+| `created`/`notified`/`armed` | `expired` | `HoldSweep` tick, `now_ms >= expires_at_ms` | store write; **no action is taken**; `perch_holds_expired_total`. The bridge publishes the expiry record on the same `swarm:hold:v1` marker (appendix §3: "also the expiry record") |
 | `notified` | `armed` | client-side only. Reported by the client on the decide request's `armed_at_ms`; the daemon **does not enforce** the 1500 ms dwell — it is a client safety control (`08` INV-11), and a daemon that enforced it would be trusting a client clock | store write; `perch_holds_armed_total` |
 | `created`/`notified`/`armed` | `deciding` | `POST /decide` compare-and-set, **after** signature verification and voter binding | store write of `{intent_event_id, cas_instant_ms, prior_state}`; **nothing else happens yet** |
 | `deciding` | `created`/`notified`/`armed` | **`abandon_decision`** — any path that returns after the CAS without writing a terminal outcome: a store fault, a `governance_gate` internal error, an executor error that is not a typed refusal | store write restoring `prior_state` and clearing `deciding_intent_event_id`; `perch_holds_abandoned_total`. **The hold stays decidable** |
@@ -972,7 +972,7 @@ pub struct HoldDecisionRequest {
     /// verifiable. The LEASES are minted from the store's compare-and-set instant,
     /// not from this, so a client cannot back-date a capability lease.
     pub decided_at_ms: i64,
-    /// 32-byte lowercase hex id of the already-published `ambush:verdict:v1` card.
+    /// 32-byte lowercase hex id of the already-published `swarm:verdict:v1` card.
     /// THE IDEMPOTENCY KEY -- AND AN UNSIGNED POINTER. It is the id of the object
     /// that carries this very signature, so a preimage containing it would have to
     /// contain a hash of itself. The daemon stores it and never treats it as
@@ -1173,7 +1173,7 @@ caller in `perch_ops.rs` with no demo gate. Neither existing gate moves.
 keyed on the leg-1 event id, plus a stored outcome.
 
 Why `nostr_intent_event_id` and not an `Idempotency-Key` header: the operator signs the
-`ambush:verdict:v1` card **once**, publishes it to the relay, and gets back a deterministic 32-byte
+`swarm:verdict:v1` card **once**, publishes it to the relay, and gets back a deterministic 32-byte
 event id. A retry re-sends that same id because it is a property of the artifact that already exists,
 not a token the client has to remember to keep stable. It is already in the body per `09` §3.1's
 sketch. Adding a header would be a second, weaker key for the same fact.
@@ -1310,7 +1310,7 @@ reading a bundle — unlike the event id, which is an unsigned pointer.
 
 **The relay half is a peer's, and it is named rather than assumed.** The losing console is the only
 party that can publish an update to its own already-published card. `13-WIRE-SCHEMAS.md` owns
-`schemas/card-ambush-verdict-v1.schema.json`, whose `leg2.state` enum is
+`schemas/card-swarm-verdict-v1.schema.json`, whose `leg2.state` enum is
 `sending|recorded|acknowledged|refused_late` — none of which means "another operator's decision was
 the one that executed". **Filed as required peer amendment PA-1 (§16):** add a `superseded` value
 carrying the winning `nostr_intent_event_id`, published by whichever console receives the 409. A
@@ -1806,7 +1806,7 @@ none. The daemon recomputes it from the submitted `rationale` and returns **422*
 bearer-token holder cannot replay a valid signature with substituted text. `13-WIRE-SCHEMAS.md`'s
 "one signature serves both legs" survives intact — the card already carries `rationale`, so both
 sides can compute the same digest — but the preimage it specifies must gain the fourth member.
-**Filed as required peer amendment PA-3 (§16)**, against `schemas/card-ambush-verdict-v1.schema.json`
+**Filed as required peer amendment PA-3 (§16)**, against `schemas/card-swarm-verdict-v1.schema.json`
 and the golden vectors, because that file is 13's and not this one's.
 
 **`nostr_intent_event_id` stays OUTSIDE, and it cannot be anywhere else.** It is the id of the leg-1
@@ -2055,7 +2055,7 @@ facts, each read at the line:
   configuration with **only** clause 3 enabled in the first build — the one clause that produces no
   hold.
 - **The console cannot create it either.** `10-RELAY-FORK.md`'s INV-RF1 restricts the operator key to
-  exactly one published kind (`kind:9` / `ambush:verdict:v1`), and `14-CLIENT-ARCHITECTURE.md`'s write
+  exactly one published kind (`kind:9` / `swarm:verdict:v1`), and `14-CLIENT-ARCHITECTURE.md`'s write
   set has no channel-create command.
 
 So on the first build, `E` promotes a finding into a case whose channel nobody creates.
@@ -2634,9 +2634,9 @@ owner. None is applied here.
 
 | # | Owner | Edit | Why |
 |---|---|---|---|
-| **PA-1** | `13-WIRE-SCHEMAS.md` · `schemas/card-ambush-verdict-v1.schema.json` | Add a `superseded` value to `leg2.state`, carrying the winning `nostr_intent_event_id` | §4.8. Two operators can legitimately hold one hold; the relay has no compare-and-set and a `kind:9` event is immutable, so two signed verdict cards for one hold is reachable and the enum has no value that says which one executed |
+| **PA-1** | `13-WIRE-SCHEMAS.md` · `schemas/card-swarm-verdict-v1.schema.json` | Add a `superseded` value to `leg2.state`, carrying the winning `nostr_intent_event_id` | §4.8. Two operators can legitimately hold one hold; the relay has no compare-and-set and a `kind:9` event is immutable, so two signed verdict cards for one hold is reachable and the enum has no value that says which one executed |
 | **PA-2** | `20-TASK-BREAKDOWN.md:1516` · `adr/0014-two-legged-writes-and-the-process-boundary.md` | Replace "`RECEIPT REQUIRED` becomes an enforced fact once B2g lands" with §5.7's middle row | §5.2, §5.7 and C15. The claim was licensed by revision 1 of this file and is withdrawn |
-| **PA-3** | `13-WIRE-SCHEMAS.md` · `schemas/card-ambush-verdict-v1.schema.json` · golden vectors | Add `rationale_sha256` as the fourth member of the signature preimage; state that `nostr_intent_event_id` is an unsigned pointer and that the two-leg join is `signature_hex` | §6.5. "One signature serves both legs" survives; the preimage gains one member so the operator's own words are inside the signed record |
+| **PA-3** | `13-WIRE-SCHEMAS.md` · `schemas/card-swarm-verdict-v1.schema.json` · golden vectors | Add `rationale_sha256` as the fourth member of the signature preimage; state that `nostr_intent_event_id` is an unsigned pointer and that the two-leg join is `signature_hex` | §6.5. "One signature serves both legs" survives; the preimage gains one member so the operator's own words are inside the signed record |
 | **PA-4** | `13-WIRE-SCHEMAS.md` (`distinct_sources_counts` const, zod literal, golden vector, pinned hash) · `17-COMPONENT-SPECS.md` (`SourceCount` expansion text) · `schemas/common.schema.json` x-note | `distinct_sources` counts **strategy-scoped** ids | §11.2. This file was in the minority that got this wrong and is now in the majority that got it right; the two artifacts that compiled the wrong reading into a `const` and a `z.literal` are the ones that still need changing |
 | **PA-5** | `22-DEMO-FIXTURE.md` · `fixtures/derive-ids.mjs` · the five prototypes | Regenerate every `hold_id` under A17's pattern | §16.1 A17. Six formats are in circulation and two use the `hold:` colon prefix the schema description warns against |
 | **PA-6** | `16-INVARIANT-TESTS.md` | Add the two-console concurrency invariant (§4.8's last paragraph) as P0, and the `deciding`-has-an-exit assertions (§3.3) | Both are safety properties with no test anywhere in the set |

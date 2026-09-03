@@ -59,7 +59,7 @@
       "trail_id": "trail-4411",
       "verdict_card_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
-    "schema": "ambush.perch.receipt.v1"
+    "schema": "swarm.perch.receipt.v1"
   },
   "issued_at": "2026-08-30T02:41:07Z",
   "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",

@@ -983,7 +983,7 @@ without a daemon.
 
 ---
 
-#### P0-19 — Bridge: identity, NIP-42, and one published `ambush:finding:v1`
+#### P0-19 — Bridge: identity, NIP-42, and one published `swarm:finding:v1`
 
 **Track** RS-1 / RS-2 · **Estimate** 1.0 ew · **Critical path** **yes** · **Implements** `09` 0.7
 (part) · **Depends on** P0-18, P0-26 · **Spec** `11-BRIDGE-CRATE.md` §7, §8, §10
@@ -1000,9 +1000,9 @@ without a daemon.
 
 **Acceptance**
 - One real `DetectionFinding` produced by telemetry POSTed to `/v1/ingest/events` appears as a
-  `kind:9` card carrying `<!-- ambush:finding:v1 -->` in a Buzz channel in **under two seconds**.
+  `kind:9` card carrying `<!-- swarm:finding:v1 -->` in a Buzz channel in **under two seconds**.
 - The card renders at the verification tier the daemon actually produced — **tier 0** for
-  `ambush:finding:v1`: a secp256k1 Nostr signature over the transport event and nothing over the
+  `swarm:finding:v1`: a secp256k1 Nostr signature over the transport event and nothing over the
   body, labelled per `08-TRUST-AND-GOVERNANCE-UX.md` §6.2. The criterion names the tier it ran at and
   may never say "Ed25519-signed artifact" without one. (`09` §2.2 exit criterion 1.)
 - The bridge is **write-only**: zero `REQ`, zero `COUNT` frames, ever. This is not an aesthetic
@@ -1053,7 +1053,7 @@ and that relay-side provisioning (P0-21) is done.
   IPC by `mockIPC(handleMockCommand, { shouldMockEvents: true })` at `:14601` when
   `main.tsx:111-123` sees `__BUZZ_E2E__`. A missing arm breaks **every** mock-mode spec with a
   "Community connection failed" render that is indistinguishable from a product bug.
-- A spec can seed a `kind:9` `ambush:finding:v1` card into a named channel and assert its rendered
+- A spec can seed a `kind:9` `swarm:finding:v1` card into a named channel and assert its rendered
   fields, using `waitForMockLiveSubscription(page, channelName)` before
   `__BUZZ_E2E_EMIT_MOCK_MESSAGE__` (messages are silently dropped without a subscription).
 - The fixture module is the **only** file that changes when a card body schema changes; `e2eBridge.ts`
@@ -1211,7 +1211,7 @@ detector).
 **Estimate assumption** — 1 ew as `09` §2.4.
 
 **Risk if it slips** — F3 must not ship. A compromised renderer could otherwise forge an
-`ambush:verdict:v1` grant card for any hold — granting **and** manufacturing the evidence that a
+`swarm:verdict:v1` grant card for any hold — granting **and** manufacturing the evidence that a
 human deliberated.
 
 ---
@@ -1657,7 +1657,7 @@ live nudge (`APPENDIX-NORMATIVE.md` §4) does not exist and the queue updates on
 **Acceptance**
 - A hold past `expires_at_ms` moves to `expired` and the expiry is **published as its own record**,
   so the case channel shows the expiry rather than the card simply ceasing to exist. The
-  `ambush:hold:v1` marker carries both the hold and its expiry (`APPENDIX-NORMATIVE.md` §3).
+  `swarm:hold:v1` marker carries both the hold and its expiry (`APPENDIX-NORMATIVE.md` §3).
 - `PERCH_HOLD_TTL_MS` is **3,600,000 ms**, configurable per threat class
   (`APPENDIX-NORMATIVE.md` §6; the value is `08` §3.6's settled proposal, not an in-tree constant,
   because no hold exists today).
@@ -2354,7 +2354,7 @@ held down records nothing, and that the dwell gate is enforced.
 gate-lines, frozen) — the publish path is the existing `subscribe`/`sendRaw` primitive
 
 **Acceptance**
-- Leg 1 is a signed `kind:9` card carrying `<!-- ambush:verdict:v1 -->` into the case channel: a
+- Leg 1 is a signed `kind:9` card carrying `<!-- swarm:verdict:v1 -->` into the case channel: a
   **human intent record, never an authorization** (brief A2). It is not `46030`/`46031`:
   `is_command_kind` (`BUZZ crates/buzz-core/src/kind.rs:815-826`) routes those to
   `command_executor::handle_command` at `ingest.rs:2278`, which rejects them with
@@ -2574,7 +2574,7 @@ the correction.
 last two are this card's own gate and have not been run, because the crate ships seven `todo!()`
 bodies (counted) and `sync-perch-golden.sh` does not exist yet.
 - `bash build/skeleton/perch-wire/parity-gate.sh` with **no environment overrides** prints
-  `311 declared field(s) across 17 schema(s), all present on both sides (7 Rust file(s), zod.ts)`
+  `312 declared field(s) across 17 schema(s), all present on both sides (7 Rust file(s), zod.ts)`
   and exits 0. Its self-test refuses to report a pass over an empty tree — it exits **2 VACUOUS**,
   never 0. Both behaviours must survive the move to `AMB tools/`, where `resolve()`'s default paths
   change; that is the one substantive edit this move needs.
@@ -2599,7 +2599,7 @@ bodies (counted) and `sync-perch-golden.sh` does not exist yet.
 **Estimate assumption** — 1.5 ew for ~6,000 lines that are already written. The work is the two
 moves, the seven `human_line` bodies, the loader and dependency wiring, `GOLDEN.sha256`
 regeneration, and two CI gates. If the render-law-2 row (P0-24) is ratified against the reading
-currently compiled into `zod.ts` and `card-ambush-escalation-v1.schema.json`, add 0.25 for the
+currently compiled into `zod.ts` and `card-swarm-escalation-v1.schema.json`, add 0.25 for the
 `const`, the `z.literal`, the `x-note` and the golden vector that carry it.
 
 **Risk if it slips** — every decoder is hand-written per surface, the Rust and TypeScript readings
@@ -2630,9 +2630,9 @@ unqualified human-decision records for one hold and nothing marks the loser.
 
 **Acceptance**
 - On `409 hold_already_deciding` or `409 hold_already_decided`, the console publishes a **second**
-  `ambush:verdict:v1` card as a NIP-10 reply to its own leg 1, with `leg2.state = "superseded"`,
+  `swarm:verdict:v1` card as a NIP-10 reply to its own leg 1, with `leg2.state = "superseded"`,
   `superseded_by` = the winning leg-1 event id and `superseded_at_ms` = its own clock. The schema
-  already carries all three (`build/schemas/card-ambush-verdict-v1.schema.json`), with an `allOf`
+  already carries all three (`build/schemas/card-swarm-verdict-v1.schema.json`), with an `allOf`
   asserting `superseded_by` is non-null on `superseded` and null on every other state.
 - **The winning id is obtained by a re-read, not from the 409 body.** This card follows the
   mechanism that exists: `openapi/perch-operator-v1.yaml`'s 409 block states that `ErrorResponse` is
@@ -3128,7 +3128,7 @@ finding, landing through B3 and B3i. Three reasons, in descending order of weigh
   until P1-01/02.
 - It does not exercise `kind:46010` and therefore **does not need the relay fork**. P0-16 can land
   before, during or after; the skeleton's card is `kind:9` with a marker.
-- It does not prove tier 2 verification. `ambush:finding:v1` is **tier 0** — a secp256k1 signature
+- It does not prove tier 2 verification. `swarm:finding:v1` is **tier 0** — a secp256k1 signature
   over the transport event and nothing over the body — and the card says so. B6 is Phase 2.
 - It does not prove the alarm path. `26006` needs `ResponseHeld` (P1-03).
 - It does not prove multi-operator delivery. `effective_principals()` synthesises one principal, so
@@ -3151,7 +3151,7 @@ Twenty-six files. Ordered so each step compiles and can be demonstrated before t
 | 7 | `AMB crates/swarm-perch-bridge/src/{lib,error,config,stream}.rs` | P0-17 | NEW | classification is an exhaustive match with no `_` arm |
 | 8 | `AMB crates/swarm-perch-bridge/src/ws/**` | P0-17 | NEW | `buzz-ws-client` vendored, four panic sites rewritten as typed errors |
 | 9 | `AMB crates/swarm-perch-bridge/src/{receive,spool/*}.rs` | P0-18 | NEW | recv / classify / append, and nothing else — the 1,024-slot budget |
-| 10 | `AMB crates/swarm-perch-bridge/src/{identity,cards,coalesce,pacer,publish,metrics,channels}.rs` | P0-19 | NEW | NIP-42, `p`-tag normalisation, 1 Hz pacer, the `ambush:finding:v1` body |
+| 10 | `AMB crates/swarm-perch-bridge/src/{identity,cards,coalesce,pacer,publish,metrics,channels}.rs` | P0-19 | NEW | NIP-42, `p`-tag normalisation, 1 Hz pacer, the `swarm:finding:v1` body |
 | 11 | `AMB crates/swarm-runtime-http/Cargo.toml` | P0-19 | — | the dependency edge |
 | 12 | `AMB crates/swarm-runtime-http/src/bin/swarm_detect.rs` | P0-19 | — | one `perch_bridge_handle` spawn; the `IngestState` clone taken **before** `:1113` |
 | 13 | `AMB docker-compose.yml` | P0-21 | — | relay, Postgres, Redis added to the two existing services |
@@ -3229,12 +3229,12 @@ curl -sf -X POST http://127.0.0.1:9090/v1/ingest/events \
 # 09 §2.2 exit criterion 1.  Read from the RELAY, not from the daemon, and read
 # it with an EXPLICIT kinds filter: an omitted `kinds` triggers the relay's
 # p-gate (BUZZ CLAUDE.md gotcha 2), and NIP-50 FTS tokenizes on punctuation, so
-# searching for the literal string "ambush:finding:v1" is not a reliable probe.
+# searching for the literal string "swarm:finding:v1" is not a reliable probe.
 LANE_CHANNEL=$(cat /tmp/perch-lane-channel-uuid)   # written by step 3
 curl -sf -X POST http://localhost:3000/query \
   -H "X-Pubkey: $PERCH_OPERATOR_PUBKEY" -H 'content-type: application/json' \
   -d "[{\"kinds\":[9],\"#h\":[\"$LANE_CHANNEL\"],\"limit\":20}]" \
-| jq '[.[] | select(.content | startswith("<!-- ambush:finding:v1 -->"))] | length'
+| jq '[.[] | select(.content | startswith("<!-- swarm:finding:v1 -->"))] | length'
 # Must be >= 1, and the marker must be the WHOLE first line — that is the
 # hardened sniff P1-17 implements, not Buzz's trimStart().startsWith().
 
@@ -3248,7 +3248,7 @@ cd "$BUZZ_FORK/desktop" && pnpm dev
 #     kind:9007 case channel from that event.  The console publishes nothing here.
 #     If the case view shows "provisioning" and never resolves, the bridge did not
 #     see the event -- check the narrowing::classify arm, not the relay.
-#   - press D to dismiss it            -> leg 1: signed kind:9 ambush:verdict:v1
+#   - press D to dismiss it            -> leg 1: signed kind:9 swarm:verdict:v1
 #                                      -> leg 2: POST /v1/operator/findings/{id}/feedback  (B3)
 #   - the D preview names the arithmetic BEFORE it commits: Dismiss retroactively
 #     removes every deposit at or before the marker, keyed (threat_class, event_id)
@@ -3275,7 +3275,7 @@ curl -sf -X POST http://127.0.0.1:9090/v1/ingest/events \
 curl -sf -X POST http://localhost:3000/query \
   -H "X-Pubkey: $PERCH_OPERATOR_PUBKEY" -H 'content-type: application/json' \
   -d "[{\"kinds\":[9],\"#h\":[\"$LANE_CHANNEL\"],\"limit\":200}]" \
-| jq '[.[] | select(.content | startswith("<!-- ambush:finding:v1 -->"))
+| jq '[.[] | select(.content | startswith("<!-- swarm:finding:v1 -->"))
        | (.content | split("\n")[1:] | join("\n") | fromjson).seq] | sort'
 # The body is the marker line followed by JSON, so the first line is dropped
 # before parsing.  The body's exact shape is 13-WIRE-SCHEMAS.md's; this probe
@@ -3488,7 +3488,7 @@ The label's exact strings are `06-COPY-AND-VOICE.md`'s. Its **shape** is fixed h
 |---|---|
 | That an empty queue means there are no held actions. | There is no hold store; `RequireHuman` is a **refusal** (`AMB crates/swarm-runtime/src/lib.rs:979-981`, `:1133-1146`) and the action is dropped. An empty queue means nothing is *recorded*, not that nothing *happened*. |
 | That a human is watching. | Nothing pages anyone in v0. The four wake classes need `26006`, which needs `ResponseHeld`. |
-| That anything on any v0 surface is a record of a human act. | The only human-authored artifact in the whole product is `ambush:verdict:v1`, and it does not exist in v0. |
+| That anything on any v0 surface is a record of a human act. | The only human-authored artifact in the whole product is `swarm:verdict:v1`, and it does not exist in v0. |
 | That the Watchfloor's numbers are a history. | They are the runtime's current snapshot. See §10.3. |
 | That the queue will be wired "soon". | A date is a claim about staffing; §7.4 is where that claim belongs. The label names the item, not the month. |
 
@@ -3559,7 +3559,7 @@ P0-15	Land the Perch token layer and the six security ramps	FE-A+DS	2.0	YES	P0-0
 P0-16	Apply the relay fork and wire it into CI	RS-1	0.5	no	-	-	phase-0,relay,rust,upstream
 P0-17	Scaffold swarm-perch-bridge and clear the supply-chain gate	RS-1	1.0	YES	-	-	phase-0,bridge,rust,critical-path
 P0-18	Bridge: the receive loop, the disk spool, and the per-issuer sequence	RS-1	1.0	YES	P0-17	-	phase-0,bridge,rust,critical-path
-P0-19	Bridge: identity, NIP-42, and one published ambush:finding:v1	RS-1	1.0	YES	P0-18,P0-21,P0-26	-	phase-0,bridge,rust,critical-path
+P0-19	Bridge: identity, NIP-42, and one published swarm:finding:v1	RS-1	1.0	YES	P0-18,P0-21,P0-26	-	phase-0,bridge,rust,critical-path
 P0-20	Add Ambush fixtures to the E2E bridge as a delegated module	FE-B	2.0	YES	P0-12	-	phase-0,testing,critical-path
 P0-21	Dev deployment: relay, Postgres and Redis in compose	RS-1	0.5	YES	-	-	phase-0,infra,critical-path
 P0-22	Author rulesets/perch-dev.yaml and its debug signature	RS-1	0.5	YES	P0-26	-	phase-0,config,rust,critical-path,new-work
@@ -3668,7 +3668,7 @@ decided and another quietly contradicted.
 | 1 | **Render law 2's mechanism** — what `distinct_sources` counts | strategy-scoped (`pipeline.rs:573`, six artifacts) vs agent-instance-scoped (`whisker_agent.rs:148-149`, two artifacts) | the second reading is already a `const`, a `z.literal` and a normative `x-note` in the delivered schemas and `zod.ts`. Deciding after P1-26 means editing a golden vector and a pinned hash, not a table row |
 | 2 | **`26006` delivery** | an `h` tag on a standing `#watch` channel (`13` `W-1`) vs adding `26006` to `P_GATED_KINDS` (`adr/0017`; the array holds six kinds today at `BUZZ crates/buzz-core/src/kind.rs:159-169`, one of them already an ephemeral for filter-layer enforcement, which is the precedent the ADR cites) | both are written as *the* decision, and applying both does not narrow delivery — **it refuses the subscription**. `W-1`'s filter is `{kinds:[26006],"#h":[watch]}` with no `#p`; `p_gated_filters_authorized` (`req.rs:1182-1216`, called from the `REQ` handler at `:221`) requires a `#p` whose values are all the authenticated pubkey, and the handler answers `"restricted: p-gated events require #p matching your pubkey"` at `:224-226`. Deciding after P1-14 means the hold alarm's live subscription is built against a filter the relay closes |
 | 3 | **`lease_ttl_ms`** | one registry row for three unrelated objects | a countdown rendered 15× wrong beside a `ContainmentLeaseView`. **TB-14** |
-| 4 | **The winning decision id after a `409`** | `card-ambush-verdict-v1.schema.json` says `superseded_by` is "returned in the 409 body"; `openapi/perch-operator-v1.yaml`'s 409 block says `ErrorResponse` is `{error, message}`, **cannot** carry a third field, and directs the client to re-read `GET /v1/response/holds/{hold_id}` for `HeldActionView.deciding_intent_event_id` (`:1517`) | P1-27 implements the re-read because it is the one that works against the delivered spec; if the schema's sentence is the intent, the OpenAPI 409 needs a body change and P1-27 is re-scoped |
+| 4 | **The winning decision id after a `409`** | `card-swarm-verdict-v1.schema.json` says `superseded_by` is "returned in the 409 body"; `openapi/perch-operator-v1.yaml`'s 409 block says `ErrorResponse` is `{error, message}`, **cannot** carry a third field, and directs the client to re-read `GET /v1/response/holds/{hold_id}` for `HeldActionView.deciding_intent_event_id` (`:1517`) | P1-27 implements the re-read because it is the one that works against the delivered spec; if the schema's sentence is the intent, the OpenAPI 409 needs a body change and P1-27 is re-scoped |
 | 5 | **The terminal chord** | `APPENDIX-NORMATIVE.md` §2 says `Cmd-\``; the shipped Buzz binding is `Cmd/Ctrl-J` (`TerminalBootstrap.tsx:146-168`) | **TB-3**. Cheap now, a rebinding with a real cost later |
 | 6 | **`hold_id`'s format** | unconstrained `"type": "string"` in three schemas, with a prose warning against a `hold:`-prefixed derived form; six formats circulate across the delivered artifacts, two of them using the warned-against prefix | pin one pattern in `common.schema.json` `$defs/HoldId` and `$ref` it. `12`'s "opaque (uuid)" is the natural choice because B1 mints it. Deciding late means fixtures, prototypes and goldens disagree with the decoder |
 
@@ -3767,7 +3767,7 @@ live at rather than quoting a peer's number:**
   `ingest/mod.rs:2572` in the `swarm_detect --serve` process, where it decides per SSE subscriber
   scope whether a broadcast event is serialized onto that subscriber's SSE response or dropped. §1.8.
 - **`build/skeleton/perch-wire/parity-gate.sh` runs green as committed with no environment
-  overrides**: `311 declared field(s) across 17 schema(s), all present on both sides (7 Rust
+  overrides**: `312 declared field(s) across 17 schema(s), all present on both sides (7 Rust
   file(s), zod.ts)`, exit 0. A review note reporting `308` and `exit 2 VACUOUS` predates
   `13-WIRE-SCHEMAS.md`'s own revision; the VACUOUS arm is the guard, and it is correct behaviour over
   an empty tree, not a defect.

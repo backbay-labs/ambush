@@ -138,7 +138,7 @@ rewrites `agent_id` between those two points. Its conclusion ("four detectors ag
 escalate") is the opposite of what the tree does. Recorded here so it is not re-raised.
 
 **State in the artifacts: already correct.** `13-WIRE-SCHEMAS.md` withdrew W-6; the `const` in
-`schemas/card-ambush-escalation-v1.schema.json`, the `$defs/SourceCountMechanism` in
+`schemas/card-swarm-escalation-v1.schema.json`, the `$defs/SourceCountMechanism` in
 `common.schema.json`, `skeleton/perch-wire/ts/zod.ts`, `ts/types.ts`, `rust/src/cards.rs`, the
 golden vector and its pinned hash all say `strategy_scoped_agent_id`. The integration pass corrected
 two stale prose paragraphs (`17-COMPONENT-SPECS.md` §4.8, `18-DATAVIZ.md` §17) that still described
@@ -208,7 +208,7 @@ Two ids that are *not* the case channel and should not be mistaken for competito
 
 ### R-6 · The verification tier of a receipt
 
-> **`ambush:receipt:v1` is tier 0.** Tier 1 is reserved for `ambush:rollback:v1`.
+> **`swarm:receipt:v1` is tier 0.** Tier 1 is reserved for `swarm:rollback:v1`.
 
 A `ResponseReceipt` carries no attestation of its own body. Where `audit.governance.receipt` is
 present, the attestation is a consensus signature over a *proposal*, not over this receipt — and
@@ -255,7 +255,7 @@ This is the deduplicated set. **File this list, not the sixteen.**
 | # | Target | Amendment | Absorbs | Status |
 |---|---|---|---|---|
 | **W2-1** | `APPENDIX-NORMATIVE.md` §6 verified counts | `AppShell.tsx` / `MessageRow.tsx` / `HomeView.tsx` = **998 / 999 / 994** on the gate's own arithmetic (`content.split(/\r?\n/).length`, `BUZZ scripts/check-file-sizes-core.mjs:24-29`), not 997 / 998 on `wc -l`. Real headroom is 2 / 1 / 6 lines | AD-A1, `15`'s and `20`'s A-1 / A-7 | accepted |
-| **W2-2** | `APPENDIX-NORMATIVE.md` §3 | The fork is **three hunks in `ingest.rs`** plus a second patch of **four hunks in `kind.rs`**; **zero client registration points**, because `46010` is a queue record and `ambush:hold:v1` on `kind:9` is the rendered row. Keep the four-point cost documented as the price of a future decision to render raw `46010` | RF-A1, AD-A3, AD-A7's arithmetic half | accepted |
+| **W2-2** | `APPENDIX-NORMATIVE.md` §3 | The fork is **three hunks in `ingest.rs`** plus a second patch of **four hunks in `kind.rs`**; **zero client registration points**, because `46010` is a queue record and `swarm:hold:v1` on `kind:9` is the rendered row. Keep the four-point cost documented as the price of a future decision to render raw `46010` | RF-A1, AD-A3, AD-A7's arithmetic half | accepted |
 | **W2-3** | `APPENDIX-NORMATIVE.md` §3 | Add: **`26006` is listed in `P_GATED_KINDS`; every REQ that can match it carries `#p = self` on every filter.** The "global (no `h`)" row itself is unchanged | supersedes RF-A6 and AD-A7's `h`-tag half | accepted — **R-1** |
 | **W2-4** | `APPENDIX-NORMATIVE.md` §3 | `requires_h_channel_scope` is at **`:704-733`** (`matches!` body `:705-732`; append after `:731`). Same drift in `03` §5.1 and `00-BRIEF.md` §4.4 / §11.3 | RF-A2 | accepted |
 | **W2-5** | `APPENDIX-NORMATIVE.md` §4 item 2 | `subscription.rs` **`:487-492`**, inside `fan_out_scoped` (`:379-495`). The claim itself is correct | RF-A3 | accepted |

@@ -97,7 +97,7 @@ export type PerchEphemeralKind =
  * 26005 (TamperAlert) and 26006 (the hold alarm) are the alarm class. 26003
  * (ModeTransition) is NOT: it is a state frame that the bridge coalesces
  * on-change like the rest of the telemetry class, and a durable
- * `ambush:escalation:v1` card is what survives a transition INTO incident.
+ * `swarm:escalation:v1` card is what survives a transition INTO incident.
  * 11-BRIDGE-CRATE.md owns that assignment; this table mirrors it and must be
  * corrected here if it is corrected there.
  */
@@ -443,7 +443,7 @@ const KIND_CHANNEL_THREAD_SUMMARY_PLACEHOLDER = 39005;
 // Steady state, worst case (Watchfloor open, a case open, twelve lanes):
 //   7 REQ frames at open, then ZERO REQ frames until navigation.
 // Inbound EVENT frames are not charged to us. The operator's own publishes
-// are: an `ambush:verdict:v1` card is one EVENT frame, and the human tier is
+// are: an `swarm:verdict:v1` card is one EVENT frame, and the human tier is
 // human_messages_per_min = 60 (connection.rs:690-695 selects it because
 // is_agent = ctx.agent_owner_pubkey.is_some() and the operator key carries no
 // owner attestation). Sixty verdicts a minute is not a queue anyone has.

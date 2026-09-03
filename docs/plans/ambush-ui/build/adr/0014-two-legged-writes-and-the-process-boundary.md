@@ -90,7 +90,7 @@ request. Three of those commands take the **kind itself** from the renderer:
 | Command | Renderer-supplied | Why it defeats a `sign_event`-only gate |
 |---|---|---|
 | `sign_event` (`identity.rs:107-130`) | `kind: u16`, `content`, `tags` | the one revision 1 gated |
-| `send_channel_message` (`messages.rs:409-424`) | `kind: Option<u32>` (`:420`), `content: String` (`:411`), plus six tag vectors | resolves `state.signing_keys()` at `:445` and signs. A renderer calling it with `kind: Some(9)` and a `content` whose first line is `<!-- ambush:verdict:v1 -->` produces a **signed, published, structurally valid verdict card without touching `sign_event` at all** |
+| `send_channel_message` (`messages.rs:409-424`) | `kind: Option<u32>` (`:420`), `content: String` (`:411`), plus six tag vectors | resolves `state.signing_keys()` at `:445` and signs. A renderer calling it with `kind: Some(9)` and a `content` whose first line is `<!-- swarm:verdict:v1 -->` produces a **signed, published, structurally valid verdict card without touching `sign_event` at all** |
 | the project-owner announcement path (`project_git_workflow.rs:82-91`) | `ProjectOwnerAnnouncementInput { kind: u16, content, created_at, tags }` | a third generic `(kind, content, tags)` oracle. Whether it survives the deletion programme is ADR 0011's; while it exists it is the same hole |
 
 The shipped CSP (`BUZZ desktop/src-tauri/tauri.conf.json:39`) ends its `connect-src` with bare
@@ -98,7 +98,7 @@ The shipped CSP (`BUZZ desktop/src-tauri/tauri.conf.json:39`) ends its `connect-
 `https://cdn.jsdelivr.net/npm/@mediapipe/`, which exists for the animated-avatar capture
 feature.
 
-Together: a compromised renderer could forge an `ambush:verdict:v1` card for any hold —
+Together: a compromised renderer could forge an `swarm:verdict:v1` card for any hold —
 manufacturing the evidence that a human deliberated — and post the whole verdict queue anywhere
 on the internet. Neither is a new hole this project opens; both are holes this project's threat
 model can no longer tolerate. **And the gate has to be drawn around the property, not around a
@@ -151,7 +151,7 @@ losing console is also the **only** party that knows both which card it publishe
 **Every human decision is two legs, published separately, never conflated, and the console
 is structurally incapable of performing the second one's job.**
 
-**Leg 1 — the intent record.** A `kind:9` card carrying `<!-- ambush:verdict:v1 -->`,
+**Leg 1 — the intent record.** A `kind:9` card carrying `<!-- swarm:verdict:v1 -->`,
 signed with the operator's own secp256k1 key, published into the case channel with an `h`
 tag equal to that channel's UUID. It records **what a named human decided, when, and on
 what they were looking at**. It is not an authorization, is never described as one, and its
@@ -190,7 +190,7 @@ Three obligations, and the third is what makes it an invariant rather than a pat
    this rule C1 is a claim about three files that a fourth file silently falsifies — which is
    precisely the defect the wave-2 red team found in revision 1.
 
-The only producer of an `ambush:verdict:v1` card is a new, narrow Tauri command,
+The only producer of an `swarm:verdict:v1` card is a new, narrow Tauri command,
 `perch_record_verdict`, which builds the card body from **daemon-fetched hold state** — not
 from renderer-supplied JSON — and is therefore the one caller whose content never reaches the
 gate as an argument. A kind allowlist alone is insufficient, because the verdict rides `kind:9`,
@@ -218,7 +218,7 @@ semantics, so the design must name the state rather than assume it away.
   mechanism; the relay is never asked to arbitrate anything (ADR 0012 clause 3). A console
   losing the race receives `409 hold_already_deciding` (with `Retry-After: 1`, because it will
   resolve) or `409 hold_already_decided`.
-- **The losing console publishes an update card.** It publishes a second `ambush:verdict:v1`
+- **The losing console publishes an update card.** It publishes a second `swarm:verdict:v1`
   replying to its own first, with `leg2.state = "superseded"` carrying the winning
   `nostr_intent_event_id`. It is the only party that can: `ErrorResponse` is `{error, message}`
   and cannot carry the winner's id, so the console re-reads the hold to learn it
@@ -232,7 +232,7 @@ semantics, so the design must name the state rather than assume it away.
   reconciliation rule above, not a promise that the update always lands.
 
 `12-BACKEND-BILL-API.md` §4.4 and §4.8 own the daemon side and the `409` taxonomy;
-`13-WIRE-SCHEMAS.md`'s `card-ambush-verdict-v1.schema.json` owns `superseded`, `superseded_by`
+`13-WIRE-SCHEMAS.md`'s `card-swarm-verdict-v1.schema.json` owns `superseded`, `superseded_by`
 and `superseded_at_ms` (peer amendment PA-1); `16-INVARIANT-TESTS.md` owns the two-console P0
 invariant. **This ADR owns only the rule that the loser must say so and that a card without a
 daemon record is not a decision.**

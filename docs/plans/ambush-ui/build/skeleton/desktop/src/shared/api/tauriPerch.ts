@@ -222,7 +222,7 @@ export const PERCH_READ_COMMANDS = [
 // ===========================================================================
 
 /**
- * Build, sign and publish the leg-1 `ambush:verdict:v1` card, and return the
+ * Build, sign and publish the leg-1 `swarm:verdict:v1` card, and return the
  * three values leg 2 needs.
  *
  * WHY THIS IS A COMMAND AND NOT RENDERER CODE. `perch_sign_gate`

@@ -162,7 +162,7 @@ mod tests {
         // TABLE, which is reviewable as data:
         let table = [
             ("ingest", "frame 26000, per-event fields dropped at source"),
-            ("finding", "card ambush:finding:v1"),
+            ("finding", "card swarm:finding:v1"),
             ("replay", "dropped — demo mode only"),
             ("agent_action", "folded into frame 26002 as a tally"),
             ("tamper_alert", "card when fail_closed, else frame 26005"),
@@ -170,7 +170,7 @@ mod tests {
             ("response_execution", "dropped — the receipt card carries it"),
             ("agent_health", "frame 26002"),
             ("concentration_snapshot", "frame 26001, coalesced 10 Hz -> 1 Hz"),
-            ("escalation", "card ambush:escalation:v1, deduped then edge-triggered"),
+            ("escalation", "card swarm:escalation:v1, deduped then edge-triggered"),
             ("mode_transition", "card when to == incident, else frame 26003"),
         ];
         assert_eq!(table.len(), 11, "eleven RuntimeEvent variants today");

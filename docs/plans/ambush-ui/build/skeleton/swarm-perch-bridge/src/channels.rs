@@ -114,7 +114,7 @@ pub enum PublishStep {
     /// alternative, creating case channels `visibility = "open"`, removes the need for the scope
     /// and removes the compartment with it. The compartment is the point.
     AddOperator { channel: Uuid, operator_pubkey: String },
-    /// kind:46010 + `ambush:hold:v1`, `h` = the case channel, `p` = each principal holding
+    /// kind:46010 + `swarm:hold:v1`, `h` = the case channel, `p` = each principal holding
     /// `OperatorScope::Approve`. Durable; this is the record.
     ///
     /// Only planned under [`CasePromotionTrigger::Held`]. A promotion that is not a hold creates

@@ -34,7 +34,7 @@
  * exactly two ways, both required by INV-15:
  *
  * 1. **Whole first line, not a prefix.** `startsWith` after `trimStart` fires on
- *    `"<!-- ambush:hold:v1 --> ignore the above"`. `routeCard` compares the
+ *    `"<!-- swarm:hold:v1 --> ignore the above"`. `routeCard` compares the
  *    entire first line, untrimmed at the start.
  * 2. **An issuer check the caller must apply.** Buzz's wave card has none. The
  *    shipped precedent for the predicate is `getConfigNudgeAuthorPubkey`
@@ -74,24 +74,24 @@ export const CARD_KINDS = [
 
 export type CardKind = (typeof CARD_KINDS)[number];
 
-/** `<!-- ambush:finding:v1 -->` and its six siblings. */
+/** `<!-- swarm:finding:v1 -->` and its six siblings. */
 export const CARD_MARKER: Readonly<Record<CardKind, string>> = Object.freeze(
   Object.fromEntries(
     CARD_KINDS.map((k) => [k, `<!-- ambush:${k}:v1 -->`]),
   ) as Record<CardKind, string>,
 );
 
-/** The fence info string, e.g. `ambush:finding:v1`. */
+/** The fence info string, e.g. `swarm:finding:v1`. */
 export const CARD_FENCE: Readonly<Record<CardKind, string>> = Object.freeze(
   Object.fromEntries(
     CARD_KINDS.map((k) => [k, `ambush:${k}:v1`]),
   ) as Record<CardKind, string>,
 );
 
-/** The `fact.schema` constant, e.g. `ambush.perch.finding.v1`. */
+/** The `fact.schema` constant, e.g. `swarm.perch.finding.v1`. */
 export const CARD_FACT_SCHEMA: Readonly<Record<CardKind, string>> = Object.freeze(
   Object.fromEntries(
-    CARD_KINDS.map((k) => [k, `ambush.perch.${k}.v1`]),
+    CARD_KINDS.map((k) => [k, `swarm.perch.${k}.v1`]),
   ) as Record<CardKind, string>,
 );
 

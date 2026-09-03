@@ -1013,10 +1013,10 @@ the new `perch_verdict.rs`.
 **Two closed sets, two files, no arithmetic — and that is the point.** `PERCH_WRITE_ROUTES` in
 `perch_writes.rs` is `[&str; 5]` and `tools/check-perch-write-allowlist.sh` reads exactly five
 daemon routes out of that file. `PERCH_RELAY_PUBLISHED_KINDS` / `PERCH_RELAY_PUBLISHED_MARKERS` in
-`perch_verdict.rs` are `[9]` and `["ambush:verdict:v1"]`, and INV-RF1's relay allowlist reads those.
+`perch_verdict.rs` are `[9]` and `["swarm:verdict:v1"]`, and INV-RF1's relay allowlist reads those.
 Merging them would make INV-01's "exactly five non-GET requests to an Ambush host" read six and be
 wrong; keeping them apart is also the file-level expression of the process boundary. `10-RELAY-FORK.md`
-INV-RF1 already says "the operator's own key publishes exactly one: `kind:9` / `ambush:verdict:v1`,
+INV-RF1 already says "the operator's own key publishes exactly one: `kind:9` / `swarm:verdict:v1`,
 only via `perch_record_verdict`" — this is the file that makes that sentence true.
 
 **DECIDED — no generic passthrough.** There is deliberately no
@@ -1032,7 +1032,7 @@ only via `perch_record_verdict`" — this is the file that makes that sentence t
 
 #### 7.3.1 `perch_record_verdict` — leg 1, and where the operator's key lives
 
-The command signs and publishes the `ambush:verdict:v1` card and returns exactly three values.
+The command signs and publishes the `swarm:verdict:v1` card and returns exactly three values.
 What the Rust side does, in order, in the Tauri process:
 
 1. Validate `hold_id` against the pinned `hold_<uuidv4>` form
@@ -1228,7 +1228,7 @@ publishes are pure TS.
 The commands above exist for exactly one reason: **leg 2 of the two-legged write must not be
 reachable from the renderer's network stack.** That is the process boundary the brief demands, and it
 is what turns "Perch never authorizes" from a convention into a property. A renderer that is fully
-compromised can *ask* for an `ambush:verdict:v1` card — and even then it supplies only the decision,
+compromised can *ask* for an `swarm:verdict:v1` card — and even then it supplies only the decision,
 the rationale and the arming timestamp, because `perch_record_verdict` builds the body from the
 daemon's own hold record (§7.3.1) — and it still cannot reach the daemon except through five named
 commands whose routes are compiled in.
@@ -1271,7 +1271,7 @@ in the case it exists for.
 **DECIDED — the losing console publishes the update card anyway, as an optimisation.** On a 409
 naming a different `nostr_intent_event_id`, `perch_decide_hold` returns
 `outcome: "superseded", superseded_by: <winner's id>` inside `Ok` (it is not an error; it is the
-system working), and the console publishes a second `ambush:verdict:v1` as a NIP-10 reply to its own
+system working), and the console publishes a second `swarm:verdict:v1` as a NIP-10 reply to its own
 leg-1 card with `leg2.state: "superseded"` and the winner's id. It does **not** retry, does **not**
 re-sign, and does **not** render its own row as recorded. The card makes the state legible to a
 reader who has only the relay — a Ledger export read months later, a case channel opened by someone
@@ -1281,7 +1281,7 @@ without daemon access — which is worth publishing but is never what the consol
 Both render as **unresolved**, each naming the other. Never pick one. That is the third state and it
 is the one a console with no daemon is actually in.
 
-**PROPOSED AMENDMENT to `13-WIRE-SCHEMAS.md`** — `card-ambush-verdict-v1.schema.json`'s `leg2.state`
+**PROPOSED AMENDMENT to `13-WIRE-SCHEMAS.md`** — `card-swarm-verdict-v1.schema.json`'s `leg2.state`
 enum is `sending | recorded | acknowledged | refused_late`; none of those means "another operator's
 decision was the one that executed". Add `superseded`, and a `superseded_by` field constrained to 64
 lowercase hex. `13` owns the schema; I do not edit it. **The render rule above holds whether or not
@@ -1826,7 +1826,7 @@ Three items moved from "could not verify" to measured, and one claim was retract
   `PerchSurfaceBoundary.tsx`, which now reads `--perch-*` classes exclusively (decision 29). A
   `bg-perch-card` with no token behind it renders transparent, which is a visible failure rather than
   a silent one — but it is still a sequencing constraint.
-- `13-WIRE-SCHEMAS.md` owns `card-ambush-verdict-v1.schema.json`'s `leg2.state` enum. §7.6 proposes
+- `13-WIRE-SCHEMAS.md` owns `card-swarm-verdict-v1.schema.json`'s `leg2.state` enum. §7.6 proposes
   `superseded` + `superseded_by`; the render rule holds without it.
 - `perchEphemeralStore`'s admitted-issuer set has no source until the bridge publishes one and someone
   decides the operator-id → Nostr-pubkey mapping. `OperatorPrincipalConfig` carries no pubkey field

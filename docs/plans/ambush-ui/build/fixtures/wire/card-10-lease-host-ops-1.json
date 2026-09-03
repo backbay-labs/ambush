@@ -2,11 +2,11 @@
   "schema": "swarm.spine.envelope.v1",
   "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
   "seq": 9,
-  "prev_envelope_hash": "0x7461b5e805d49e798064e27975abb1a701ee4f6aa98f99e9f171b769db77d92d",
+  "prev_envelope_hash": "0x9d0db3b5f33136aec9867e9f137b017ed004fcfebcb1895a1f89d0b1c104a26c",
   "issued_at": "2026-03-17T09:16:19Z",
   "capability_token": null,
   "fact": {
-    "schema": "ambush.perch.lease.v1",
+    "schema": "swarm.perch.lease.v1",
     "issuer": {
       "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
       "role": null,
@@ -53,5 +53,5 @@
       "expires_at_ms": 1773739879900
     }
   },
-  "envelope_hash": "0xd751d499e0dbdf4c072b8bca8cdb8e1e5bedb213cae295836382208f3b8c55c8"
+  "envelope_hash": "0x79f27cd1d3b2316fd7ce6cfcb5e1d4332bedb5d4ee1b0dea5729f9cfba054ceb"
 }

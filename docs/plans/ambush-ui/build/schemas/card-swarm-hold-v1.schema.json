@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ambush.invalid/perch/wire/v1/card-ambush-hold-v1.schema.json",
-  "title": "ambush:hold:v1",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-hold-v1.schema.json",
+  "title": "swarm:hold:v1",
   "description": "The rendered hold card, in the case channel. This is the row an operator reads; the needs-action QUEUE row is the separate kind:46010 notice (event-46010-hold-notice.schema.json), per 10-RELAY-FORK.md decision RF-D3.\n\nOne hold produces two or more cards: an OPEN card (state=created|notified|armed|deciding) and exactly one TERMINAL card (state=granted|refused|expired|executed|failed) published as a NIP-10 reply to the open card. The terminal card is the appendix's 'also the expiry record'. Both carry the full hold, because a card is immutable and the timeline must read top to bottom without a join.\n\nremaining_ms and expired are NOT on this card. They are clock-derived, the card is immutable, and INV-06 requires the two to be two separate rendered facts. The console computes both from expires_at_ms.\n\nTier 0. The HeldActionStore record carries no signature; the ActionRequest inside it may carry a governance_receipt in `evidence`, which is a separate, separately-badged object.",
   "allOf": [
     {
@@ -21,7 +21,7 @@
       "additionalProperties": false,
       "properties": {
         "schema": {
-          "const": "ambush.perch.hold.v1"
+          "const": "swarm.perch.hold.v1"
         },
         "issuer": {
           "$ref": "common.schema.json#/$defs/FactIssuer",
@@ -58,7 +58,7 @@
                   "type": "null"
                 }
               ],
-              "description": "The Nostr event id of the ambush:finding:v1 card this hold answers, when one exists."
+              "description": "The Nostr event id of the swarm:finding:v1 card this hold answers, when one exists."
             }
           }
         },
@@ -247,7 +247,7 @@
       "issued_at": "2026-03-17T09:14:42Z",
       "capability_token": null,
       "fact": {
-        "schema": "ambush.perch.hold.v1",
+        "schema": "swarm.perch.hold.v1",
         "issuer": {
           "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
           "role": null,

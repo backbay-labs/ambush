@@ -17,6 +17,7 @@ violations.copy.ts	deny-label
 violations.copy.ts	exclamation
 violations.copy.ts	hunt-noun
 violations.copy.ts	legacy-codename
+violations.copy.ts	product-codename
 violations.copy.ts	quorum-fraction
 violations.copy.ts	reassurance
 violations.copy.ts	shield-glyph

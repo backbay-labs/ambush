@@ -18,7 +18,7 @@
   "additionalProperties": false,
   "properties": {
     "schema": {
-      "const": "ambush.perch.frame.ingest_rate.v1"
+      "const": "swarm.perch.frame.ingest_rate.v1"
     },
     "kind": {
       "const": 26000
@@ -58,7 +58,7 @@
   },
   "examples": [
     {
-      "schema": "ambush.perch.frame.ingest_rate.v1",
+      "schema": "swarm.perch.frame.ingest_rate.v1",
       "kind": 26000,
       "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
       "emitted_at_ms": 1787754972000,

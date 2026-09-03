@@ -79,6 +79,6 @@
   "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
   "kind": 26001,
   "observed_at_seconds": 1787754973,
-  "schema": "ambush.perch.frame.concentration.v1",
+  "schema": "swarm.perch.frame.concentration.v1",
   "seq": 4412
 }

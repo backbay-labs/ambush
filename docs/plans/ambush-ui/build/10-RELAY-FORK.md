@@ -83,7 +83,7 @@ points".*
 | 6 | The fork is **two match arms** | **incomplete — it is three hunks in one file, and a second patch in another** | the symbol is not imported: `grep -n KIND_WORKFLOW_APPROVAL crates/buzz-relay/src/handlers/ingest.rs` returns nothing at this SHA. Adding it to the `use buzz_core::kind::{…}` block at `:13-37` makes rustfmt reflow **three** lines, because `:35` is already 98 of 100 columns. §3.3. Separately, §11 adds four hunks in `buzz-core/src/kind.rs` for `26006`. |
 | 7 | `required_scope_for_kind` before `:545` | **exact** | insertion point confirmed at the line |
 | 8 | `requires_h_channel_scope` at `:703-732` | **off by one at both ends** | the `fn` is at `:704`, `:703` is its doc comment, `:733` is the closing brace, the `matches!` body is `:705-732`, and the append point is after `:731` (`KIND_HUDDLE_GUIDELINES`). Confirms the ground note. |
-| 9 | **four client registration points** | **false as costed — the real cost is zero** | §5. `46010` never needs to render as a timeline row, because `ambush:hold:v1` on `kind:9` is what renders (`APPENDIX-NORMATIVE.md` §3), and the needs-action feed is Rust plus one `switch` arm that already exists. |
+| 9 | **four client registration points** | **false as costed — the real cost is zero** | §5. `46010` never needs to render as a timeline row, because `swarm:hold:v1` on `kind:9` is what renders (`APPENDIX-NORMATIVE.md` §3), and the needs-action feed is Rust plus one `switch` arm that already exists. |
 | 10 | "two relay arms, six registration points" | **should become "three hunks in `ingest.rs` and a second patch of four hunks in `buzz-core/src/kind.rs`; zero client registration points"** | amendment **RF-A1**, §10; supersedes the "one line in `kind.rs`" arithmetic in `21-ADRS.md`'s AD-A7 — §11.8 |
 | 11 | No `search_tsv` change | **true, for both kinds** | `schema/schema.sql:223-227`'s `CASE WHEN kind IN (1059, 30179, 30300, 30350, 30622, 44100, 44101, 44200)` excludes 46010; and `26006` is ephemeral, so the storage half of the `P_GATED` contract does not apply to it either (`crates/buzz-core/src/kind.rs:156-158`, and the tripwire's own skip rule at `crates/buzz-search/tests/fts_integration.rs:1421-1422`) |
 | 12 | No p-gate change | **true of `46010`; false of the fork as a whole** | `P_GATED_KINDS` (`crates/buzz-core/src/kind.rs:159-169`) does not gain 46010 — an explicit-kinds REQ naming it clears `p_gated_filters_authorized` (`crates/buzz-relay/src/handlers/req.rs:1182-1216`, applied at `:219-242` **only when `channel_id.is_none()`**). It **does** gain `26006`: patch 2, argued in §11. |
@@ -336,7 +336,7 @@ card's reply badge every time a hold is published is a visible, wrong side effec
 
 > **DECISION RF-D1 (binding).** A `kind:46010` published by Perch's bridge **carries no `e` tag,
 > ever.** Its only single-letter tags are `h` (the case channel, mandatory) and `p` (one per
-> principal). Threading a hold to its finding is done by the `ambush:hold:v1` `kind:9` marker
+> principal). Threading a hold to its finding is done by the `swarm:hold:v1` `kind:9` marker
 > card, which is a chat message and is *supposed* to count as a reply.
 > Owner: `11-BRIDGE-CRATE.md` enforces it at the publish seam; `16-INVARIANT-TESTS.md` asserts it.
 > This narrows `APPENDIX-NORMATIVE.md` §3's tag budget for one kind; it does not contradict it.
@@ -400,7 +400,7 @@ happens when two of them decide it, and three relay facts settle where the answe
    by event id only — `ON CONFLICT DO NOTHING` (`crates/buzz-db/src/store/event.rs:5` and
    `:327`). `kind:9` is neither replaceable (`is_replaceable` is `{0, 3, 41, 10000..=19999}`,
    `crates/buzz-core/src/kind.rs:776-778`) nor parameterized-replaceable (30000–39999,
-   `:783-785`), so a second `ambush:verdict:v1` card **never supersedes the first**. Two signed
+   `:783-785`), so a second `swarm:verdict:v1` card **never supersedes the first**. Two signed
    human-decision records land in the case channel and both persist.
 3. **Deletion is not the remedy.** `KIND_NIP29_DELETE_EVENT` (9005) exists
    (`crates/buzz-core/src/kind.rs:341`), so the losing console *could* try to erase its card.
@@ -413,7 +413,7 @@ happens when two of them decide it, and three relay facts settle where the answe
 >
 > - `12-BACKEND-BILL-API.md` §4.4 already resolves the daemon side (`409 hold_already_deciding`)
 >   — it is the only compare-and-set in the system.
-> - `13-WIRE-SCHEMAS.md` owns `card-ambush-verdict-v1.schema.json`, whose `leg2.state` enum is
+> - `13-WIRE-SCHEMAS.md` owns `card-swarm-verdict-v1.schema.json`, whose `leg2.state` enum is
 >   `sending | recorded | acknowledged | refused_late` and has no value meaning "another
 >   operator's decision was the one that executed". **A value is needed** (`superseded` is the
 >   obvious name), carrying the winner's `nostr_intent_event_id`, published by whichever console
@@ -449,7 +449,7 @@ paid together.
 
 **But Perch does not need any of them**, and the reason is structural rather than a shortcut:
 
-1. **The hold's *rendered* card is `ambush:hold:v1` on `kind:9`** — `APPENDIX-NORMATIVE.md` §3's
+1. **The hold's *rendered* card is `swarm:hold:v1` on `kind:9`** — `APPENDIX-NORMATIVE.md` §3's
    marker registry. `kind:9` is already in points 1, 2 and 3, and `MessageRow`'s `default:` arm at
    `:414-426` already content-sniffs (`parseWaveMessageContent`, `:415`). Marker cards cost zero
    registration points; that is the shipped precedent.
@@ -889,7 +889,7 @@ reconstruct without it after the ephemeral has decayed*) in reverse: the marker 
 **queue** job, not an evidence job.
 
 **If Option C is ever forced** (upstream declines *and* patch-carrying is ruled out), the correct
-shape is `ambush:hold:v1` as the sole carrier plus a client-side needs-action projection built
+shape is `swarm:hold:v1` as the sole carrier plus a client-side needs-action projection built
 from the case-channel history REQ — and `04`/`07` must be told the queue is now a client
 derivation with no server-side authority, which changes `APPENDIX-NORMATIVE.md` §4 layer 3
 materially. Record it as a kill-criterion consequence, not a fallback. Note that Option C does
@@ -913,7 +913,7 @@ The mitigation is not a rule about how cards are rendered. It is a rule about wh
 > The `swarm-perch-bridge` process publishes exactly **nine kinds** to the relay and no others:
 > `46010`, `kind:9` (carrying exactly the seven `ambush:*:v1` markers of
 > `APPENDIX-NORMATIVE.md` §3), and the ephemeral block `26000`–`26006`. The operator's own key
-> publishes exactly one: `kind:9` carrying `ambush:verdict:v1`, and only through
+> publishes exactly one: `kind:9` carrying `swarm:verdict:v1`, and only through
 > `perch_record_verdict` (`08` INV-29).
 >
 > ### INV-RF2 (PROPOSED, binding on Perch) — every allowlisted kind names its authority
@@ -932,13 +932,13 @@ route column was checked against `AMBUSH` this session.
 | Kind | Marker | Daemon authority for re-verification | Status of that route |
 |---|---|---|---|
 | `46010` | — | `GET /v1/response/holds/{hold_id}` | **bill B2r** — does not exist today |
-| `9` | `ambush:hold:v1` | `GET /v1/response/holds/{hold_id}` | **bill B2r** |
-| `9` | `ambush:verdict:v1` | the same hold's `decision` field, via B2r | **bill B2r** (+ **B2o** for `approved_by`). See §4.5: this is also the read that decides whether a verdict card is *the* decision or a superseded one. |
-| `9` | `ambush:lease:v1` | `GET /v1/operator/containment/leases` | **exists** — `AMB crates/swarm-runtime-http/src/http/containment.rs:262-270`, merged into the daemon's listener at `bin/swarm_detect.rs:1116-1125` |
-| `9` | `ambush:rollback:v1` | the `POST …/leases/{id}/release` response body | **exists** — `containment.rs:191-247`; read `lease_closed` / `fully_reversed`, never the HTTP status |
-| `9` | `ambush:finding:v1` | **none by id.** B3r is `GET /v1/operator/findings/reviewed?since_ms=` — a review-state list, not a by-id read | **bill B3r, and it does not answer "re-fetch this finding"** |
-| `9` | `ambush:receipt:v1` | **none.** No receipt-by-id route exists in either the 49-route operator surface (`AMB http/state.rs:292-488`) or the daemon's 16 (`AMB crates/swarm-ingest-runtime/src/ingest/mod.rs:2540-2576`) | **none, and none is on the bill** |
-| `9` | `ambush:escalation:v1` | **none.** `RuntimeEvent::Escalation` exists only on the broadcast channel (`AMB crates/swarm-runtime/src/runtime_events.rs:214-305`); no route serves it | **none, by design** |
+| `9` | `swarm:hold:v1` | `GET /v1/response/holds/{hold_id}` | **bill B2r** |
+| `9` | `swarm:verdict:v1` | the same hold's `decision` field, via B2r | **bill B2r** (+ **B2o** for `approved_by`). See §4.5: this is also the read that decides whether a verdict card is *the* decision or a superseded one. |
+| `9` | `swarm:lease:v1` | `GET /v1/operator/containment/leases` | **exists** — `AMB crates/swarm-runtime-http/src/http/containment.rs:262-270`, merged into the daemon's listener at `bin/swarm_detect.rs:1116-1125` |
+| `9` | `swarm:rollback:v1` | the `POST …/leases/{id}/release` response body | **exists** — `containment.rs:191-247`; read `lease_closed` / `fully_reversed`, never the HTTP status |
+| `9` | `swarm:finding:v1` | **none by id.** B3r is `GET /v1/operator/findings/reviewed?since_ms=` — a review-state list, not a by-id read | **bill B3r, and it does not answer "re-fetch this finding"** |
+| `9` | `swarm:receipt:v1` | **none.** No receipt-by-id route exists in either the 49-route operator surface (`AMB http/state.rs:292-488`) or the daemon's 16 (`AMB crates/swarm-ingest-runtime/src/ingest/mod.rs:2540-2576`) | **none, and none is on the bill** |
+| `9` | `swarm:escalation:v1` | **none.** `RuntimeEvent::Escalation` exists only on the broadcast channel (`AMB crates/swarm-runtime/src/runtime_events.rs:214-305`); no route serves it | **none, by design** |
 | `26000`–`26006` | — | n/a — ephemeral, aggregates only, never a record | n/a |
 
 **Three of the seven markers have no daemon re-read at all.** That is a finding, not a gap in this
@@ -971,13 +971,13 @@ entry point, taking a closed enum:
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PerchWireKind {
     HoldRecord,            // 46010
-    FindingCard,           // 9 + ambush:finding:v1
-    EscalationCard,        // 9 + ambush:escalation:v1
-    HoldCard,              // 9 + ambush:hold:v1
-    VerdictCard,           // 9 + ambush:verdict:v1
-    ReceiptCard,           // 9 + ambush:receipt:v1
-    LeaseCard,             // 9 + ambush:lease:v1
-    RollbackCard,          // 9 + ambush:rollback:v1
+    FindingCard,           // 9 + swarm:finding:v1
+    EscalationCard,        // 9 + swarm:escalation:v1
+    HoldCard,              // 9 + swarm:hold:v1
+    VerdictCard,           // 9 + swarm:verdict:v1
+    ReceiptCard,           // 9 + swarm:receipt:v1
+    LeaseCard,             // 9 + swarm:lease:v1
+    RollbackCard,          // 9 + swarm:rollback:v1
     Telemetry(EphemeralKind), // 26000..=26006
 }
 
@@ -1049,7 +1049,7 @@ sentence; file one row, using the RF-A1 text below, which corrects AD-A7's arith
 
 | # | Target | Was | Proposed | Forced by |
 |---|---|---|---|---|
-| **RF-A1** | `APPENDIX-NORMATIVE.md` §3, *"Two relay match arms … plus four client registration points … Say 'two relay arms, six registration points'."* | 2 + 4 | **"three hunks in `buzz-relay/src/handlers/ingest.rs`, plus a second patch of four hunks in `buzz-core/src/kind.rs`; zero client registration points."** The third `ingest.rs` hunk is the `KIND_WORKFLOW_APPROVAL_REQUESTED` import (absent at `eed74bde2`, reflowing three lines of a rustfmt-packed `use` block); the `kind.rs` patch is the `26006` read rule (§11) and is four hunks, not one line, because Buzz declares every kind it reserves and the entry needs its own tests; the four client points are unnecessary because 46010 is a queue record and `ambush:hold:v1` on `kind:9` is the rendered row. Keep the four-point cost documented as the price of a future decision to render raw 46010 rows. | §1 rows 6 and 10, §3.3, §3.5, §5, §11.8 |
+| **RF-A1** | `APPENDIX-NORMATIVE.md` §3, *"Two relay match arms … plus four client registration points … Say 'two relay arms, six registration points'."* | 2 + 4 | **"three hunks in `buzz-relay/src/handlers/ingest.rs`, plus a second patch of four hunks in `buzz-core/src/kind.rs`; zero client registration points."** The third `ingest.rs` hunk is the `KIND_WORKFLOW_APPROVAL_REQUESTED` import (absent at `eed74bde2`, reflowing three lines of a rustfmt-packed `use` block); the `kind.rs` patch is the `26006` read rule (§11) and is four hunks, not one line, because Buzz declares every kind it reserves and the entry needs its own tests; the four client points are unnecessary because 46010 is a queue record and `swarm:hold:v1` on `kind:9` is the rendered row. Keep the four-point cost documented as the price of a future decision to render raw 46010 rows. | §1 rows 6 and 10, §3.3, §3.5, §5, §11.8 |
 | **RF-A2** | `APPENDIX-NORMATIVE.md` §3, *`requires_h_channel_scope` at `:703-732`* | `:703-732` | **`:704-733`** (`matches!` body `:705-732`, append after `:731`). Same drift in `03` §5.1 and `00-BRIEF.md` §4.4/§11.3. | read at the line |
 | **RF-A3** | `APPENDIX-NORMATIVE.md` §4 item 2, *`subscription.rs:486-491`* | `:486-491` | **`:487-492`**, inside `fan_out_scoped` (`:379-495`). The claim itself is correct and now has an executable test (§6.3). | read at the line |
 | **RF-A4** | `APPENDIX-NORMATIVE.md` §3's tag budget, as applied to 46010 | `h`, `e`/`p`, `t`, `l`, `k`, `d` | **`46010` carries `h` and `p` only — never `e`** (RF-D1). `requires_h_channel_scope` double-duties as the NIP-10 thread-metadata gate at `ingest.rs:2987-2997`, so an `e`-tagged hold mutates `reply_count`/`descendant_count` on its root and emits a relay-signed `kind:39005`. This narrows the budget for one kind; it does not change it. | §4.2 |

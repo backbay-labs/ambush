@@ -16,7 +16,7 @@ P0-15	Land the Perch token layer and the six security ramps	FE-A+DS	2.0	YES	P0-0
 P0-16	Apply the relay fork and wire it into CI	RS-1	0.5	no	-	-	phase-0,relay,rust,upstream
 P0-17	Scaffold swarm-perch-bridge and clear the supply-chain gate	RS-1	1.0	YES	-	-	phase-0,bridge,rust,critical-path
 P0-18	Bridge: the receive loop, the disk spool, and the per-issuer sequence	RS-1	1.0	YES	P0-17	-	phase-0,bridge,rust,critical-path
-P0-19	Bridge: identity, NIP-42, and one published ambush:finding:v1	RS-1	1.0	YES	P0-18,P0-21,P0-26	-	phase-0,bridge,rust,critical-path
+P0-19	Bridge: identity, NIP-42, and one published swarm:finding:v1	RS-1	1.0	YES	P0-18,P0-21,P0-26	-	phase-0,bridge,rust,critical-path
 P0-20	Add Ambush fixtures to the E2E bridge as a delegated module	FE-B	2.0	YES	P0-12	-	phase-0,testing,critical-path
 P0-21	Dev deployment: relay, Postgres and Redis in compose	RS-1	0.5	YES	-	-	phase-0,infra,critical-path
 P0-22	Author rulesets/perch-dev.yaml and its debug signature	RS-1	0.5	YES	P0-26	-	phase-0,config,rust,critical-path,new-work

@@ -8,6 +8,7 @@ export const CORPUS_VIOLATIONS = {
   navHunt: "Open the hunt",
   colonyWord: "the clowder is healthy",
   codename: "Swarm Team Six console",
+  productCodename: "Open the Perch console",
   bareLease: "the lease expires in 12 minutes",
   bareLane: "open the async lane",
   shouty: "Recorded!",

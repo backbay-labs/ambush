@@ -47,7 +47,7 @@
       "origin_receipt_id": "resp-contain:tel-8831:lease:web-04",
       "receipt_card_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     },
-    "schema": "ambush.perch.lease.v1",
+    "schema": "swarm.perch.lease.v1",
     "ttl_source": "runtime.containment.lease_ttl_ms"
   },
   "issued_at": "2026-08-30T02:41:07Z",

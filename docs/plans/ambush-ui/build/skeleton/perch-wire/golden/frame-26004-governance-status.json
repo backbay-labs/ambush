@@ -9,7 +9,7 @@
   "last_transition_at_ms": null,
   "partition_state": "healthy",
   "quorum_threshold": 1,
-  "schema": "ambush.perch.frame.governance_status.v1",
+  "schema": "swarm.perch.frame.governance_status.v1",
   "seq": 4413,
   "total_governors": 1,
   "unauthorized_partition_actions": 0

@@ -28,7 +28,7 @@
       "lane_channel": "3f1e77c2-0b41-4c6a-9d55-8ac1e2f40911",
       "strategy_id": "dns_exfil_beaconing"
     },
-    "schema": "ambush.perch.finding.v1"
+    "schema": "swarm.perch.finding.v1"
   },
   "issued_at": "2026-08-30T02:41:07Z",
   "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",

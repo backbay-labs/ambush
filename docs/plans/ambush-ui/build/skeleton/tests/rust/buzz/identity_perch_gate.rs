@@ -20,7 +20,7 @@
 //   `submit_event_at_created_at` at :527 and POSTs the event to the relay's
 //   `/events`. Nothing in that path consulted the first draft's gate. So a
 //   renderer bug -- or a compromised renderer -- publishes a
-//   `<!-- ambush:verdict:v1 -->` kind:9 card into a case channel signed by the
+//   `<!-- swarm:verdict:v1 -->` kind:9 card into a case channel signed by the
 //   operator's own key: the exact identity the admission rule (INV-15) treats as
 //   authoritative for verdict cards, fabricating the one artifact the product
 //   exists to produce.
@@ -28,8 +28,8 @@
 //   Worse in detail: `build_message` is handed `content.trim()`
 //   (messages.rs:505), which strips the leading whitespace the first draft's
 //   own test relied on to make a marker un-sniffable. A gate placed BEFORE that
-//   trim would sign `" <!-- ambush:verdict:v1 -->"` as harmless and the relay
-//   would carry `"<!-- ambush:verdict:v1 -->"`, which the renderer parses as a
+//   trim would sign `" <!-- swarm:verdict:v1 -->"` as harmless and the relay
+//   would carry `"<!-- swarm:verdict:v1 -->"`, which the renderer parses as a
 //   card. Placement therefore has to be after every transform the content
 //   undergoes, not before.
 //

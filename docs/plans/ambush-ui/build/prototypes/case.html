@@ -1071,7 +1071,7 @@ is being applied identically.</p>
 <thead><tr><th>Label</th><th>Derived value</th><th>Why the case screen needs it</th></tr></thead>
 <tbody>
 <tr><td class="mono">rollback/host-ops-1</td><td class="mono">rb_81c4a588</td><td>The rollback card is one of the seven markers and must render on this timeline.</td></tr>
-<tr><td class="mono">audit-trail/hunt-evt-1</td><td class="mono">trail-3f541a</td><td><code>ambush:receipt:v1</code> carries an <code>AuditTrail</code>; the card renders its id.</td></tr>
+<tr><td class="mono">audit-trail/hunt-evt-1</td><td class="mono">trail-3f541a</td><td><code>swarm:receipt:v1</code> carries an <code>AuditTrail</code>; the card renders its id.</td></tr>
 <tr><td class="mono">replay-bundle/hunt-evt-1</td><td class="mono">bundle-4a9234bc</td><td>The receipt card links a replay bundle, and the terminal panel replays it.</td></tr>
 <tr><td class="mono">governance-receipt/hunt-evt-1</td><td class="mono">gov-1cb75a76</td><td>Names the object whose absence the tier-0 provenance state is <em>about</em>.</td></tr>
 <tr><td class="mono">containment-lease/host-ops-1/stale-quarantine</td><td class="mono">cl_5e7a2190</td><td>The <b>expired-and-still-listed</b> state needs a second containment lease; the scenario's only one is healthy.</td></tr>
@@ -1116,11 +1116,11 @@ route table (appendix §1); neither can be reworded, and both are rendered on th
 <li><b>C-A6 — NEW, filed here, and the sharpest of the six.</b> The <code>exclamation</code> row needs
 <code>&lt;!--</code> in its exempt column. <b>Every marker card in the product renders a string containing an
 exclamation mark</b>, because the marker <em>is</em> an HTML comment:
-<code>&lt;!-- ambush:finding:v1 --&gt;</code> and its six siblings. The ban as written fails all seven card types on
+<code>&lt;!-- swarm:finding:v1 --&gt;</code> and its six siblings. The ban as written fails all seven card types on
 the wire format the appendix itself mandates. Seven strings on this screen; the same seven on every Perch surface
 that renders a card.</li>
 <li><b>The <code>superseded</code> verdict state has no wire value.</b>
-<code>schemas/card-ambush-verdict-v1.schema.json</code>'s <code>leg2.state</code> enum is
+<code>schemas/card-swarm-verdict-v1.schema.json</code>'s <code>leg2.state</code> enum is
 <code>sending | recorded | acknowledged | refused_late</code>. None of them means &ldquo;another operator's
 decision was the one that executed&rdquo;. <b>PROPOSED to 13-WIRE-SCHEMAS:</b> add
 <code>superseded</code>, carrying the winning <code>nostr_intent_event_id</code>; publish it from whichever console
@@ -1230,7 +1230,7 @@ crossing reads <code>2 sources / 1 agent</code>. <code>17-COMPONENT-SPECS</code>
 <code>13-WIRE-SCHEMAS</code> read <code>whisker_agent.rs:148-149</code>, stopped there, and concluded the
 opposite; because they own the schema, that reading is compiled into a <code>const</code>, a <code>z.literal</code>
 and a golden vector. <b>Those three artifacts are the fix site</b>, not the prose: the appendix's law needs no
-rewrite, but <code>card-ambush-escalation-v1.schema.json</code>'s <code>distinct_sources_counts</code> const must
+rewrite, but <code>card-swarm-escalation-v1.schema.json</code>'s <code>distinct_sources_counts</code> const must
 read <code>strategy_scoped_agent_id</code>. Six producers now hold this reading; two hold the other.</p>
 
 <h3>Departures from a plan document, each with its reason</h3>
@@ -1756,7 +1756,7 @@ function issuerLine(o){
     <span class="role absent" title="fact.issuer.role is null on every card the shipped daemon path produces. infer_agent_role (AMB crates/swarm-runtime/src/detection/pipeline.rs:583-604) matches on starts_with(&quot;whisker-&quot;) and seven siblings; the id it receives starts swarm:ed25519:, so it returns None.">role unresolved &middot; <code>infer_agent_role</code> returned <code>None</code></span></div>`;
 }
 
-/* 1 — ambush:finding:v1 ---------------------------------------------------- */
+/* 1 — swarm:finding:v1 ---------------------------------------------------- */
 function cardFinding(S, f){
   const uncorrelated = S.caseState==='fresh';
   const dis = uncorrelated || S.data==='error' || S.caseState==='archived';
@@ -1772,7 +1772,7 @@ function cardFinding(S, f){
       <span class="strat">${esc(f.strategy)}</span>
       ${sevChip(f.severity)} ${confMeter(f.confidence)}
       ${done?'<span class="chip flat">dismissed 09:18:44</span>':''}
-      <span class="spacer"></span>${markerTag('ambush:finding:v1')}
+      <span class="spacer"></span>${markerTag('swarm:finding:v1')}
     </div>
     <div class="line">${adv(f.child)} started under ${adv(f.parent)} on ${adv(FX.host)}, as ${adv(f.user)}.</div>
     <div class="line sub">${esc(f.technique)} ${esc(f.technique_name)}
@@ -1795,7 +1795,7 @@ function cardFinding(S, f){
   </article>`;
 }
 
-/* 2 — ambush:escalation:v1 -------------------------------------------------- */
+/* 2 — swarm:escalation:v1 -------------------------------------------------- */
 function cardEscalation(S){
   const p = FX.policy;
   const crossSec = Math.floor(T.cross/1000);
@@ -1812,7 +1812,7 @@ function cardEscalation(S){
       <span class="card-kind">Escalation</span>
       <span class="strat">${esc(FX.case.threat_class)}</span>
       <span class="chip flat mode">crossed alert_threshold</span>
-      <span class="spacer"></span>${markerTag('ambush:escalation:v1')}
+      <span class="spacer"></span>${markerTag('swarm:escalation:v1')}
     </div>
     <dl class="kv">
       <dt>total_strength</dt>
@@ -1900,7 +1900,7 @@ function concentrationChart(S){
   </div>`;
 }
 
-/* 3 — ambush:hold:v1 ------------------------------------------------------- */
+/* 3 — swarm:hold:v1 ------------------------------------------------------- */
 function cardHold(S, which){
   const h = FX.holds[which];
   const leased = h.leases_a_containment;
@@ -1929,7 +1929,7 @@ function cardHold(S, which){
       <span class="chip flat">destructive 12</span>
       ${leased?'<span class="chip flat">containment 4</span><span class="chip flat">reversible 3</span>'
               :'<span class="chip flat" style="color:hsl(var(--perch-sev-medium))">not a containment action</span>'}
-      <span class="spacer"></span>${markerTag('ambush:hold:v1')}
+      <span class="spacer"></span>${markerTag('swarm:hold:v1')}
     </div>
     <dl class="kv">
       <dt class="solid">Action</dt>
@@ -1947,7 +1947,7 @@ function cardHold(S, which){
     ${advLegend()}
     ${prov({state:'none', cardKind:'the hold record', npub:FX.bridge.nostr_pubkey})}
     ${expired
-      ? `<div class="loud"><b>Expired with no decision at ${hhmmss(h.expires_at_ms)}.</b> Nothing dispatched and no containment opened. The expiry is its own <code>ambush:hold:v1</code> card, so the record does not depend on anyone having been watching.</div>`
+      ? `<div class="loud"><b>Expired with no decision at ${hhmmss(h.expires_at_ms)}.</b> Nothing dispatched and no containment opened. The expiry is its own <code>swarm:hold:v1</code> card, so the record does not depend on anyone having been watching.</div>`
       : open
         ? `<div class="controls"><button class="open-hold" data-act="open-hold">
              <span>Open the held action &#8250;</span>
@@ -1957,7 +1957,7 @@ function cardHold(S, which){
   </article>`;
 }
 
-/* 4 — ambush:verdict:v1 — leg 1 of the two-legged write --------------------
+/* 4 — swarm:verdict:v1 — leg 1 of the two-legged write --------------------
    Three leg-2 states are drawn. `superseded` is the one the review found
    nothing in the set handled: two consoles may legitimately hold one open hold
    (appendix §4 layer 1 p-tags every OperatorScope::Approve principal, and brief
@@ -1986,7 +1986,7 @@ function cardVerdict(S){
       <span class="card-kind">Verdict</span>
       <span class="strat">grant &middot; isolate_host &middot; host-ops-1</span>
       ${mode==='superseded'?'<span class="chip flat" style="color:hsl(var(--perch-sev-high))">superseded</span>':''}
-      <span class="spacer"></span>${markerTag('ambush:verdict:v1')}
+      <span class="spacer"></span>${markerTag('swarm:verdict:v1')}
     </div>
     <div class="line">Recorded by <b>${esc(v.operator_id)}</b> in Perch at ${hhmmss(v.decided_at_ms)}.</div>
     <div class="line sub">Rationale, as written: &ldquo;${esc(v.rationale)}&rdquo;</div>
@@ -2008,7 +2008,7 @@ function cardVerdict(S){
   </article>`;
 }
 
-/* 5 — ambush:receipt:v1 ----------------------------------------------------- */
+/* 5 — swarm:receipt:v1 ----------------------------------------------------- */
 function cardReceipt(S){
   const r = FX.receipt, tier0 = S.caseState==='tier0';
   return `<article class="card p-evidence">
@@ -2017,7 +2017,7 @@ function cardReceipt(S){
       <span class="strat">${esc(r.action)}</span>
       <span class="chip flat">${esc(r.mode)}</span>
       <span class="chip flat good">${esc(r.status)}</span>
-      <span class="spacer"></span>${markerTag('ambush:receipt:v1')}
+      <span class="spacer"></span>${markerTag('swarm:receipt:v1')}
     </div>
     <dl class="kv">
       <dt>receipt_id</dt>
@@ -2048,7 +2048,7 @@ function cardReceipt(S){
   </article>`;
 }
 
-/* 6 — ambush:lease:v1 (containment lease, on open) -------------------------- */
+/* 6 — swarm:lease:v1 (containment lease, on open) -------------------------- */
 function cardLease(S, stale){
   const c = stale ? FX.containment_stale : FX.containment;
   const now = STATE.clock;
@@ -2061,7 +2061,7 @@ function cardLease(S, stale){
     <div class="card-head">
       <span class="card-kind">Containment lease</span>
       <span class="strat">${esc(c.action)}</span>
-      <span class="spacer"></span>${markerTag('ambush:lease:v1')}
+      <span class="spacer"></span>${markerTag('swarm:lease:v1')}
     </div>
     <dl class="kv">
       <dt>lease_id</dt><dd><span class="mono">${esc(c.lease_id)}</span></dd>
@@ -2099,19 +2099,19 @@ function cardLease(S, stale){
   </article>`;
 }
 
-/* 7 — ambush:rollback:v1, as a NIP-10 reply to its containment-lease card ---- */
+/* 7 — swarm:rollback:v1, as a NIP-10 reply to its containment-lease card ---- */
 function cardRollback(S){
   const rb = FX.rollback, tier0 = S.caseState==='tier0';
   const reversed = rb.steps.filter(s=>s.status==='Reversed').length;
   const full = rb.steps.length>0 && reversed===rb.steps.length;
   return `<div class="reply">
-    <div class="reply-tag">NIP-10 reply to <span class="mono">ambush:lease:v1</span> &middot; <code>e</code> <span class="mono">${esc(FX.containment.ev.slice(0,24))}&hellip;</span></div>
+    <div class="reply-tag">NIP-10 reply to <span class="mono">swarm:lease:v1</span> &middot; <code>e</code> <span class="mono">${esc(FX.containment.ev.slice(0,24))}&hellip;</span></div>
     <article class="card p-evidence">
       <div class="card-head">
         <span class="card-kind">Rollback</span>
         <span class="strat">${esc(rb.trigger)}</span>
         <span class="chip flat">${esc(rb.mode)}</span>
-        <span class="spacer"></span>${markerTag('ambush:rollback:v1')}
+        <span class="spacer"></span>${markerTag('swarm:rollback:v1')}
       </div>
       <dl class="kv">
         <dt>rollback_id</dt><dd><span class="mono">${esc(rb.rollback_id)}</span></dd>
@@ -2500,13 +2500,13 @@ DERIVED.json       every value Perch computed rather than received</pre>
     <div class="cap"><b>One thing this bundle cannot yet express.</b> If two consoles decided one hold, <code>holds/</code> would contain two signed human intent records for it, and only the daemon's decision record says which one executed. The <code>superseded</code> qualification this screen draws is what keeps that readable; it needs a wire value that does not exist.</div>
     <div class="tablewrap"><table class="data" style="margin-top:1rem">
       <thead><tr><th>artifact</th><th>tier</th><th>what can actually be checked</th></tr></thead><tbody>
-      <tr><td class="mono">ambush:finding:v1</td><td>0</td><td>nothing offline; re-read it from the daemon and compare bytes</td></tr>
-      <tr><td class="mono">ambush:escalation:v1</td><td>0</td><td>nothing offline; re-read it from the daemon and compare bytes</td></tr>
-      <tr><td class="mono">ambush:hold:v1</td><td>0</td><td>nothing offline; re-read it from the daemon and compare bytes</td></tr>
-      <tr><td class="mono">ambush:lease:v1</td><td>0</td><td>nothing offline; re-read it from the daemon and compare bytes</td></tr>
-      <tr><td class="mono">ambush:verdict:v1</td><td>1</td><td>the relay envelope: this operator's key published these bytes</td></tr>
-      <tr><td class="mono">ambush:receipt:v1</td><td>${tier0?0:1}</td><td>${tier0?'no embedded governance attestation is present':'the embedded governance receipt, when one is present'}</td></tr>
-      <tr><td class="mono">ambush:rollback:v1</td><td>${tier0?0:2}</td><td>${tier0?'no governance attestation is present':'the attestation re-canonicalizes and its signature holds against the key inside it'}</td></tr>
+      <tr><td class="mono">swarm:finding:v1</td><td>0</td><td>nothing offline; re-read it from the daemon and compare bytes</td></tr>
+      <tr><td class="mono">swarm:escalation:v1</td><td>0</td><td>nothing offline; re-read it from the daemon and compare bytes</td></tr>
+      <tr><td class="mono">swarm:hold:v1</td><td>0</td><td>nothing offline; re-read it from the daemon and compare bytes</td></tr>
+      <tr><td class="mono">swarm:lease:v1</td><td>0</td><td>nothing offline; re-read it from the daemon and compare bytes</td></tr>
+      <tr><td class="mono">swarm:verdict:v1</td><td>1</td><td>the relay envelope: this operator's key published these bytes</td></tr>
+      <tr><td class="mono">swarm:receipt:v1</td><td>${tier0?0:1}</td><td>${tier0?'no embedded governance attestation is present':'the embedded governance receipt, when one is present'}</td></tr>
+      <tr><td class="mono">swarm:rollback:v1</td><td>${tier0?0:2}</td><td>${tier0?'no governance attestation is present':'the attestation re-canonicalizes and its signature holds against the key inside it'}</td></tr>
       </tbody></table></div>
     <div class="cap">Three of the seven have <b>no daemon re-read at all</b> &mdash; no receipt-by-id route exists on either surface &mdash; so their cards render the absence rather than offering a check that would 404.</div>
     <div class="controls"><button class="vbtn">Export for the record</button></div>
@@ -2800,7 +2800,7 @@ function dismissModal(){
     <p>This appears as an explicit suppression row on the case timeline and on the execution threat-class lane timeline, and as a hatched span with a
       visible step on the curve. The curve does not quietly redraw as though the bar had never been crossed.</p>
     <p class="muted t-xs">The suppression deposit that results is signed with the <b>daemon's</b> key, not yours.
-      The signed human act is the <code>ambush:verdict:v1</code> card.</p>
+      The signed human act is the <code>swarm:verdict:v1</code> card.</p>
     <div class="modal-actions">
       <button class="btn quiet" data-act="close">Cancel</button>
       <button class="btn" data-act="close">Dismiss and suppress</button>

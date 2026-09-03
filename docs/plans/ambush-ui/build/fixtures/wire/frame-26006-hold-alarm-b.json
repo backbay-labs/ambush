@@ -1,6 +1,6 @@
 {
   "kind": 26006,
-  "schema": "ambush.perch.frame.hold_alarm.v1",
+  "schema": "swarm.perch.frame.hold_alarm.v1",
   "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
   "seq": 2,
   "emitted_at_ms": 1773738882710,

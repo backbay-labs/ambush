@@ -88,14 +88,14 @@ are exactly seven markers and an eighth requires a written argument. `kind:46010
 single stored-kind exception and it is a repair, not an addition.**
 
 **The seven markers**, all `kind:9`, are `APPENDIX-NORMATIVE.md` §3's registry:
-`ambush:finding:v1`, `ambush:escalation:v1`, `ambush:hold:v1`, `ambush:verdict:v1`,
-`ambush:receipt:v1`, `ambush:lease:v1`, `ambush:rollback:v1`.
+`swarm:finding:v1`, `swarm:escalation:v1`, `swarm:hold:v1`, `swarm:verdict:v1`,
+`swarm:receipt:v1`, `swarm:lease:v1`, `swarm:rollback:v1`.
 
 **The body shape is fixed**, and its ordering is the honest-degradation property:
 
 ```
-<!-- ambush:finding:v1 -->
-{"schema":"ambush:finding:v1", …}
+<!-- swarm:finding:v1 -->
+{"schema":"swarm:finding:v1", …}
 Whisker flagged lateral movement on host web-04 at 14:02 UTC.
 ```
 
@@ -121,7 +121,7 @@ same admission rule applies to `kind:46010`: a hold from an unadmitted signer re
 untrusted prose, never enters a queue, and never reaches a wake class. This is `08` INV-15
 and it exists because adversary-authored telemetry reaches this renderer: without the
 admission half, any community member can publish a `kind:9` beginning
-`<!-- ambush:verdict:v1 -->` and manufacture the appearance of a human deliberation.
+`<!-- swarm:verdict:v1 -->` and manufacture the appearance of a human deliberation.
 
 **The registry is lifted out of `MessageRow` before the first card.** Seven new sniff
 branches cannot be added to a file with one gate-line of headroom (ADR 0011, Fact 3), and
@@ -163,7 +163,7 @@ ordinary insert.
 - The fork of `block/buzz` for durable evidence is one kind, three hunks in one relay file,
   and zero client registration points.
 - The cards degrade honestly in four consumers that will never be taught to parse them.
-- A marker is versioned in its own name, so `ambush:finding:v2` can ship beside `v1`
+- A marker is versioned in its own name, so `swarm:finding:v2` can ship beside `v1`
   without a registry negotiation.
 
 ### Negative
@@ -191,7 +191,7 @@ ordinary insert.
 - **PROPOSED** a table test over the marker registry asserting exactly seven entries, each
   with a `v`-suffixed version, and that the parser rejects a body where the marker is not
   the whole of line 0.
-- **PROPOSED** an E2E test: a `kind:9` carrying `ambush:verdict:v1` from a pubkey outside
+- **PROPOSED** an E2E test: a `kind:9` carrying `swarm:verdict:v1` from a pubkey outside
   the admitted-identity set renders as prose, does not enter a queue, and produces no
   notification (`08` INV-15).
 
@@ -207,7 +207,7 @@ ordinary insert.
   row.
 - `13-WIRE-SCHEMAS.md` owns the seven payload schemas. This ADR owns only the carrier
   decision and the two rules that bound it.
-- The `ambush:rollback:v1` card for a **TTL-driven** containment release has no producer:
+- The `swarm:rollback:v1` card for a **TTL-driven** containment release has no producer:
   the operator-driven one is the console's leg-1 publish, and nothing broadcasts a runtime
   event when the sweep closes a **containment lease** on its own. `11-BRIDGE-CRATE.md` §15
   names the smallest fix (a `RuntimeEvent::ContainmentReleased`, bill item **B1c**, PROPOSED,

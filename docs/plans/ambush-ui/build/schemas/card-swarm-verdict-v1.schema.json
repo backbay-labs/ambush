@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ambush.invalid/perch/wire/v1/card-ambush-verdict-v1.schema.json",
-  "title": "ambush:verdict:v1",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-verdict-v1.schema.json",
+  "title": "swarm:verdict:v1",
   "description": "LEG 1 OF THE TWO-LEGGED WRITE. A signed human intent record, published by the OPERATOR'S OWN Nostr key into the case channel. It is not an authorization and no daemon reads it as one: leg 2 is a separate POST to /v1/response/holds/{id}/decide over a process boundary, and the daemon re-derives authority from scratch.\n\nThis is the only card in the registry the operator publishes and the only one not produced by the bridge. It therefore carries NO spine envelope issuer the bridge controls, and its `envelope.issuer` is the operator's own spine identity \u2014 the same swarm:ed25519:{public_key_hex} that voter_id_from_public_key produces (crates/swarm-runtime/src/approval.rs:1783-1785) and that the decide route requires to equal the authenticated operator_id.\n\nTIER 1 FROM DAY ONE, conditional on B2's operator Ed25519 key existing. 08 section 6.2 files this card as tier 0 'until B1.6' (=B2o); that is one step too conservative. B2o is what puts the operator on the RECEIPT. The detached signature in `fact.signature` is produced by the console for leg 2 regardless of B2o, so the card is verifiable the moment leg 2 exists. See 13-WIRE-SCHEMAS.md section 9 amendment W-4.",
   "allOf": [
     {
@@ -22,7 +22,7 @@
       "additionalProperties": false,
       "properties": {
         "schema": {
-          "const": "ambush.perch.verdict.v1"
+          "const": "swarm.perch.verdict.v1"
         },
         "issuer": {
           "$ref": "common.schema.json#/$defs/OperatorFactIssuer",
@@ -49,7 +49,7 @@
             },
             "hold_card_id": {
               "$ref": "common.schema.json#/$defs/Hex64Lower",
-              "description": "Nostr event id of the open ambush:hold:v1 card. Also the `e` tag."
+              "description": "Nostr event id of the open swarm:hold:v1 card. Also the `e` tag."
             }
           }
         },
@@ -59,7 +59,8 @@
             "decision",
             "hold_id",
             "decided_at_ms",
-            "operator_id"
+            "operator_id",
+            "rationale_sha256"
           ],
           "additionalProperties": false,
           "properties": {
@@ -80,6 +81,17 @@
               "type": "string",
               "description": "The configured Ambush operator principal id (crates/swarm-core/src/config/operator.rs:118-129). The console asserts it equals voter_id_from_public_key(signature.public_key_hex) before publishing, because the decide route will."
             },
+            "rationale_sha256": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/Hex64Lower"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "SHA-256 of the UTF-8 rationale string, or JSON null when rationale is absent. This binds the fourth member of the signing preimage without making free text part of its canonical JSON shape."
+            },
             "rationale": {
               "oneOf": [
                 {
@@ -95,7 +107,7 @@
         },
         "signature": {
           "$ref": "common.schema.json#/$defs/DetachedSignature",
-          "description": "Ed25519 over the RFC 8785 canonical form of {decided_at_ms, decision, hold_id} \u2014 EXACTLY the preimage build/openapi/perch-operator-v1.yaml's decide route requires, so one signature serves both legs and a reviewer diffing them checks one thing. `rationale` and `operator_id` are deliberately OUTSIDE the preimage: rationale is free text the operator may reword, and operator_id is re-derived from public_key_hex."
+          "description": "Ed25519 over the RFC 8785 canonical form of {decided_at_ms, decision, hold_id, rationale_sha256} \u2014 EXACTLY the preimage build/openapi/perch-operator-v1.yaml's decide route requires, so one signature serves both legs and a reviewer diffing them checks one thing. `rationale` and `operator_id` are deliberately OUTSIDE the preimage: rationale is bound by its digest, and operator_id is re-derived from public_key_hex."
         },
         "leg2": {
           "type": "object",
@@ -103,7 +115,7 @@
             "state"
           ],
           "additionalProperties": false,
-          "description": "The console's own record of what leg 2 did, published as an UPDATE card (a second ambush:verdict:v1 replying to the first). INV-33 forbids optimistic UI: every state is rendered as a distinct thing and none of them offers an undo.\n\nTWO OPERATORS, ONE HOLD. APPENDIX-NORMATIVE.md section 4 layer 1 p-tags EVERY OperatorScope::Approve principal and section 13's declined-amendment note confirms the watch claim does not narrow that, so more than one console can legitimately hold the same open hold. Leg 1 is published to the relay BEFORE leg 2 is POSTed (13-WIRE-SCHEMAS section 3.2's publish order), the relay has no compare-and-set, and a kind:9 event is immutable \u2014 so BOTH signed verdict cards land in the case channel and stay there. 12-BACKEND-BILL-API.md section 4.4 resolves the DAEMON side (409 hold_already_deciding / hold_already_decided); `superseded` is the relay side of the same event, and it is the console's obligation, not the daemon's: the losing console is the only party that knows both which card it published and which 409 it received. Without it the case channel and the Ledger export's holds/ directory contain two unqualified human-decision records for one hold and nothing marks the loser.",
+          "description": "The console's own record of what leg 2 did, published as an UPDATE card (a second swarm:verdict:v1 replying to the first). INV-33 forbids optimistic UI: every state is rendered as a distinct thing and none of them offers an undo.\n\nTWO OPERATORS, ONE HOLD. APPENDIX-NORMATIVE.md section 4 layer 1 p-tags EVERY OperatorScope::Approve principal and section 13's declined-amendment note confirms the watch claim does not narrow that, so more than one console can legitimately hold the same open hold. Leg 1 is published to the relay BEFORE leg 2 is POSTed (13-WIRE-SCHEMAS section 3.2's publish order), the relay has no compare-and-set, and a kind:9 event is immutable \u2014 so BOTH signed verdict cards land in the case channel and stay there. 12-BACKEND-BILL-API.md section 4.4 resolves the DAEMON side (409 hold_already_deciding / hold_already_decided); `superseded` is the relay side of the same event, and it is the console's obligation, not the daemon's: the losing console is the only party that knows both which card it published and which 409 it received. Without it the case channel and the Ledger export's holds/ directory contain two unqualified human-decision records for one hold and nothing marks the loser.",
           "properties": {
             "state": {
               "type": "string",
@@ -216,7 +228,7 @@
       "issued_at": "2026-03-17T09:16:19Z",
       "capability_token": null,
       "fact": {
-        "schema": "ambush.perch.verdict.v1",
+        "schema": "swarm.perch.verdict.v1",
         "issuer": {
           "swarm_agent_id": "perch-operator-1",
           "role": null,
@@ -233,6 +245,7 @@
           "hold_id": "h_a07aeacf",
           "decided_at_ms": 1773738979000,
           "operator_id": "perch-operator-1",
+          "rationale_sha256": "1585784cc28d7aea3b5265880b27b4b0e851f6006b76e0d222a302bad5ba5ae5",
           "rationale": "Office-spawned encoded PowerShell on host-ops-1, two detectors agreeing. Isolating."
         },
         "signature": {
@@ -259,7 +272,7 @@
       "issued_at": "2026-03-17T09:16:21Z",
       "capability_token": null,
       "fact": {
-        "schema": "ambush.perch.verdict.v1",
+        "schema": "swarm.perch.verdict.v1",
         "issuer": {
           "swarm_agent_id": "perch-operator-2",
           "role": null,
@@ -276,6 +289,7 @@
           "hold_id": "h_a07aeacf",
           "decided_at_ms": 1773738979050,
           "operator_id": "perch-operator-2",
+          "rationale_sha256": "6ec22089809e9c2e8c5a2799c3a248e92d71c4c223b73101c9a768eb1615d1d2",
           "rationale": "Same call, one tick later."
         },
         "signature": {

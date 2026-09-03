@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ambush.invalid/perch/wire/v1/card-ambush-lease-v1.schema.json",
-  "title": "ambush:lease:v1",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-lease-v1.schema.json",
+  "title": "swarm:lease:v1",
   "description": "One ContainmentLease, on open, in the case channel. Only four of the twelve destructive action kinds ever produce one (crates/swarm-runtime/src/containment.rs:54-63).\n\nCARRIES ContainmentLeaseRecord, NOT ContainmentLeaseView. The View's two extra fields, remaining_ms and expired, are computed against an observation instant (crates/swarm-runtime-http/src/http/containment.rs:72-88) and this card is immutable; baking them in would freeze a countdown at its publish value forever. The console recomputes both from expires_at_ms and renders them as two separate elements (INV-06).\n\nTier 0. A ContainmentLease carries no signature; governance_receipt_id is an id, not a receipt, and resolving it is not a verification.",
   "allOf": [
     {
@@ -21,7 +21,7 @@
       "additionalProperties": false,
       "properties": {
         "schema": {
-          "const": "ambush.perch.lease.v1"
+          "const": "swarm.perch.lease.v1"
         },
         "issuer": {
           "$ref": "common.schema.json#/$defs/FactIssuer",
@@ -57,7 +57,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Nostr event id of the ambush:receipt:v1 card. Also the `e` tag."
+              "description": "Nostr event id of the swarm:receipt:v1 card. Also the `e` tag."
             }
           }
         },
@@ -130,7 +130,7 @@
       "issued_at": "2026-08-30T02:41:07Z",
       "capability_token": null,
       "fact": {
-        "schema": "ambush.perch.lease.v1",
+        "schema": "swarm.perch.lease.v1",
         "issuer": {
           "swarm_agent_id": "pouncer-2b18",
           "role": "pouncer",
