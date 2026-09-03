@@ -52,6 +52,7 @@ jobs:
               - 'workspace/schema/**'
               - 'workspace/Cargo.toml'
               - 'workspace/Cargo.lock'
+              - 'workspace/.cargo/config.toml'
               - 'workspace/rust-toolchain.toml'
               - 'workspace/deny.toml'
               - '.github/workflows/workspace-ci.yml'
@@ -68,6 +69,7 @@ jobs:
               - 'workspace/pnpm-lock.yaml'
             desktop-rust:
               - 'workspace/desktop/src-tauri/**'
+              - 'workspace/.cargo/config.toml'
               - 'workspace/scripts/check-desktop-vulnerabilities.sh'
             web:
               - 'workspace/web/**'
@@ -107,7 +109,9 @@ jobs:
       - name: Desktop worktree identity contract
         run: scripts/test-instance-env.sh
       - name: Desktop reset scope contract
-        run: scripts/test-reset-desktop-standalone-state.sh
+        run: |
+          scripts/test-reset-desktop-dev-state.sh
+          scripts/test-reset-desktop-standalone-state.sh
       - name: Codex security review contract
         run: just security-review-check
       - name: Rust cache contract

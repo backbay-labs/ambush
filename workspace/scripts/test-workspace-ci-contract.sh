@@ -3,6 +3,7 @@ set -euo pipefail
 
 workspace_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 workflow="$workspace_root/../.github/workflows/workspace-ci.yml"
+lefthook="$workspace_root/lefthook.yml"
 
 require_literal() {
     local needle="$1"
@@ -15,6 +16,7 @@ require_literal() {
 require_literal 'admin: ${{ steps.filter.outputs.admin }}'
 require_literal "              - 'workspace/admin-web/**'"
 require_literal "              - 'workspace/Justfile'"
+require_literal "              - 'workspace/.cargo/config.toml'"
 require_literal "              - 'workspace/scripts/reconcile-schema-after-pgschema.sql'"
 require_literal "  admin-dashboard:"
 require_literal "    name: Admin Dashboard"
@@ -27,6 +29,13 @@ require_literal "              - 'workspace/scripts/check-desktop-vulnerabilitie
 require_literal "      - name: Install cargo-audit"
 require_literal "          tool: cargo-audit@0.22.0"
 require_literal "        run: scripts/check-desktop-vulnerabilities.sh"
+require_literal "          scripts/test-reset-desktop-dev-state.sh"
+require_literal "          scripts/test-reset-desktop-standalone-state.sh"
+
+if [[ $(grep -oF '"workspace/.cargo/config.toml"' "$lefthook" | wc -l | tr -d ' ') -ne 2 ]]; then
+    echo "Rust and desktop-Tauri pre-push lanes must both include workspace/.cargo/config.toml" >&2
+    exit 1
+fi
 
 reconciliation_cache_entries=$(grep -c "hashFiles(.*workspace/scripts/reconcile-schema-after-pgschema.sql" "$workflow" || true)
 if [[ "$reconciliation_cache_entries" -ne 2 ]]; then

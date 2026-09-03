@@ -29,8 +29,9 @@ fi
 AMBUSH_TAURI_CONFIG="{\"build\":{\"devUrl\":\"${DEV_URL}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${AMBUSH_VITE_PORT} --strictPort\"},\"identifier\":\"com.backbay.ambush.app.dev\",\"productName\":\"Ambush Dev\"}"
 unset VITE_DEV_BRANCH
 
-# In worktrees, extract a label from the branch name and derive a unique app
-# identity and icon so multiple local desktop instances can run side by side.
+# In worktrees, derive the app identity from the worktree directory and use the
+# branch only as a display label. The identity therefore survives branch
+# switches and remains distinct for detached worktrees.
 #
 # Worktree detection: compare --git-dir to --git-common-dir. In the main
 # working tree these are identical; in any worktree (whether under .worktrees/,
@@ -39,9 +40,17 @@ if git -C "$WORKSPACE_ROOT" rev-parse --is-inside-work-tree &>/dev/null; then
     GIT_DIR=$(git -C "$WORKSPACE_ROOT" rev-parse --git-dir)
     GIT_COMMON_DIR=$(git -C "$WORKSPACE_ROOT" rev-parse --git-common-dir 2>/dev/null)
     if [[ -n "$GIT_COMMON_DIR" && "$GIT_DIR" != "$GIT_COMMON_DIR" ]]; then
+        WORKTREE_NAME=$(basename "$WORKTREE_ROOT")
         BRANCH_NAME=$(git -C "$WORKSPACE_ROOT" rev-parse --abbrev-ref HEAD)
-        export AMBUSH_WORKTREE_LABEL="${BRANCH_NAME##*/}"
-        export AMBUSH_INSTANCE_SLUG=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
+        if [[ "$BRANCH_NAME" == "HEAD" ]]; then
+            LABEL_RAW=$(git -C "$WORKSPACE_ROOT" rev-parse --short HEAD)
+        else
+            LABEL_RAW="${BRANCH_NAME##*/}"
+        fi
+        export AMBUSH_WORKTREE_LABEL=$(printf '%s' "$LABEL_RAW" | sed -e 's/[^A-Za-z0-9._-]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
+        [[ -n "$AMBUSH_WORKTREE_LABEL" ]] || export AMBUSH_WORKTREE_LABEL="worktree"
+        export AMBUSH_INSTANCE_SLUG=$(printf '%s' "$WORKTREE_NAME" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')
+        [[ -n "$AMBUSH_INSTANCE_SLUG" ]] || export AMBUSH_INSTANCE_SLUG="worktree"
 
         # AMBUSH_SHARE_IDENTITY=1: reuse the main dev checkout's Nostr key so
         # worktrees skip onboarding and share the same identity. The per-worktree

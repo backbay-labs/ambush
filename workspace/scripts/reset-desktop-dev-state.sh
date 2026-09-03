@@ -4,7 +4,43 @@
 # deliberately outside every deletion pattern in this script.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 log() { printf '[desktop-dev-reset] %s\n' "$*"; }
+
+slugify() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | \
+    sed -e 's/[^a-z0-9]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//'
+}
+
+# SecretStore uses the base development service for normal debug launches and
+# a directory-scoped service for standalone worktrees. Older worktree builds
+# used a branch-derived suffix, so a full reset clears both inventories.
+DEV_KEYRING_SERVICES=(ambush-desktop-dev sprout-desktop-dev ambush-desktop-dev.main)
+add_dev_keyring_service() {
+  local service="$1" existing
+  [[ -n "$service" ]] || return 0
+  for existing in "${DEV_KEYRING_SERVICES[@]}"; do
+    [[ "$existing" == "$service" ]] && return 0
+  done
+  DEV_KEYRING_SERVICES+=("$service")
+}
+
+if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  while IFS= read -r -d '' field; do
+    case "$field" in
+      "worktree "*)
+        worktree_slug=$(slugify "$(basename "${field#worktree }")")
+        add_dev_keyring_service "ambush-desktop-dev.${worktree_slug}"
+        ;;
+      "branch refs/heads/"*)
+        legacy_branch_slug=$(slugify "${field#branch refs/heads/}")
+        add_dev_keyring_service "ambush-desktop-dev.${legacy_branch_slug}"
+        ;;
+    esac
+  done < <(git -C "$REPO_ROOT" worktree list --porcelain -z)
+fi
 
 remove_path() {
   local path="$1"
@@ -32,7 +68,7 @@ remove_bundle_state() {
   shopt -u nullglob
 }
 
-case "$(uname -s)" in
+case "${AMBUSH_TEST_PLATFORM:-$(uname -s)}" in
   Darwin)
     remove_bundle_state "$HOME/Library/Application Support"
     remove_bundle_state "$HOME/Library/Caches"
@@ -41,17 +77,22 @@ case "$(uname -s)" in
     remove_bundle_state "$HOME/Library/Saved Application State" ".savedState"
     remove_bundle_state "$HOME/Library/Preferences" ".plist"
 
-    # SecretStore keeps all dev identity and agent keys in this dev-only item.
     # Delete every matching item in case an older build used multiple accounts.
     if command -v security >/dev/null 2>&1; then
-      while security delete-generic-password -s ambush-desktop-dev >/dev/null 2>&1; do :; done
-      while security delete-generic-password -s sprout-desktop-dev >/dev/null 2>&1; do :; done
+      for service in "${DEV_KEYRING_SERVICES[@]}"; do
+        while security delete-generic-password -s "$service" >/dev/null 2>&1; do :; done
+      done
     fi
     ;;
   Linux)
     remove_bundle_state "${XDG_DATA_HOME:-$HOME/.local/share}"
     remove_bundle_state "${XDG_CONFIG_HOME:-$HOME/.config}"
     remove_bundle_state "${XDG_CACHE_HOME:-$HOME/.cache}"
+    if command -v secret-tool >/dev/null 2>&1; then
+      for service in "${DEV_KEYRING_SERVICES[@]}"; do
+        secret-tool clear service "$service" username secrets target default >/dev/null 2>&1 || true
+      done
+    fi
     ;;
   *)
     log "Desktop bundle cleanup is not implemented for $(uname -s); continuing"
