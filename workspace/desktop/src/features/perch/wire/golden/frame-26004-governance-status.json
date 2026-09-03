@@ -1,0 +1,16 @@
+{
+  "active_contingency_leases": 0,
+  "contingency_lease_ttl_ms": 300000,
+  "emitted_at_ms": 1787754973300,
+  "healthy_governors": 1,
+  "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+  "kind": 26004,
+  "last_reconciliation_report_id": null,
+  "last_transition_at_ms": null,
+  "partition_state": "healthy",
+  "quorum_threshold": 1,
+  "schema": "swarm.perch.frame.governance_status.v1",
+  "seq": 4413,
+  "total_governors": 1,
+  "unauthorized_partition_actions": 0
+}

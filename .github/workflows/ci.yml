@@ -224,6 +224,16 @@ jobs:
       - name: Check the trusted-computing-base layering boundary
         run: bash tools/check-workspace-layering.sh
 
+      # The Perch wire contract lives in three places with no codegen between
+      # them: the JSON Schemas under docs/plans/ambush-ui/build/schemas/, the
+      # Rust wire crate, and the desktop's zod module under workspace/. The two
+      # golden-vector suites catch a field whose shape differs; this catches
+      # the one they cannot -- a field added to one side and to no vector.
+      # Name-level only, by design (types are the goldens' job), and it exits 2
+      # rather than 0 when it cannot see one of the three sides.
+      - name: Check Perch wire field-set parity
+        run: bash tools/check-perch-wire-parity.sh
+
       # BFT-03 / phase 321 criterion 3. The criterion reads "no production path
       # holds more than one governor signing key in memory" and names no method
       # of checking it, which makes it satisfiable by assertion -- the exact
