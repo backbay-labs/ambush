@@ -36,7 +36,7 @@
 | `docs/plans/ambush-ui/build/prototypes/*.html`, `skeleton/desktop/**`, `skeleton/tests/**` | strings renamed |
 | `docs/plans/ambush-ui/build/skeleton/tools/copy-ban-list.tsv` | `Perch` added as a rendered-word ban |
 | `crates/swarm-core/src/config/operator.rs` | `nostr_pubkey: Option<String>` on `OperatorPrincipalConfig` and `OperatorAuthConfig`, validated |
-| `rulesets/perch-dev.yaml`, `rulesets/perch-dev.yaml.sig.json` | the dev profile and its debug-signed sidecar |
+| `rulesets-dev/perch-dev.yaml`, `rulesets-dev/perch-dev.yaml.sig.json` | the dev profile and its debug-signed sidecar |
 | `crates/swarm-runtime-http/src/bin/sign_dev_ruleset.rs` | writes the sidecar with the in-repo debug key |
 | `docker-compose.yml` | gains `postgres`, `redis`, `relay` beside `swarm-detect` |
 | `scripts/provision-perch.sh` | creates the twelve lane channels and the memberships the bridge and the operator need |
@@ -516,12 +516,12 @@
 ### Task 9: The dev ruleset and its signing binary (P0-22)
 
 **Files:**
-- Create: `rulesets/perch-dev.yaml`, `rulesets/perch-dev.yaml.sig.json`
+- Create: `rulesets-dev/perch-dev.yaml`, `rulesets-dev/perch-dev.yaml.sig.json`
 - Create: `crates/swarm-runtime-http/src/bin/sign_dev_ruleset.rs` (+ `[[bin]]` entry)
 
 - [ ] **Step 1: Generate, then edit.**
   ```bash
-  cargo run -p swarm-runtime-http --bin swarmctl -- init --mode detect_only --output rulesets/perch-dev.yaml
+  cargo run -p swarm-runtime-http --bin swarmctl -- init --mode detect_only --output rulesets-dev/perch-dev.yaml
   ```
   Then set, keeping every other generated value: `operator_surface.enabled: true`; `correlation.enabled: true`; `correlation.incident_store` to the file-backed variant (the `BundleStoreConfig` enum's non-memory arm — `swarmctl validate` rejects an unknown key, so the wrong spelling fails loudly); `audit.recent_decisions_limit: 200`; one operator principal with `scopes: [read, rehearse, approve, maintenance]`, `token_env: SWARM_OPERATOR_TOKEN`, and `nostr_pubkey` set to the dev operator key `scripts/provision-perch.sh` prints. Leave `runtime.mode: detect_only` (D4).
 - [ ] **Step 2: The signing binary.**
@@ -536,8 +536,8 @@
       Ok(())
   }
   ```
-- [ ] **Step 3: Sign and validate.** `cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets/perch-dev.yaml && cargo run -p swarm-runtime-http --bin swarmctl -- validate --config rulesets/perch-dev.yaml` → valid; commit the sidecar (`git status --porcelain rulesets/` clean afterwards).
-- [ ] **Step 4: Prove the release refusal.** `cargo run --release -p swarm-runtime-http --bin swarm_detect -- --config rulesets/perch-dev.yaml --serve --bind 127.0.0.1:9099` → exits with a signature-trust error (record the text in the commit message). Debug build: `cargo run -p swarm-runtime-http --bin swarm_detect -- --config rulesets/perch-dev.yaml --serve --bind 127.0.0.1:9099` → `curl -sf http://127.0.0.1:9099/readyz` succeeds and the log says the operator surface is enabled.
+- [ ] **Step 3: Sign and validate.** `cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets-dev/perch-dev.yaml && cargo run -p swarm-runtime-http --bin swarmctl -- validate --config rulesets-dev/perch-dev.yaml` → valid; commit the sidecar (`git status --porcelain rulesets/` clean afterwards).
+- [ ] **Step 4: Prove the release refusal.** `cargo run --release -p swarm-runtime-http --bin swarm_detect -- --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9099` → exits with a signature-trust error (record the text in the commit message). Debug build: `cargo run -p swarm-runtime-http --bin swarm_detect -- --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9099` → `curl -sf http://127.0.0.1:9099/readyz` succeeds and the log says the operator surface is enabled.
 - [ ] **Step 5: Commit.** `feat(rulesets): perch-dev profile with a debug-signed sidecar and its signing binary`.
 
 ### Task 10: The dev stack — relay, Postgres, Redis beside the daemon (P0-21)
@@ -645,7 +645,7 @@
 6. `runResetters` covers the 21 singletons; community switching E2E green.
 7. `ambush-ws-client` has zero `unwrap()` / `unreachable!()` in production paths and is enumerated by the engine's panic gate.
 8. A principal with `nostr_pubkey` loads; a malformed one is rejected at validation.
-9. `docker compose up` brings up relay, Postgres, Redis and `swarm-detect`; a debug `swarm_detect --config rulesets/perch-dev.yaml --serve` reports ready; a release build refuses the same file.
+9. `docker compose up` brings up relay, Postgres, Redis and `swarm-detect`; a debug `swarm_detect --config rulesets-dev/perch-dev.yaml --serve` reports ready; a release build refuses the same file.
 10. `getFeature("perch")` exists and is off by default.
 
 ## Sizing
