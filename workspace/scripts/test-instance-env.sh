@@ -107,7 +107,7 @@ cp "$source_script" "$other_workspace/scripts/instance-env.sh"
 other_slug="$(
   cd "$other_workspace/desktop"
   PATH="$stub_bin:$PATH" INSTANCE_ENV_CAPTURE="$capture" INSTANCE_ENV_SWIFT_FAIL=1 bash -c '
-    source "$1"
+    source "$1" >/dev/null
     printf "%s" "$AMBUSH_INSTANCE_SLUG"
   ' _ "$other_workspace/scripts/instance-env.sh"
 )"
@@ -126,7 +126,7 @@ cp "$source_script" "$normalized_workspace/scripts/instance-env.sh"
 normalized_slug="$(
   cd "$normalized_workspace/desktop"
   PATH="$stub_bin:$PATH" INSTANCE_ENV_CAPTURE="$capture" INSTANCE_ENV_SWIFT_FAIL=1 bash -c '
-    source "$1"
+    source "$1" >/dev/null
     printf "%s" "$AMBUSH_INSTANCE_SLUG"
   ' _ "$normalized_workspace/scripts/instance-env.sh"
 )"
