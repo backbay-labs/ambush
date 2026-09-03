@@ -4541,6 +4541,66 @@ impl TaskTerminalOutboxEntry {
         Ok(())
     }
 
+    /// Bind every strategy-memory reference to records that are already
+    /// durable in the graph snapshot or are carried by this same terminal
+    /// publication. Terminal evidence is admitted atomically with the
+    /// outbox, while hypotheses and edges must pre-exist in the snapshot.
+    pub fn validate_memory_graph_references(
+        &self,
+        graph: &HypothesisGraph,
+        hypotheses: &BTreeMap<HypothesisId, Hypothesis>,
+    ) -> Result<(), GraphAdmissionError> {
+        let Some(memory) = &self.memory else {
+            return Ok(());
+        };
+        if memory.graph_id != graph.graph_id {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal strategy memory references a different graph".to_string(),
+            });
+        }
+        if !hypotheses.contains_key(&memory.selected_hypothesis_id) {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal strategy memory selects an unknown hypothesis".to_string(),
+            });
+        }
+        if memory
+            .falsified_alternative_ids
+            .iter()
+            .any(|hypothesis_id| !hypotheses.contains_key(hypothesis_id))
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal strategy memory names an unknown falsified alternative"
+                    .to_string(),
+            });
+        }
+        let referenced_edges = memory
+            .hypothesis_delta
+            .added_edge_ids
+            .iter()
+            .chain(&memory.hypothesis_delta.retracted_edge_ids)
+            .chain(&memory.hypothesis_delta.superseded_edge_ids);
+        if referenced_edges
+            .into_iter()
+            .any(|edge_id| !graph.edges.contains_key(edge_id))
+        {
+            return Err(GraphAdmissionError::InvalidTransition {
+                reason: "terminal strategy memory references an unknown graph edge".to_string(),
+            });
+        }
+        let terminal_evidence_ids = self
+            .evidence
+            .iter()
+            .map(|evidence| &evidence.evidence_id)
+            .collect::<BTreeSet<_>>();
+        if memory.evidence_utility.keys().any(|evidence_id| {
+            !graph.evidence.contains_key(evidence_id)
+                && !terminal_evidence_ids.contains(evidence_id)
+        }) {
+            return Err(GraphAdmissionError::UnknownEvidence);
+        }
+        Ok(())
+    }
+
     fn validate_memory_lineage_for_transition(
         &self,
         descriptor: &LogicalTaskDescriptor,
@@ -4624,6 +4684,14 @@ impl TaskTerminalOutboxEntry {
                                 .to_string(),
                     });
                 }
+                if let TaskTarget::Hypothesis { hypothesis_id } = &task.request.target
+                    && hypothesis_id != &decision.hypothesis_id
+                {
+                    return Err(GraphAdmissionError::InvalidTransition {
+                        reason: "terminal decision hypothesis does not match the claimed task"
+                            .to_string(),
+                    });
+                }
                 if link.task_id != self.envelope.task_id
                     || link.decision_id.as_ref() != Some(&decision.decision_id)
                     || !link.evidence_ids.is_subset(&decision.evidence_ids)
@@ -4636,6 +4704,10 @@ impl TaskTerminalOutboxEntry {
                 if !decision.evidence_ids.is_subset(evidence_ids) {
                     return Err(GraphAdmissionError::UnknownEvidence);
                 }
+                validate_terminal_decision_upper_bound(
+                    decision,
+                    self.envelope.completion.completed_at,
+                )?;
                 Ok(())
             }
             _ => Err(GraphAdmissionError::InvalidTransition {
@@ -4732,6 +4804,11 @@ impl TaskTerminalOutboxEntry {
             });
         }
         let evidence_ids = self.validate_for_task_fields(task, limits)?;
+        validate_terminal_decision_time(
+            self.decision.as_ref(),
+            logical_time_high_water,
+            self.envelope.completion.completed_at,
+        )?;
         self.validate_memory_lineage_for_transition(
             descriptor,
             &evidence_ids,
@@ -4871,6 +4948,36 @@ impl TaskTerminalOutboxEntry {
         )?;
         Ok(())
     }
+}
+
+fn validate_terminal_decision_upper_bound(
+    decision: &DecisionRecord,
+    completion_at: GraphLogicalTime,
+) -> Result<(), GraphAdmissionError> {
+    if decision.decided_at > completion_at {
+        return Err(GraphAdmissionError::InvalidTransition {
+            reason: "terminal decision is dated after terminal completion".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_terminal_decision_time(
+    decision: Option<&DecisionRecord>,
+    logical_time_high_water: GraphLogicalTime,
+    completion_at: GraphLogicalTime,
+) -> Result<(), GraphAdmissionError> {
+    let Some(decision) = decision else {
+        return Ok(());
+    };
+    validate_terminal_decision_upper_bound(decision, completion_at)?;
+    if decision.decided_at < logical_time_high_water {
+        return Err(GraphAdmissionError::InvalidTransition {
+            reason: "terminal decision is back-dated before the logical-time high-water"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Durable proof for a terminal task transition.  A terminal state is not
@@ -10152,6 +10259,119 @@ mod tests {
         (memory, expiry)
     }
 
+    fn falsify_outbox_fixture(
+        decision_kind: DecisionKind,
+        decided_at: GraphLogicalTime,
+    ) -> (TaskRecord, LogicalTaskDescriptor, TaskTerminalOutboxEntry) {
+        let key = signer();
+        let claimant = AgentId::from_public_key_hex(&key.public_key().to_hex());
+        let hypothesis_id = HypothesisId::new("hypothesis:terminal-falsify");
+        let evidence = envelope("record:terminal-falsify", GraphProducerRole::Normalizer);
+        let target = TaskTarget::Hypothesis {
+            hypothesis_id: hypothesis_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            GraphId::new("graph:terminal-falsify"),
+            target.clone(),
+            TaskKind::FalsifyHypothesis,
+            canonical_digest(&"terminal-falsify-seed").expect("seed digest"),
+        )
+        .expect("descriptor");
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            descriptor.kind,
+            target.clone(),
+            GraphProducerRole::Falsifier,
+            claimant.clone(),
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [evidence.evidence_id.clone()],
+                [],
+            )
+            .expect("scope"),
+            GraphLogicalTime::new(100),
+        )
+        .expect("request");
+        let lease = TaskLease::new(
+            LeaseId::new("lease:terminal-falsify"),
+            claimant.clone(),
+            GraphLogicalTime::new(100),
+            GraphLogicalTime::new(200),
+            FencingToken::new(1),
+        )
+        .expect("lease");
+        let task = TaskRecord::claimed(request.clone(), lease.clone()).expect("task");
+        let decision_role = match decision_kind {
+            DecisionKind::Support => GraphProducerRole::Hunter,
+            DecisionKind::Challenge => GraphProducerRole::Challenger,
+            DecisionKind::Falsify => GraphProducerRole::Falsifier,
+            DecisionKind::Adjudicate | DecisionKind::Reopen => GraphProducerRole::Adjudicator,
+        };
+        let decision = DecisionRecord::new(
+            decision_kind,
+            hypothesis_id,
+            [evidence.evidence_id.clone()],
+            decision_role,
+            claimant.clone(),
+            decided_at,
+            "terminal decision",
+        )
+        .expect("decision")
+        .signed_with(&key, "terminal-falsify-decision")
+        .expect("decision signature");
+        let decision_link = TaskDecisionLink::new(
+            request.task_id.clone(),
+            target,
+            [evidence.evidence_id.clone()],
+            Some(decision.decision_id.clone()),
+        )
+        .expect("decision link");
+        let capability = TaskCapabilityProof::new(
+            request.task_id.clone(),
+            claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().expect("claim digest"),
+            &key,
+            "terminal-falsify-worker",
+        )
+        .expect("capability");
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::HypothesisFalsified,
+            claimant.clone(),
+            GraphLogicalTime::new(150),
+            [evidence.evidence_id.clone()],
+            "digest:terminal-falsify",
+        )
+        .expect("completion");
+        let terminal = TaskTerminalEnvelope::new(
+            request.task_id,
+            request.idempotency_key,
+            lease.lease_id,
+            lease.fencing_token,
+            completion,
+            Some(decision_link),
+            claimant.clone(),
+            capability,
+        )
+        .expect("terminal envelope")
+        .signed_with(&key, "terminal-falsify-worker")
+        .expect("terminal signature");
+        (
+            task,
+            descriptor,
+            TaskTerminalOutboxEntry {
+                envelope: terminal,
+                evidence: vec![evidence],
+                decision: Some(decision),
+                memory: None,
+                memory_expiry: None,
+                producer_key_id: claimant,
+                publication_acknowledged: Some(false),
+            },
+        )
+    }
+
     #[test]
     fn retry_exhaustion_terminalizes_claimed_and_legacy_expired_shapes() {
         let (mut claimed, _, _, _) = outbox_fixture();
@@ -10426,6 +10646,222 @@ mod tests {
             ),
             Err(GraphAdmissionError::InvalidTransition { ref reason })
                 if reason.contains("producer identity")
+        ));
+    }
+
+    #[test]
+    fn terminal_outbox_binds_decision_kind_target_and_logical_time() {
+        let limits = GraphResourceLimits::default();
+        let (task, descriptor, valid) =
+            falsify_outbox_fixture(DecisionKind::Falsify, GraphLogicalTime::new(140));
+        valid
+            .validate_for_task_at(&task, &descriptor, &limits, GraphLogicalTime::new(130))
+            .expect("valid falsification publication");
+        let committed = task
+            .clone()
+            .complete(
+                valid.envelope.completion.clone(),
+                valid.envelope.fencing_token,
+                limits.max_task_lease_ms,
+            )
+            .expect("committed task");
+        valid
+            .validate_for_committed_task_at(
+                &committed,
+                &descriptor,
+                &limits,
+                GraphLogicalTime::new(150),
+            )
+            .expect("valid committed publication");
+
+        let (wrong_task, wrong_descriptor, wrong_kind) =
+            falsify_outbox_fixture(DecisionKind::Support, GraphLogicalTime::new(140));
+        assert!(matches!(
+            wrong_kind.validate_for_task_at(
+                &wrong_task,
+                &wrong_descriptor,
+                &limits,
+                GraphLogicalTime::new(130),
+            ),
+            Err(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("decision kind")
+        ));
+        let wrong_committed = wrong_task
+            .clone()
+            .complete(
+                wrong_kind.envelope.completion.clone(),
+                wrong_kind.envelope.fencing_token,
+                limits.max_task_lease_ms,
+            )
+            .expect("wrong-kind committed task");
+        assert!(matches!(
+            wrong_kind.validate_for_committed_task_at(
+                &wrong_committed,
+                &wrong_descriptor,
+                &limits,
+                GraphLogicalTime::new(150),
+            ),
+            Err(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("decision kind")
+        ));
+
+        let (backdated_task, backdated_descriptor, backdated) =
+            falsify_outbox_fixture(DecisionKind::Falsify, GraphLogicalTime::new(120));
+        assert!(matches!(
+            backdated.validate_for_task_at(
+                &backdated_task,
+                &backdated_descriptor,
+                &limits,
+                GraphLogicalTime::new(130),
+            ),
+            Err(GraphAdmissionError::InvalidTransition { reason }) if reason.contains("back-dated")
+        ));
+
+        let (future_task, future_descriptor, future) =
+            falsify_outbox_fixture(DecisionKind::Falsify, GraphLogicalTime::new(151));
+        assert!(matches!(
+            future.validate_for_task_at(
+                &future_task,
+                &future_descriptor,
+                &limits,
+                GraphLogicalTime::new(130),
+            ),
+            Err(GraphAdmissionError::InvalidTransition { reason })
+                if reason.contains("after terminal completion")
+        ));
+    }
+
+    #[test]
+    fn terminal_strategy_memory_references_must_resolve_atomically() {
+        let (task, descriptor, base, key) = outbox_evidence_fixture();
+        let evidence_id = base.evidence[0].evidence_id.clone();
+        let selected_id = HypothesisId::new("hypothesis:memory-selected");
+        let selected = Hypothesis::new(
+            selected_id.clone(),
+            ConfidenceDistribution::uniform_two(),
+            [],
+            [],
+        )
+        .expect("selected hypothesis");
+        let hypotheses = BTreeMap::from([(selected_id.clone(), selected)]);
+        let graph =
+            HypothesisGraph::new(descriptor.graph_id.clone(), GraphResourceLimits::default())
+                .expect("graph");
+        let build_memory = |selected_hypothesis_id: HypothesisId,
+                            delta: HypothesisDelta,
+                            utilities: Vec<EvidenceUtility>,
+                            alternatives: Vec<HypothesisId>| {
+            let provenance =
+                MemoryProvenance::new(task.request.claimant.clone(), [evidence_id.clone()])
+                    .signed_with(
+                        &key,
+                        GraphProducerRole::Hunter,
+                        "memory-reference-provenance",
+                    )
+                    .expect("provenance");
+            StrategyMemory::new(
+                descriptor.graph_id.clone(),
+                selected_hypothesis_id,
+                delta,
+                utilities,
+                alternatives,
+                MemoryOutcome::Inconclusive,
+                provenance,
+            )
+            .expect("memory")
+            .signed_with(&key, GraphProducerRole::Hunter, "memory-reference")
+            .expect("memory signature")
+        };
+        let attach = |mut entry: TaskTerminalOutboxEntry, memory: StrategyMemory| {
+            let expiry = StrategyMemoryExpiryEnvelope::new_with_limit(
+                &memory,
+                GraphLogicalTime::new(140),
+                20,
+                MAX_STRATEGY_MEMORY_TTL_TICKS,
+                &key,
+            )
+            .expect("expiry");
+            entry.memory = Some(memory);
+            entry.memory_expiry = Some(expiry);
+            entry
+        };
+
+        let valid = attach(
+            base.clone(),
+            build_memory(
+                selected_id.clone(),
+                HypothesisDelta::new([], [], []),
+                vec![EvidenceUtility::new(evidence_id.clone(), 5_000)],
+                vec![],
+            ),
+        );
+        valid
+            .validate_for_task(&task, &descriptor, &GraphResourceLimits::default())
+            .expect("structurally valid memory");
+        valid
+            .validate_memory_graph_references(&graph, &hypotheses)
+            .expect("terminal evidence resolves atomically");
+
+        let unknown_selected = attach(
+            base.clone(),
+            build_memory(
+                HypothesisId::new("hypothesis:missing"),
+                HypothesisDelta::new([], [], []),
+                vec![],
+                vec![],
+            ),
+        );
+        assert!(
+            unknown_selected
+                .validate_memory_graph_references(&graph, &hypotheses)
+                .is_err()
+        );
+
+        let unknown_alternative = attach(
+            base.clone(),
+            build_memory(
+                selected_id.clone(),
+                HypothesisDelta::new([], [], []),
+                vec![],
+                vec![HypothesisId::new("hypothesis:missing-alternative")],
+            ),
+        );
+        assert!(
+            unknown_alternative
+                .validate_memory_graph_references(&graph, &hypotheses)
+                .is_err()
+        );
+
+        let unknown_edge = attach(
+            base.clone(),
+            build_memory(
+                selected_id.clone(),
+                HypothesisDelta::new([EdgeId::new("edge:missing")], [], []),
+                vec![],
+                vec![],
+            ),
+        );
+        assert!(
+            unknown_edge
+                .validate_memory_graph_references(&graph, &hypotheses)
+                .is_err()
+        );
+
+        let unknown_utility = attach(
+            base,
+            build_memory(
+                selected_id,
+                HypothesisDelta::new([], [], []),
+                vec![EvidenceUtility::new(
+                    EvidenceId::new("evidence:missing"),
+                    5_000,
+                )],
+                vec![],
+            ),
+        );
+        assert!(matches!(
+            unknown_utility.validate_memory_graph_references(&graph, &hypotheses),
+            Err(GraphAdmissionError::UnknownEvidence)
         ));
     }
 

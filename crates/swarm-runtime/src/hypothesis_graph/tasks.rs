@@ -1323,11 +1323,7 @@ fn claim_request_is_idempotent(snapshot: &GraphStoreSnapshot, request: &TaskClai
         && existing.task.request.role == request.role
         && existing.task.request.claimant == request.claimant
         && existing.task.request.evidence_scope == request.evidence_scope;
-    same_request
-        && matches!(
-            existing.task.state,
-            TaskState::Claimed | TaskState::Completed | TaskState::Failed
-        )
+    same_request && existing.task.state == TaskState::Claimed
 }
 
 /// Coordinator callers submit unsigned decision requests.  The injected
@@ -1491,6 +1487,9 @@ pub fn commit_terminal_once(
             &snapshot.state().limits,
             snapshot.state().logical_time_high_water,
         )
+        .map_err(GraphStoreError::Admission)?;
+    publication
+        .validate_memory_graph_references(&snapshot.state().graph, &snapshot.state().hypotheses)
         .map_err(GraphStoreError::Admission)?;
     validate_completion_kind(
         entry.task.request.kind,
@@ -2538,6 +2537,21 @@ mod tests {
         store.set_reject_cas(false);
         ledger
             .create_task(&store, initial.revision(), descriptor, request.clone())
+            .unwrap();
+        let before_hypothesis = store.snapshot().unwrap();
+        let mut with_hypothesis = before_hypothesis.state().clone();
+        let memory_hypothesis = Hypothesis::new(
+            swarm_core::hypothesis_graph::HypothesisId::new("hypothesis:memory"),
+            swarm_core::hypothesis_graph::ConfidenceDistribution::uniform_two(),
+            [],
+            [],
+        )
+        .unwrap();
+        with_hypothesis
+            .hypotheses
+            .insert(memory_hypothesis.hypothesis_id.clone(), memory_hypothesis);
+        store
+            .compare_and_swap(before_hypothesis.revision(), with_hypothesis)
             .unwrap();
         store.set_reject_cas(false);
         let capability = TaskCapabilityProof::signed_with(

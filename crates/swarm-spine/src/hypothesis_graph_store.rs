@@ -1043,6 +1043,9 @@ impl GraphStoreState {
                     self.logical_time_high_water,
                 )
                 .map_err(GraphStoreError::Admission)?;
+            entry
+                .validate_memory_graph_references(&self.graph, &self.hypotheses)
+                .map_err(GraphStoreError::Admission)?;
             for evidence in &entry.evidence {
                 match self.graph.evidence.get(&evidence.evidence_id) {
                     Some(admitted) if admitted == evidence => {}
@@ -3725,6 +3728,22 @@ fn validate_reasoning_cas_transition(
                             reason: "terminal task replacement has no logical descriptor"
                                 .to_string(),
                         })?;
+                // Re-run the publication against the claimed predecessor,
+                // not only the materialized terminal candidate. This binds
+                // decision chronology and memory references to the exact
+                // durable snapshot being replaced, closing the direct-CAS
+                // path as well as the runtime convenience path.
+                outbox
+                    .validate_for_task_at(
+                        &prior.task,
+                        descriptor,
+                        limits,
+                        current.logical_time_high_water,
+                    )
+                    .map_err(GraphStoreError::Admission)?;
+                outbox
+                    .validate_memory_graph_references(&current.graph, &current.hypotheses)
+                    .map_err(GraphStoreError::Admission)?;
                 outbox
                     .validate_for_committed_task_at(
                         &next.task,
@@ -4448,18 +4467,12 @@ fn claim_task_op(
                 task_id: request.task_id,
             });
         }
-        if existing.task.state == TaskState::Claimed
-            || matches!(
-                existing.task.state,
-                TaskState::Completed | TaskState::Failed
-            )
-        {
-            if existing.task.state == TaskState::Claimed
-                && existing
-                    .task
-                    .lease
-                    .as_ref()
-                    .is_some_and(|lease| now >= lease.expires_at)
+        if existing.task.state == TaskState::Claimed {
+            if existing
+                .task
+                .lease
+                .as_ref()
+                .is_some_and(|lease| now >= lease.expires_at)
             {
                 return Err(GraphStoreError::TaskExpiredNeedsReclaim {
                     task_id: request.task_id,
@@ -4471,6 +4484,14 @@ fn claim_task_op(
                     idempotent: true,
                 },
                 changed: false,
+            });
+        }
+        if matches!(
+            existing.task.state,
+            TaskState::Completed | TaskState::Failed
+        ) {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "terminal tasks cannot be claimed".to_string(),
             });
         }
         if existing.task.state == TaskState::Expired {
@@ -4785,13 +4806,6 @@ fn expire_task_op(
         .tasks
         .get(&TaskId::new(task_id))
         .is_some_and(|entry| entry.task.attempts >= limits.max_task_retries);
-    // Marker-one tasks ordinarily terminate only through the descriptor-bound
-    // outbox CAS. Retry exhaustion is the narrow store-authenticated exception:
-    // no worker result exists to publish, and leaving the elapsed final lease
-    // claimable would block every later campaign forever.
-    if !retry_exhaustion {
-        reject_reasoning_terminal_transition(state)?;
-    }
     observe_logical_time(state, now)?;
     {
         let entry = task_entry_mut(state, task_id)?;
@@ -11483,6 +11497,201 @@ mod tests {
                 .unwrap()
                 .claims_used(),
             1
+        );
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    fn assert_reasoning_expiry_and_budgeted_reclaim(
+        store: &dyn HypothesisGraphStore,
+        claimant_seed: u8,
+    ) -> GraphStoreSnapshot {
+        let (descriptor, request) = logical_request(claimant_seed, "reasoning-expiry");
+        let migrated = migrate_legacy_pending_with_budget(
+            store,
+            descriptor,
+            request.clone(),
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+        );
+        let claimed = store
+            .claim_task_cas_with_budget(
+                &migrated.revision,
+                request.clone(),
+                GraphLogicalTime::new(100),
+                10,
+                budget_at(GraphLogicalTime::new(100), 0, 1),
+            )
+            .expect("reasoning task claim");
+        let expired = store
+            .expire_task(
+                request.task_id.as_str(),
+                claimed.task_generation,
+                GraphLogicalTime::new(110),
+            )
+            .expect("reasoning lease expiry");
+        assert_eq!(expired.task.state, TaskState::Expired);
+        assert!(expired.task.lease.is_none());
+        let after_expiry = store.snapshot().expect("expired snapshot");
+        assert_eq!(
+            after_expiry.scheduler_budget(),
+            Some(&budget_at(GraphLogicalTime::new(100), 0, 1))
+        );
+
+        let reclaimed = store
+            .reclaim_task_cas_with_budget(
+                &after_expiry.revision,
+                request.task_id.as_str(),
+                request.clone(),
+                GraphLogicalTime::new(111),
+                10,
+                budget_at(GraphLogicalTime::new(111), 0, 1),
+            )
+            .expect("budgeted reasoning reclaim");
+        assert_eq!(reclaimed.task.state, TaskState::Claimed);
+        assert_eq!(reclaimed.task.attempts, 2);
+        let after_reclaim = store.snapshot().expect("reclaimed snapshot");
+        let durable = &after_reclaim.state.tasks[&request.task_id];
+        assert_eq!(durable.history.len(), 1);
+        assert_eq!(durable.history[0].state, TaskState::Expired);
+        assert_eq!(
+            after_reclaim.scheduler_budget(),
+            Some(&budget_at(GraphLogicalTime::new(111), 0, 1))
+        );
+        after_reclaim
+    }
+
+    #[test]
+    fn reasoning_leases_expire_and_reclaim_across_memory_and_file_backends() {
+        let memory = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(125),
+            budget_policy(),
+        )
+        .unwrap();
+        let memory_after = assert_reasoning_expiry_and_budgeted_reclaim(&memory, 125);
+        assert_eq!(memory.snapshot().unwrap(), memory_after);
+
+        let path = temp_dir("reasoning-expiry-reclaim");
+        let key = signer(126);
+        let file = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let file_after = assert_reasoning_expiry_and_budgeted_reclaim(&file, 126);
+        let expected_bytes = file_after.canonical_bytes().unwrap();
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().canonical_bytes().unwrap(),
+            expected_bytes
+        );
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    fn assert_terminal_claim_retries_are_rejected_without_mutation(
+        store: &dyn HypothesisGraphStore,
+        claimant_seed: u8,
+    ) -> GraphStoreSnapshot {
+        let completed_request = request(claimant_seed, "completed-claim-retry");
+        let completed_claim = store
+            .claim_task(completed_request.clone(), GraphLogicalTime::new(100), 10)
+            .expect("claim completed task");
+        let completed_lease = completed_claim.task.lease.clone().expect("active lease");
+        let completed_evidence = match &completed_request.target {
+            TaskTarget::Evidence { evidence_id } => evidence_id.clone(),
+            _ => unreachable!("fixture is evidence acquisition"),
+        };
+        store
+            .complete_task(
+                completed_request.task_id.as_str(),
+                completed_claim.task_generation,
+                &completed_lease.lease_id,
+                completed_lease.fencing_token,
+                GraphLogicalTime::new(105),
+                TaskCompletion::new(
+                    TaskCompletionKind::EvidenceAdded,
+                    completed_request.claimant.clone(),
+                    GraphLogicalTime::new(105),
+                    [completed_evidence],
+                    "completed-claim-retry",
+                )
+                .unwrap(),
+            )
+            .expect("complete task");
+        let before_completed_retry = store.snapshot().unwrap();
+        let before_completed_bytes = before_completed_retry.canonical_bytes().unwrap();
+        assert!(matches!(
+            store.claim_task(
+                completed_request,
+                GraphLogicalTime::new(106),
+                10,
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("terminal tasks cannot be claimed")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_completed_bytes
+        );
+
+        let failed_request = request(claimant_seed.saturating_add(1), "failed-claim-retry");
+        let failed_claim = store
+            .claim_task(failed_request.clone(), GraphLogicalTime::new(200), 10)
+            .expect("claim failed task");
+        let failed_lease = failed_claim.task.lease.clone().expect("active lease");
+        store
+            .fail_task(
+                failed_request.task_id.as_str(),
+                failed_claim.task_generation,
+                &failed_lease.lease_id,
+                failed_lease.fencing_token,
+                GraphLogicalTime::new(205),
+                TaskFailure::new(
+                    failed_request.claimant.clone(),
+                    GraphLogicalTime::new(205),
+                    "failed-claim-retry",
+                )
+                .unwrap(),
+            )
+            .expect("fail task");
+        let before_failed_retry = store.snapshot().unwrap();
+        let before_failed_bytes = before_failed_retry.canonical_bytes().unwrap();
+        assert!(matches!(
+            store.claim_task(failed_request, GraphLogicalTime::new(206), 10),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("terminal tasks cannot be claimed")
+        ));
+        let after = store.snapshot().unwrap();
+        assert_eq!(after.canonical_bytes().unwrap(), before_failed_bytes);
+        after
+    }
+
+    #[test]
+    fn terminal_claim_retries_fail_closed_across_memory_and_file_backends() {
+        let memory = MemoryHypothesisGraphStore::new(graph(), signer(127)).unwrap();
+        let memory_after =
+            assert_terminal_claim_retries_are_rejected_without_mutation(&memory, 127);
+        assert_eq!(memory.snapshot().unwrap(), memory_after);
+
+        let path = temp_dir("terminal-claim-retry");
+        let key = signer(129);
+        let file = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
+        let file_after = assert_terminal_claim_retries_are_rejected_without_mutation(&file, 129);
+        let expected_bytes = file_after.canonical_bytes().unwrap();
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer(&path, key).unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().canonical_bytes().unwrap(),
+            expected_bytes
         );
         drop(reopened);
         fs::remove_dir_all(path).unwrap();
