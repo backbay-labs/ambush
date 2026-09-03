@@ -117,3 +117,7 @@ id_ed25519
 !workspace/.claude/
 !workspace/.vscode/
 !workspace/crates/ambush-push-gateway/tests/fixtures/*.pem
+
+# scripts/provision-perch.sh output: the dev operator identity and the lane
+# channel map for the local relay stack (docs/plans/ambush-ui/integration/11-PLAN-GROUND.md Task 10).
+.perch-dev/

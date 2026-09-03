@@ -1,3 +1,14 @@
+# The engine's dev stack: the daemon beside the Ambush relay it will report
+# into (docs/plans/ambush-ui/integration/11-PLAN-GROUND.md Task 10, P0-21).
+#
+#   docker compose up -d postgres redis relay   # the relay stack alone
+#   docker compose up -d                        # plus swarm-detect
+#   bash scripts/provision-perch.sh             # the dev operator + lane channels
+#
+# `relay` builds workspace/Dockerfile and reads workspace/.env for its relay
+# signing key (`cd workspace && just bootstrap` writes one); the in-network
+# service URLs below override that file's localhost values. The relay applies
+# its own migrations on start (workspace/CLAUDE.md).
 services:
   swarm-detect:
     build:
@@ -5,6 +16,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "9090:9090"
+    depends_on:
+      relay:
+        condition: service_healthy
     volumes:
       # Config stays read-only. `data/` is layered writable on top because
       # identity.agent_key_dir resolves to <config parent>/data/agent-keys and
@@ -22,6 +36,104 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 3
+
+  # postgres and redis are transcribed from workspace/docker-compose.yml (same
+  # images, healthchecks and memory limits; ports bound to 127.0.0.1) so the
+  # relay here runs against exactly the substrate the workspace develops on.
+  postgres:
+    image: postgres:17-alpine
+    container_name: ambush-postgres
+    environment:
+      POSTGRES_USER: ambush
+      POSTGRES_PASSWORD: ambush_dev
+      POSTGRES_DB: ambush
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ambush"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    labels:
+      com.backbay.ambush.service: "postgres"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ambush-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    labels:
+      com.backbay.ambush.service: "redis"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
+
+  relay:
+    build:
+      context: ./workspace
+      dockerfile: Dockerfile
+    container_name: ambush-relay
+    # Optional so `docker compose config` and the daemon-only `up swarm-detect`
+    # work on a checkout that never ran the workspace bootstrap; without the
+    # file the relay exits at startup naming the missing AMBUSH_RELAY_PRIVATE_KEY.
+    env_file:
+      - path: ./workspace/.env
+        required: false
+    environment:
+      # In-network addresses win over the localhost values in workspace/.env.
+      DATABASE_URL: postgres://ambush:ambush_dev@postgres:5432/ambush
+      PGHOST: postgres
+      REDIS_URL: redis://redis:6379
+      AMBUSH_BIND_ADDR: 0.0.0.0:3000
+      # The relay seeds the community for this authority at startup, which is
+      # the Host the CLI and the desktop send for http://localhost:3000.
+      RELAY_URL: ws://localhost:3000
+      # Migrations are opt-in (workspace/crates/ambush-relay/src/main.rs); a
+      # dev stack on a fresh volume has nothing else to run them.
+      AMBUSH_AUTO_MIGRATE: "true"
+      # The relay refuses to start unless its S3 git object store passes a
+      # conformance probe, and this stack carries no MinIO: the console
+      # publishes channel events and kind:9 cards, never media or git pushes.
+      # Those two surfaces are unavailable here until a minio service is
+      # transcribed from workspace/docker-compose.yml.
+      AMBUSH_GIT_CONFORMANCE_PROBE: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # The runtime image ships curl, not wget (workspace/Dockerfile).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    labels:
+      com.backbay.ambush.service: "relay"
+      com.backbay.ambush.env: "dev"
+    restart: unless-stopped
 
   nats:
     image: nats:2-alpine
@@ -42,3 +154,7 @@ services:
 volumes:
   nats-data:
   swarm-identity:
+  postgres-data:
+    name: ambush-postgres-data
+    labels:
+      com.backbay.ambush.volume: "postgres"
