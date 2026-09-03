@@ -17,8 +17,8 @@ import {
   filterInboxItems,
   matchesInboxFilter,
 } from "@/features/home/lib/inboxViewHelpers";
-import { resolveInboxFilterSelection } from "@/features/home/lib/inboxSelection";
 import { useHomeInboxReadState } from "@/features/home/useHomeInboxReadState";
+import { useHomeInboxFilterChange } from "@/features/home/useHomeInboxFilterChange";
 import { useHomeInboxAutoSelection } from "@/features/home/useHomeInboxAutoSelection";
 import { useHomeInboxContextMessages } from "@/features/home/useHomeInboxContextMessages";
 import { useHomePersonalInbox } from "@/features/home/useHomePersonalInbox";
@@ -460,53 +460,20 @@ export function HomeView({
     setIsSendingReply(false);
   }, [selectedConversationId]);
 
-  const handleFilterChange = React.useCallback(
-    (nextFilter: InboxFilter) => {
-      const nextItems = inboxItems.filter(
-        (item) =>
-          matchesInboxFilter(item, nextFilter, ownedAgentPubkeys) &&
-          (!unreadOnly ||
-            !effectiveDoneSet.has(item.id) ||
-            item.conversationId === selectedConversationId),
-      );
-      const selection = resolveInboxFilterSelection({
-        isNarrow: isNarrowHomeViewport,
-        items: nextItems,
-        selectedConversationId,
-      });
-
-      setUnreadBoundary(null);
-      setSelectedDraftKey(null);
-      setSelectedReminderId(null);
-      setFilter(nextFilter);
-
-      if (
-        nextFilter === "reminders" ||
-        nextFilter === "drafts" ||
-        selection.preserveSelection
-      ) {
-        if (nextFilter === "reminders" || nextFilter === "drafts") {
-          setAutoSelectedEventId(null);
-          applyInboxSearchPatch({ item: null });
-        }
-        return;
-      }
-
-      applyInboxSearchPatch({ item: null });
-      setAutoSelectedEventId(selection.autoSelectedEventId);
-    },
-    [
-      applyInboxSearchPatch,
-      effectiveDoneSet,
-      inboxItems,
-      isNarrowHomeViewport,
-      ownedAgentPubkeys,
-      selectedConversationId,
-      setSelectedDraftKey,
-      setSelectedReminderId,
-      unreadOnly,
-    ],
-  );
+  const handleFilterChange = useHomeInboxFilterChange({
+    applyInboxSearchPatch,
+    effectiveDoneSet,
+    inboxItems,
+    isNarrow: isNarrowHomeViewport,
+    ownedAgentPubkeys,
+    selectedConversationId,
+    setAutoSelectedEventId,
+    setFilter,
+    setSelectedDraftKey,
+    setSelectedReminderId,
+    setUnreadBoundary,
+    unreadOnly,
+  });
 
   if (isLoading && !feed) {
     return <HomeLoadingState />;
