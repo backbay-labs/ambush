@@ -246,12 +246,19 @@ test("an attachment that arrives after the view is left is revoked immediately",
   await instrumentObjectUrls(page);
   await routeFeedbackDetail(page);
   let release = () => {};
+  let confirmAllStarted = () => {};
+  let startedCount = 0;
   const held = new Promise<void>((resolve) => {
     release = resolve;
+  });
+  const allStarted = new Promise<void>((resolve) => {
+    confirmAllStarted = resolve;
   });
   await page.route(
     `**/api/admin/v1/feedback/${FEEDBACK_ID}/attachments/**`,
     async (route) => {
+      startedCount += 1;
+      if (startedCount === 2) confirmAllStarted();
       await held;
       await route.fulfill({
         contentType: "application/octet-stream",
@@ -261,8 +268,10 @@ test("an attachment that arrives after the view is left is revoked immediately",
   );
 
   await page.goto(`/feedback/${FEEDBACK_ID}`);
-  // Both fetches are held, so no blob exists yet.
-  await expect(page.getByText("Loading…")).toBeVisible();
+  // Wait for both held attachment fetches rather than a transient page-level
+  // loading state: the detail request may complete before Playwright observes
+  // that label, while the attachment requests are the lifecycle under test.
+  await allStarted;
   expect(await page.evaluate(() => window.objectUrlLog.created)).toEqual([]);
 
   // Leave before either fetch resolves, then let both complete.
