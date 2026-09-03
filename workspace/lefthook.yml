@@ -115,19 +115,19 @@ pre-push:
     desktop-check:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["workspace/desktop/**", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
+      glob: ["workspace/desktop/**", "workspace/preview-features.json", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
       exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-check
     desktop-typecheck:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["workspace/desktop/**", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
+      glob: ["workspace/desktop/**", "workspace/preview-features.json", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
       exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-typecheck
     desktop-test:
       root: workspace/
       files: git diff --name-only origin/main...HEAD
-      glob: ["workspace/desktop/**", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
+      glob: ["workspace/desktop/**", "workspace/preview-features.json", "workspace/package.json", "workspace/pnpm-lock.yaml", "workspace/pnpm-workspace.yaml", "workspace/Justfile"]
       exclude: ["workspace/desktop/src-tauri/**"]
       run: just desktop-test
     desktop-tauri-checks:

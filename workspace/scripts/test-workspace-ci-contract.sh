@@ -71,6 +71,15 @@ for filter in desktop web admin; do
     done
 done
 
+# The desktop bundle and its E2E helpers import the shared feature manifest
+# directly (vite `@features-manifest` alias, tests/helpers/features.ts), so a
+# manifest-only change must still run every desktop consumer lane.
+desktop_filter_block=$(filter_block desktop)
+grep -Fq "              - 'workspace/preview-features.json'" <<<"$desktop_filter_block" || {
+    echo "desktop filter must include the shared feature manifest workspace/preview-features.json" >&2
+    exit 1
+}
+
 hook_command_block() {
     local command="$1"
     awk -v command="$command" '
@@ -89,6 +98,7 @@ grep -Fq '"workspace/examples/countdown-bot/**"' <<<"$rust_hook_block" || {
 for command in desktop-check desktop-typecheck desktop-test; do
     block=$(hook_command_block "$command")
     for input in \
+        "workspace/preview-features.json" \
         "workspace/package.json" \
         "workspace/pnpm-workspace.yaml" \
         "workspace/Justfile"; do

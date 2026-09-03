@@ -67,6 +67,7 @@ jobs:
               - 'workspace/scripts/normative-corpus.json'
               - 'workspace/desktop/**'
               - '!workspace/desktop/src-tauri/**'
+              - 'workspace/preview-features.json'
               - 'workspace/package.json'
               - 'workspace/pnpm-lock.yaml'
               - 'workspace/pnpm-workspace.yaml'
