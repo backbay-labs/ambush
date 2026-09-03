@@ -581,6 +581,16 @@ test("composer Ambush chip labels wrap without orphaning their icons", async ({
     const container = element.parentElement;
     if (container) container.style.width = "220px";
   });
+  await expect
+    .poll(() =>
+      sentChip.evaluate(
+        (element) =>
+          Array.from(element.getClientRects()).filter(
+            (rect) => rect.width > 0 && rect.height > 0,
+          ).length,
+      ),
+    )
+    .toBeGreaterThanOrEqual(2);
   const fragmentRects = await sentChip.evaluate((element) =>
     Array.from(element.getClientRects(), (rect) => ({
       bottom: rect.bottom,

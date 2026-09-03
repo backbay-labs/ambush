@@ -432,10 +432,22 @@ export function CommunityOnboardingFlow({
             })
           : null;
 
+      let avatarUrlToSave = shouldSaveCandidate
+        ? candidateAvatarUrl
+        : undefined;
+      if (!avatarUrlToSave) {
+        try {
+          avatarUrlToSave = (await getProfile()).avatarUrl?.trim() || undefined;
+        } catch {
+          // The native profile update is itself read-merge-write. If this
+          // refresh fails, omitting the avatar still preserves the stored one.
+        }
+      }
+
       try {
         const profile = await updateProfile({
           displayName: displayName.trim(),
-          avatarUrl: shouldSaveCandidate ? candidateAvatarUrl : undefined,
+          avatarUrl: avatarUrlToSave,
         });
         deferredAvatar?.release({
           expectedPubkey: profile.pubkey,

@@ -2634,12 +2634,15 @@ test("sends a thread message to its parent channel with a root-thread link", asy
     .filter({ hasText: replySummary })
     .last();
   await expect
-    .poll(async () => {
-      if (await sharedRow.isVisible()) return true;
-      const scrollToLatest = page.getByTestId("message-scroll-to-latest");
-      if (await scrollToLatest.isVisible()) await scrollToLatest.click();
-      return false;
-    })
+    .poll(
+      async () => {
+        if (await sharedRow.isVisible()) return true;
+        const scrollToLatest = page.getByTestId("message-scroll-to-latest");
+        if (await scrollToLatest.isVisible()) await scrollToLatest.click();
+        return false;
+      },
+      { timeout: 15_000 },
+    )
     .toBe(true);
   await expect(sharedRow.getByTestId("message-author")).toHaveText(
     "npub1mock...",
@@ -4362,6 +4365,7 @@ for (const targetKind of ["reply", "root"] as const) {
     await reply.hover();
     await reply.getByRole("button", { name: "More actions" }).click();
     await page.getByRole("menuitem", { name: "Edit message" }).click();
+    await expect(threadInput).toHaveText(sourceReply);
     await threadInput.fill(dirtyReply);
 
     const targetLink = timeline

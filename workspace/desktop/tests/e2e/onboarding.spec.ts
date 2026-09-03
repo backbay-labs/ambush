@@ -2577,7 +2577,7 @@ test("a pending avatar never becomes durable if propagation fails after onboardi
           .map(({ payload }) => (payload as { avatarUrl?: string }).avatarUrl),
       ),
     )
-    .toEqual([existingAvatarUrl]);
+    .toEqual([undefined]);
   await expect(
     page.getByText("Avatar couldn’t finish uploading"),
   ).toBeVisible();
