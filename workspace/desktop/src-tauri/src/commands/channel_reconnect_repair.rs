@@ -3,8 +3,9 @@ use tauri::State;
 use crate::{app_state::AppState, relay::query_relay};
 
 const MAX_REPAIR_PAGE_LIMIT: u32 = 500;
-const CHANNEL_REPAIR_KINDS: [u32; 15] = [
-    5, 7, 9, 9005, 40001, 40002, 40003, 40008, 40099, 45001, 45003, 48100, 48101, 48102, 48103,
+const CHANNEL_REPAIR_KINDS: [u32; 18] = [
+    5, 7, 9, 9005, 39005, 40001, 40002, 40003, 40008, 40099, 40100, 45001, 45003, 46010, 48100,
+    48101, 48102, 48103,
 ];
 
 fn build_channel_reconnect_repair_filter(
@@ -94,6 +95,20 @@ mod tests {
         assert!(filter.get("top_level").is_none());
         assert!(filter.get("include_summaries").is_none());
         assert!(filter.get("include_aux").is_none());
+    }
+
+    /// 01-DESIGN §8 / 11-PLAN-GROUND Task 3: a reconnect must repair the
+    /// perch case-channel kinds — held actions (46010), the case canvas
+    /// (40100) and thread summaries (39005) — or a console that dropped its
+    /// socket during a hold would render a stale case.
+    #[test]
+    fn repair_kinds_cover_perch_case_channel_kinds() {
+        for kind in [46010u32, 40100, 39005] {
+            assert!(
+                CHANNEL_REPAIR_KINDS.contains(&kind),
+                "kind {kind} must be repaired on reconnect"
+            );
+        }
     }
 
     #[test]

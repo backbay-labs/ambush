@@ -35,6 +35,8 @@ abstract final class EventKind {
   static const streamMessageEdit = 40003;
   static const streamMessageDiff = 40008;
   static const systemMessage = 40099;
+  static const canvas = 40100;
+  static const approvalRequest = 46010;
   static const jobRequest = 43001;
   static const jobAccepted = 43002;
   static const jobProgress = 43003;
@@ -67,6 +69,9 @@ abstract final class EventKind {
     streamMessageEdit, // 40003
     streamMessageDiff, // 40008
     systemMessage, // 40099
+    canvas, // 40100 — channel canvas document
+    channelThreadSummary, // 39005 — relay-signed thread summaries
+    approvalRequest, // 46010 — channel-scoped workflow/hold approval requests
     huddleStarted, // 48100 — visible huddle session row
     huddleParticipantJoined, // 48101 — huddle lifecycle metadata
     huddleParticipantLeft, // 48102 — huddle lifecycle metadata

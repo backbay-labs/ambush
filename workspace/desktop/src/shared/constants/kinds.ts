@@ -23,6 +23,8 @@ export const KIND_CHANNEL_WINDOW_BOUNDS = 39006;
 export const KIND_STREAM_MESSAGE_DIFF = 40008;
 export const KIND_REMINDER = 40007;
 export const KIND_SYSTEM_MESSAGE = 40099;
+/** Channel canvas document (ambush-core `KIND_CANVAS`); repaired on reconnect with the channel window. */
+export const KIND_CANVAS = 40100;
 export const KIND_JOB_REQUEST = 43001;
 export const KIND_JOB_ACCEPTED = 43002;
 export const KIND_JOB_PROGRESS = 43003;
@@ -106,6 +108,9 @@ export const CHANNEL_EVENT_KINDS = [
   KIND_STREAM_MESSAGE_EDIT, // 40003 — message edits
   KIND_STREAM_MESSAGE_DIFF, // 40008 — message diffs
   KIND_SYSTEM_MESSAGE, // 40099 — system messages (join, leave, etc.)
+  KIND_CANVAS, // 40100 — channel canvas document
+  KIND_CHANNEL_THREAD_SUMMARY, // 39005 — relay-signed thread summaries
+  KIND_APPROVAL_REQUEST, // 46010 — channel-scoped workflow/hold approval requests
   KIND_HUDDLE_STARTED, // 48100 — visible huddle session card
   KIND_HUDDLE_PARTICIPANT_JOINED, // 48101 — huddle lifecycle overlay
   KIND_HUDDLE_PARTICIPANT_LEFT, // 48102 — huddle lifecycle overlay
