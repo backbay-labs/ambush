@@ -52,6 +52,11 @@ pub use tasks::{
 /// record derives its producer identity from the public key, and verification
 /// requires that same admitted key.
 pub trait GraphRecordSigner: Send + Sync {
+    /// Return the key-derived identity admitted when this signer capability
+    /// was constructed. Coordinator commits bind every initial decision to
+    /// this identity at the durable store boundary.
+    fn admitted_identity(&self) -> Result<AgentId, GraphAdmissionError>;
+
     fn sign_edge(
         &self,
         edge: CausalEdge,
@@ -127,6 +132,13 @@ impl KeypairGraphRecordSigner {
 }
 
 impl GraphRecordSigner for KeypairGraphRecordSigner {
+    fn admitted_identity(&self) -> Result<AgentId, GraphAdmissionError> {
+        self.ensure_admitted()?;
+        Ok(AgentId::from_public_key_hex(
+            &self.key.public_key().to_hex(),
+        ))
+    }
+
     fn sign_edge(
         &self,
         edge: CausalEdge,

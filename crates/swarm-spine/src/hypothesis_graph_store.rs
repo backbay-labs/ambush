@@ -3234,11 +3234,18 @@ fn read_authenticated_state(
 /// admitted here is a terminal publication accompanied by its descriptor and
 /// outbox entry.  This keeps the one-transition reasoning boundary while
 /// retaining the durable monotonic fences from Plan 03.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitialDecisionAdmission<'a> {
+    Reject,
+    AuthenticatedCoordinator(&'a AgentId),
+}
+
 fn validate_reasoning_cas_transition(
     current: &GraphStoreState,
     candidate: &GraphStoreState,
     limits: &GraphResourceLimits,
     scheduler_policy: &SchedulerBudgetPolicy,
+    initial_decision_admission: InitialDecisionAdmission<'_>,
 ) -> Result<(), GraphStoreError> {
     if candidate.migration_marker < current.migration_marker {
         return Err(GraphStoreError::InvalidState {
@@ -3404,9 +3411,34 @@ fn validate_reasoning_cas_transition(
                         | UncertaintyReason::ConflictingEvidence
                 )
             });
-        if !coordinator_shape || !descriptor_lineage {
+        let initial_history_is_authenticated = match initial_decision_admission {
+            InitialDecisionAdmission::Reject => {
+                hypothesis.decision_history.is_empty()
+                    && hypothesis.status == swarm_core::hypothesis_graph::HypothesisStatus::Live
+            }
+            InitialDecisionAdmission::AuthenticatedCoordinator(coordinator_identity) => {
+                if hypothesis.decision_history.is_empty() {
+                    hypothesis.status == swarm_core::hypothesis_graph::HypothesisStatus::Live
+                } else {
+                    hypothesis.decision_history.iter().all(|decision| {
+                        let coordinator_scoped = decision.witness.as_ref().is_some_and(|witness| {
+                            witness.scoped_agent_id == "hypothesis-coordinator"
+                        });
+                        coordinator_scoped && &decision.producer_identity == coordinator_identity
+                    })
+                }
+            }
+        };
+        // A falsification decision closes its own alternative, so the
+        // coordinator must not manufacture a task which can no longer run.
+        // Every still-live alternative retains descriptor lineage.
+        let task_lineage_is_complete = hypothesis.status
+            == swarm_core::hypothesis_graph::HypothesisStatus::Falsified
+            || descriptor_lineage;
+        if !coordinator_shape || !initial_history_is_authenticated || !task_lineage_is_complete {
             return Err(GraphStoreError::InvalidState {
-                reason: "new hypothesis lacks coordinator seed/task lineage".to_string(),
+                reason: "new hypothesis lacks authenticated coordinator seed/task lineage"
+                    .to_string(),
             });
         }
     }
@@ -4429,6 +4461,14 @@ fn claim_task_op(
     validate_request(&request)?;
     ensure_reasoning_descriptor_for_request(state, &request)?;
     now.validate().map_err(GraphStoreError::Admission)?;
+    if now < state.logical_time_high_water {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: format!(
+                "claim logical time regressed below persisted high-water {}",
+                state.logical_time_high_water
+            ),
+        });
+    }
     let existing = state.tasks.get(&request.task_id).cloned();
     if let Some(ref existing) = existing {
         let pending_rebind = existing.task.state == TaskState::Pending
@@ -5451,6 +5491,22 @@ pub trait HypothesisGraphStore: Send + Sync {
         expected: &GraphStoreRevision,
         state: GraphStoreState,
     ) -> Result<GraphStoreSnapshot, GraphStoreError>;
+    /// Commit one coordinator-built seed generation whose initial decision
+    /// history is authenticated by coordinator-scoped record witnesses.
+    /// Ordinary CAS deliberately rejects initial decision history so callers
+    /// cannot bypass the runtime signer's admission boundary.
+    fn compare_and_swap_coordinator_seed(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        coordinator_identity: &AgentId,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        let _ = (expected, state, coordinator_identity);
+        Err(GraphStoreError::InvalidTransition {
+            reason: "store backend does not implement authenticated coordinator seed admission"
+                .to_string(),
+        })
+    }
     fn create_task(&self, request: TaskClaimRequest)
     -> Result<TaskMutationResult, GraphStoreError>;
     fn create_task_cas(
@@ -5752,17 +5808,12 @@ impl MemoryHypothesisGraphStore {
             idempotent: marker.idempotent,
         }
     }
-}
 
-impl HypothesisGraphStore for MemoryHypothesisGraphStore {
-    fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError> {
-        self.read_signed()?.snapshot()
-    }
-
-    fn compare_and_swap(
+    fn compare_and_swap_reasoning(
         &self,
         expected: &GraphStoreRevision,
         state: GraphStoreState,
+        initial_decision_admission: InitialDecisionAdmission<'_>,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
         let (snapshot, _) = self.mutate(Some(expected), |current| {
             if state.graph_id != self.graph_id {
@@ -5797,6 +5848,7 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
                 &state,
                 &self.limits,
                 &self.scheduler_policy,
+                initial_decision_admission,
             )?;
             current.graph = state.graph;
             current.hypotheses = state.hypotheses;
@@ -5819,6 +5871,33 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
             })
         })?;
         Ok(snapshot)
+    }
+}
+
+impl HypothesisGraphStore for MemoryHypothesisGraphStore {
+    fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        self.read_signed()?.snapshot()
+    }
+
+    fn compare_and_swap(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        self.compare_and_swap_reasoning(expected, state, InitialDecisionAdmission::Reject)
+    }
+
+    fn compare_and_swap_coordinator_seed(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        coordinator_identity: &AgentId,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        self.compare_and_swap_reasoning(
+            expected,
+            state,
+            InitialDecisionAdmission::AuthenticatedCoordinator(coordinator_identity),
+        )
     }
 
     fn create_task(
@@ -8869,29 +8948,12 @@ impl FileHypothesisGraphStore {
             idempotent: marker.idempotent,
         }
     }
-}
 
-impl HypothesisGraphStore for FileHypothesisGraphStore {
-    fn fail_reasoning_task_cas(
-        &self,
-        expected: &GraphStoreRevision,
-        expected_generation: u64,
-        publication: TaskFailureOutboxEntry,
-    ) -> Result<TaskTerminalResult, GraphStoreError> {
-        let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            fail_reasoning_task_op(state, expected_generation, publication, &self.limits)
-        })?;
-        Ok(Self::result_from_marker(snapshot, marker))
-    }
-
-    fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError> {
-        self.read_signed()?.snapshot()
-    }
-
-    fn compare_and_swap(
+    fn compare_and_swap_reasoning(
         &self,
         expected: &GraphStoreRevision,
         state: GraphStoreState,
+        initial_decision_admission: InitialDecisionAdmission<'_>,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
         let (snapshot, _) = self.mutate(Some(expected), |current| {
             if state.graph_id != self.graph_id {
@@ -8926,21 +8988,22 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
                 &state,
                 &self.limits,
                 &self.scheduler_policy,
+                initial_decision_admission,
             )?;
-            current.graph = state.graph.clone();
-            current.hypotheses = state.hypotheses.clone();
-            current.tasks = state.tasks.clone();
-            current.logical_task_descriptors = state.logical_task_descriptors.clone();
-            current.task_tombstones = state.task_tombstones.clone();
-            current.terminal_outbox = state.terminal_outbox.clone();
-            current.task_failure_outbox = state.task_failure_outbox.clone();
+            current.graph = state.graph;
+            current.hypotheses = state.hypotheses;
+            current.tasks = state.tasks;
+            current.logical_task_descriptors = state.logical_task_descriptors;
+            current.task_tombstones = state.task_tombstones;
+            current.terminal_outbox = state.terminal_outbox;
+            current.task_failure_outbox = state.task_failure_outbox;
             current.fencing_counter = state.fencing_counter;
-            current.limits = state.limits.clone();
-            current.cross_graph_links = state.cross_graph_links.clone();
-            current.scheduler_budget = state.scheduler_budget.clone();
+            current.limits = state.limits;
+            current.cross_graph_links = state.cross_graph_links;
+            current.scheduler_budget = state.scheduler_budget;
             current.migration_marker = state.migration_marker;
-            current.result_projection_digest = state.result_projection_digest.clone();
-            current.operator_projection_digest = state.operator_projection_digest.clone();
+            current.result_projection_digest = state.result_projection_digest;
+            current.operator_projection_digest = state.operator_projection_digest;
             current.logical_time_high_water = state.logical_time_high_water;
             Ok(StateMutation {
                 value: (),
@@ -8948,6 +9011,45 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
             })
         })?;
         Ok(snapshot)
+    }
+}
+
+impl HypothesisGraphStore for FileHypothesisGraphStore {
+    fn fail_reasoning_task_cas(
+        &self,
+        expected: &GraphStoreRevision,
+        expected_generation: u64,
+        publication: TaskFailureOutboxEntry,
+    ) -> Result<TaskTerminalResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(Some(expected), |state| {
+            fail_reasoning_task_op(state, expected_generation, publication, &self.limits)
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        self.read_signed()?.snapshot()
+    }
+
+    fn compare_and_swap(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        self.compare_and_swap_reasoning(expected, state, InitialDecisionAdmission::Reject)
+    }
+
+    fn compare_and_swap_coordinator_seed(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        coordinator_identity: &AgentId,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        self.compare_and_swap_reasoning(
+            expected,
+            state,
+            InitialDecisionAdmission::AuthenticatedCoordinator(coordinator_identity),
+        )
     }
 
     fn create_task(
@@ -9263,6 +9365,22 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
         match self {
             Self::Memory(store) => store.compare_and_swap(expected, state),
             Self::LocalFiles(store) => store.compare_and_swap(expected, state),
+        }
+    }
+
+    fn compare_and_swap_coordinator_seed(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        coordinator_identity: &AgentId,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        match self {
+            Self::Memory(store) => {
+                store.compare_and_swap_coordinator_seed(expected, state, coordinator_identity)
+            }
+            Self::LocalFiles(store) => {
+                store.compare_and_swap_coordinator_seed(expected, state, coordinator_identity)
+            }
         }
     }
 
@@ -13213,6 +13331,109 @@ mod tests {
     }
 
     #[test]
+    fn direct_cas_rejects_initial_decision_history_even_with_task_lineage() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(145),
+            budget_policy(),
+        )
+        .unwrap();
+        let tick = GraphLogicalTime::new(1);
+        let migrated = migrate_with_budget(&store, budget_at(tick, 0, 0), tick);
+        let before_bytes = migrated.canonical_bytes().unwrap();
+        let hypothesis_id = HypothesisId::new("hypothesis:forged-history");
+        let decision_key = signer(146);
+        let producer = AgentId::from_public_key_hex(&decision_key.public_key().to_hex());
+        let decision = swarm_core::hypothesis_graph::DecisionRecord::new(
+            swarm_core::hypothesis_graph::DecisionKind::Support,
+            hypothesis_id.clone(),
+            [],
+            GraphProducerRole::Hunter,
+            producer.clone(),
+            tick,
+            "caller-crafted initial decision",
+        )
+        .unwrap()
+        .signed_with(&decision_key, "hypothesis-coordinator")
+        .unwrap();
+        let hypothesis = Hypothesis::new(
+            hypothesis_id.clone(),
+            ConfidenceDistribution::uniform_two(),
+            [UncertaintyReason::InsufficientEvidence],
+            [],
+        )
+        .unwrap()
+        .append_decision(decision)
+        .unwrap();
+        let target = TaskTarget::Hypothesis {
+            hypothesis_id: hypothesis_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            migrated.state().graph_id.clone(),
+            target.clone(),
+            TaskKind::FalsifyHypothesis,
+            "46".repeat(32),
+        )
+        .unwrap();
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            TaskKind::FalsifyHypothesis,
+            target,
+            GraphProducerRole::Falsifier,
+            producer,
+            EvidenceScope::new([EvidenceSourceFamily::Process], [], []).unwrap(),
+            tick,
+        )
+        .unwrap();
+        let durable = DurableTaskRecord {
+            schema_version: GRAPH_STORE_SCHEMA_VERSION,
+            task: TaskRecord {
+                schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+                request,
+                state: TaskState::Pending,
+                generation: 1,
+                attempts: 1,
+                lease: None,
+                completion: None,
+                terminal_history: Vec::new(),
+            },
+            generation: 1,
+            history: Vec::new(),
+        };
+        let mut candidate = migrated.state.clone();
+        candidate.hypotheses.insert(hypothesis_id, hypothesis);
+        candidate.task_tombstones.insert(
+            descriptor.task_id.clone(),
+            TaskMonotonicity::from_record(&durable).unwrap(),
+        );
+        candidate.tasks.insert(descriptor.task_id.clone(), durable);
+        candidate
+            .logical_task_descriptors
+            .insert(descriptor.task_id.clone(), descriptor);
+        candidate.scheduler_budget = Some(budget_at(tick, 1, 0));
+
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, candidate.clone()),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("authenticated coordinator seed/task lineage")
+        ));
+        let unrelated = AgentId::from_public_key_hex(&signer(149).public_key().to_hex());
+        assert!(matches!(
+            store.compare_and_swap_coordinator_seed(
+                &migrated.revision,
+                candidate,
+                &unrelated,
+            ),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("authenticated coordinator seed/task lineage")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
+    }
+
+    #[test]
     fn pending_reasoning_task_binds_the_first_eligible_claimant() {
         let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
             graph(),
@@ -13279,6 +13500,41 @@ mod tests {
             Err(GraphStoreError::AlreadyClaimed { .. })
         ));
         assert_eq!(store.snapshot().unwrap(), before_steal);
+    }
+
+    #[test]
+    fn reasoning_claim_rejects_time_below_durable_high_water_without_mutation() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(147),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(148, "retrograde-claim");
+        let high_water = GraphLogicalTime::new(100);
+        let migrated = migrate_legacy_pending_with_budget(
+            &store,
+            descriptor,
+            request.clone(),
+            budget_at(high_water, 0, 0),
+        );
+        let before_bytes = migrated.canonical_bytes().unwrap();
+
+        assert!(matches!(
+            store.claim_task_cas_with_budget(
+                &migrated.revision,
+                request,
+                GraphLogicalTime::new(99),
+                10,
+                budget_at(high_water, 0, 1),
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("claim logical time regressed")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
     }
 
     fn assert_reasoning_failure_is_atomic(

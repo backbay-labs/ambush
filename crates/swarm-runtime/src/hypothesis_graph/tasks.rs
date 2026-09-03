@@ -193,6 +193,7 @@ impl HypothesisTaskLedger {
                 reason: "logical task descriptor graph ID differs from durable graph".to_string(),
             });
         }
+        validate_existing_task_target(snapshot.state(), descriptor.kind, &descriptor.target)?;
         if let Some(existing_descriptor) = snapshot
             .state()
             .logical_task_descriptors
@@ -832,6 +833,10 @@ fn coordinate_seed_once(
         signer,
         decisions,
     } = context;
+    let coordinator_identity = signer
+        .map(GraphRecordSigner::admitted_identity)
+        .transpose()
+        .map_err(GraphStoreError::Admission)?;
     let snapshot = store.snapshot()?;
     if snapshot.revision() != revision {
         return Err(GraphStoreError::StalePredecessor {
@@ -954,8 +959,8 @@ fn coordinate_seed_once(
     }
 
     let edge_ids = next.graph.edges.keys().cloned().collect::<BTreeSet<_>>();
-    let task_targets =
-        coordination_task_targets(seed, &edge_ids).map_err(GraphStoreError::Admission)?;
+    let task_targets = coordination_task_targets(seed, &edge_ids, &next.hypotheses)
+        .map_err(GraphStoreError::Admission)?;
     let mut task_ids = Vec::with_capacity(task_targets.len());
     let mut new_tasks = 0_usize;
     for (kind, target) in task_targets {
@@ -1087,7 +1092,11 @@ fn coordinate_seed_once(
             task_ids,
         });
     }
-    let committed = store.compare_and_swap(revision, next)?;
+    let committed = if let Some(coordinator_identity) = coordinator_identity.as_ref() {
+        store.compare_and_swap_coordinator_seed(revision, next, coordinator_identity)?
+    } else {
+        store.compare_and_swap(revision, next)?
+    };
     if let Some(budget) = committed.scheduler_budget() {
         *scheduler_budget = budget.clone();
     }
@@ -1111,6 +1120,35 @@ fn same_logical_descriptor(left: &LogicalTaskDescriptor, right: &LogicalTaskDesc
         && left.target == right.target
         && left.kind == right.kind
         && left.seed_digest == right.seed_digest
+}
+
+fn validate_existing_task_target(
+    state: &GraphStoreState,
+    kind: TaskKind,
+    target: &TaskTarget,
+) -> Result<(), GraphStoreError> {
+    let target_exists = match (kind, target) {
+        // Evidence acquisition may name the evidence the task is expected to
+        // produce, so absence is not malformed at admission time.
+        (TaskKind::AcquireEvidence, TaskTarget::Evidence { .. }) => true,
+        (TaskKind::ChallengeEdge, TaskTarget::Edge { edge_id }) => {
+            state.graph.edges.contains_key(edge_id)
+        }
+        (TaskKind::FalsifyHypothesis, TaskTarget::Hypothesis { hypothesis_id }) => {
+            state.hypotheses.contains_key(hypothesis_id)
+        }
+        // Descriptor validation normally rejects kind/target mismatches; keep
+        // this boundary fail-closed for custom or future implementations.
+        _ => false,
+    };
+    if target_exists {
+        Ok(())
+    } else {
+        Err(GraphStoreError::InvalidState {
+            reason: "logical task descriptor target does not exist in the durable graph"
+                .to_string(),
+        })
+    }
 }
 
 /// Mirror the spine's claim idempotency predicate without guessing from the
@@ -1826,6 +1864,75 @@ mod tests {
         let mut probe = before.clone();
         assert!(probe.admit_at(&config, tick, 2, 0).is_err());
         assert_eq!(ledger.scheduler_budget(), &before);
+    }
+
+    #[test]
+    fn task_creation_rejects_missing_edge_and_hypothesis_targets_without_charging() {
+        let config = HypothesisGraphConfig {
+            enabled: true,
+            max_work_units_per_tick: 4,
+            max_claims_per_tick: 2,
+            ..HypothesisGraphConfig::default()
+        };
+        let graph_id = swarm_core::hypothesis_graph::GraphId::new("graph:missing-task-target");
+        let graph = swarm_core::hypothesis_graph::HypothesisGraph::new(
+            graph_id.clone(),
+            config.resource_limits(),
+        )
+        .unwrap();
+        let store = MemoryHypothesisGraphStore::new_with_config(graph, key(71), &config).unwrap();
+        let claimant_key = key(72);
+        let claimant = AgentId::from_public_key_hex(&claimant_key.public_key().to_hex());
+        let cases = [
+            (
+                TaskKind::ChallengeEdge,
+                TaskTarget::Edge {
+                    edge_id: swarm_core::hypothesis_graph::EdgeId::new("edge:missing"),
+                },
+                GraphProducerRole::Challenger,
+            ),
+            (
+                TaskKind::FalsifyHypothesis,
+                TaskTarget::Hypothesis {
+                    hypothesis_id: HypothesisId::new("hypothesis:missing"),
+                },
+                GraphProducerRole::Falsifier,
+            ),
+        ];
+        let mut ledger =
+            HypothesisTaskLedger::from_config(&config, GraphLogicalTime::new(10)).unwrap();
+        let before = store.snapshot().unwrap();
+        let before_bytes = before.canonical_bytes().unwrap();
+        let budget_before = ledger.scheduler_budget().clone();
+
+        for (kind, target, role) in cases {
+            let descriptor =
+                LogicalTaskDescriptor::new(graph_id.clone(), target.clone(), kind, "71".repeat(32))
+                    .unwrap();
+            let request = TaskClaimRequest::new(
+                descriptor.task_id.clone(),
+                kind,
+                target,
+                role,
+                claimant.clone(),
+                EvidenceScope::new([EvidenceSourceFamily::Process], [], []).unwrap(),
+                GraphLogicalTime::new(10),
+            )
+            .unwrap();
+            let error = ledger
+                .create_task(&store, before.revision(), descriptor, request)
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                GraphStoreError::InvalidState { reason }
+                    if reason.contains("target does not exist")
+            ));
+            assert_eq!(
+                store.snapshot().unwrap().canonical_bytes().unwrap(),
+                before_bytes
+            );
+            assert_eq!(ledger.scheduler_budget(), &budget_before);
+        }
     }
 
     #[test]
@@ -3252,6 +3359,29 @@ mod tests {
         assert_eq!(
             result.snapshot.state().hypotheses[&HypothesisId::new("hypothesis:falsify")].status,
             swarm_core::hypothesis_graph::HypothesisStatus::Falsified
+        );
+        assert!(result.snapshot.state().tasks.values().all(|task| {
+            !matches!(
+                &task.task.request.target,
+                TaskTarget::Hypothesis { hypothesis_id }
+                    if hypothesis_id == &HypothesisId::new("hypothesis:falsify")
+            )
+        }));
+        assert!(result.snapshot.state().tasks.values().any(|task| {
+            matches!(
+                &task.task.request.target,
+                TaskTarget::Hypothesis { hypothesis_id }
+                    if hypothesis_id == &HypothesisId::new("hypothesis:support-challenge")
+            )
+        }));
+        assert_eq!(result.snapshot.state().tasks.len(), 2);
+        assert_eq!(
+            result
+                .snapshot
+                .scheduler_budget()
+                .unwrap()
+                .work_units_used(),
+            2
         );
     }
 
