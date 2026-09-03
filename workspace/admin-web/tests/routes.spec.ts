@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
 test.beforeEach(async ({ page }) => {
   // Every admin API call returns 200, so the probe resolves to disabled mode
   // and the dashboard renders without a credential.
@@ -141,6 +146,7 @@ test("feedback cards open the complete submission", async ({ page }) => {
         category: "needs-work",
         body: fullBody,
         tags: [],
+        status: "new",
         eventCreatedAt: "2026-07-17T17:25:00Z",
         receivedAt: "2026-07-17T17:30:00Z",
       }),
@@ -157,6 +163,7 @@ test("feedback cards open the complete submission", async ({ page }) => {
           submitterPubkey: "21".repeat(32),
           category: "needs-work",
           bodySummary: `${fullBody.slice(0, 240)}…`,
+          status: "new",
           receivedAt: "2026-07-17T17:30:00Z",
         },
       ]),
@@ -194,6 +201,7 @@ test("feedback can be searched and filtered by community and time", async ({
           submitterPubkey: "21".repeat(32),
           category: "bug",
           bodySummary: "Composer freezes after sleep",
+          status: "new",
           receivedAt: recent,
         },
         {
@@ -203,6 +211,7 @@ test("feedback can be searched and filtered by community and time", async ({
           submitterPubkey: "22".repeat(32),
           category: "praise",
           bodySummary: "Calls are much more reliable",
+          status: "archived",
           receivedAt: old,
         },
       ]),
@@ -238,6 +247,7 @@ test("feedback filters keep long community names usable", async ({ page }) => {
           submitterPubkey: "21".repeat(32),
           category: "bug",
           bodySummary: "The filter row stays within its container",
+          status: "new",
           receivedAt: new Date().toISOString(),
         },
       ]),
@@ -294,7 +304,9 @@ test("feedback filters keep long community names usable", async ({ page }) => {
   }
 });
 
-test("feedback status is stored locally by feedback id", async ({ page }) => {
+test("feedback status filter uses the relay's authoritative status", async ({
+  page,
+}) => {
   await page.route("**/api/admin/v1/feedback", (route) =>
     route.fulfill({
       contentType: "application/json",
@@ -306,6 +318,7 @@ test("feedback status is stored locally by feedback id", async ({ page }) => {
           submitterPubkey: "21".repeat(32),
           category: "bug",
           bodySummary: "Composer freezes after sleep",
+          status: "reviewed",
           receivedAt: new Date().toISOString(),
         },
       ]),
@@ -313,12 +326,9 @@ test("feedback status is stored locally by feedback id", async ({ page }) => {
   );
 
   await page.goto("/feedback");
-  await page.getByRole("checkbox", { name: "Acted on" }).check();
-  await page.reload();
-  await expect(page.getByRole("checkbox", { name: "Acted on" })).toBeChecked();
-  await page.getByLabel("Status").selectOption("acted-on");
+  await page.getByLabel("Status").selectOption("reviewed");
   await expect(page.getByText("Composer freezes after sleep")).toBeVisible();
-  await page.getByLabel("Status").selectOption("pending");
+  await page.getByLabel("Status").selectOption("new");
   await expect(page.getByText("No matching feedback.")).toBeVisible();
 });
 
@@ -339,6 +349,7 @@ test("feedback attachments render from imeta without raw markdown", async ({
         submitterPubkey: "21".repeat(32),
         category: "bug",
         body: `Composer froze.\n![image](${imageUrl})\n[diagnostics.txt](${fileUrl})`,
+        status: "new",
         tags: [
           [
             "imeta",
@@ -363,6 +374,16 @@ test("feedback attachments render from imeta without raw markdown", async ({
       }),
     }),
   );
+
+  await page.route(`**/api/admin/v1/feedback/${id}/attachments/**`, (route) => {
+    const isImage = new URL(route.request().url()).pathname.endsWith(
+      "a".repeat(64),
+    );
+    route.fulfill({
+      contentType: isImage ? "image/png" : "application/octet-stream",
+      body: isImage ? ONE_PIXEL_PNG : "bytes",
+    });
+  });
 
   await page.goto(`/feedback/${id}`);
   await expect(

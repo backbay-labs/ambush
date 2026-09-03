@@ -5,6 +5,11 @@ interface ObjectUrlLog {
   revoked: string[];
 }
 
+const ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
 declare global {
   interface Window {
     objectUrlLog: ObjectUrlLog;
@@ -65,11 +70,15 @@ test("nip98 mode: attachments are fetched with a signed credential and rendered 
 
   const attachmentRequests: { path: string; authorization?: string }[] = [];
   await page.route(`**/api/admin/v1/feedback/${id}/attachments/**`, (route) => {
+    const isImage = new URL(route.request().url()).pathname.endsWith(imageHash);
     attachmentRequests.push({
       path: new URL(route.request().url()).pathname,
       authorization: route.request().headers().authorization,
     });
-    route.fulfill({ contentType: "application/octet-stream", body: "bytes" });
+    route.fulfill({
+      contentType: isImage ? "image/png" : "application/octet-stream",
+      body: isImage ? ONE_PIXEL_PNG : "bytes",
+    });
   });
   await page.route(`**/api/admin/v1/feedback/${id}`, (route) =>
     route.fulfill({
@@ -82,6 +91,7 @@ test("nip98 mode: attachments are fetched with a signed credential and rendered 
         submitterPubkey: "21".repeat(32),
         category: "bug",
         body: "Composer froze.",
+        status: "new",
         tags: [
           [
             "imeta",
@@ -169,6 +179,7 @@ async function routeFeedbackDetail(page: Page) {
         submitterPubkey: "21".repeat(32),
         category: "bug",
         body: "Composer froze.",
+        status: "new",
         tags: [
           [
             "imeta",
@@ -199,8 +210,15 @@ test("attachment object urls are revoked when the view is left", async ({
   await routeFeedbackDetail(page);
   await page.route(
     `**/api/admin/v1/feedback/${FEEDBACK_ID}/attachments/**`,
-    (route) =>
-      route.fulfill({ contentType: "application/octet-stream", body: "bytes" }),
+    (route) => {
+      const isImage = new URL(route.request().url()).pathname.endsWith(
+        IMAGE_HASH,
+      );
+      route.fulfill({
+        contentType: isImage ? "image/png" : "application/octet-stream",
+        body: isImage ? ONE_PIXEL_PNG : "bytes",
+      });
+    },
   );
 
   await page.goto(`/feedback/${FEEDBACK_ID}`);
