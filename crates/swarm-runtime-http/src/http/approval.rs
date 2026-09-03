@@ -7,76 +7,13 @@ use axum::extract::{Extension, Path as RoutePath, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use serde::Deserialize;
 use serde_json::json;
-#[cfg(test)]
-use std::sync::{Arc, Mutex, OnceLock};
 use swarm_core::config::OperatorScope;
 use swarm_crypto::DetachedSignature;
 use swarm_policy::governance::GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX;
 use swarm_runtime::approval::{
     ApprovalError, ApprovalLedgerList, ApprovalLedgerLookup, ApprovalLedgerVoteTransition,
-    ApprovalSetList, ApprovalSetReport, ThresholdRule,
+    ApprovalSetList, ApprovalSetReport, ApprovalVote, ApprovalVoteIntent, ThresholdRule,
 };
-#[cfg(test)]
-use tokio::sync::Barrier;
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ApprovalAppendTestMode {
-    TransitionOutcome,
-    ReloadLatestMutant,
-}
-
-#[cfg(test)]
-#[derive(Clone)]
-struct ApprovalAppendTestHook {
-    ledger_id: String,
-    barrier: Arc<Barrier>,
-    mode: ApprovalAppendTestMode,
-}
-
-#[cfg(test)]
-static APPROVAL_APPEND_TEST_HOOK: OnceLock<Mutex<Option<ApprovalAppendTestHook>>> = OnceLock::new();
-
-#[cfg(test)]
-fn approval_append_test_hook_cell() -> &'static Mutex<Option<ApprovalAppendTestHook>> {
-    APPROVAL_APPEND_TEST_HOOK.get_or_init(|| Mutex::new(None))
-}
-
-#[cfg(test)]
-pub(super) fn install_approval_append_test_hook(
-    ledger_id: &str,
-    barrier: Arc<Barrier>,
-    mode: ApprovalAppendTestMode,
-) {
-    let mut hook = approval_append_test_hook_cell()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *hook = Some(ApprovalAppendTestHook {
-        ledger_id: ledger_id.to_string(),
-        barrier,
-        mode,
-    });
-}
-
-#[cfg(test)]
-pub(super) fn clear_approval_append_test_hook() {
-    let mut hook = approval_append_test_hook_cell()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *hook = None;
-}
-
-#[cfg(test)]
-async fn wait_for_approval_append_test_hook(ledger_id: &str) -> Option<ApprovalAppendTestMode> {
-    let hook = approval_append_test_hook_cell()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    let hook = hook.filter(|hook| hook.ledger_id == ledger_id)?;
-    hook.barrier.wait().await;
-    Some(hook.mode)
-}
-
 #[derive(Debug, Deserialize)]
 pub(super) struct ApprovalSetListQuery {
     limit: Option<usize>,
@@ -97,7 +34,8 @@ pub(super) struct ApprovalSetCreateRequest {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ApprovalVoteAppendRequest {
-    voter_id: String,
+    #[serde(flatten)]
+    intent: ApprovalVoteIntent,
     signature: DetachedSignature,
 }
 
@@ -199,10 +137,21 @@ pub(super) async fn approval_vote_append_handler(
     Json(request): Json<ApprovalVoteAppendRequest>,
 ) -> Result<Json<ApprovalLedgerLookup>, OperatorApiError> {
     require_operator_api_scope(&principal, OperatorScope::Approve, "approval")?;
-    if request.voter_id != principal.operator_id.as_ref() {
+    if request.intent.vote != ApprovalVote::Approve {
+        return Err(OperatorApiError::bad_request(
+            "durable approval ledgers do not yet support denial votes",
+        ));
+    }
+    if request.intent.voter_id != principal.operator_id.as_ref() {
         return Err(OperatorApiError::forbidden(format!(
             "authenticated operator `{}` cannot submit votes for `{}`",
-            principal.operator_id, request.voter_id
+            principal.operator_id, request.intent.voter_id
+        )));
+    }
+    if request.intent.ledger_id != ledger_id {
+        return Err(OperatorApiError::bad_request(format!(
+            "signed approval vote targets ledger `{}` instead of route ledger `{ledger_id}`",
+            request.intent.ledger_id
         )));
     }
     let harness = approval_harness(&state)?;
@@ -213,25 +162,14 @@ pub(super) async fn approval_vote_append_handler(
             OperatorApiError::not_found(format!("approval ledger `{ledger_id}` was not found"))
         })?;
     let outcome = harness
-        .append_signed_vote_outcome(&ledger_id, &request.voter_id, &request.signature)
+        .append_signed_vote_outcome(&request.intent, &request.signature)
         .map_err(map_approval_error)?;
     let updated = outcome.ledger;
-    #[cfg(test)]
-    let test_mode = wait_for_approval_append_test_hook(&ledger_id).await;
     let should_resume = matches!(
         outcome.transition,
         ApprovalLedgerVoteTransition::QuorumCrossed
             | ApprovalLedgerVoteTransition::ExactDuplicateOfQuorum
     );
-    #[cfg(test)]
-    let should_resume = if matches!(test_mode, Some(ApprovalAppendTestMode::ReloadLatestMutant)) {
-        harness
-            .load_ledger(&ledger_id)
-            .map_err(map_approval_error)?
-            .is_some_and(|latest| latest.quorum_state.quorum_met)
-    } else {
-        should_resume
-    };
     if should_resume {
         let approval_set = harness
             .load_approval_set(&updated.report.approval_set_id)
@@ -251,7 +189,7 @@ pub(super) async fn approval_vote_append_handler(
         ) && !governed
         {
             return Err(map_approval_error(ApprovalError::DuplicateVoter {
-                voter_id: request.voter_id,
+                voter_id: request.intent.voter_id,
             }));
         }
         let receipt_pack = harness
@@ -296,7 +234,7 @@ pub(super) async fn approval_vote_append_handler(
         ApprovalLedgerVoteTransition::ExactDuplicatePending
     ) {
         return Err(map_approval_error(ApprovalError::DuplicateVoter {
-            voter_id: request.voter_id,
+            voter_id: request.intent.voter_id,
         }));
     }
     Ok(Json(updated))

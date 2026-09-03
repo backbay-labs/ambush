@@ -4152,6 +4152,55 @@ where
 {
     let current_revision = current.revision()?;
     check_expected(&current_revision, expected)?;
+    transition_after_predecessor_check(
+        current,
+        signer,
+        limits,
+        scheduler_policy,
+        expected.is_none(),
+        operation,
+    )
+}
+
+fn transition_with_exact_retry<R, P, F>(
+    current: &SignedGraphStoreState,
+    expected: Option<&GraphStoreRevision>,
+    signer: &Keypair,
+    limits: &GraphResourceLimits,
+    scheduler_policy: &SchedulerBudgetPolicy,
+    exact_retry: P,
+    operation: F,
+) -> Result<(SignedGraphStoreState, R), GraphStoreError>
+where
+    P: FnOnce(&GraphStoreState) -> Result<Option<R>, GraphStoreError>,
+    F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
+{
+    if let Some(value) = exact_retry(&current.state)? {
+        return Ok((current.clone(), value));
+    }
+    let current_revision = current.revision()?;
+    check_expected(&current_revision, expected)?;
+    transition_after_predecessor_check(
+        current,
+        signer,
+        limits,
+        scheduler_policy,
+        expected.is_none(),
+        operation,
+    )
+}
+
+fn transition_after_predecessor_check<R, F>(
+    current: &SignedGraphStoreState,
+    signer: &Keypair,
+    limits: &GraphResourceLimits,
+    scheduler_policy: &SchedulerBudgetPolicy,
+    refresh_convenience_tombstones: bool,
+    operation: F,
+) -> Result<(SignedGraphStoreState, R), GraphStoreError>
+where
+    F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
+{
     let mut next_state = current.state.clone();
     let result = operation(&mut next_state)?;
     if !result.changed {
@@ -4162,7 +4211,7 @@ where
     // before the append-only validator could reject it. Convenience task
     // transitions refresh only the records changed by this operation, so an
     // unrelated legacy tombstone is never rewritten as a side effect.
-    if expected.is_none() {
+    if refresh_convenience_tombstones {
         refresh_changed_task_tombstones(&current.state, &mut next_state, false)?;
     }
     validate_scheduler_budget_transition(&current.state, &next_state)?;
@@ -4838,6 +4887,12 @@ fn fail_reasoning_task_op(
     publication: TaskFailureOutboxEntry,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
+    if let Some(marker) = exact_reasoning_failure_retry(state, &publication)? {
+        return Ok(StateMutation {
+            value: marker,
+            changed: false,
+        });
+    }
     if state.migration_marker < GRAPH_STATE_MIGRATION_HYPOTHESES {
         return Err(GraphStoreError::InvalidTransition {
             reason: "descriptor-bound reasoning failure requires a marker-1 graph".to_string(),
@@ -4915,6 +4970,39 @@ fn fail_reasoning_task_op(
         },
         changed: true,
     })
+}
+
+fn exact_reasoning_failure_retry(
+    state: &GraphStoreState,
+    publication: &TaskFailureOutboxEntry,
+) -> Result<Option<TaskMutationMarker>, GraphStoreError> {
+    let Some(committed) = state.task_failure_outbox.get(&publication.task_id) else {
+        return Ok(None);
+    };
+    let task =
+        state
+            .tasks
+            .get(&publication.task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "reasoning failure outbox has no retained durable task".to_string(),
+            })?;
+    let descriptor = state
+        .logical_task_descriptors
+        .get(&publication.task_id)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "reasoning failure outbox has no logical descriptor".to_string(),
+        })?;
+    committed.validate_for_failed_task(&task.task, descriptor, state.logical_time_high_water)?;
+    if committed != publication {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "reasoning failure retry differs from the committed task publication"
+                .to_string(),
+        });
+    }
+    Ok(Some(TaskMutationMarker {
+        task: task.task.clone(),
+        idempotent: true,
+    }))
 }
 
 fn expire_task_op(
@@ -5787,6 +5875,42 @@ impl MemoryHypothesisGraphStore {
         Ok((guard.snapshot()?, value))
     }
 
+    fn mutate_with_exact_retry<R, P, F>(
+        &self,
+        expected: Option<&GraphStoreRevision>,
+        exact_retry: P,
+        operation: F,
+    ) -> Result<(GraphStoreSnapshot, R), GraphStoreError>
+    where
+        P: FnOnce(&GraphStoreState) -> Result<Option<R>, GraphStoreError>,
+        F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
+    {
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| GraphStoreError::PoisonedLock)?;
+        verify_state(
+            &guard,
+            &self.graph_id,
+            &self.signer_id,
+            &self.limits,
+            &self.scheduler_policy,
+        )?;
+        let (next, value) = transition_with_exact_retry(
+            &guard,
+            expected,
+            &self.signer,
+            &self.limits,
+            &self.scheduler_policy,
+            exact_retry,
+            operation,
+        )?;
+        if next != *guard {
+            *guard = next;
+        }
+        Ok((guard.snapshot()?, value))
+    }
+
     pub fn revision(&self) -> Result<GraphStoreRevision, GraphStoreError> {
         self.snapshot().map(|snapshot| snapshot.revision)
     }
@@ -6075,9 +6199,12 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
         expected_generation: u64,
         publication: TaskFailureOutboxEntry,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
-        let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            fail_reasoning_task_op(state, expected_generation, publication, &self.limits)
-        })?;
+        let retry_publication = publication.clone();
+        let (snapshot, marker) = self.mutate_with_exact_retry(
+            Some(expected),
+            |state| exact_reasoning_failure_retry(state, &retry_publication),
+            |state| fail_reasoning_task_op(state, expected_generation, publication, &self.limits),
+        )?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
@@ -8794,17 +8921,31 @@ impl FileHypothesisGraphStore {
     where
         F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
     {
+        self.mutate_with_exact_retry(expected, |_| Ok(None), operation)
+    }
+
+    fn mutate_with_exact_retry<R, P, F>(
+        &self,
+        expected: Option<&GraphStoreRevision>,
+        exact_retry: P,
+        operation: F,
+    ) -> Result<(GraphStoreSnapshot, R), GraphStoreError>
+    where
+        P: FnOnce(&GraphStoreState) -> Result<Option<R>, GraphStoreError>,
+        F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
+    {
         let _mutation_guard = self
             .mutation_lock
             .lock()
             .map_err(|_| GraphStoreError::PoisonedLock)?;
         let current = self.read_signed()?;
-        let (next, value) = transition(
+        let (next, value) = transition_with_exact_retry(
             &current,
             expected,
             &self.signer,
             &self.limits,
             &self.scheduler_policy,
+            exact_retry,
             operation,
         )?;
         if next != current {
@@ -9030,9 +9171,12 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
         expected_generation: u64,
         publication: TaskFailureOutboxEntry,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
-        let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            fail_reasoning_task_op(state, expected_generation, publication, &self.limits)
-        })?;
+        let retry_publication = publication.clone();
+        let (snapshot, marker) = self.mutate_with_exact_retry(
+            Some(expected),
+            |state| exact_reasoning_failure_retry(state, &retry_publication),
+            |state| fail_reasoning_task_op(state, expected_generation, publication, &self.limits),
+        )?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
@@ -13593,10 +13737,10 @@ mod tests {
         );
     }
 
-    fn assert_reasoning_failure_is_atomic(
+    fn prepare_reasoning_failure(
         store: &dyn HypothesisGraphStore,
         claimant_seed: u8,
-    ) -> GraphStoreSnapshot {
+    ) -> (TaskClaimResult, TaskFailureOutboxEntry) {
         let (descriptor, request) = logical_request(claimant_seed, "atomic-reasoning-failure");
         let claimant_key = signer(claimant_seed);
         let migrated = migrate_legacy_pending_with_budget(
@@ -13639,6 +13783,15 @@ mod tests {
             "atomic-failure-worker",
         )
         .unwrap();
+        (claimed, publication)
+    }
+
+    fn assert_reasoning_failure_is_atomic(
+        store: &dyn HypothesisGraphStore,
+        claimant_seed: u8,
+    ) -> GraphStoreSnapshot {
+        let (claimed, publication) = prepare_reasoning_failure(store, claimant_seed);
+        let task_id = publication.task_id.clone();
         let failed = store
             .fail_reasoning_task_cas(
                 &claimed.revision,
@@ -13660,12 +13813,112 @@ mod tests {
         );
         let snapshot = store.snapshot().unwrap();
         assert_eq!(
-            snapshot.task_failure_outbox().get(&request.task_id),
+            snapshot.task_failure_outbox().get(&task_id),
             Some(&publication)
         );
-        assert!(!snapshot.terminal_outbox().contains_key(&request.task_id));
+        assert!(!snapshot.terminal_outbox().contains_key(&task_id));
         snapshot.state().validate().unwrap();
+        let committed_bytes = snapshot.canonical_bytes().unwrap();
+        for expected in [&claimed.revision, snapshot.revision()] {
+            let replayed = store
+                .fail_reasoning_task_cas(expected, claimed.task_generation, publication.clone())
+                .unwrap();
+            assert!(replayed.idempotent);
+            assert_eq!(replayed.revision, *snapshot.revision());
+            assert_eq!(replayed.task, failed.task);
+        }
+        let mut changed = publication;
+        changed.failure.summary_digest = "digest:changed-reasoning-failure".to_string();
+        assert!(matches!(
+            store.fail_reasoning_task_cas(
+                snapshot.revision(),
+                claimed.task_generation,
+                changed,
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("differs from the committed task publication")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            committed_bytes
+        );
         snapshot
+    }
+
+    fn assert_concurrent_reasoning_failure_retry_is_atomic(
+        store: Arc<dyn HypothesisGraphStore>,
+        claimant_seed: u8,
+    ) {
+        let (claimed, publication) = prepare_reasoning_failure(store.as_ref(), claimant_seed);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            let expected = claimed.revision.clone();
+            let publication = publication.clone();
+            let expected_generation = claimed.task_generation;
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.fail_reasoning_task_cas(&expected, expected_generation, publication)
+            }));
+        }
+        barrier.wait();
+        let results = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.idempotent).count(), 1);
+        assert_eq!(
+            results.iter().filter(|result| !result.idempotent).count(),
+            1
+        );
+
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(
+            snapshot.revision.generation,
+            claimed.revision.generation + 1
+        );
+        assert!(
+            results
+                .iter()
+                .all(|result| result.revision == snapshot.revision)
+        );
+        assert_eq!(
+            snapshot.task_failure_outbox().get(&publication.task_id),
+            Some(&publication)
+        );
+        let committed_bytes = snapshot.canonical_bytes().unwrap();
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            committed_bytes
+        );
+    }
+
+    #[test]
+    fn concurrent_reasoning_failure_retries_are_atomic_for_memory_and_file() {
+        let memory: Arc<dyn HypothesisGraphStore> = Arc::new(
+            MemoryHypothesisGraphStore::new_with_scheduler_policy(
+                graph(),
+                signer(151),
+                budget_policy(),
+            )
+            .unwrap(),
+        );
+        assert_concurrent_reasoning_failure_retry_is_atomic(memory, 152);
+
+        let path = temp_dir("concurrent-reasoning-failure-retry");
+        let file: Arc<dyn HypothesisGraphStore> = Arc::new(
+            FileHypothesisGraphStore::new_with_scheduler_policy(
+                &path,
+                graph(),
+                signer(153),
+                budget_policy(),
+            )
+            .unwrap(),
+        );
+        assert_concurrent_reasoning_failure_retry_is_atomic(file, 154);
+        let _ = fs::remove_dir_all(path);
     }
 
     #[test]

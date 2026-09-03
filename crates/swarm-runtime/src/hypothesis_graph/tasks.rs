@@ -433,6 +433,10 @@ impl HypothesisTaskLedger {
         signer: &swarm_crypto::Keypair,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let snapshot = store.snapshot()?;
+        let failure = TaskFailure::new(claim.claimant.clone(), failed_at, summary_digest)?;
+        if let Some(committed) = exact_failure_retry(&snapshot, claim, &failure, signer)? {
+            return Ok(committed);
+        }
         if snapshot.revision() != revision {
             return Err(GraphStoreError::StalePredecessor {
                 expected_generation: revision.generation,
@@ -470,7 +474,6 @@ impl HypothesisTaskLedger {
                 reason: "runtime claim does not bind the active durable task".to_string(),
             });
         }
-        let failure = TaskFailure::new(claim.claimant.clone(), failed_at, summary_digest)?;
         let publication = TaskFailureOutboxEntry::new(
             &task.task,
             descriptor,
@@ -1278,6 +1281,73 @@ fn validate_configured_terminal_time(
         (None, None) => {}
     }
     Ok(())
+}
+
+fn exact_failure_retry(
+    snapshot: &GraphStoreSnapshot,
+    claim: &TaskClaim,
+    failure: &TaskFailure,
+    signer: &swarm_crypto::Keypair,
+) -> Result<Option<TaskTerminalResult>, GraphStoreError> {
+    let Some(committed) = snapshot.state().task_failure_outbox.get(&claim.task_id) else {
+        return Ok(None);
+    };
+    let task = snapshot.state().tasks.get(&claim.task_id).ok_or_else(|| {
+        GraphStoreError::InvalidState {
+            reason: "reasoning failure outbox has no retained durable task".to_string(),
+        }
+    })?;
+    let descriptor = snapshot
+        .state()
+        .logical_task_descriptors
+        .get(&claim.task_id)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "reasoning failure outbox has no logical descriptor".to_string(),
+        })?;
+    let proof = task
+        .task
+        .terminal_history
+        .last()
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "reasoning failure outbox task has no terminal proof".to_string(),
+        })?;
+    let signer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
+    if task.task.state != TaskState::Failed
+        || claim.idempotency_key != task.task.request.idempotency_key
+        || claim.claimant != task.task.request.claimant
+        || claim.capability != task.task.request.kind
+        || claim.lease_id != proof.prior_lease.lease_id
+        || claim.fencing_token != proof.prior_lease.fencing_token
+        || committed.task_id != claim.task_id
+        || committed.lease_id != claim.lease_id
+        || committed.fencing_token != claim.fencing_token
+        || committed.capability != claim.capability_proof
+        || committed.failure != *failure
+        || committed.witness.scoped_agent_id != "reasoning-task-failure"
+        || signer_identity != claim.claimant
+    {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "reasoning failure retry differs from the committed task publication"
+                .to_string(),
+        });
+    }
+    claim
+        .capability_proof
+        .validate_for_claim(&task.task.request)
+        .map_err(GraphStoreError::Admission)?;
+    committed.validate_for_failed_task(
+        &task.task,
+        descriptor,
+        snapshot.state().logical_time_high_water,
+    )?;
+    Ok(Some(TaskTerminalResult {
+        task: task.task.clone(),
+        lease: task.task.lease.clone(),
+        generation: snapshot.revision().generation,
+        task_generation: task.generation,
+        revision: snapshot.revision().clone(),
+        idempotent: true,
+    }))
 }
 
 fn retry_decision_matches(
@@ -2873,7 +2943,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_failure_commits_failed_state_and_outbox_once() {
+    fn runtime_failure_commits_once_and_exact_retries_are_idempotent() {
         let config = HypothesisGraphConfig {
             enabled: true,
             max_work_units_per_tick: 4,
@@ -2931,18 +3001,44 @@ mod tests {
         assert!(after.task_failure_outbox().contains_key(&request.task_id));
         assert!(!after.terminal_outbox().contains_key(&request.task_id));
         let before_retry = after.canonical_bytes().unwrap();
-        assert!(
-            ledger
+        for revision in [claimed.revision().clone(), after.revision().clone()] {
+            let replayed = ledger
                 .fail_task_once(
                     &store,
-                    after.revision(),
+                    &revision,
                     &claim,
                     GraphLogicalTime::new(15),
                     "digest:runtime-failure",
                     &claimant_key,
                 )
-                .is_err()
-        );
+                .unwrap();
+            assert!(replayed.idempotent);
+            assert_eq!(replayed.revision, *after.revision());
+        }
+        assert!(matches!(
+            ledger.fail_task_once(
+                &store,
+                after.revision(),
+                &claim,
+                GraphLogicalTime::new(15),
+                "digest:changed-runtime-failure",
+                &claimant_key,
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("differs from the committed task publication")
+        ));
+        assert!(matches!(
+            ledger.fail_task_once(
+                &store,
+                after.revision(),
+                &claim,
+                GraphLogicalTime::new(15),
+                "digest:runtime-failure",
+                &key(99),
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("differs from the committed task publication")
+        ));
         assert_eq!(
             store.snapshot().unwrap().canonical_bytes().unwrap(),
             before_retry

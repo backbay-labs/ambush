@@ -20,6 +20,48 @@ use swarm_crypto::{
 };
 use swarm_spine::{AuditTrail, SpineError, build_signed_envelope, verify_envelope};
 
+/// Maximum accepted lead of a voter-authenticated timestamp over host time.
+pub const MAX_APPROVAL_VOTE_FUTURE_SKEW_MS: i64 = 30_000;
+/// Current durable approval-ledger wire schema.
+pub const CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION: u32 = 2;
+const LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION: u32 = 1;
+/// Current durable approval-verdict wire schema.
+pub const CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION: u32 = 2;
+const LEGACY_APPROVAL_VERDICT_SCHEMA_VERSION: u32 = 1;
+
+const fn legacy_approval_ledger_schema_version() -> u32 {
+    LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION
+}
+
+const fn legacy_approval_verdict_schema_version() -> u32 {
+    LEGACY_APPROVAL_VERDICT_SCHEMA_VERSION
+}
+
+/// Signature payload generation used by a portable approval receipt pack.
+///
+/// Missing values deserialize as `LegacyV1` so a pre-versioning pack can be
+/// classified as verified-retired or authenticated-core-only quarantine. V1
+/// packs are never accepted as current approval authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalReceiptPackSignatureVersion {
+    #[default]
+    LegacyV1,
+    V2,
+}
+
+/// Signature payload generation used by one approval entry.
+///
+/// Missing values deserialize as `LegacyV1` so pre-versioning artifacts can be
+/// retained as audit history without ever being counted as approval authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalVoteSignatureVersion {
+    #[default]
+    LegacyV1,
+    IntentV2,
+}
+
 /// Approval vote persisted on a ledger entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -121,14 +163,33 @@ pub struct ApprovalLedgerEntry {
     pub voter_id: String,
     #[serde(default)]
     pub vote: ApprovalVote,
+    #[serde(default)]
+    pub signature_version: ApprovalVoteSignatureVersion,
     pub signature: DetachedSignature,
     pub timestamp_ms: i64,
+    #[serde(default)]
+    pub previous_envelope_hash: Option<String>,
     pub envelope_hash: String,
+}
+
+/// Canonical, voter-authenticated intent for one append-only ledger entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalVoteIntent {
+    pub signature_version: ApprovalVoteSignatureVersion,
+    pub approval_set_id: String,
+    pub ledger_id: String,
+    pub entry_id: String,
+    pub voter_id: String,
+    pub vote: ApprovalVote,
+    pub timestamp_ms: i64,
+    pub previous_envelope_hash: Option<String>,
 }
 
 /// Durable approval-ledger artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalLedgerReport {
+    #[serde(default = "legacy_approval_ledger_schema_version")]
+    pub schema_version: u32,
     pub ledger_id: String,
     pub approval_set_id: String,
     pub entries: Vec<ApprovalLedgerEntry>,
@@ -171,13 +232,19 @@ impl ApprovalLedgerQuorumState {
         let approved_voters = ledger
             .entries
             .iter()
-            .filter(|entry| entry.vote.is_approve())
+            .filter(|entry| {
+                entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                    && entry.vote.is_approve()
+            })
             .map(|entry| entry.voter_id.as_str())
             .collect::<HashSet<_>>();
         let reject_count = ledger
             .entries
             .iter()
-            .filter(|entry| !entry.vote.is_approve())
+            .filter(|entry| {
+                entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                    && !entry.vote.is_approve()
+            })
             .count();
         let votes_received = approved_voters.len();
         let votes_required = set.threshold.required_count_for(set.eligible_voters.len());
@@ -257,6 +324,8 @@ pub enum ApprovalVerdictStatus {
 /// Durable approval verdict artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalVerdictReport {
+    #[serde(default = "legacy_approval_verdict_schema_version")]
+    pub schema_version: u32,
     pub verdict_id: String,
     pub approval_set_id: String,
     pub ledger_id: String,
@@ -315,6 +384,8 @@ pub struct ApprovalVerdictList {
 /// Signed, portable receipt pack bundling approval lineage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalReceiptPackReport {
+    #[serde(default)]
+    pub signature_version: ApprovalReceiptPackSignatureVersion,
     pub pack_id: String,
     pub signer_id: String,
     pub approval_set: ApprovalSetReport,
@@ -357,11 +428,26 @@ pub struct ApprovalReceiptPackLookup {
     pub report: ApprovalReceiptPackReport,
 }
 
+/// Observable, non-authoritative receipt artifact whose signed V1 core is
+/// intact but whose surrounding identity and time metadata was never signed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalReceiptPackQuarantineRecord {
+    pub observed_pack_id: String,
+    pub observed_signer_id: String,
+    pub observed_created_at_ms: i64,
+    pub signature_key_id: String,
+    pub authenticated_core_hash: String,
+    pub observed_bundle_path: String,
+    pub reason: String,
+}
+
 /// Operator-facing approval receipt-pack listing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalReceiptPackList {
     pub total_count: usize,
     pub packs: Vec<ApprovalReceiptPackRecord>,
+    pub quarantined_count: usize,
+    pub quarantined: Vec<ApprovalReceiptPackQuarantineRecord>,
 }
 
 /// Errors raised by the persisted approval-set store.
@@ -423,6 +509,14 @@ pub enum ApprovalLedgerStoreError {
 /// Errors raised by the persisted approval-verdict store.
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalVerdictStoreError {
+    #[error(
+        "refusing to persist approval verdict `{verdict_id}` with non-current schema `{schema_version}`"
+    )]
+    UnsupportedSchema {
+        verdict_id: String,
+        schema_version: u32,
+    },
+
     #[error("refusing to persist nonterminal approval verdict `{verdict_id}`")]
     NonTerminalVerdict { verdict_id: String },
 
@@ -451,6 +545,9 @@ pub enum ApprovalVerdictStoreError {
 /// Errors raised by the persisted approval receipt-pack store.
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalReceiptPackStoreError {
+    #[error("refusing to persist receipt pack `{pack_id}` with a legacy signature payload")]
+    LegacySignaturePayload { pack_id: String },
+
     #[error("failed to read approval receipt-pack store file `{path}`: {source}")]
     Read {
         path: PathBuf,
@@ -1699,6 +1796,12 @@ impl FileApprovalVerdictStore {
         &self,
         report: &ApprovalVerdictReport,
     ) -> Result<ApprovalVerdictRecord, ApprovalVerdictStoreError> {
+        if report.schema_version != CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION {
+            return Err(ApprovalVerdictStoreError::UnsupportedSchema {
+                verdict_id: report.verdict_id.clone(),
+                schema_version: report.schema_version,
+            });
+        }
         // A not-approved evaluation is a view of a mutable ledger, not a
         // durable terminal artifact. Persisting it would make its counts and
         // missing-voter set unverifiable after the next valid vote.
@@ -1892,6 +1995,11 @@ impl FileApprovalReceiptPackStore {
         &self,
         report: &ApprovalReceiptPackReport,
     ) -> Result<ApprovalReceiptPackRecord, ApprovalReceiptPackStoreError> {
+        if report.signature_version != ApprovalReceiptPackSignatureVersion::V2 {
+            return Err(ApprovalReceiptPackStoreError::LegacySignaturePayload {
+                pack_id: report.pack_id.clone(),
+            });
+        }
         let path = self.report_path(&report.pack_id);
         write_pretty_json(
             &path,
@@ -1940,6 +2048,8 @@ impl FileApprovalReceiptPackStore {
         Ok(ApprovalReceiptPackList {
             total_count: index.entries.len(),
             packs: index.entries,
+            quarantined_count: 0,
+            quarantined: Vec::new(),
         })
     }
 }
@@ -2024,6 +2134,14 @@ fn validate_ledger_report(
     report: &ApprovalLedgerReport,
     set: &ApprovalSetReport,
 ) -> Result<(), ApprovalError> {
+    if report.schema_version != CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: format!(
+                "approval ledger `{}` uses unsupported schema version `{}`",
+                report.ledger_id, report.schema_version
+            ),
+        });
+    }
     if report.approval_set_id != set.set_id {
         return Err(ApprovalError::InvalidLedgerRequest {
             reason: format!(
@@ -2041,97 +2159,67 @@ fn validate_ledger_report(
         });
     }
 
-    let eligible = set
-        .eligible_voters
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
     let mut replayed = ApprovalLedgerReport {
+        schema_version: CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION,
         ledger_id: report.ledger_id.clone(),
         approval_set_id: report.approval_set_id.clone(),
         entries: Vec::new(),
         created_at_ms: report.created_at_ms,
     };
+    let observed_now_ms = now_ms();
+    let mut observed_current_vote = false;
     for entry in &report.entries {
-        // The durable vote writer currently exposes only an approve operation,
-        // and the legacy voter signature payload does not include `vote`.
-        // Consequently, any other persisted value is unauthenticated and must
-        // fail closed. Pure verdict evaluation still accepts reject entries so
-        // threshold semantics can be evaluated independently of persistence.
-        if entry.vote != ApprovalVote::Approve {
-            return Err(ApprovalError::InvalidLedgerRequest {
-                reason: format!(
-                    "approval ledger `{}` contains an unsupported persisted vote",
-                    report.ledger_id
-                ),
-            });
-        }
-        if entry.timestamp_ms < report.created_at_ms
-            || replayed
-                .entries
-                .last()
-                .is_some_and(|previous| entry.timestamp_ms < previous.timestamp_ms)
-        {
-            return Err(ApprovalError::InvalidLedgerRequest {
-                reason: format!(
-                    "approval ledger `{}` contains an out-of-lineage vote timestamp",
-                    report.ledger_id
-                ),
-            });
-        }
-        if !eligible.contains(entry.voter_id.as_str()) {
-            return Err(ApprovalError::InvalidLedgerRequest {
-                reason: format!(
-                    "approval ledger `{}` contains an ineligible voter `{}`",
-                    report.ledger_id, entry.voter_id
-                ),
-            });
+        match entry.signature_version {
+            ApprovalVoteSignatureVersion::LegacyV1 => {
+                if observed_current_vote {
+                    return Err(ApprovalError::InvalidLedgerRequest {
+                        reason: format!(
+                            "approval ledger `{}` places legacy audit history after current votes",
+                            report.ledger_id
+                        ),
+                    });
+                }
+                validate_legacy_approval_entry(&replayed, set, entry).map_err(|error| {
+                    ApprovalError::InvalidLedgerRequest {
+                        reason: format!(
+                            "approval ledger `{}` contains invalid legacy audit history: {error}",
+                            report.ledger_id
+                        ),
+                    }
+                })?;
+                replayed.entries.push(entry.clone());
+            }
+            ApprovalVoteSignatureVersion::IntentV2 => {
+                observed_current_vote = true;
+                let intent = approval_vote_intent_from_entry(report, entry);
+                verify_approval_vote_signature_raw(&intent, &entry.signature).map_err(|error| {
+                    ApprovalError::InvalidLedgerRequest {
+                        reason: format!(
+                            "approval ledger `{}` contains an invalid current signed vote: {error}",
+                            report.ledger_id
+                        ),
+                    }
+                })?;
+                validate_and_append_vote_at(
+                    &mut replayed,
+                    set,
+                    &intent,
+                    &entry.signature,
+                    observed_now_ms,
+                )
+                .map_err(|error| ApprovalError::InvalidLedgerRequest {
+                    reason: format!(
+                        "approval ledger `{}` contains an invalid current signed vote: {error}",
+                        report.ledger_id
+                    ),
+                })?;
+            }
         }
         if replayed
             .entries
-            .iter()
-            .any(|previous| previous.voter_id == entry.voter_id)
+            .last()
+            .is_none_or(|replayed_entry| replayed_entry != entry)
         {
-            return Err(ApprovalError::InvalidLedgerRequest {
-                reason: format!(
-                    "approval ledger `{}` contains duplicate voter `{}`",
-                    report.ledger_id, entry.voter_id
-                ),
-            });
-        }
-        let payload = vote_payload_bytes(&set.set_id, &report.ledger_id, &entry.voter_id)?;
-        verify_detached_signature(&payload, &entry.signature).map_err(|error| {
-            ApprovalError::InvalidLedgerRequest {
-                reason: format!(
-                    "approval ledger `{}` contains an invalid signature: {error}",
-                    report.ledger_id
-                ),
-            }
-        })?;
-        if voter_id_from_public_key(&entry.signature.public_key_hex) != entry.voter_id {
-            return Err(ApprovalError::InvalidLedgerRequest {
-                reason: format!(
-                    "approval ledger `{}` contains a voter/signature identity mismatch",
-                    report.ledger_id
-                ),
-            });
-        }
-        let expected_entry_id =
-            next_approval_ledger_entry_id(&replayed.ledger_id, replayed.entries.len());
-        let expected_envelope_hash = build_vote_envelope_hash(
-            &replayed,
-            &expected_entry_id,
-            &entry.voter_id,
-            &entry.signature,
-            entry.timestamp_ms,
-        )
-        .map_err(|error| ApprovalError::InvalidLedgerRequest {
-            reason: format!(
-                "approval ledger `{}` contains an invalid vote timestamp: {error}",
-                report.ledger_id
-            ),
-        })?;
-        if entry.entry_id != expected_entry_id || entry.envelope_hash != expected_envelope_hash {
             return Err(ApprovalError::InvalidLedgerRequest {
                 reason: format!(
                     "approval ledger `{}` contains an invalid vote chain",
@@ -2139,7 +2227,6 @@ fn validate_ledger_report(
                 ),
             });
         }
-        replayed.entries.push(entry.clone());
     }
     if replayed != *report {
         return Err(ApprovalError::InvalidLedgerRequest {
@@ -2150,6 +2237,125 @@ fn validate_ledger_report(
         });
     }
     Ok(())
+}
+
+fn validate_legacy_ledger_report(
+    report: &ApprovalLedgerReport,
+    set: &ApprovalSetReport,
+) -> Result<(), ApprovalError> {
+    if report.schema_version != LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION
+        || report.approval_set_id != set.set_id
+        || report.created_at_ms < set.created_at_ms
+    {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: format!(
+                "legacy approval ledger `{}` is not bound to its persisted approval set",
+                report.ledger_id
+            ),
+        });
+    }
+    let mut replayed = ApprovalLedgerReport {
+        schema_version: LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION,
+        ledger_id: report.ledger_id.clone(),
+        approval_set_id: report.approval_set_id.clone(),
+        entries: Vec::new(),
+        created_at_ms: report.created_at_ms,
+    };
+    for entry in &report.entries {
+        validate_legacy_approval_entry(&replayed, set, entry).map_err(|error| {
+            ApprovalError::InvalidLedgerRequest {
+                reason: format!(
+                    "legacy approval ledger `{}` contains invalid audit history: {error}",
+                    report.ledger_id
+                ),
+            }
+        })?;
+        replayed.entries.push(entry.clone());
+    }
+    Ok(())
+}
+
+fn validate_legacy_approval_entry(
+    replayed: &ApprovalLedgerReport,
+    set: &ApprovalSetReport,
+    entry: &ApprovalLedgerEntry,
+) -> Result<(), ApprovalError> {
+    if entry.signature_version != ApprovalVoteSignatureVersion::LegacyV1
+        || entry.vote != ApprovalVote::Approve
+        || entry.previous_envelope_hash.is_some()
+    {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "legacy entries must retain the original approve-only V1 wire shape"
+                .to_string(),
+        });
+    }
+    if entry.timestamp_ms < replayed.created_at_ms
+        || replayed
+            .entries
+            .last()
+            .is_some_and(|previous| entry.timestamp_ms < previous.timestamp_ms)
+    {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "legacy entry timestamp is outside its historical audit lineage".to_string(),
+        });
+    }
+    if !set
+        .eligible_voters
+        .iter()
+        .any(|eligible| eligible == &entry.voter_id)
+        || replayed
+            .entries
+            .iter()
+            .any(|previous| previous.voter_id == entry.voter_id)
+    {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: format!(
+                "legacy voter `{}` is ineligible or duplicated",
+                entry.voter_id
+            ),
+        });
+    }
+    let payload =
+        legacy_approval_vote_payload_bytes(&set.set_id, &replayed.ledger_id, &entry.voter_id)?;
+    verify_detached_signature(&payload, &entry.signature).map_err(|error| {
+        ApprovalError::InvalidSignature {
+            voter_id: entry.voter_id.clone(),
+            reason: error.to_string(),
+        }
+    })?;
+    if voter_id_from_public_key(&entry.signature.public_key_hex) != entry.voter_id {
+        return Err(ApprovalError::InvalidSignature {
+            voter_id: entry.voter_id.clone(),
+            reason: "signature public key does not match the legacy voter ID".to_string(),
+        });
+    }
+    let expected_entry_id =
+        next_approval_ledger_entry_id(&replayed.ledger_id, replayed.entries.len());
+    let expected_envelope_hash = build_legacy_vote_envelope_hash(
+        replayed,
+        &expected_entry_id,
+        &entry.voter_id,
+        &entry.signature,
+        entry.timestamp_ms,
+    )?;
+    if entry.entry_id != expected_entry_id || entry.envelope_hash != expected_envelope_hash {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "legacy entry does not match its deterministic audit envelope".to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyReceiptPackDisposition {
+    VerifiedRetired,
+    AuthenticatedCoreOnly,
+}
+
+#[derive(Default)]
+struct ValidatedReceiptPackProjection {
+    authoritative: Vec<ApprovalReceiptPackLookup>,
+    quarantined: Vec<ApprovalReceiptPackQuarantineRecord>,
 }
 
 /// Domain harness for approval-set and ledger workflows.
@@ -2293,6 +2499,7 @@ impl DefaultApprovalHarness {
 
         let ledger_id = approval_ledger_id(&set_id, created_at_ms);
         let ledger = ApprovalLedgerReport {
+            schema_version: CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION,
             ledger_id,
             approval_set_id: set_id,
             entries: Vec::new(),
@@ -2315,43 +2522,25 @@ impl DefaultApprovalHarness {
                 }
             })?;
             let mut ledger = self.load_stored_ledger_for_set(set_id)?;
-            if !ledger
-                .report
-                .entries
-                .iter()
-                .any(|entry| entry.voter_id == voter_id)
-                && ApprovalLedgerQuorumState::from_ledger_and_set(&ledger.report, &set.report)
-                    .quorum_met
+            if !ledger.report.entries.iter().any(|entry| {
+                entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                    && entry.voter_id == voter_id
+            }) && ApprovalLedgerQuorumState::from_ledger_and_set(&ledger.report, &set.report)
+                .quorum_met
             {
                 return Err(ApprovalError::QuorumAlreadyMet {
                     ledger_id: ledger.report.ledger_id.clone(),
                 });
             }
-            let signature = signer.sign(&vote_payload_bytes(
-                &set.report.set_id,
-                &ledger.report.ledger_id,
-                voter_id,
-            )?);
-            let timestamp_ms = now_ms();
-            let entry_id = next_approval_ledger_entry_id(
-                &ledger.report.ledger_id,
-                ledger.report.entries.len(),
-            );
-            let envelope_hash = build_vote_envelope_hash(
+            let timestamp_ms = next_approval_vote_timestamp_ms(&ledger.report, now_ms());
+            let intent = build_approval_vote_intent(
                 &ledger.report,
-                &entry_id,
                 voter_id,
-                &signature,
+                ApprovalVote::Approve,
                 timestamp_ms,
-            )?;
-            validate_and_append_vote(
-                &mut ledger.report,
-                &set.report,
-                voter_id,
-                &signature,
-                timestamp_ms,
-                &envelope_hash,
-            )?;
+            );
+            let signature = signer.sign(&approval_vote_payload_bytes(&intent)?);
+            validate_and_append_vote(&mut ledger.report, &set.report, &intent, &signature)?;
             let quorum_state =
                 ApprovalLedgerQuorumState::from_ledger_and_set(&ledger.report, &set.report);
             self.ledger_store.persist(&ledger.report)?;
@@ -2361,11 +2550,10 @@ impl DefaultApprovalHarness {
 
     pub fn append_signed_vote(
         &self,
-        ledger_id: &str,
-        voter_id: &str,
+        intent: &ApprovalVoteIntent,
         signature: &DetachedSignature,
     ) -> Result<ApprovalLedgerQuorumState, ApprovalError> {
-        match self.append_signed_vote_outcome(ledger_id, voter_id, signature)? {
+        match self.append_signed_vote_outcome(intent, signature)? {
             ApprovalLedgerVoteOutcome {
                 ledger,
                 transition:
@@ -2377,45 +2565,46 @@ impl DefaultApprovalHarness {
                     | ApprovalLedgerVoteTransition::ExactDuplicateOfQuorum,
                 ..
             } => Err(ApprovalError::DuplicateVoter {
-                voter_id: voter_id.to_string(),
+                voter_id: intent.voter_id.clone(),
             }),
         }
     }
 
     pub fn append_signed_vote_outcome(
         &self,
-        ledger_id: &str,
-        voter_id: &str,
+        intent: &ApprovalVoteIntent,
         signature: &DetachedSignature,
     ) -> Result<ApprovalLedgerVoteOutcome, ApprovalError> {
+        validate_persistable_vote_intent(intent)?;
         self.with_workflow_lock(|| {
-            let mut ledger = self.load_ledger_unlocked(ledger_id)?.ok_or_else(|| {
-                ApprovalError::ApprovalLedgerNotFound {
-                    ledger_id: ledger_id.to_string(),
-                }
-            })?;
+            let mut ledger = self
+                .load_ledger_unlocked(&intent.ledger_id)?
+                .ok_or_else(|| ApprovalError::ApprovalLedgerNotFound {
+                    ledger_id: intent.ledger_id.clone(),
+                })?;
             let set = self
                 .load_approval_set(&ledger.report.approval_set_id)?
                 .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
                     set_id: ledger.report.approval_set_id.clone(),
                 })?;
-            if ledger.report.ledger_id != ledger_id
+            if ledger.report.ledger_id != intent.ledger_id
                 || ledger.record.ledger_id != ledger.report.ledger_id
                 || ledger.report.approval_set_id != set.report.set_id
+                || intent.approval_set_id != set.report.set_id
             {
                 return Err(ApprovalError::InvalidLedgerRequest {
-                    reason: format!(
-                        "approval ledger `{ledger_id}` is not bound to the exact persisted approval set and ledger"
-                    ),
+                    reason:
+                        "approval vote is not bound to the exact persisted approval set and ledger"
+                            .to_string(),
                 });
             }
-            if let Some(existing) = ledger
-                .report
-                .entries
-                .iter()
-                .find(|entry| entry.voter_id == voter_id)
-            {
-                if existing.signature == *signature {
+            verify_approval_vote_signature(intent, signature)?;
+            if let Some(existing) = ledger.report.entries.iter().find(|entry| {
+                entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                    && entry.voter_id == intent.voter_id
+            }) {
+                let existing_intent = approval_vote_intent_from_entry(&ledger.report, existing);
+                if existing_intent == *intent && existing.signature == *signature {
                     let transition = if ledger.quorum_state.quorum_met {
                         ApprovalLedgerVoteTransition::ExactDuplicateOfQuorum
                     } else {
@@ -2424,7 +2613,7 @@ impl DefaultApprovalHarness {
                     return Ok(ApprovalLedgerVoteOutcome { ledger, transition });
                 }
                 return Err(ApprovalError::DuplicateVoter {
-                    voter_id: voter_id.to_string(),
+                    voter_id: intent.voter_id.clone(),
                 });
             }
             if ledger.quorum_state.quorum_met {
@@ -2432,26 +2621,7 @@ impl DefaultApprovalHarness {
                     ledger_id: ledger.report.ledger_id.clone(),
                 });
             }
-            let timestamp_ms = now_ms();
-            let entry_id = next_approval_ledger_entry_id(
-                &ledger.report.ledger_id,
-                ledger.report.entries.len(),
-            );
-            let envelope_hash = build_vote_envelope_hash(
-                &ledger.report,
-                &entry_id,
-                voter_id,
-                signature,
-                timestamp_ms,
-            )?;
-            validate_and_append_vote(
-                &mut ledger.report,
-                &set.report,
-                voter_id,
-                signature,
-                timestamp_ms,
-                &envelope_hash,
-            )?;
+            validate_and_append_vote(&mut ledger.report, &set.report, intent, signature)?;
             let quorum_state =
                 ApprovalLedgerQuorumState::from_ledger_and_set(&ledger.report, &set.report);
             let transition = if !ledger.quorum_state.quorum_met && quorum_state.quorum_met {
@@ -2616,14 +2786,32 @@ impl DefaultApprovalHarness {
                     ),
                 });
             }
-            let expected = evaluate_verdict(&set.report, &ledger.report, report.evaluated_at_ms)?;
-            if report != expected {
+            if report.schema_version == LEGACY_APPROVAL_VERDICT_SCHEMA_VERSION {
+                validate_legacy_verdict_for_retirement(&report, &set.report, &ledger.report)?;
+                // A positively reconstructed V1 verdict remains on disk as
+                // audit evidence but is never projected as current authority.
+                continue;
+            }
+            if report.schema_version != CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION {
                 return Err(ApprovalError::InvalidVerdictRequest {
                     reason: format!(
-                        "approval verdict `{}` does not match its persisted set and ledger",
-                        report.verdict_id
+                        "approval verdict `{}` uses unsupported schema version `{}`",
+                        report.verdict_id, report.schema_version
                     ),
                 });
+            }
+            let expected = evaluate_verdict(&set.report, &ledger.report, report.evaluated_at_ms);
+            match expected {
+                Ok(expected) if report == expected => {}
+                Ok(_) => {
+                    return Err(ApprovalError::InvalidVerdictRequest {
+                        reason: format!(
+                            "approval verdict `{}` does not match its persisted set and ledger",
+                            report.verdict_id
+                        ),
+                    });
+                }
+                Err(error) => return Err(error),
             }
             if report.status == ApprovalVerdictStatus::Approved
                 && !seen_approved_ledgers
@@ -2643,13 +2831,16 @@ impl DefaultApprovalHarness {
 
     fn validated_receipt_packs_unlocked(
         &self,
-    ) -> Result<Vec<ApprovalReceiptPackLookup>, ApprovalError> {
+    ) -> Result<ValidatedReceiptPackProjection, ApprovalError> {
         let receipt_pack_store = self.receipt_pack_store()?;
         let verdicts = self.validated_verdicts_unlocked()?;
         let index = receipt_pack_store.read_index()?;
         let mut seen_pack_ids = HashSet::new();
         let mut seen_approved_ledgers = HashSet::new();
-        let mut verified = Vec::with_capacity(index.entries.len());
+        let mut projection = ValidatedReceiptPackProjection {
+            authoritative: Vec::with_capacity(index.entries.len()),
+            quarantined: Vec::new(),
+        };
         for record in index.entries {
             if !seen_pack_ids.insert(record.pack_id.clone()) {
                 return Err(ApprovalError::InvalidReceiptPack {
@@ -2665,6 +2856,47 @@ impl DefaultApprovalHarness {
                 |path, source| ApprovalReceiptPackStoreError::Parse { path, source },
             )?;
             validate_receipt_pack_record(receipt_pack_store, &record, &report)?;
+            if report.signature_version == ApprovalReceiptPackSignatureVersion::LegacyV1 {
+                let disposition = validate_legacy_receipt_pack_for_retirement(&report)?;
+                let set = self
+                    .set_store
+                    .load(&report.approval_set.set_id)?
+                    .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
+                        set_id: report.approval_set.set_id.clone(),
+                    })?;
+                let ledger = self
+                    .load_ledger_unlocked(&report.ledger.ledger_id)?
+                    .ok_or_else(|| ApprovalError::ApprovalLedgerNotFound {
+                        ledger_id: report.ledger.ledger_id.clone(),
+                    })?;
+                let persisted_legacy = legacy_ledger_prefix(&ledger.report)?;
+                if set.report != report.approval_set || persisted_legacy != report.ledger {
+                    return Err(ApprovalError::InvalidReceiptPack {
+                        reason: format!(
+                            "legacy receipt pack `{}` does not match its persisted V1 lineage",
+                            report.pack_id
+                        ),
+                    });
+                }
+                if disposition == LegacyReceiptPackDisposition::AuthenticatedCoreOnly {
+                    projection
+                        .quarantined
+                        .push(ApprovalReceiptPackQuarantineRecord {
+                            observed_pack_id: report.pack_id.clone(),
+                            observed_signer_id: report.signer_id.clone(),
+                            observed_created_at_ms: report.created_at_ms,
+                            signature_key_id: report.signature.key_id.clone(),
+                            authenticated_core_hash: report.content_hash.clone(),
+                            observed_bundle_path: record.bundle_path,
+                            reason: "V1 signature authenticates only set, ledger, verdict, and audit references; observed pack identity, signer, and creation time are non-authoritative"
+                                .to_string(),
+                        });
+                }
+                // Full-metadata V1 packs are verified-but-retired; oldest V1
+                // packs are observable quarantine records. Neither enters the
+                // authoritative collection or blocks creation of a V2 pack.
+                continue;
+            }
             verify_receipt_pack(&report)?;
 
             let set = self
@@ -2710,9 +2942,11 @@ impl DefaultApprovalHarness {
                     ),
                 });
             }
-            verified.push(ApprovalReceiptPackLookup { record, report });
+            projection
+                .authoritative
+                .push(ApprovalReceiptPackLookup { record, report });
         }
-        Ok(verified)
+        Ok(projection)
     }
 
     pub fn create_verdict(
@@ -2756,11 +2990,7 @@ impl DefaultApprovalHarness {
         if let Some(lookup) = existing.into_iter().next() {
             return Ok(lookup);
         }
-        let evaluated_at_ms = ledger
-            .report
-            .entries
-            .iter()
-            .fold(now_ms(), |latest, entry| latest.max(entry.timestamp_ms));
+        let evaluated_at_ms = approval_verdict_timestamp_ms(&ledger.report, now_ms());
         let report = evaluate_verdict(&set.report, &ledger.report, evaluated_at_ms)?;
         if report.status != ApprovalVerdictStatus::Approved {
             return Err(ApprovalError::InvalidVerdictRequest {
@@ -2839,6 +3069,7 @@ impl DefaultApprovalHarness {
             })?;
         let existing = self
             .validated_receipt_packs_unlocked()?
+            .authoritative
             .into_iter()
             .filter(|lookup| {
                 lookup.report.approval_set.set_id == set.report.set_id
@@ -2876,6 +3107,7 @@ impl DefaultApprovalHarness {
                 env_name: signing_key_env.to_string(),
             })?;
         let signer = Ed25519Signer::from_secret_material(&secret_material);
+        let created_at_ms = approval_receipt_timestamp_ms(&verdict.report, now_ms());
         let report = build_receipt_pack(
             &set.report,
             &ledger.report,
@@ -2883,7 +3115,7 @@ impl DefaultApprovalHarness {
             vec![set.report.promotion_evidence_ref.clone()],
             &signer,
             signer_id,
-            now_ms(),
+            created_at_ms,
         )?;
         let record = receipt_pack_store.persist(&report)?;
         Ok(ApprovalReceiptPackLookup { record, report })
@@ -2926,20 +3158,24 @@ impl DefaultApprovalHarness {
     ) -> Result<Option<ApprovalReceiptPackLookup>, ApprovalError> {
         Ok(self
             .validated_receipt_packs_unlocked()?
+            .authoritative
             .into_iter()
             .find(|lookup| lookup.report.pack_id == pack_id))
     }
 
     pub fn list_receipt_packs(&self) -> Result<ApprovalReceiptPackList, ApprovalError> {
         self.with_workflow_lock(|| {
-            let packs = self
-                .validated_receipt_packs_unlocked()?
+            let projection = self.validated_receipt_packs_unlocked()?;
+            let packs = projection
+                .authoritative
                 .into_iter()
                 .map(|lookup| lookup.record)
                 .collect::<Vec<_>>();
             Ok(ApprovalReceiptPackList {
                 total_count: packs.len(),
                 packs,
+                quarantined_count: projection.quarantined.len(),
+                quarantined: projection.quarantined,
             })
         })
     }
@@ -2987,6 +3223,47 @@ impl DefaultApprovalHarness {
         Ok(true)
     }
 
+    /// Upgrade pre-versioning ledgers in place without granting their V1 votes
+    /// any authority. The workflow lock makes the rewrite single-writer across
+    /// processes; retaining every V1 entry keeps the original append-only audit
+    /// chain visible while the current quorum projection requires fresh V2
+    /// votes from the same eligible operators.
+    fn migrate_legacy_ledgers_unlocked(&self) -> Result<(), ApprovalError> {
+        let index = self.ledger_store.read_index()?;
+        for record in index.entries {
+            let path = self.ledger_store.report_path(&record.ledger_id);
+            let mut report = read_json::<ApprovalLedgerReport, ApprovalLedgerStoreError>(
+                &path,
+                |path, source| ApprovalLedgerStoreError::Read { path, source },
+                |path, source| ApprovalLedgerStoreError::Parse { path, source },
+            )?;
+            validate_ledger_record(&self.ledger_store, &record, &report)?;
+            match report.schema_version {
+                CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION => {}
+                LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION => {
+                    let set = self
+                        .set_store
+                        .load(&report.approval_set_id)?
+                        .ok_or_else(|| ApprovalError::ApprovalSetNotFound {
+                            set_id: report.approval_set_id.clone(),
+                        })?;
+                    validate_legacy_ledger_report(&report, &set.report)?;
+                    report.schema_version = CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION;
+                    self.ledger_store.persist(&report)?;
+                }
+                version => {
+                    return Err(ApprovalError::InvalidLedgerRequest {
+                        reason: format!(
+                            "approval ledger `{}` uses unsupported schema version `{version}`",
+                            report.ledger_id
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn load_stored_ledger_for_set(
         &self,
         set_id: &str,
@@ -3031,7 +3308,7 @@ impl DefaultApprovalHarness {
         // when only the index replacement was interrupted.
         let ledger_id = approval_ledger_id(&set.set_id, set.created_at_ms);
         let report_path = self.ledger_store.report_path(&ledger_id);
-        let ledger = match fs::symlink_metadata(&report_path) {
+        let mut ledger = match fs::symlink_metadata(&report_path) {
             Ok(metadata) if metadata.file_type().is_file() => {
                 read_json::<ApprovalLedgerReport, ApprovalLedgerStoreError>(
                     &report_path,
@@ -3046,6 +3323,7 @@ impl DefaultApprovalHarness {
                 });
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => ApprovalLedgerReport {
+                schema_version: CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION,
                 ledger_id: ledger_id.clone(),
                 approval_set_id: set.set_id.clone(),
                 entries: Vec::new(),
@@ -3066,8 +3344,12 @@ impl DefaultApprovalHarness {
             return Err(ApprovalError::LedgerRecoveryConflict {
                 set_id: set.set_id.clone(),
                 reason: "the durable ledger report does not match the deterministic initial ledger identity"
-                    .to_string(),
+                .to_string(),
             });
+        }
+        if ledger.schema_version == LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION {
+            validate_legacy_ledger_report(&ledger, set)?;
+            ledger.schema_version = CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION;
         }
         validate_ledger_report(&ledger, set)?;
         self.ledger_store.persist(&ledger)?;
@@ -3119,7 +3401,9 @@ impl DefaultApprovalHarness {
         let snapshot = self.workflow_snapshot()?;
         #[cfg(test)]
         wait_for_workflow_test_hook(&lock.path);
-        let result = transition();
+        let result = self
+            .migrate_legacy_ledgers_unlocked()
+            .and_then(|()| transition());
         let lock_result = lock.verify();
         let snapshot_lock_result = snapshot.verify_lock_state();
         match (result, lock_result, snapshot_lock_result) {
@@ -3159,55 +3443,115 @@ impl DefaultApprovalHarness {
 pub fn validate_and_append_vote(
     ledger: &mut ApprovalLedgerReport,
     set: &ApprovalSetReport,
-    voter_id: &str,
+    intent: &ApprovalVoteIntent,
     signature: &DetachedSignature,
-    timestamp_ms: i64,
-    envelope_hash: &str,
 ) -> Result<(), ApprovalError> {
-    if !set
-        .eligible_voters
-        .iter()
-        .any(|eligible| eligible == voter_id)
-    {
-        return Err(ApprovalError::IneligibleVoter {
-            voter_id: voter_id.to_string(),
+    validate_and_append_vote_at(ledger, set, intent, signature, now_ms())
+}
+
+fn validate_persistable_vote_intent(intent: &ApprovalVoteIntent) -> Result<(), ApprovalError> {
+    if intent.signature_version != ApprovalVoteSignatureVersion::IntentV2 {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "approval vote intent must use the current V2 signature payload".to_string(),
         });
     }
-    if ledger
-        .entries
-        .iter()
-        .any(|entry| entry.voter_id == voter_id)
-    {
-        return Err(ApprovalError::DuplicateVoter {
-            voter_id: voter_id.to_string(),
+    if intent.vote != ApprovalVote::Approve {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "durable approval ledgers do not yet support denial votes".to_string(),
         });
     }
+    Ok(())
+}
 
-    let payload_bytes = vote_payload_bytes(&set.set_id, &ledger.ledger_id, voter_id)?;
-    verify_detached_signature(&payload_bytes, signature).map_err(|error| {
-        ApprovalError::InvalidSignature {
-            voter_id: voter_id.to_string(),
-            reason: error.to_string(),
-        }
-    })?;
-
+fn validate_and_append_vote_at(
+    ledger: &mut ApprovalLedgerReport,
+    set: &ApprovalSetReport,
+    intent: &ApprovalVoteIntent,
+    signature: &DetachedSignature,
+    observed_now_ms: i64,
+) -> Result<(), ApprovalError> {
+    if ledger.schema_version != CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "current votes require a migrated V2 approval ledger".to_string(),
+        });
+    }
+    validate_persistable_vote_intent(intent)?;
+    verify_approval_vote_signature(intent, signature)?;
     let expected_voter_id = voter_id_from_public_key(&signature.public_key_hex);
-    if voter_id != expected_voter_id {
+    if intent.voter_id != expected_voter_id {
         return Err(ApprovalError::InvalidSignature {
-            voter_id: voter_id.to_string(),
+            voter_id: intent.voter_id.clone(),
             reason: format!(
                 "signature public key resolves to `{expected_voter_id}` instead of requested voter"
             ),
         });
     }
+    if intent.approval_set_id != set.set_id
+        || intent.ledger_id != ledger.ledger_id
+        || ledger.approval_set_id != set.set_id
+    {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "approval vote intent is not bound to the target set and ledger".to_string(),
+        });
+    }
+    if !set
+        .eligible_voters
+        .iter()
+        .any(|eligible| eligible == &intent.voter_id)
+    {
+        return Err(ApprovalError::IneligibleVoter {
+            voter_id: intent.voter_id.clone(),
+        });
+    }
+    if ledger.entries.iter().any(|entry| {
+        entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+            && entry.voter_id == intent.voter_id
+    }) {
+        return Err(ApprovalError::DuplicateVoter {
+            voter_id: intent.voter_id.clone(),
+        });
+    }
+    let expected_entry_id = next_approval_ledger_entry_id(&ledger.ledger_id, ledger.entries.len());
+    let expected_previous_envelope_hash = ledger
+        .entries
+        .last()
+        .map(|entry| entry.envelope_hash.clone());
+    if intent.entry_id != expected_entry_id
+        || intent.previous_envelope_hash != expected_previous_envelope_hash
+    {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "approval vote intent does not extend the current ledger head".to_string(),
+        });
+    }
+    if intent.timestamp_ms < ledger.created_at_ms
+        || ledger
+            .entries
+            .iter()
+            .rev()
+            .find(|entry| entry.signature_version == ApprovalVoteSignatureVersion::IntentV2)
+            .is_some_and(|previous| intent.timestamp_ms < previous.timestamp_ms)
+    {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "approval vote timestamp predates the current ledger head".to_string(),
+        });
+    }
+    if intent.timestamp_ms > observed_now_ms.saturating_add(MAX_APPROVAL_VOTE_FUTURE_SKEW_MS) {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: "approval vote timestamp exceeds the allowed future clock skew".to_string(),
+        });
+    }
+
+    let envelope_hash = build_vote_envelope_hash(ledger, intent, signature)?;
 
     ledger.entries.push(ApprovalLedgerEntry {
-        entry_id: next_approval_ledger_entry_id(&ledger.ledger_id, ledger.entries.len()),
-        voter_id: voter_id.to_string(),
-        vote: ApprovalVote::Approve,
+        entry_id: intent.entry_id.clone(),
+        voter_id: intent.voter_id.clone(),
+        vote: intent.vote,
+        signature_version: intent.signature_version,
         signature: signature.clone(),
-        timestamp_ms,
-        envelope_hash: envelope_hash.to_string(),
+        timestamp_ms: intent.timestamp_ms,
+        previous_envelope_hash: intent.previous_envelope_hash.clone(),
+        envelope_hash,
     });
     Ok(())
 }
@@ -3234,7 +3578,9 @@ pub fn evaluate_verdict(
     if evaluated_at_ms < approval_set.created_at_ms
         || evaluated_at_ms < ledger.created_at_ms
         || ledger.entries.iter().any(|entry| {
-            eligible.contains(entry.voter_id.as_str()) && entry.timestamp_ms > evaluated_at_ms
+            entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                && eligible.contains(entry.voter_id.as_str())
+                && entry.timestamp_ms > evaluated_at_ms
         })
     {
         return Err(ApprovalError::InvalidVerdictRequest {
@@ -3244,6 +3590,207 @@ pub fn evaluate_verdict(
             ),
         });
     }
+    let approve_count = ledger
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                && eligible.contains(entry.voter_id.as_str())
+                && entry.vote.is_approve()
+        })
+        .count();
+    let reject_count = ledger
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                && eligible.contains(entry.voter_id.as_str())
+                && !entry.vote.is_approve()
+        })
+        .count();
+    let seen_voters = ledger
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                && eligible.contains(entry.voter_id.as_str())
+        })
+        .map(|entry| entry.voter_id.as_str())
+        .collect::<HashSet<_>>();
+    let missing_voters = approval_set
+        .eligible_voters
+        .iter()
+        .filter(|voter_id| !seen_voters.contains(voter_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let eligible_count = approval_set.eligible_voters.len();
+    let threshold_required_count = approval_set.threshold.required_count_for(eligible_count);
+    let status = if approval_set
+        .threshold
+        .is_met_for(approve_count, reject_count, eligible_count)
+    {
+        ApprovalVerdictStatus::Approved
+    } else {
+        ApprovalVerdictStatus::NotApproved
+    };
+    let seed = ApprovalVerdictIdSeed {
+        schema_version: CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION,
+        approval_set_id: &approval_set.set_id,
+        ledger_id: &ledger.ledger_id,
+        status,
+        approve_count,
+        reject_count,
+        threshold_required_count,
+        eligible_count,
+        missing_voters: &missing_voters,
+        evaluated_at_ms,
+    };
+    let verdict_id = approval_verdict_id(evaluated_at_ms, &canonical_json_bytes(&seed)?);
+
+    Ok(ApprovalVerdictReport {
+        schema_version: CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION,
+        verdict_id,
+        approval_set_id: approval_set.set_id.clone(),
+        ledger_id: ledger.ledger_id.clone(),
+        status,
+        approve_count,
+        reject_count,
+        threshold_required: render_threshold_rule_with_eligible(
+            &approval_set.threshold,
+            eligible_count,
+        ),
+        threshold_required_count,
+        eligible_count,
+        missing_voters,
+        evaluated_at_ms,
+    })
+}
+
+pub fn build_receipt_pack(
+    approval_set: &ApprovalSetReport,
+    ledger: &ApprovalLedgerReport,
+    verdict: &ApprovalVerdictReport,
+    audit_refs: Vec<String>,
+    signer: &Ed25519Signer,
+    signer_id: &str,
+    created_at_ms: i64,
+) -> Result<ApprovalReceiptPackReport, ApprovalError> {
+    if ledger.schema_version != CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "receipt packs require the current approval-ledger schema".to_string(),
+        });
+    }
+    if verdict.schema_version != CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "receipt packs require the current approval-verdict schema".to_string(),
+        });
+    }
+    if created_at_ms < approval_set.created_at_ms
+        || created_at_ms < ledger.created_at_ms
+        || created_at_ms < verdict.evaluated_at_ms
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "receipt pack creation timestamp predates its approval lineage".to_string(),
+        });
+    }
+    if ledger.entries.iter().any(|entry| {
+        entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+            && entry.timestamp_ms > verdict.evaluated_at_ms
+    }) {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "receipt pack verdict predates a persisted approval vote".to_string(),
+        });
+    }
+    if evaluate_verdict(approval_set, ledger, verdict.evaluated_at_ms)? != *verdict {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "receipt pack verdict does not match current authenticated votes".to_string(),
+        });
+    }
+    let content = ApprovalReceiptPackContentRef {
+        signature_version: ApprovalReceiptPackSignatureVersion::V2,
+        signer_id,
+        approval_set,
+        ledger,
+        verdict,
+        audit_refs: audit_refs.as_slice(),
+        created_at_ms,
+    };
+    let content_bytes = canonical_json_bytes(&content)?;
+    let content_hash = sha256_hex(&content_bytes);
+    let signature = signer.sign(&content_bytes);
+    let seed = ApprovalReceiptPackIdSeed {
+        signer_id,
+        content_hash: &content_hash,
+        signature_key_id: &signature.key_id,
+        created_at_ms,
+    };
+    let pack_id = approval_receipt_pack_id(created_at_ms, &canonical_json_bytes(&seed)?);
+
+    Ok(ApprovalReceiptPackReport {
+        signature_version: ApprovalReceiptPackSignatureVersion::V2,
+        pack_id,
+        signer_id: signer_id.to_string(),
+        approval_set: approval_set.clone(),
+        ledger: ledger.clone(),
+        verdict: verdict.clone(),
+        audit_refs,
+        content_hash,
+        signature,
+        created_at_ms,
+    })
+}
+
+fn legacy_ledger_prefix(
+    ledger: &ApprovalLedgerReport,
+) -> Result<ApprovalLedgerReport, ApprovalError> {
+    let legacy_len = ledger
+        .entries
+        .iter()
+        .take_while(|entry| entry.signature_version == ApprovalVoteSignatureVersion::LegacyV1)
+        .count();
+    if ledger.entries[legacy_len..]
+        .iter()
+        .any(|entry| entry.signature_version == ApprovalVoteSignatureVersion::LegacyV1)
+    {
+        return Err(ApprovalError::InvalidLedgerRequest {
+            reason: format!(
+                "approval ledger `{}` places legacy audit history after current votes",
+                ledger.ledger_id
+            ),
+        });
+    }
+    Ok(ApprovalLedgerReport {
+        schema_version: LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION,
+        ledger_id: ledger.ledger_id.clone(),
+        approval_set_id: ledger.approval_set_id.clone(),
+        entries: ledger.entries[..legacy_len].to_vec(),
+        created_at_ms: ledger.created_at_ms,
+    })
+}
+
+fn evaluate_legacy_verdict(
+    approval_set: &ApprovalSetReport,
+    ledger: &ApprovalLedgerReport,
+    evaluated_at_ms: i64,
+) -> Result<ApprovalVerdictReport, ApprovalError> {
+    if ledger.schema_version != LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION
+        || ledger.approval_set_id != approval_set.set_id
+        || ledger.entries.iter().any(|entry| {
+            entry.signature_version != ApprovalVoteSignatureVersion::LegacyV1
+                || entry.timestamp_ms > evaluated_at_ms
+        })
+        || evaluated_at_ms < approval_set.created_at_ms
+        || evaluated_at_ms < ledger.created_at_ms
+    {
+        return Err(ApprovalError::InvalidVerdictRequest {
+            reason: "legacy approval verdict does not have a valid V1 lineage".to_string(),
+        });
+    }
+    let eligible = approval_set
+        .eligible_voters
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
     let approve_count = ledger
         .entries
         .iter()
@@ -3276,7 +3823,7 @@ pub fn evaluate_verdict(
     } else {
         ApprovalVerdictStatus::NotApproved
     };
-    let seed = ApprovalVerdictIdSeed {
+    let seed = LegacyApprovalVerdictIdSeed {
         approval_set_id: &approval_set.set_id,
         ledger_id: &ledger.ledger_id,
         status,
@@ -3288,8 +3835,8 @@ pub fn evaluate_verdict(
         evaluated_at_ms,
     };
     let verdict_id = approval_verdict_id(evaluated_at_ms, &canonical_json_bytes(&seed)?);
-
     Ok(ApprovalVerdictReport {
+        schema_version: LEGACY_APPROVAL_VERDICT_SCHEMA_VERSION,
         verdict_id,
         approval_set_id: approval_set.set_id.clone(),
         ledger_id: ledger.ledger_id.clone(),
@@ -3307,49 +3854,171 @@ pub fn evaluate_verdict(
     })
 }
 
-pub fn build_receipt_pack(
+fn validate_legacy_verdict_for_retirement(
+    report: &ApprovalVerdictReport,
     approval_set: &ApprovalSetReport,
     ledger: &ApprovalLedgerReport,
-    verdict: &ApprovalVerdictReport,
-    audit_refs: Vec<String>,
-    signer: &Ed25519Signer,
-    signer_id: &str,
-    created_at_ms: i64,
-) -> Result<ApprovalReceiptPackReport, ApprovalError> {
-    let content = ApprovalReceiptPackContentRef {
-        signer_id,
-        approval_set,
-        ledger,
-        verdict,
-        audit_refs: audit_refs.as_slice(),
-        created_at_ms,
-    };
-    let content_bytes = canonical_json_bytes(&content)?;
-    let content_hash = sha256_hex(&content_bytes);
-    let signature = signer.sign(&content_bytes);
-    let seed = ApprovalReceiptPackIdSeed {
-        signer_id,
-        content_hash: &content_hash,
-        signature_key_id: &signature.key_id,
-        created_at_ms,
-    };
-    let pack_id = approval_receipt_pack_id(created_at_ms, &canonical_json_bytes(&seed)?);
+) -> Result<(), ApprovalError> {
+    if report.schema_version != LEGACY_APPROVAL_VERDICT_SCHEMA_VERSION
+        || report.status != ApprovalVerdictStatus::Approved
+    {
+        return Err(ApprovalError::InvalidVerdictRequest {
+            reason: format!(
+                "approval verdict `{}` is not a retireable V1 terminal artifact",
+                report.verdict_id
+            ),
+        });
+    }
+    let legacy = legacy_ledger_prefix(ledger)?;
+    validate_legacy_ledger_report(&legacy, approval_set)?;
+    if evaluate_legacy_verdict(approval_set, &legacy, report.evaluated_at_ms)? != *report {
+        return Err(ApprovalError::InvalidVerdictRequest {
+            reason: format!(
+                "legacy approval verdict `{}` does not match its verified V1 lineage",
+                report.verdict_id
+            ),
+        });
+    }
+    Ok(())
+}
 
-    Ok(ApprovalReceiptPackReport {
-        pack_id,
-        signer_id: signer_id.to_string(),
-        approval_set: approval_set.clone(),
-        ledger: ledger.clone(),
-        verdict: verdict.clone(),
-        audit_refs,
-        content_hash,
-        signature,
-        created_at_ms,
-    })
+fn legacy_ledger_content_ref(ledger: &ApprovalLedgerReport) -> LegacyApprovalLedgerReportRef<'_> {
+    LegacyApprovalLedgerReportRef {
+        ledger_id: &ledger.ledger_id,
+        approval_set_id: &ledger.approval_set_id,
+        entries: ledger
+            .entries
+            .iter()
+            .map(|entry| LegacyApprovalLedgerEntryRef {
+                entry_id: &entry.entry_id,
+                voter_id: &entry.voter_id,
+                vote: entry.vote,
+                signature: &entry.signature,
+                timestamp_ms: entry.timestamp_ms,
+                envelope_hash: &entry.envelope_hash,
+            })
+            .collect(),
+        created_at_ms: ledger.created_at_ms,
+    }
+}
+
+fn legacy_verdict_content_ref(
+    verdict: &ApprovalVerdictReport,
+) -> LegacyApprovalVerdictReportRef<'_> {
+    LegacyApprovalVerdictReportRef {
+        verdict_id: &verdict.verdict_id,
+        approval_set_id: &verdict.approval_set_id,
+        ledger_id: &verdict.ledger_id,
+        status: verdict.status,
+        approve_count: verdict.approve_count,
+        reject_count: verdict.reject_count,
+        threshold_required: &verdict.threshold_required,
+        threshold_required_count: verdict.threshold_required_count,
+        eligible_count: verdict.eligible_count,
+        missing_voters: &verdict.missing_voters,
+        evaluated_at_ms: verdict.evaluated_at_ms,
+    }
+}
+
+fn validate_legacy_receipt_pack_for_retirement(
+    pack: &ApprovalReceiptPackReport,
+) -> Result<LegacyReceiptPackDisposition, ApprovalError> {
+    if pack.signature_version != ApprovalReceiptPackSignatureVersion::LegacyV1
+        || pack.ledger.schema_version != LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION
+        || pack.verdict.schema_version != LEGACY_APPROVAL_VERDICT_SCHEMA_VERSION
+        || pack
+            .ledger
+            .entries
+            .iter()
+            .any(|entry| entry.signature_version != ApprovalVoteSignatureVersion::LegacyV1)
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "self-declared legacy receipt pack does not have the V1 wire shape".to_string(),
+        });
+    }
+    if !approval_set_voters_are_canonical(&pack.approval_set.eligible_voters)
+        || pack.approval_set.set_id != canonical_approval_set_id(&pack.approval_set)?
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "legacy receipt pack contains a non-canonical approval set".to_string(),
+        });
+    }
+    validate_legacy_ledger_report(&pack.ledger, &pack.approval_set)?;
+    validate_legacy_verdict_for_retirement(&pack.verdict, &pack.approval_set, &pack.ledger)?;
+    let later_v1_content = LegacyApprovalReceiptPackContentRef {
+        signer_id: &pack.signer_id,
+        approval_set: &pack.approval_set,
+        ledger: legacy_ledger_content_ref(&pack.ledger),
+        verdict: legacy_verdict_content_ref(&pack.verdict),
+        audit_refs: &pack.audit_refs,
+        created_at_ms: pack.created_at_ms,
+    };
+    let full_metadata_payload = canonical_json_bytes(&later_v1_content)?;
+    if sha256_hex(&full_metadata_payload) == pack.content_hash
+        && verify_detached_signature(&full_metadata_payload, &pack.signature).is_ok()
+    {
+        if pack.created_at_ms < pack.verdict.evaluated_at_ms {
+            return Err(ApprovalError::InvalidReceiptPack {
+                reason: "legacy receipt pack predates its verified V1 verdict".to_string(),
+            });
+        }
+        let expected_pack_id = canonical_receipt_pack_id(pack)?;
+        if pack.pack_id != expected_pack_id {
+            return Err(ApprovalError::InvalidReceiptPack {
+                reason: format!(
+                    "legacy pack ID mismatch: expected {}, observed {}",
+                    expected_pack_id, pack.pack_id
+                ),
+            });
+        }
+        return Ok(LegacyReceiptPackDisposition::VerifiedRetired);
+    }
+
+    let signed_core = OriginalApprovalReceiptPackContentRef {
+        approval_set: &pack.approval_set,
+        ledger: legacy_ledger_content_ref(&pack.ledger),
+        verdict: legacy_verdict_content_ref(&pack.verdict),
+        audit_refs: &pack.audit_refs,
+    };
+    let signed_core_payload = canonical_json_bytes(&signed_core)?;
+    if sha256_hex(&signed_core_payload) != pack.content_hash {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "legacy receipt content hash does not match a known V1 payload".to_string(),
+        });
+    }
+    verify_detached_signature(&signed_core_payload, &pack.signature).map_err(|error| {
+        ApprovalError::InvalidReceiptPack {
+            reason: format!("legacy receipt core signature did not verify: {error}"),
+        }
+    })?;
+    Ok(LegacyReceiptPackDisposition::AuthenticatedCoreOnly)
 }
 
 pub fn verify_receipt_pack(pack: &ApprovalReceiptPackReport) -> Result<(), ApprovalError> {
+    if pack.signature_version == ApprovalReceiptPackSignatureVersion::LegacyV1 {
+        let disposition = validate_legacy_receipt_pack_for_retirement(pack)?;
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: match disposition {
+                LegacyReceiptPackDisposition::VerifiedRetired => {
+                    "legacy approval receipt packs are retired and cannot authorize execution"
+                        .to_string()
+                }
+                LegacyReceiptPackDisposition::AuthenticatedCoreOnly => {
+                    "legacy approval receipt pack is quarantined because signer, creation time, and pack identity are unauthenticated"
+                        .to_string()
+                }
+            },
+        });
+    }
+    if pack.ledger.schema_version != CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION
+        || pack.verdict.schema_version != CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "current receipt pack contains a non-current approval artifact".to_string(),
+        });
+    }
     let content = ApprovalReceiptPackContentRef {
+        signature_version: pack.signature_version,
         signer_id: &pack.signer_id,
         approval_set: &pack.approval_set,
         ledger: &pack.ledger,
@@ -3376,16 +4045,14 @@ pub fn verify_receipt_pack(pack: &ApprovalReceiptPackReport) -> Result<(), Appro
         || pack.verdict.approval_set_id != pack.approval_set.set_id
         || pack.verdict.ledger_id != pack.ledger.ledger_id
         || pack.ledger.created_at_ms < pack.approval_set.created_at_ms
-        || pack
-            .ledger
-            .entries
-            .iter()
-            .any(|entry| entry.timestamp_ms < pack.ledger.created_at_ms)
-        || pack
-            .ledger
-            .entries
-            .iter()
-            .any(|entry| entry.timestamp_ms > pack.verdict.evaluated_at_ms)
+        || pack.ledger.entries.iter().any(|entry| {
+            entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                && entry.timestamp_ms < pack.ledger.created_at_ms
+        })
+        || pack.ledger.entries.iter().any(|entry| {
+            entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+                && entry.timestamp_ms > pack.verdict.evaluated_at_ms
+        })
         || pack.verdict.evaluated_at_ms < pack.ledger.created_at_ms
         || pack.created_at_ms < pack.verdict.evaluated_at_ms
     {
@@ -3399,6 +4066,16 @@ pub fn verify_receipt_pack(pack: &ApprovalReceiptPackReport) -> Result<(), Appro
     {
         return Err(ApprovalError::InvalidReceiptPack {
             reason: "approval set or ledger identifier is not canonical".to_string(),
+        });
+    }
+    if evaluate_verdict(
+        &pack.approval_set,
+        &pack.ledger,
+        pack.verdict.evaluated_at_ms,
+    )? != pack.verdict
+    {
+        return Err(ApprovalError::InvalidReceiptPack {
+            reason: "receipt pack verdict does not match current authenticated votes".to_string(),
         });
     }
     let expected_pack_id = canonical_receipt_pack_id(pack)?;
@@ -3485,46 +4162,17 @@ pub fn verify_governed_human_receipt_pack(
         });
     }
 
-    let mut replayed_ledger = ApprovalLedgerReport {
-        ledger_id: pack.ledger.ledger_id.clone(),
-        approval_set_id: pack.ledger.approval_set_id.clone(),
-        entries: Vec::new(),
-        created_at_ms: pack.ledger.created_at_ms,
-    };
-    for entry in &pack.ledger.entries {
-        if entry.vote != ApprovalVote::Approve {
-            return Err(ApprovalError::InvalidReceiptPack {
-                reason: "governed execution requires explicit approve votes".into(),
-            });
+    validate_ledger_report(&pack.ledger, &pack.approval_set).map_err(|error| {
+        ApprovalError::InvalidReceiptPack {
+            reason: format!("approval vote ledger could not be replayed exactly: {error}"),
         }
-        let expected_entry_id = next_approval_ledger_entry_id(
-            &replayed_ledger.ledger_id,
-            replayed_ledger.entries.len(),
-        );
-        let expected_envelope_hash = build_vote_envelope_hash(
-            &replayed_ledger,
-            &expected_entry_id,
-            &entry.voter_id,
-            &entry.signature,
-            entry.timestamp_ms,
-        )?;
-        if entry.entry_id != expected_entry_id || entry.envelope_hash != expected_envelope_hash {
-            return Err(ApprovalError::InvalidReceiptPack {
-                reason: "approval vote ledger chain is inconsistent".into(),
-            });
-        }
-        validate_and_append_vote(
-            &mut replayed_ledger,
-            &pack.approval_set,
-            &entry.voter_id,
-            &entry.signature,
-            entry.timestamp_ms,
-            &entry.envelope_hash,
-        )?;
-    }
-    if replayed_ledger != pack.ledger {
+    })?;
+    if pack.ledger.entries.iter().any(|entry| {
+        entry.signature_version == ApprovalVoteSignatureVersion::IntentV2
+            && entry.vote != ApprovalVote::Approve
+    }) {
         return Err(ApprovalError::InvalidReceiptPack {
-            reason: "approval vote ledger could not be replayed exactly".into(),
+            reason: "governed execution requires explicit approve votes".into(),
         });
     }
 
@@ -3581,6 +4229,7 @@ pub fn render_approval_ledger(
 ) -> String {
     let mut lines = vec![
         format!("Approval Ledger: {}", report.ledger_id),
+        format!("Schema Version: {}", report.schema_version),
         format!("Approval Set: {}", report.approval_set_id),
         format!("Created: {}", report.created_at_ms),
         format!(
@@ -3608,9 +4257,13 @@ pub fn render_approval_ledger(
     } else {
         lines.push(format!("Votes ({})", report.entries.len()));
         lines.extend(report.entries.iter().map(|entry| {
+            let authority = match entry.signature_version {
+                ApprovalVoteSignatureVersion::LegacyV1 => "retired legacy audit",
+                ApprovalVoteSignatureVersion::IntentV2 => "current authority",
+            };
             format!(
-                "  - {} at {} [{}]",
-                entry.voter_id, entry.timestamp_ms, entry.entry_id
+                "  - {} at {} [{}; {authority}]",
+                entry.voter_id, entry.timestamp_ms, entry.entry_id,
             )
         }));
     }
@@ -3661,6 +4314,7 @@ pub fn render_approval_ledger_list(list: &ApprovalLedgerList) -> String {
 pub fn render_approval_verdict(report: &ApprovalVerdictReport) -> String {
     let mut lines = vec![
         format!("Approval Verdict: {}", report.verdict_id),
+        format!("Schema Version: {}", report.schema_version),
         format!("Approval Set: {}", report.approval_set_id),
         format!("Ledger: {}", report.ledger_id),
         format!("Status: {:?}", report.status),
@@ -3704,6 +4358,7 @@ pub fn render_approval_verdict_list(list: &ApprovalVerdictList) -> String {
 pub fn render_approval_receipt_pack(report: &ApprovalReceiptPackReport) -> String {
     [
         format!("Approval Receipt Pack: {}", report.pack_id),
+        format!("Signature Version: {:?}", report.signature_version),
         format!("Signer: {}", report.signer_id),
         format!("Approval Set: {}", report.approval_set.set_id),
         format!("Ledger: {}", report.ledger.ledger_id),
@@ -3723,15 +4378,31 @@ pub fn render_approval_receipt_pack_list(list: &ApprovalReceiptPackList) -> Stri
     let mut lines = vec![format!("Approval Receipt Packs ({})", list.total_count)];
     if list.packs.is_empty() {
         lines.push("none".to_string());
-        return lines.join("\n");
+    } else {
+        lines.extend(list.packs.iter().map(|record| {
+            format!(
+                "- {} verdict={} set={} created={}",
+                record.pack_id, record.verdict_id, record.approval_set_id, record.created_at_ms
+            )
+        }));
     }
-
-    lines.extend(list.packs.iter().map(|record| {
-        format!(
-            "- {} verdict={} set={} created={}",
-            record.pack_id, record.verdict_id, record.approval_set_id, record.created_at_ms
-        )
-    }));
+    lines.push(format!(
+        "Quarantined Legacy Receipt Packs ({})",
+        list.quarantined_count
+    ));
+    if list.quarantined.is_empty() {
+        lines.push("none".to_string());
+    } else {
+        lines.extend(list.quarantined.iter().map(|record| {
+            format!(
+                "- observed_id={} signature_key={} core_hash={} reason={}",
+                record.observed_pack_id,
+                record.signature_key_id,
+                record.authenticated_core_hash,
+                record.reason
+            )
+        }));
+    }
     lines.join("\n")
 }
 
@@ -3744,14 +4415,21 @@ struct ApprovalSetIdSeed<'a> {
 }
 
 #[derive(Serialize)]
-struct ApprovalVoteSignaturePayload<'a> {
+struct ApprovalVerdictIdSeed<'a> {
+    schema_version: u32,
     approval_set_id: &'a str,
     ledger_id: &'a str,
-    voter_id: &'a str,
+    status: ApprovalVerdictStatus,
+    approve_count: usize,
+    reject_count: usize,
+    threshold_required_count: usize,
+    eligible_count: usize,
+    missing_voters: &'a [String],
+    evaluated_at_ms: i64,
 }
 
 #[derive(Serialize)]
-struct ApprovalVerdictIdSeed<'a> {
+struct LegacyApprovalVerdictIdSeed<'a> {
     approval_set_id: &'a str,
     ledger_id: &'a str,
     status: ApprovalVerdictStatus,
@@ -3773,12 +4451,64 @@ struct ApprovalReceiptPackIdSeed<'a> {
 
 #[derive(Serialize)]
 struct ApprovalReceiptPackContentRef<'a> {
+    signature_version: ApprovalReceiptPackSignatureVersion,
     signer_id: &'a str,
     approval_set: &'a ApprovalSetReport,
     ledger: &'a ApprovalLedgerReport,
     verdict: &'a ApprovalVerdictReport,
     audit_refs: &'a [String],
     created_at_ms: i64,
+}
+
+#[derive(Serialize)]
+struct LegacyApprovalLedgerEntryRef<'a> {
+    entry_id: &'a str,
+    voter_id: &'a str,
+    vote: ApprovalVote,
+    signature: &'a DetachedSignature,
+    timestamp_ms: i64,
+    envelope_hash: &'a str,
+}
+
+#[derive(Serialize)]
+struct LegacyApprovalLedgerReportRef<'a> {
+    ledger_id: &'a str,
+    approval_set_id: &'a str,
+    entries: Vec<LegacyApprovalLedgerEntryRef<'a>>,
+    created_at_ms: i64,
+}
+
+#[derive(Serialize)]
+struct LegacyApprovalVerdictReportRef<'a> {
+    verdict_id: &'a str,
+    approval_set_id: &'a str,
+    ledger_id: &'a str,
+    status: ApprovalVerdictStatus,
+    approve_count: usize,
+    reject_count: usize,
+    threshold_required: &'a str,
+    threshold_required_count: usize,
+    eligible_count: usize,
+    missing_voters: &'a [String],
+    evaluated_at_ms: i64,
+}
+
+#[derive(Serialize)]
+struct LegacyApprovalReceiptPackContentRef<'a> {
+    signer_id: &'a str,
+    approval_set: &'a ApprovalSetReport,
+    ledger: LegacyApprovalLedgerReportRef<'a>,
+    verdict: LegacyApprovalVerdictReportRef<'a>,
+    audit_refs: &'a [String],
+    created_at_ms: i64,
+}
+
+#[derive(Serialize)]
+struct OriginalApprovalReceiptPackContentRef<'a> {
+    approval_set: &'a ApprovalSetReport,
+    ledger: LegacyApprovalLedgerReportRef<'a>,
+    verdict: LegacyApprovalVerdictReportRef<'a>,
+    audit_refs: &'a [String],
 }
 
 fn approval_set_id(created_at_ms: i64, seed_bytes: &[u8]) -> String {
@@ -3845,21 +4575,39 @@ fn canonical_receipt_pack_id(pack: &ApprovalReceiptPackReport) -> Result<String,
 }
 
 fn canonical_approval_verdict_id(report: &ApprovalVerdictReport) -> Result<String, ApprovalError> {
-    let seed = ApprovalVerdictIdSeed {
-        approval_set_id: &report.approval_set_id,
-        ledger_id: &report.ledger_id,
-        status: report.status,
-        approve_count: report.approve_count,
-        reject_count: report.reject_count,
-        threshold_required_count: report.threshold_required_count,
-        eligible_count: report.eligible_count,
-        missing_voters: &report.missing_voters,
-        evaluated_at_ms: report.evaluated_at_ms,
+    let seed_bytes = match report.schema_version {
+        LEGACY_APPROVAL_VERDICT_SCHEMA_VERSION => {
+            canonical_json_bytes(&LegacyApprovalVerdictIdSeed {
+                approval_set_id: &report.approval_set_id,
+                ledger_id: &report.ledger_id,
+                status: report.status,
+                approve_count: report.approve_count,
+                reject_count: report.reject_count,
+                threshold_required_count: report.threshold_required_count,
+                eligible_count: report.eligible_count,
+                missing_voters: &report.missing_voters,
+                evaluated_at_ms: report.evaluated_at_ms,
+            })?
+        }
+        CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION => canonical_json_bytes(&ApprovalVerdictIdSeed {
+            schema_version: report.schema_version,
+            approval_set_id: &report.approval_set_id,
+            ledger_id: &report.ledger_id,
+            status: report.status,
+            approve_count: report.approve_count,
+            reject_count: report.reject_count,
+            threshold_required_count: report.threshold_required_count,
+            eligible_count: report.eligible_count,
+            missing_voters: &report.missing_voters,
+            evaluated_at_ms: report.evaluated_at_ms,
+        })?,
+        unsupported => {
+            return Err(ApprovalError::InvalidVerdictRequest {
+                reason: format!("unsupported approval verdict schema version `{unsupported}`"),
+            });
+        }
     };
-    Ok(approval_verdict_id(
-        report.evaluated_at_ms,
-        &canonical_json_bytes(&seed)?,
-    ))
+    Ok(approval_verdict_id(report.evaluated_at_ms, &seed_bytes))
 }
 
 fn approval_receipt_pack_id(created_at_ms: i64, seed_bytes: &[u8]) -> String {
@@ -3913,20 +4661,20 @@ fn voter_id_from_public_key(public_key_hex: &str) -> String {
     format!("swarm:ed25519:{public_key_hex}")
 }
 
-fn vote_payload_bytes(
+fn legacy_approval_vote_payload_bytes(
     approval_set_id: &str,
     ledger_id: &str,
     voter_id: &str,
 ) -> Result<Vec<u8>, ApprovalError> {
-    canonical_json_bytes(&ApprovalVoteSignaturePayload {
-        approval_set_id,
-        ledger_id,
-        voter_id,
-    })
+    canonical_json_bytes(&json!({
+        "approval_set_id": approval_set_id,
+        "ledger_id": ledger_id,
+        "voter_id": voter_id,
+    }))
     .map_err(Into::into)
 }
 
-fn build_vote_envelope_hash(
+fn build_legacy_vote_envelope_hash(
     ledger: &ApprovalLedgerReport,
     entry_id: &str,
     voter_id: &str,
@@ -3934,11 +4682,9 @@ fn build_vote_envelope_hash(
     timestamp_ms: i64,
 ) -> Result<String, ApprovalError> {
     let published_at = DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
-        .ok_or_else(|| ApprovalError::InvalidReceiptPack {
-            reason: format!("approval vote timestamp `{timestamp_ms}` is out of range"),
+        .ok_or_else(|| ApprovalError::InvalidLedgerRequest {
+            reason: format!("legacy approval vote timestamp `{timestamp_ms}` is out of range"),
         })?
-        // Preserve the historical seconds-precision wire value while deriving it
-        // from the persisted vote timestamp instead of verification wall clock.
         .to_rfc3339_opts(SecondsFormat::Secs, true);
     let keypair = Keypair::from_seed(
         sha256(format!("approval-ledger-envelope:{}", ledger.ledger_id).as_bytes()).as_bytes(),
@@ -3961,10 +4707,120 @@ fn build_vote_envelope_hash(
         }),
         published_at,
     )?;
-
     if !verify_envelope(&envelope)? {
         return Err(ApprovalError::InvalidSignature {
             voter_id: voter_id.to_string(),
+            reason: "legacy spine envelope did not verify".to_string(),
+        });
+    }
+    envelope
+        .get("envelope_hash")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or(SpineError::MissingField("envelope_hash").into())
+}
+
+pub fn build_approval_vote_intent(
+    ledger: &ApprovalLedgerReport,
+    voter_id: &str,
+    vote: ApprovalVote,
+    timestamp_ms: i64,
+) -> ApprovalVoteIntent {
+    ApprovalVoteIntent {
+        signature_version: ApprovalVoteSignatureVersion::IntentV2,
+        approval_set_id: ledger.approval_set_id.clone(),
+        ledger_id: ledger.ledger_id.clone(),
+        entry_id: next_approval_ledger_entry_id(&ledger.ledger_id, ledger.entries.len()),
+        voter_id: voter_id.to_string(),
+        vote,
+        timestamp_ms,
+        previous_envelope_hash: ledger
+            .entries
+            .last()
+            .map(|entry| entry.envelope_hash.clone()),
+    }
+}
+
+pub fn approval_vote_payload_bytes(intent: &ApprovalVoteIntent) -> Result<Vec<u8>, ApprovalError> {
+    canonical_json_bytes(intent).map_err(Into::into)
+}
+
+fn approval_vote_intent_from_entry(
+    ledger: &ApprovalLedgerReport,
+    entry: &ApprovalLedgerEntry,
+) -> ApprovalVoteIntent {
+    ApprovalVoteIntent {
+        signature_version: entry.signature_version,
+        approval_set_id: ledger.approval_set_id.clone(),
+        ledger_id: ledger.ledger_id.clone(),
+        entry_id: entry.entry_id.clone(),
+        voter_id: entry.voter_id.clone(),
+        vote: entry.vote,
+        timestamp_ms: entry.timestamp_ms,
+        previous_envelope_hash: entry.previous_envelope_hash.clone(),
+    }
+}
+
+fn verify_approval_vote_signature(
+    intent: &ApprovalVoteIntent,
+    signature: &DetachedSignature,
+) -> Result<(), ApprovalError> {
+    validate_persistable_vote_intent(intent)?;
+    verify_approval_vote_signature_raw(intent, signature)
+}
+
+fn verify_approval_vote_signature_raw(
+    intent: &ApprovalVoteIntent,
+    signature: &DetachedSignature,
+) -> Result<(), ApprovalError> {
+    verify_detached_signature(&approval_vote_payload_bytes(intent)?, signature).map_err(|error| {
+        ApprovalError::InvalidSignature {
+            voter_id: intent.voter_id.clone(),
+            reason: error.to_string(),
+        }
+    })
+}
+
+fn build_vote_envelope_hash(
+    ledger: &ApprovalLedgerReport,
+    intent: &ApprovalVoteIntent,
+    signature: &DetachedSignature,
+) -> Result<String, ApprovalError> {
+    let published_at = DateTime::<Utc>::from_timestamp_millis(intent.timestamp_ms)
+        .ok_or_else(|| ApprovalError::InvalidReceiptPack {
+            reason: format!(
+                "approval vote timestamp `{}` is out of range",
+                intent.timestamp_ms
+            ),
+        })?
+        // Preserve the historical seconds-precision wire value while deriving it
+        // from the persisted vote timestamp instead of verification wall clock.
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    let keypair = Keypair::from_seed(
+        sha256(format!("approval-ledger-envelope:{}", ledger.ledger_id).as_bytes()).as_bytes(),
+    );
+    let envelope = build_signed_envelope(
+        &keypair,
+        (ledger.entries.len() + 1) as u64,
+        intent.previous_envelope_hash.clone(),
+        json!({
+            "type": "approval_vote",
+            "signature_version": intent.signature_version,
+            "approval_set_id": intent.approval_set_id,
+            "ledger_id": intent.ledger_id,
+            "entry_id": intent.entry_id,
+            "voter_id": intent.voter_id,
+            "vote": intent.vote,
+            "timestamp_ms": intent.timestamp_ms,
+            "previous_envelope_hash": intent.previous_envelope_hash,
+            "signature": signature,
+        }),
+        published_at,
+    )?;
+
+    if !verify_envelope(&envelope)? {
+        return Err(ApprovalError::InvalidSignature {
+            voter_id: intent.voter_id.clone(),
             reason: "generated spine envelope did not verify".to_string(),
         });
     }
@@ -3994,6 +4850,32 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+fn next_approval_vote_timestamp_ms(ledger: &ApprovalLedgerReport, observed_now_ms: i64) -> i64 {
+    ledger
+        .entries
+        .iter()
+        .filter(|entry| entry.signature_version == ApprovalVoteSignatureVersion::IntentV2)
+        .fold(
+            observed_now_ms.max(ledger.created_at_ms),
+            |latest, entry| latest.max(entry.timestamp_ms),
+        )
+}
+
+fn approval_verdict_timestamp_ms(ledger: &ApprovalLedgerReport, observed_now_ms: i64) -> i64 {
+    ledger
+        .entries
+        .iter()
+        .filter(|entry| entry.signature_version == ApprovalVoteSignatureVersion::IntentV2)
+        .fold(
+            observed_now_ms.max(ledger.created_at_ms),
+            |latest, entry| latest.max(entry.timestamp_ms),
+        )
+}
+
+fn approval_receipt_timestamp_ms(verdict: &ApprovalVerdictReport, observed_now_ms: i64) -> i64 {
+    observed_now_ms.max(verdict.evaluated_at_ms)
 }
 
 fn read_json<T, E>(
@@ -4078,6 +4960,30 @@ mod tests {
         files
     }
 
+    fn install_legacy_wire_ledger(
+        set_root: &Path,
+        ledger_root: &Path,
+        set: &ApprovalSetReport,
+        ledger_bytes: &[u8],
+    ) -> ApprovalLedgerReport {
+        let set_store = FileApprovalSetStore::open(set_root).unwrap();
+        set_store.persist(set).unwrap();
+        let ledger_store = FileApprovalLedgerStore::open(ledger_root).unwrap();
+        let report: ApprovalLedgerReport = serde_json::from_slice(ledger_bytes).unwrap();
+        assert_eq!(report.schema_version, LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION);
+        let path = ledger_store.report_path(&report.ledger_id);
+        fs::write(&path, ledger_bytes).unwrap();
+        ledger_store
+            .write_index(&ApprovalLedgerIndex {
+                entries: vec![ApprovalLedgerRecord::from_report(
+                    &report,
+                    path.display().to_string(),
+                )],
+            })
+            .unwrap();
+        report
+    }
+
     fn capture_workflow_lock_file(path: &Path) -> (Vec<u8>, String) {
         let metadata = fs::symlink_metadata(path).unwrap();
         assert!(metadata.file_type().is_file());
@@ -4159,6 +5065,7 @@ mod tests {
 
     fn sample_ledger(set_id: &str) -> ApprovalLedgerReport {
         ApprovalLedgerReport {
+            schema_version: CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION,
             ledger_id: "approval-ledger:test".to_string(),
             approval_set_id: set_id.to_string(),
             entries: Vec::new(),
@@ -4191,15 +5098,41 @@ mod tests {
         vote: ApprovalVote,
         index: usize,
     ) -> ApprovalLedgerEntry {
-        let signature = signer.sign(&vote_payload_bytes(set_id, ledger_id, voter_id).unwrap());
-        ApprovalLedgerEntry {
+        let timestamp_ms = 1_700_000_000_200 + index as i64;
+        let previous_envelope_hash = (index > 0).then(|| format!("0xhash{:02}", index));
+        let intent = ApprovalVoteIntent {
+            signature_version: ApprovalVoteSignatureVersion::IntentV2,
+            approval_set_id: set_id.to_string(),
+            ledger_id: ledger_id.to_string(),
             entry_id: next_approval_ledger_entry_id(ledger_id, index),
             voter_id: voter_id.to_string(),
             vote,
+            timestamp_ms,
+            previous_envelope_hash: previous_envelope_hash.clone(),
+        };
+        let signature = signer.sign(&approval_vote_payload_bytes(&intent).unwrap());
+        ApprovalLedgerEntry {
+            entry_id: intent.entry_id,
+            voter_id: voter_id.to_string(),
+            vote,
+            signature_version: ApprovalVoteSignatureVersion::IntentV2,
             signature,
-            timestamp_ms: 1_700_000_000_200 + index as i64,
+            timestamp_ms,
+            previous_envelope_hash,
             envelope_hash: format!("0xhash{:02}", index + 1),
         }
+    }
+
+    fn signed_vote_intent(
+        ledger: &ApprovalLedgerReport,
+        voter_id: &str,
+        signer: &Ed25519Signer,
+        timestamp_ms: i64,
+    ) -> (ApprovalVoteIntent, DetachedSignature) {
+        let intent =
+            build_approval_vote_intent(ledger, voter_id, ApprovalVote::Approve, timestamp_ms);
+        let signature = signer.sign(&approval_vote_payload_bytes(&intent).unwrap());
+        (intent, signature)
     }
 
     #[test]
@@ -4255,18 +5188,10 @@ mod tests {
         let (voter_id, signer) = voter("alpha");
         let set = sample_set(vec![voter_id.clone()], 1);
         let mut ledger = sample_ledger(&set.set_id);
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger.ledger_id, &voter_id).unwrap());
+        let (intent, signature) =
+            signed_vote_intent(&ledger, &voter_id, &signer, 1_700_000_000_300);
 
-        validate_and_append_vote(
-            &mut ledger,
-            &set,
-            &voter_id,
-            &signature,
-            1_700_000_000_300,
-            "0xenvelopehash",
-        )
-        .unwrap();
+        validate_and_append_vote(&mut ledger, &set, &intent, &signature).unwrap();
 
         assert_eq!(ledger.entries.len(), 1);
         assert_eq!(ledger.entries[0].voter_id, voter_id);
@@ -4295,13 +5220,10 @@ mod tests {
         let ledger = harness
             .load_stored_ledger_for_set(&set_record.set_id)
             .expect("load ledger");
-        let signature = signer.sign(
-            &vote_payload_bytes(&set_record.set_id, &ledger.report.ledger_id, &voter_id)
-                .expect("payload bytes"),
-        );
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_id, &signer, now_ms());
 
         let quorum_state = harness
-            .append_signed_vote(&ledger.report.ledger_id, &voter_id, &signature)
+            .append_signed_vote(&intent, &signature)
             .expect("signed vote should append");
 
         assert!(quorum_state.quorum_met);
@@ -4588,19 +5510,19 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_id, &signer, now_ms());
         let barrier = Arc::new(Barrier::new(2));
         let start = |harness: DefaultApprovalHarness| {
             let barrier = barrier.clone();
             let set_id = set.set_id.clone();
             let ledger_id = ledger_id.clone();
-            let voter_id = voter_id.clone();
+            let intent = intent.clone();
             let signature = signature.clone();
             let signing_key_env = signing_key_env.clone();
             thread::spawn(move || {
                 barrier.wait();
-                let append = harness.append_signed_vote(&ledger_id, &voter_id, &signature);
+                let append = harness.append_signed_vote(&intent, &signature);
                 let pack = harness.ensure_approved_receipt_pack(
                     &set_id,
                     &ledger_id,
@@ -4677,14 +5599,17 @@ mod tests {
                 &std::env::var("SWARM_RUNTIME_APPROVAL_CHILD_SIGNATURE").unwrap(),
             )
             .unwrap();
-            let ledger_id = std::env::var("SWARM_RUNTIME_APPROVAL_CHILD_LEDGER").unwrap();
-            let voter_id = std::env::var("SWARM_RUNTIME_APPROVAL_CHILD_VOTER").unwrap();
+            let intent: ApprovalVoteIntent = serde_json::from_str(
+                &std::env::var("SWARM_RUNTIME_APPROVAL_CHILD_INTENT").unwrap(),
+            )
+            .unwrap();
+            let ledger_id = intent.ledger_id.clone();
             let set_id = std::env::var("SWARM_RUNTIME_APPROVAL_CHILD_SET").unwrap();
             let ready_path = std::env::var("SWARM_RUNTIME_APPROVAL_CHILD_READY").unwrap();
             let release_path = std::env::var("SWARM_RUNTIME_APPROVAL_CHILD_RELEASE").unwrap();
             fs::write(&ready_path, b"ready").unwrap();
             wait_for_file(Path::new(&release_path));
-            let outcome = match harness.append_signed_vote(&ledger_id, &voter_id, &signature) {
+            let outcome = match harness.append_signed_vote(&intent, &signature) {
                 Ok(_) => "ok",
                 Err(ApprovalError::DuplicateVoter { .. }) => "duplicate",
                 Err(error) => panic!("unexpected separate-process vote outcome: {error}"),
@@ -4730,8 +5655,8 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_id, &signer, now_ms());
         let first_ready = dir.child("first-child-ready");
         let second_ready = dir.child("second-child-ready");
         let release = dir.child("children-release");
@@ -4765,8 +5690,10 @@ mod tests {
                     dir.child("approval-ledgers").display().to_string(),
                 )
                 .env("SWARM_RUNTIME_APPROVAL_CHILD_SET", set_id)
-                .env("SWARM_RUNTIME_APPROVAL_CHILD_LEDGER", &ledger_id)
-                .env("SWARM_RUNTIME_APPROVAL_CHILD_VOTER", &voter_id)
+                .env(
+                    "SWARM_RUNTIME_APPROVAL_CHILD_INTENT",
+                    serde_json::to_string(&intent).unwrap(),
+                )
                 .env(
                     "SWARM_RUNTIME_APPROVAL_CHILD_SIGNATURE",
                     serde_json::to_string(&signature).unwrap(),
@@ -4855,7 +5782,10 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            let voter_id = std::env::var("SWARM_RUNTIME_APPROVAL_CONTROL_VOTER").unwrap();
+            let intent: ApprovalVoteIntent = serde_json::from_str(
+                &std::env::var("SWARM_RUNTIME_APPROVAL_CONTROL_INTENT").unwrap(),
+            )
+            .unwrap();
             let signature: DetachedSignature = serde_json::from_str(
                 &std::env::var("SWARM_RUNTIME_APPROVAL_CONTROL_SIGNATURE").unwrap(),
             )
@@ -4866,26 +5796,7 @@ mod tests {
             wait_for_file(Path::new(&release_path));
 
             let mut candidate = ledger;
-            let timestamp_ms = now_ms();
-            let entry_id =
-                next_approval_ledger_entry_id(&candidate.ledger_id, candidate.entries.len());
-            let envelope_hash = build_vote_envelope_hash(
-                &candidate,
-                &entry_id,
-                &voter_id,
-                &signature,
-                timestamp_ms,
-            )
-            .unwrap();
-            validate_and_append_vote(
-                &mut candidate,
-                &set,
-                &voter_id,
-                &signature,
-                timestamp_ms,
-                &envelope_hash,
-            )
-            .unwrap();
+            validate_and_append_vote(&mut candidate, &set, &intent, &signature).unwrap();
             fs::write(
                 std::env::var("SWARM_RUNTIME_APPROVAL_CONTROL_RESULT").unwrap(),
                 b"winner",
@@ -4911,8 +5822,8 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_id, &signer, now_ms());
         let first_ready = dir.child("first-control-ready");
         let second_ready = dir.child("second-control-ready");
         let release = dir.child("control-release");
@@ -4927,7 +5838,10 @@ mod tests {
                 .env(CHILD_ENV, "1")
                 .env("SWARM_RUNTIME_APPROVAL_CONTROL_SET", &set.set_id)
                 .env("SWARM_RUNTIME_APPROVAL_CONTROL_LEDGER", &ledger_id)
-                .env("SWARM_RUNTIME_APPROVAL_CONTROL_VOTER", &voter_id)
+                .env(
+                    "SWARM_RUNTIME_APPROVAL_CONTROL_INTENT",
+                    serde_json::to_string(&intent).unwrap(),
+                )
                 .env(
                     "SWARM_RUNTIME_APPROVAL_CONTROL_SIGNATURE",
                     serde_json::to_string(&signature).unwrap(),
@@ -5050,11 +5964,10 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature = initial_signer
-            .sign(&vote_payload_bytes(&set.set_id, &ledger_id, &initial_voter).unwrap());
-        harness
-            .append_signed_vote(&ledger_id, &initial_voter, &signature)
-            .unwrap();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) =
+            signed_vote_intent(&ledger.report, &initial_voter, &initial_signer, now_ms());
+        harness.append_signed_vote(&intent, &signature).unwrap();
         let signing_key_env = format!(
             "SWARM_RUNTIME_APPROVAL_LOCK_ROLLBACK_KEY_{}",
             std::process::id()
@@ -5143,11 +6056,9 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
-        harness
-            .append_signed_vote(&ledger_id, &voter_id, &signature)
-            .unwrap();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_id, &signer, now_ms());
+        harness.append_signed_vote(&intent, &signature).unwrap();
         let signing_key_env = format!(
             "SWARM_RUNTIME_APPROVAL_LOCK_CONTENT_KEY_{}",
             std::process::id()
@@ -5247,11 +6158,23 @@ mod tests {
         let routed_report_bytes = fs::read(&ledger_b_report_path).unwrap();
         fs::write(&ledger_a_report_path, &routed_report_bytes).unwrap();
 
-        let signature = signer_a
-            .sign(&vote_payload_bytes(&set_a.set_id, &ledger_a.ledger_id, &voter_a).unwrap());
-        let append_error = harness
-            .append_signed_vote(&ledger_a.ledger_id, &voter_a, &signature)
-            .unwrap_err();
+        let ledger_a_lookup = harness.load_ledger(&ledger_a.ledger_id).unwrap_err();
+        assert!(matches!(
+            ledger_a_lookup,
+            ApprovalError::InvalidLedgerRequest { .. }
+        ));
+        let intent = ApprovalVoteIntent {
+            signature_version: ApprovalVoteSignatureVersion::IntentV2,
+            approval_set_id: set_a.set_id.clone(),
+            ledger_id: ledger_a.ledger_id.clone(),
+            entry_id: next_approval_ledger_entry_id(&ledger_a.ledger_id, 0),
+            voter_id: voter_a.clone(),
+            vote: ApprovalVote::Approve,
+            timestamp_ms: now_ms(),
+            previous_envelope_hash: None,
+        };
+        let signature = signer_a.sign(&approval_vote_payload_bytes(&intent).unwrap());
+        let append_error = harness.append_signed_vote(&intent, &signature).unwrap_err();
         let append_reason = match append_error {
             ApprovalError::InvalidLedgerRequest { reason } => reason,
             other => panic!("expected exact ledger binding failure, got {other:?}"),
@@ -5345,11 +6268,12 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature_a =
-            signer_a.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_a).unwrap());
+        let empty_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent_a, signature_a) =
+            signed_vote_intent(&empty_ledger.report, &voter_a, &signer_a, now_ms());
         assert!(
             harness
-                .append_signed_vote(&ledger_id, &voter_a, &signature_a)
+                .append_signed_vote(&intent_a, &signature_a)
                 .unwrap()
                 .quorum_met
         );
@@ -5364,20 +6288,20 @@ mod tests {
         let before_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap().report;
         let before_verdicts = harness.list_verdicts().unwrap().total_count;
         let before_packs = harness.list_receipt_packs().unwrap().total_count;
-        let signature_b =
-            signer_b.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_b).unwrap());
+        let (intent_b, signature_b) =
+            signed_vote_intent(&before_ledger, &voter_b, &signer_b, now_ms());
         let barrier = Arc::new(Barrier::new(2));
         let retry_thread = {
             let harness = harness.clone();
             let barrier = barrier.clone();
             let set_id = set.set_id.clone();
             let ledger_id = ledger_id.clone();
-            let voter_id = voter_a.clone();
+            let intent = intent_a.clone();
             let signature = signature_a.clone();
             let signing_key_env = signing_key_env.clone();
             thread::spawn(move || {
                 barrier.wait();
-                let append = harness.append_signed_vote(&ledger_id, &voter_id, &signature);
+                let append = harness.append_signed_vote(&intent, &signature);
                 let pack = harness.ensure_approved_receipt_pack(
                     &set_id,
                     &ledger_id,
@@ -5390,12 +6314,11 @@ mod tests {
         let distinct_thread = {
             let harness = harness.clone();
             let barrier = barrier.clone();
-            let ledger_id = ledger_id.clone();
-            let voter_id = voter_b.clone();
+            let intent = intent_b.clone();
             let signature = signature_b.clone();
             thread::spawn(move || {
                 barrier.wait();
-                harness.append_signed_vote(&ledger_id, &voter_id, &signature)
+                harness.append_signed_vote(&intent, &signature)
             })
         };
         let (retry_append, retry_pack) = retry_thread.join().unwrap();
@@ -5435,7 +6358,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            reopened.append_signed_vote(&ledger_id, &voter_b, &signature_b),
+            reopened.append_signed_vote(&intent_b, &signature_b),
             Err(ApprovalError::QuorumAlreadyMet { .. })
         ));
         let restarted_pack = reopened
@@ -5458,8 +6381,8 @@ mod tests {
     }
 
     #[test]
-    fn tampered_persisted_reject_vote_fails_closed_without_derivatives() {
-        let dir = TestDir::new("tampered-persisted-reject-vote");
+    fn tampered_persisted_vote_intent_fails_cryptographically_without_derivatives() {
+        let dir = TestDir::new("tampered-persisted-vote-intent");
         let set_root = dir.child("approval-sets");
         let ledger_root = dir.child("approval-ledgers");
         let verdict_root = dir.child("approval-verdicts");
@@ -5472,57 +6395,80 @@ mod tests {
             &ledger_root,
         )
         .unwrap();
-        let (voter_id, signer) = voter("tampered-persisted-reject-voter");
+        let (voter_a, signer_a) = voter("tampered-persisted-vote-a");
+        let (voter_b, signer_b) = voter("tampered-persisted-vote-b");
         let set = harness
             .create_approval_set(
-                vec![voter_id.clone()],
-                ThresholdRule::AtLeast { required: 1 },
-                "promotion-evidence:tampered-persisted-reject",
+                vec![voter_a.clone(), voter_b.clone()],
+                ThresholdRule::AtLeast { required: 2 },
+                "promotion-evidence:tampered-persisted-vote-intent",
             )
             .unwrap();
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
         harness
-            .append_signed_vote(&ledger_id, &voter_id, &signature)
+            .append_vote(&set.set_id, &voter_a, &signer_a)
+            .unwrap();
+        harness
+            .append_vote(&set.set_id, &voter_b, &signer_b)
             .unwrap();
 
         let ledger_path = harness.ledger_store.report_path(&ledger_id);
-        let mut report: ApprovalLedgerReport =
-            serde_json::from_slice(&fs::read(&ledger_path).unwrap()).unwrap();
-        report.entries[0].vote = ApprovalVote::Reject;
-        fs::write(&ledger_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let original_ledger_bytes = fs::read(&ledger_path).unwrap();
+        let original_report: serde_json::Value =
+            serde_json::from_slice(&original_ledger_bytes).unwrap();
         let expected_sets = capture_store_tree(&set_root);
-        let expected_ledgers = capture_store_tree(&ledger_root);
         let expected_verdicts = capture_store_tree(&verdict_root);
         let expected_packs = capture_store_tree(&pack_root);
-
         drop(harness);
-        let reopened = DefaultApprovalHarness::from_path(
-            dir.child("config-placeholder"),
-            &verdict_root,
-            &pack_root,
-            &set_root,
-            &ledger_root,
-        )
-        .unwrap();
-        for result in [
-            reopened.load_ledger(&ledger_id).map(|_| ()),
-            reopened.list_ledgers(Some(&set.set_id)).map(|_| ()),
-            reopened.create_verdict(&set.set_id, &ledger_id).map(|_| ()),
-        ] {
-            assert!(matches!(
-                result,
-                Err(ApprovalError::InvalidLedgerRequest { reason })
-                    if reason.contains("unsupported persisted vote")
-            ));
+
+        let mut mutations = Vec::new();
+        let mut vote = original_report.clone();
+        vote["entries"][0]["vote"] = json!("reject");
+        mutations.push(vote);
+        let mut signature_version = original_report.clone();
+        signature_version["entries"][0]["signature_version"] = json!("legacy_v1");
+        mutations.push(signature_version);
+        let mut timestamp = original_report.clone();
+        timestamp["entries"][0]["timestamp_ms"] =
+            json!(timestamp["entries"][0]["timestamp_ms"].as_i64().unwrap() + 1);
+        mutations.push(timestamp);
+        let mut entry_id = original_report.clone();
+        entry_id["entries"][0]["entry_id"] = json!("approval-ledger-entry:tampered");
+        mutations.push(entry_id);
+        let mut predecessor = original_report.clone();
+        predecessor["entries"][1]["previous_envelope_hash"] = json!("0xtampered-predecessor");
+        mutations.push(predecessor);
+
+        for mutated in mutations {
+            fs::write(&ledger_path, serde_json::to_vec_pretty(&mutated).unwrap()).unwrap();
+            let expected_ledgers = capture_store_tree(&ledger_root);
+            let reopened = DefaultApprovalHarness::from_path(
+                dir.child("config-placeholder"),
+                &verdict_root,
+                &pack_root,
+                &set_root,
+                &ledger_root,
+            )
+            .unwrap();
+            for result in [
+                reopened.load_ledger(&ledger_id).map(|_| ()),
+                reopened.list_ledgers(Some(&set.set_id)).map(|_| ()),
+                reopened.create_verdict(&set.set_id, &ledger_id).map(|_| ()),
+            ] {
+                assert!(matches!(
+                    result,
+                    Err(ApprovalError::InvalidLedgerRequest { reason })
+                        if reason.contains("invalid signature")
+                ));
+            }
+            assert_eq!(capture_store_tree(&set_root), expected_sets);
+            assert_eq!(capture_store_tree(&ledger_root), expected_ledgers);
+            assert_eq!(capture_store_tree(&verdict_root), expected_verdicts);
+            assert_eq!(capture_store_tree(&pack_root), expected_packs);
+            fs::write(&ledger_path, &original_ledger_bytes).unwrap();
         }
-        assert_eq!(capture_store_tree(&set_root), expected_sets);
-        assert_eq!(capture_store_tree(&ledger_root), expected_ledgers);
-        assert_eq!(capture_store_tree(&verdict_root), expected_verdicts);
-        assert_eq!(capture_store_tree(&pack_root), expected_packs);
     }
 
     #[test]
@@ -5580,8 +6526,8 @@ mod tests {
         let baseline_ledger_tree = capture_store_tree(&ledger_root);
         let baseline_verdict_tree = capture_store_tree(&verdict_root);
         let baseline_pack_tree = capture_store_tree(&pack_root);
-        let signature =
-            signer_a.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_a).unwrap());
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_a, &signer_a, now_ms());
         let mut sorted_voters = vec![voter_a.clone(), voter_b.clone()];
         sorted_voters.sort();
         let mut reordered_voters = sorted_voters.clone();
@@ -5596,7 +6542,7 @@ mod tests {
                 &ledger_root,
             )
             .unwrap();
-            let append_error = reopened.append_signed_vote(&ledger_id, &voter_a, &signature);
+            let append_error = reopened.append_signed_vote(&intent, &signature);
             assert!(
                 matches!(append_error, Err(ApprovalError::SetStore(_))),
                 "{append_error:?}"
@@ -5736,11 +6682,9 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
-        harness
-            .append_signed_vote(&ledger_id, &voter_id, &signature)
-            .unwrap();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_id, &signer, now_ms());
+        harness.append_signed_vote(&intent, &signature).unwrap();
         let pack = harness
             .ensure_approved_receipt_pack(
                 &set.set_id,
@@ -5755,6 +6699,10 @@ mod tests {
 
         let assert_tampered = |mutated: serde_json::Value| {
             fs::write(&pack_path, serde_json::to_vec_pretty(&mutated).unwrap()).unwrap();
+            let before_sets = capture_store_tree(&dir.child("approval-sets"));
+            let before_ledgers = capture_store_tree(&dir.child("approval-ledgers"));
+            let before_verdicts = capture_store_tree(&dir.child("approval-verdicts"));
+            let before_packs = capture_store_tree(&dir.child("approval-receipt-packs"));
             let reopened = DefaultApprovalHarness::from_path(
                 dir.child("config-placeholder"),
                 dir.child("approval-verdicts"),
@@ -5777,6 +6725,19 @@ mod tests {
                 reopened.list_receipt_packs(),
                 Err(ApprovalError::InvalidReceiptPack { .. })
             ));
+            assert_eq!(capture_store_tree(&dir.child("approval-sets")), before_sets);
+            assert_eq!(
+                capture_store_tree(&dir.child("approval-ledgers")),
+                before_ledgers
+            );
+            assert_eq!(
+                capture_store_tree(&dir.child("approval-verdicts")),
+                before_verdicts
+            );
+            assert_eq!(
+                capture_store_tree(&dir.child("approval-receipt-packs")),
+                before_packs
+            );
         };
 
         let mut tampered: serde_json::Value = serde_json::from_slice(&original_bytes).unwrap();
@@ -5789,6 +6750,10 @@ mod tests {
 
         let mut tampered: serde_json::Value = serde_json::from_slice(&original_bytes).unwrap();
         tampered["pack_id"] = json!("approval-receipt-pack:tampered");
+        assert_tampered(tampered);
+
+        let mut tampered: serde_json::Value = serde_json::from_slice(&original_bytes).unwrap();
+        tampered["ledger"]["schema_version"] = json!(LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION);
         assert_tampered(tampered);
 
         assert_ne!(fs::read(&pack_path).unwrap(), original_bytes);
@@ -5821,11 +6786,9 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
-        harness
-            .append_signed_vote(&ledger_id, &voter_id, &signature)
-            .unwrap();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_id, &signer, now_ms());
+        harness.append_signed_vote(&intent, &signature).unwrap();
         let pack = harness
             .ensure_approved_receipt_pack(
                 &set.set_id,
@@ -5911,11 +6874,9 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
-        harness
-            .append_signed_vote(&ledger_id, &voter_id, &signature)
-            .unwrap();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let (intent, signature) = signed_vote_intent(&ledger.report, &voter_id, &signer, now_ms());
+        harness.append_signed_vote(&intent, &signature).unwrap();
         harness
             .ensure_approved_receipt_pack(
                 &set.set_id,
@@ -6025,15 +6986,10 @@ mod tests {
     fn vote_envelope_hash_is_bound_to_the_persisted_vote_timestamp() {
         let (voter_id, signer) = voter("stable-envelope-time");
         let ledger = sample_ledger("approval-set:stable-envelope-time");
-        let entry_id = next_approval_ledger_entry_id(&ledger.ledger_id, 0);
-        let signature = signer.sign(
-            &vote_payload_bytes(&ledger.approval_set_id, &ledger.ledger_id, &voter_id).unwrap(),
-        );
         let timestamp_ms = 1_700_000_000_300;
+        let (intent, signature) = signed_vote_intent(&ledger, &voter_id, &signer, timestamp_ms);
 
-        let actual =
-            build_vote_envelope_hash(&ledger, &entry_id, &voter_id, &signature, timestamp_ms)
-                .unwrap();
+        let actual = build_vote_envelope_hash(&ledger, &intent, &signature).unwrap();
         let keypair = Keypair::from_seed(
             sha256(format!("approval-ledger-envelope:{}", ledger.ledger_id).as_bytes()).as_bytes(),
         );
@@ -6042,12 +6998,15 @@ mod tests {
             1,
             None,
             json!({
-                "type": "approval_vote",
-                "approval_set_id": ledger.approval_set_id,
+            "type": "approval_vote",
+            "signature_version": intent.signature_version,
+            "approval_set_id": ledger.approval_set_id,
                 "ledger_id": ledger.ledger_id,
-                "entry_id": entry_id,
+                "entry_id": intent.entry_id,
                 "voter_id": voter_id,
+                "vote": "approve",
                 "timestamp_ms": timestamp_ms,
+                "previous_envelope_hash": null,
                 "signature": signature,
             }),
             "2023-11-14T22:13:20Z".to_string(),
@@ -6065,27 +7024,11 @@ mod tests {
         let (voter_id, signer) = voter("alpha");
         let set = sample_set(vec![voter_id.clone()], 1);
         let mut ledger = sample_ledger(&set.set_id);
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger.ledger_id, &voter_id).unwrap());
-        validate_and_append_vote(
-            &mut ledger,
-            &set,
-            &voter_id,
-            &signature,
-            1_700_000_000_300,
-            "0xfirst",
-        )
-        .unwrap();
+        let (intent, signature) =
+            signed_vote_intent(&ledger, &voter_id, &signer, 1_700_000_000_300);
+        validate_and_append_vote(&mut ledger, &set, &intent, &signature).unwrap();
 
-        let error = validate_and_append_vote(
-            &mut ledger,
-            &set,
-            &voter_id,
-            &signature,
-            1_700_000_000_301,
-            "0xsecond",
-        )
-        .unwrap_err();
+        let error = validate_and_append_vote(&mut ledger, &set, &intent, &signature).unwrap_err();
         assert!(matches!(error, ApprovalError::DuplicateVoter { .. }));
     }
 
@@ -6095,18 +7038,10 @@ mod tests {
         let (ineligible_voter, signer) = voter("ineligible");
         let set = sample_set(vec![eligible_voter], 1);
         let mut ledger = sample_ledger(&set.set_id);
-        let signature = signer
-            .sign(&vote_payload_bytes(&set.set_id, &ledger.ledger_id, &ineligible_voter).unwrap());
+        let (intent, signature) =
+            signed_vote_intent(&ledger, &ineligible_voter, &signer, 1_700_000_000_300);
 
-        let error = validate_and_append_vote(
-            &mut ledger,
-            &set,
-            &ineligible_voter,
-            &signature,
-            1_700_000_000_300,
-            "0xhash",
-        )
-        .unwrap_err();
+        let error = validate_and_append_vote(&mut ledger, &set, &intent, &signature).unwrap_err();
         assert!(matches!(error, ApprovalError::IneligibleVoter { .. }));
     }
 
@@ -6116,18 +7051,10 @@ mod tests {
         let (_, wrong_signer) = voter("wrong");
         let set = sample_set(vec![voter_id.clone()], 1);
         let mut ledger = sample_ledger(&set.set_id);
-        let signature = wrong_signer
-            .sign(&vote_payload_bytes(&set.set_id, &ledger.ledger_id, &voter_id).unwrap());
+        let (intent, signature) =
+            signed_vote_intent(&ledger, &voter_id, &wrong_signer, 1_700_000_000_300);
 
-        let error = validate_and_append_vote(
-            &mut ledger,
-            &set,
-            &voter_id,
-            &signature,
-            1_700_000_000_300,
-            "0xhash",
-        )
-        .unwrap_err();
+        let error = validate_and_append_vote(&mut ledger, &set, &intent, &signature).unwrap_err();
         assert!(matches!(error, ApprovalError::InvalidSignature { .. }));
     }
 
@@ -6165,6 +7092,714 @@ mod tests {
         assert_eq!(ledger.report.entries.len(), 1);
         assert_eq!(ledger.quorum_state.votes_received, 1);
         assert!(ledger.report.entries[0].envelope_hash.starts_with("0x"));
+    }
+
+    #[test]
+    fn tracked_legacy_fixture_quarantines_partial_pack_without_losing_ledger_audit() {
+        const LEGACY_SET: &str = include_str!(
+            "../../../data/approval-sets/reports/approval-set_1775999389010_78f831a60ffb.json"
+        );
+        const LEGACY_LEDGER: &str = include_str!(
+            "../../../data/approval-ledgers/reports/approval-ledger_1775999389010_af0e7ffe9869.json"
+        );
+        const LEGACY_VERDICT: &str = include_str!(
+            "../../../data/approval-verdicts/reports/approval-verdict_1775999389015_1b6903d82da2.json"
+        );
+        const LEGACY_PACK: &str = include_str!(
+            "../../../data/approval-receipt-packs/reports/approval-receipt-pack_1775999389017_653e5fa1dbc5.json"
+        );
+
+        let dir = TestDir::new("tracked-legacy-golden");
+        let set_root = dir.child("approval-sets");
+        let ledger_root = dir.child("approval-ledgers");
+        let verdict_root = dir.child("approval-verdicts");
+        let pack_root = dir.child("approval-receipt-packs");
+        let set: ApprovalSetReport = serde_json::from_str(LEGACY_SET).unwrap();
+        let legacy =
+            install_legacy_wire_ledger(&set_root, &ledger_root, &set, LEGACY_LEDGER.as_bytes());
+        assert_eq!(legacy.entries.len(), 1);
+        assert_eq!(
+            legacy.entries[0].signature_version,
+            ApprovalVoteSignatureVersion::LegacyV1
+        );
+        validate_legacy_ledger_report(&legacy, &set).unwrap();
+
+        let verdict: ApprovalVerdictReport = serde_json::from_str(LEGACY_VERDICT).unwrap();
+        let verdict_store = FileApprovalVerdictStore::open(&verdict_root).unwrap();
+        let verdict_path = verdict_store.report_path(&verdict.verdict_id);
+        fs::write(&verdict_path, LEGACY_VERDICT).unwrap();
+        verdict_store
+            .write_index(&ApprovalVerdictIndex {
+                entries: vec![ApprovalVerdictRecord::from_report(
+                    &verdict,
+                    verdict_path.display().to_string(),
+                )],
+            })
+            .unwrap();
+        let legacy_pack: ApprovalReceiptPackReport = serde_json::from_str(LEGACY_PACK).unwrap();
+        let pack_store = FileApprovalReceiptPackStore::open(&pack_root).unwrap();
+        let pack_path = pack_store.report_path(&legacy_pack.pack_id);
+        fs::write(&pack_path, LEGACY_PACK).unwrap();
+        pack_store
+            .write_index(&ApprovalReceiptPackIndex {
+                entries: vec![ApprovalReceiptPackRecord::from_report(
+                    &legacy_pack,
+                    pack_path.display().to_string(),
+                )],
+            })
+            .unwrap();
+
+        let legacy_pack_error = verify_receipt_pack(&legacy_pack).unwrap_err();
+        assert!(
+            matches!(
+                &legacy_pack_error,
+                ApprovalError::InvalidReceiptPack { reason }
+                    if reason.contains("is quarantined")
+            ),
+            "unexpected oldest-V1 rejection: {legacy_pack_error}"
+        );
+
+        // The later V1 payload covered signer identity and creation time. It
+        // can be positively verified and retired without being authorization.
+        let later_v1_signer = Ed25519Signer::from_secret_material("later-v1-receipt-key");
+        let later_v1_signer_id = "later-v1-receipt-signer";
+        let later_v1_created_at_ms = legacy_pack.created_at_ms;
+        let later_v1_content = LegacyApprovalReceiptPackContentRef {
+            signer_id: later_v1_signer_id,
+            approval_set: &set,
+            ledger: legacy_ledger_content_ref(&legacy),
+            verdict: legacy_verdict_content_ref(&verdict),
+            audit_refs: &legacy_pack.audit_refs,
+            created_at_ms: later_v1_created_at_ms,
+        };
+        let later_v1_payload = canonical_json_bytes(&later_v1_content).unwrap();
+        let later_v1_content_hash = sha256_hex(&later_v1_payload);
+        let later_v1_signature = later_v1_signer.sign(&later_v1_payload);
+        let later_v1_pack_id = approval_receipt_pack_id(
+            later_v1_created_at_ms,
+            &canonical_json_bytes(&ApprovalReceiptPackIdSeed {
+                signer_id: later_v1_signer_id,
+                content_hash: &later_v1_content_hash,
+                signature_key_id: &later_v1_signature.key_id,
+                created_at_ms: later_v1_created_at_ms,
+            })
+            .unwrap(),
+        );
+        let later_v1_pack = ApprovalReceiptPackReport {
+            signature_version: ApprovalReceiptPackSignatureVersion::LegacyV1,
+            pack_id: later_v1_pack_id,
+            signer_id: later_v1_signer_id.to_string(),
+            approval_set: set.clone(),
+            ledger: legacy.clone(),
+            verdict: verdict.clone(),
+            audit_refs: legacy_pack.audit_refs.clone(),
+            content_hash: later_v1_content_hash,
+            signature: later_v1_signature,
+            created_at_ms: later_v1_created_at_ms,
+        };
+        assert!(matches!(
+            verify_receipt_pack(&later_v1_pack),
+            Err(ApprovalError::InvalidReceiptPack { reason })
+                if reason.contains("legacy approval receipt packs are retired")
+        ));
+        let harness = DefaultApprovalHarness::from_path(
+            dir.child("config-placeholder"),
+            &verdict_root,
+            &pack_root,
+            &set_root,
+            &ledger_root,
+        )
+        .unwrap();
+        let migrated = harness.load_ledger(&legacy.ledger_id).unwrap().unwrap();
+        assert_eq!(
+            migrated.report.schema_version,
+            CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION
+        );
+        assert_eq!(migrated.report.entries, legacy.entries);
+        assert_eq!(migrated.quorum_state.votes_received, 0);
+        assert!(!migrated.quorum_state.quorum_met);
+        assert_eq!(migrated.quorum_state.voters_remaining, set.eligible_voters);
+        let rendered = render_approval_ledger(&migrated.report, &migrated.quorum_state);
+        assert!(rendered.contains("Schema Version: 2"));
+        assert!(rendered.contains("retired legacy audit"));
+        assert!(harness.list_verdicts().unwrap().verdicts.is_empty());
+        let packs = harness.list_receipt_packs().unwrap();
+        assert_eq!(packs.total_count, 0);
+        assert!(packs.packs.is_empty());
+        assert_eq!(packs.quarantined_count, 1);
+        assert_eq!(packs.quarantined[0].observed_pack_id, legacy_pack.pack_id);
+        assert!(packs.quarantined[0].reason.contains("non-authoritative"));
+        assert!(
+            harness
+                .load_receipt_pack(&legacy_pack.pack_id)
+                .unwrap()
+                .is_none()
+        );
+
+        let mut invalid_legacy_pack = later_v1_pack;
+        invalid_legacy_pack
+            .audit_refs
+            .push("audit:tampered".to_string());
+        let invalid_legacy_pack_error = verify_receipt_pack(&invalid_legacy_pack).unwrap_err();
+        assert!(matches!(
+            invalid_legacy_pack_error,
+            ApprovalError::InvalidReceiptPack { reason }
+                if !reason.contains("are retired")
+        ));
+
+        let mut invalid_legacy_verdict: serde_json::Value =
+            serde_json::from_str(LEGACY_VERDICT).unwrap();
+        invalid_legacy_verdict["threshold_required"] = json!("tampered V1 projection");
+        fs::write(
+            &verdict_path,
+            serde_json::to_vec_pretty(&invalid_legacy_verdict).unwrap(),
+        )
+        .unwrap();
+        let invalid_verdict_tree = capture_store_tree(&verdict_root);
+        assert!(matches!(
+            harness.list_verdicts(),
+            Err(ApprovalError::InvalidVerdictRequest { reason })
+                if reason.contains("does not match its verified V1 lineage")
+        ));
+        assert_eq!(capture_store_tree(&verdict_root), invalid_verdict_tree);
+        fs::write(&verdict_path, LEGACY_VERDICT).unwrap();
+
+        assert_eq!(fs::read_to_string(verdict_path).unwrap(), LEGACY_VERDICT);
+        assert_eq!(fs::read_to_string(&pack_path).unwrap(), LEGACY_PACK);
+
+        // The oldest V1 signature omitted signer_id and created_at_ms. An
+        // attacker can therefore coordinate those mutations with a new
+        // canonical ID, report path, and index record without breaking that
+        // partial signature. Such an artifact must remain quarantined and
+        // non-authoritative, never misclassified as verified retired audit.
+        let mut coordinated = legacy_pack;
+        coordinated.signer_id = "coordinated-attacker".to_string();
+        coordinated.created_at_ms = coordinated.created_at_ms.saturating_add(10_000);
+        coordinated.pack_id = canonical_receipt_pack_id(&coordinated).unwrap();
+        let coordinated_path = pack_store.report_path(&coordinated.pack_id);
+        fs::rename(&pack_path, &coordinated_path).unwrap();
+        fs::write(
+            &coordinated_path,
+            serde_json::to_vec_pretty(&coordinated).unwrap(),
+        )
+        .unwrap();
+        pack_store
+            .write_index(&ApprovalReceiptPackIndex {
+                entries: vec![ApprovalReceiptPackRecord::from_report(
+                    &coordinated,
+                    coordinated_path.display().to_string(),
+                )],
+            })
+            .unwrap();
+        let coordinated_sets = capture_store_tree(&set_root);
+        let coordinated_ledgers = capture_store_tree(&ledger_root);
+        let coordinated_verdicts = capture_store_tree(&verdict_root);
+        let coordinated_packs = capture_store_tree(&pack_root);
+        let coordinated_projection = harness.list_receipt_packs().unwrap();
+        assert_eq!(coordinated_projection.total_count, 0);
+        assert!(coordinated_projection.packs.is_empty());
+        assert_eq!(coordinated_projection.quarantined_count, 1);
+        assert_eq!(
+            coordinated_projection.quarantined[0].observed_pack_id,
+            coordinated.pack_id
+        );
+        assert_eq!(
+            coordinated_projection.quarantined[0].observed_signer_id,
+            "coordinated-attacker"
+        );
+        assert!(
+            coordinated_projection.quarantined[0]
+                .reason
+                .contains("non-authoritative")
+        );
+        assert_eq!(capture_store_tree(&set_root), coordinated_sets);
+        assert_eq!(capture_store_tree(&ledger_root), coordinated_ledgers);
+        assert_eq!(capture_store_tree(&verdict_root), coordinated_verdicts);
+        assert_eq!(capture_store_tree(&pack_root), coordinated_packs);
+    }
+
+    #[test]
+    fn legacy_wire_migration_is_concurrent_idempotent_and_requires_v2_revote_after_restart() {
+        const TRACKED_LEGACY_LEDGER: &str = include_str!(
+            "../../../data/approval-ledgers/reports/approval-ledger_1775999389010_af0e7ffe9869.json"
+        );
+        let dir = TestDir::new("legacy-revote-restart");
+        let set_root = dir.child("approval-sets");
+        let ledger_root = dir.child("approval-ledgers");
+        let verdict_root = dir.child("approval-verdicts");
+        let pack_root = dir.child("approval-receipt-packs");
+        let (voter_id, signer) = voter("legacy-revote-voter");
+        let created_at_ms = now_ms().saturating_sub(100);
+        let threshold = ThresholdRule::AtLeast { required: 1 };
+        let evidence_ref = "swarm.governance.human-authorization.v1:legacy-revote";
+        let set_id = canonical_approval_set_id_fields(
+            std::slice::from_ref(&voter_id),
+            &threshold,
+            evidence_ref,
+            created_at_ms,
+        )
+        .unwrap();
+        let set = ApprovalSetReport {
+            set_id: set_id.clone(),
+            eligible_voters: vec![voter_id.clone()],
+            threshold,
+            promotion_evidence_ref: evidence_ref.to_string(),
+            created_at_ms,
+        };
+        let ledger_id = approval_ledger_id(&set_id, created_at_ms);
+        let legacy_timestamp_ms = now_ms().saturating_add(3_600_000);
+        let legacy_signature = signer
+            .sign(&legacy_approval_vote_payload_bytes(&set_id, &ledger_id, &voter_id).unwrap());
+        let mut legacy = ApprovalLedgerReport {
+            schema_version: LEGACY_APPROVAL_LEDGER_SCHEMA_VERSION,
+            ledger_id: ledger_id.clone(),
+            approval_set_id: set_id.clone(),
+            entries: Vec::new(),
+            created_at_ms,
+        };
+        let entry_id = next_approval_ledger_entry_id(&ledger_id, 0);
+        let envelope_hash = build_legacy_vote_envelope_hash(
+            &legacy,
+            &entry_id,
+            &voter_id,
+            &legacy_signature,
+            legacy_timestamp_ms,
+        )
+        .unwrap();
+        legacy.entries.push(ApprovalLedgerEntry {
+            entry_id,
+            voter_id: voter_id.clone(),
+            vote: ApprovalVote::Approve,
+            signature_version: ApprovalVoteSignatureVersion::LegacyV1,
+            signature: legacy_signature,
+            timestamp_ms: legacy_timestamp_ms,
+            previous_envelope_hash: None,
+            envelope_hash,
+        });
+
+        let tracked_shape: serde_json::Value = serde_json::from_str(TRACKED_LEGACY_LEDGER).unwrap();
+        let tracked_entry_keys = tracked_shape["entries"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        let mut legacy_wire = serde_json::to_value(&legacy).unwrap();
+        legacy_wire
+            .as_object_mut()
+            .unwrap()
+            .remove("schema_version");
+        let legacy_wire_entry = legacy_wire["entries"][0].as_object_mut().unwrap();
+        legacy_wire_entry.remove("signature_version");
+        legacy_wire_entry.remove("previous_envelope_hash");
+        assert_eq!(
+            legacy_wire_entry.keys().cloned().collect::<HashSet<_>>(),
+            tracked_entry_keys,
+            "the generated migration fixture must retain the tracked V1 wire shape"
+        );
+        let legacy_wire_bytes = serde_json::to_vec_pretty(&legacy_wire).unwrap();
+        install_legacy_wire_ledger(&set_root, &ledger_root, &set, &legacy_wire_bytes);
+
+        let legacy_verdict =
+            evaluate_legacy_verdict(&set, &legacy, legacy_timestamp_ms.saturating_add(1)).unwrap();
+        let mut legacy_verdict_wire = serde_json::to_value(&legacy_verdict).unwrap();
+        legacy_verdict_wire
+            .as_object_mut()
+            .unwrap()
+            .remove("schema_version");
+        let legacy_verdict_bytes = serde_json::to_vec_pretty(&legacy_verdict_wire).unwrap();
+        let legacy_verdict_store = FileApprovalVerdictStore::open(&verdict_root).unwrap();
+        let legacy_verdict_path = legacy_verdict_store.report_path(&legacy_verdict.verdict_id);
+        fs::write(&legacy_verdict_path, &legacy_verdict_bytes).unwrap();
+        legacy_verdict_store
+            .write_index(&ApprovalVerdictIndex {
+                entries: vec![ApprovalVerdictRecord::from_report(
+                    &legacy_verdict,
+                    legacy_verdict_path.display().to_string(),
+                )],
+            })
+            .unwrap();
+
+        let oldest_pack_signer = Ed25519Signer::from_secret_material("oldest-v1-pack-key");
+        let oldest_pack_signer_id = "oldest-v1-observed-signer";
+        let oldest_pack_created_at_ms = legacy_verdict.evaluated_at_ms.saturating_add(1);
+        let oldest_audit_refs = vec![evidence_ref.to_string()];
+        let oldest_signed_core = OriginalApprovalReceiptPackContentRef {
+            approval_set: &set,
+            ledger: legacy_ledger_content_ref(&legacy),
+            verdict: legacy_verdict_content_ref(&legacy_verdict),
+            audit_refs: &oldest_audit_refs,
+        };
+        let oldest_payload = canonical_json_bytes(&oldest_signed_core).unwrap();
+        let oldest_content_hash = sha256_hex(&oldest_payload);
+        let oldest_signature = oldest_pack_signer.sign(&oldest_payload);
+        let oldest_pack_id = approval_receipt_pack_id(
+            oldest_pack_created_at_ms,
+            &canonical_json_bytes(&ApprovalReceiptPackIdSeed {
+                signer_id: oldest_pack_signer_id,
+                content_hash: &oldest_content_hash,
+                signature_key_id: &oldest_signature.key_id,
+                created_at_ms: oldest_pack_created_at_ms,
+            })
+            .unwrap(),
+        );
+        let oldest_pack = ApprovalReceiptPackReport {
+            signature_version: ApprovalReceiptPackSignatureVersion::LegacyV1,
+            pack_id: oldest_pack_id,
+            signer_id: oldest_pack_signer_id.to_string(),
+            approval_set: set.clone(),
+            ledger: legacy.clone(),
+            verdict: legacy_verdict,
+            audit_refs: oldest_audit_refs,
+            content_hash: oldest_content_hash,
+            signature: oldest_signature,
+            created_at_ms: oldest_pack_created_at_ms,
+        };
+        let mut oldest_pack_wire = serde_json::to_value(&oldest_pack).unwrap();
+        oldest_pack_wire
+            .as_object_mut()
+            .unwrap()
+            .remove("signature_version");
+        oldest_pack_wire["ledger"]
+            .as_object_mut()
+            .unwrap()
+            .remove("schema_version");
+        oldest_pack_wire["ledger"]["entries"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("signature_version");
+        oldest_pack_wire["ledger"]["entries"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("previous_envelope_hash");
+        oldest_pack_wire["verdict"]
+            .as_object_mut()
+            .unwrap()
+            .remove("schema_version");
+        let oldest_pack_bytes = serde_json::to_vec_pretty(&oldest_pack_wire).unwrap();
+        let oldest_pack_store = FileApprovalReceiptPackStore::open(&pack_root).unwrap();
+        let oldest_pack_path = oldest_pack_store.report_path(&oldest_pack.pack_id);
+        fs::write(&oldest_pack_path, &oldest_pack_bytes).unwrap();
+        oldest_pack_store
+            .write_index(&ApprovalReceiptPackIndex {
+                entries: vec![ApprovalReceiptPackRecord::from_report(
+                    &oldest_pack,
+                    oldest_pack_path.display().to_string(),
+                )],
+            })
+            .unwrap();
+
+        let harness = Arc::new(
+            DefaultApprovalHarness::from_path(
+                dir.child("config-placeholder"),
+                &verdict_root,
+                &pack_root,
+                &set_root,
+                &ledger_root,
+            )
+            .unwrap(),
+        );
+        let start = Arc::new(Barrier::new(3));
+        let mut migrations = Vec::new();
+        for _ in 0..2 {
+            let harness = harness.clone();
+            let ledger_id = ledger_id.clone();
+            let start = start.clone();
+            migrations.push(thread::spawn(move || {
+                start.wait();
+                harness.load_ledger(&ledger_id).unwrap().unwrap()
+            }));
+        }
+        start.wait();
+        for migrated in migrations.into_iter().map(|worker| worker.join().unwrap()) {
+            assert_eq!(
+                migrated.report.schema_version,
+                CURRENT_APPROVAL_LEDGER_SCHEMA_VERSION
+            );
+            assert_eq!(migrated.report.entries.len(), 1);
+            assert!(!migrated.quorum_state.quorum_met);
+        }
+        let migrated_tree = capture_store_tree(&ledger_root);
+        drop(harness);
+
+        let reopened = DefaultApprovalHarness::from_path(
+            dir.child("config-placeholder"),
+            &verdict_root,
+            &pack_root,
+            &set_root,
+            &ledger_root,
+        )
+        .unwrap();
+        let migrated = reopened.load_ledger(&ledger_id).unwrap().unwrap();
+        assert_eq!(capture_store_tree(&ledger_root), migrated_tree);
+        assert_eq!(migrated.quorum_state.votes_received, 0);
+        let current_timestamp_ms = now_ms();
+        assert!(current_timestamp_ms < legacy_timestamp_ms);
+        let (intent, signature) =
+            signed_vote_intent(&migrated.report, &voter_id, &signer, current_timestamp_ms);
+        reopened.append_signed_vote(&intent, &signature).unwrap();
+        let approved = reopened.load_ledger(&ledger_id).unwrap().unwrap();
+        assert_eq!(approved.report.entries.len(), 2);
+        assert_eq!(
+            approved.report.entries[0].signature_version,
+            ApprovalVoteSignatureVersion::LegacyV1
+        );
+        assert_eq!(
+            approved.report.entries[1].signature_version,
+            ApprovalVoteSignatureVersion::IntentV2
+        );
+        assert!(approved.report.entries[1].timestamp_ms < approved.report.entries[0].timestamp_ms);
+        assert_eq!(approved.quorum_state.votes_received, 1);
+        assert!(approved.quorum_state.quorum_met);
+
+        let signing_key_env = format!("SWARM_RUNTIME_LEGACY_REVOTE_KEY_{}", std::process::id());
+        let _signing_key = ScopedEnv::set(&signing_key_env, "legacy-revote-pack-key");
+        let pack = reopened
+            .ensure_approved_receipt_pack(
+                &set_id,
+                &ledger_id,
+                "legacy-revote-pack-signer",
+                &signing_key_env,
+            )
+            .unwrap();
+        verify_governed_human_receipt_pack(
+            &pack.report,
+            &set_id,
+            &approval_set_digest(&set).unwrap(),
+            evidence_ref,
+            created_at_ms,
+            now_ms(),
+        )
+        .unwrap();
+        let retried_pack = reopened
+            .ensure_approved_receipt_pack(
+                &set_id,
+                &ledger_id,
+                "legacy-revote-pack-signer",
+                &signing_key_env,
+            )
+            .unwrap();
+        assert_eq!(retried_pack, pack);
+        let projection = reopened.list_receipt_packs().unwrap();
+        assert_eq!(projection.total_count, 1);
+        assert_eq!(projection.packs.len(), 1);
+        assert_eq!(projection.packs[0].pack_id, pack.report.pack_id);
+        assert_eq!(projection.quarantined_count, 1);
+        assert_eq!(projection.quarantined.len(), 1);
+        assert_eq!(
+            projection.quarantined[0].observed_pack_id,
+            oldest_pack.pack_id
+        );
+        assert!(
+            projection.quarantined[0]
+                .reason
+                .contains("non-authoritative")
+        );
+        assert!(
+            render_approval_receipt_pack_list(&projection)
+                .contains("Quarantined Legacy Receipt Packs (1)")
+        );
+        assert_eq!(fs::read(&oldest_pack_path).unwrap(), oldest_pack_bytes);
+        drop(reopened);
+
+        let restarted = DefaultApprovalHarness::from_path(
+            dir.child("config-placeholder"),
+            &verdict_root,
+            &pack_root,
+            &set_root,
+            &ledger_root,
+        )
+        .unwrap();
+        let after_restart = restarted.load_ledger(&ledger_id).unwrap().unwrap();
+        assert_eq!(after_restart.report, approved.report);
+        assert!(after_restart.quorum_state.quorum_met);
+        assert_eq!(
+            restarted
+                .load_receipt_pack(&pack.report.pack_id)
+                .unwrap()
+                .unwrap()
+                .report,
+            pack.report
+        );
+        assert_eq!(
+            pack.report.signature_version,
+            ApprovalReceiptPackSignatureVersion::V2
+        );
+        assert_eq!(
+            pack.report.verdict.schema_version,
+            CURRENT_APPROVAL_VERDICT_SCHEMA_VERSION
+        );
+        let restarted_projection = restarted.list_receipt_packs().unwrap();
+        assert_eq!(restarted_projection.total_count, 1);
+        assert_eq!(restarted_projection.quarantined_count, 1);
+        assert_eq!(fs::read(&oldest_pack_path).unwrap(), oldest_pack_bytes);
+
+        // A V2 verdict on a ledger that retains V1 audit history must still
+        // fail closed when a field outside the index and ID seed is changed.
+        // Legacy history is not a blanket reason to hide a malformed report.
+        let verdict_path = PathBuf::from(
+            restarted
+                .load_verdict(&pack.report.verdict.verdict_id)
+                .unwrap()
+                .unwrap()
+                .record
+                .bundle_path,
+        );
+        let mut tampered_verdict: serde_json::Value =
+            serde_json::from_slice(&fs::read(&verdict_path).unwrap()).unwrap();
+        tampered_verdict["threshold_required"] = json!("tampered V2 projection");
+        fs::write(
+            &verdict_path,
+            serde_json::to_vec_pretty(&tampered_verdict).unwrap(),
+        )
+        .unwrap();
+        let before_sets = capture_store_tree(&set_root);
+        let before_ledgers = capture_store_tree(&ledger_root);
+        let before_verdicts = capture_store_tree(&verdict_root);
+        let before_packs = capture_store_tree(&pack_root);
+        assert!(matches!(
+            restarted.list_verdicts(),
+            Err(ApprovalError::InvalidVerdictRequest { reason })
+                if reason.contains("does not match its persisted set and ledger")
+        ));
+        assert!(matches!(
+            restarted.ensure_approved_receipt_pack(
+                &set_id,
+                &ledger_id,
+                "legacy-revote-pack-signer",
+                &signing_key_env,
+            ),
+            Err(ApprovalError::InvalidVerdictRequest { .. })
+        ));
+        assert_eq!(capture_store_tree(&set_root), before_sets);
+        assert_eq!(capture_store_tree(&ledger_root), before_ledgers);
+        assert_eq!(capture_store_tree(&verdict_root), before_verdicts);
+        assert_eq!(capture_store_tree(&pack_root), before_packs);
+    }
+
+    #[test]
+    fn durable_reject_vote_is_refused_before_any_store_mutation() {
+        let dir = TestDir::new("reject-vote-no-mutation");
+        let set_root = dir.child("approval-sets");
+        let ledger_root = dir.child("approval-ledgers");
+        let harness = DefaultApprovalHarness::from_paths(&set_root, &ledger_root).unwrap();
+        let (voter_id, signer) = voter("reject-vote-voter");
+        let set = harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                "promotion-evidence:reject-vote",
+            )
+            .unwrap();
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let intent =
+            build_approval_vote_intent(&ledger.report, &voter_id, ApprovalVote::Reject, now_ms());
+        let signature = signer.sign(&approval_vote_payload_bytes(&intent).unwrap());
+        let set_before = capture_store_tree(&set_root);
+        let ledger_before = capture_store_tree(&ledger_root);
+
+        assert!(matches!(
+            harness.append_signed_vote_outcome(&intent, &signature),
+            Err(ApprovalError::InvalidLedgerRequest { reason })
+                if reason.contains("do not yet support denial votes")
+        ));
+        assert_eq!(capture_store_tree(&set_root), set_before);
+        assert_eq!(capture_store_tree(&ledger_root), ledger_before);
+        assert_eq!(harness.load_ledger(&ledger_id).unwrap().unwrap(), ledger);
+    }
+
+    #[test]
+    fn monotonic_approval_timestamps_clamp_an_injected_backward_clock() {
+        let (voter_id, signer) = voter("backward-clock-voter");
+        let set = sample_set(vec![voter_id.clone()], 1);
+        let mut ledger = sample_ledger(&set.set_id);
+        let authenticated_vote_ms = 1_700_000_000_300;
+        let observed_backward_clock_ms = 1_700_000_000_250;
+        let (intent, signature) =
+            signed_vote_intent(&ledger, &voter_id, &signer, authenticated_vote_ms);
+        validate_and_append_vote_at(
+            &mut ledger,
+            &set,
+            &intent,
+            &signature,
+            observed_backward_clock_ms,
+        )
+        .unwrap();
+
+        assert_eq!(
+            next_approval_vote_timestamp_ms(&ledger, observed_backward_clock_ms),
+            authenticated_vote_ms
+        );
+        assert_eq!(
+            approval_verdict_timestamp_ms(&ledger, observed_backward_clock_ms),
+            authenticated_vote_ms
+        );
+        let verdict = evaluate_verdict(&set, &ledger, authenticated_vote_ms).unwrap();
+        assert_eq!(
+            approval_receipt_timestamp_ms(&verdict, observed_backward_clock_ms),
+            authenticated_vote_ms
+        );
+    }
+
+    #[test]
+    fn signed_future_vote_is_rejected_on_append_and_persisted_replay() {
+        let dir = TestDir::new("future-vote-skew");
+        let harness = DefaultApprovalHarness::from_paths(
+            dir.child("approval-sets"),
+            dir.child("approval-ledgers"),
+        )
+        .unwrap();
+        let (voter_id, signer) = voter("future-vote-voter");
+        let set_record = harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                "promotion-evidence:future-vote-skew",
+            )
+            .unwrap();
+        let set = harness
+            .load_approval_set(&set_record.set_id)
+            .unwrap()
+            .unwrap()
+            .report;
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let observed_now_ms = now_ms();
+        let poisoned_timestamp_ms = observed_now_ms.saturating_add(3_600_000);
+        let (intent, signature) =
+            signed_vote_intent(&ledger.report, &voter_id, &signer, poisoned_timestamp_ms);
+        let before_append = capture_store_tree(&dir.child("approval-ledgers"));
+
+        assert!(matches!(
+            harness.append_signed_vote(&intent, &signature),
+            Err(ApprovalError::InvalidLedgerRequest { reason })
+                if reason.contains("allowed future clock skew")
+        ));
+        assert_eq!(
+            capture_store_tree(&dir.child("approval-ledgers")),
+            before_append
+        );
+
+        let mut poisoned_ledger = ledger.report;
+        validate_and_append_vote_at(
+            &mut poisoned_ledger,
+            &set,
+            &intent,
+            &signature,
+            poisoned_timestamp_ms,
+        )
+        .unwrap();
+        harness.ledger_store.persist(&poisoned_ledger).unwrap();
+        assert!(matches!(
+            harness.load_ledger(&ledger_id),
+            Err(ApprovalError::InvalidLedgerRequest { reason })
+                if reason.contains("allowed future clock skew")
+        ));
     }
 
     #[test]
@@ -6349,20 +7984,79 @@ mod tests {
         let mut predating_verdict = verdict;
         predating_verdict.evaluated_at_ms = ledger.entries[1].timestamp_ms.saturating_sub(1);
         predating_verdict.verdict_id = canonical_approval_verdict_id(&predating_verdict).unwrap();
-        let predating_pack = build_receipt_pack(
-            &set,
-            &ledger,
-            &predating_verdict,
-            vec!["audit:chronology".to_string()],
-            &signer,
-            "local-approval-signer",
-            1_700_000_000_601,
-        )
-        .unwrap();
+        let mut predating_pack = pack;
+        predating_pack.verdict = predating_verdict;
+        let predating_content = ApprovalReceiptPackContentRef {
+            signature_version: predating_pack.signature_version,
+            signer_id: &predating_pack.signer_id,
+            approval_set: &predating_pack.approval_set,
+            ledger: &predating_pack.ledger,
+            verdict: &predating_pack.verdict,
+            audit_refs: &predating_pack.audit_refs,
+            created_at_ms: predating_pack.created_at_ms,
+        };
+        let predating_content_bytes = canonical_json_bytes(&predating_content).unwrap();
+        predating_pack.content_hash = sha256_hex(&predating_content_bytes);
+        predating_pack.signature = signer.sign(&predating_content_bytes);
+        predating_pack.pack_id = canonical_receipt_pack_id(&predating_pack).unwrap();
         assert!(matches!(
             verify_receipt_pack(&predating_pack),
             Err(ApprovalError::InvalidReceiptPack { reason })
                 if reason.contains("lineage or timestamps are inconsistent")
+        ));
+    }
+
+    #[test]
+    fn receipt_pack_builder_rejects_creation_before_approval_lineage() {
+        let (voter_id, signer) = voter("receipt-lineage-voter");
+        let set = sample_set(vec![voter_id.clone()], 1);
+        let mut ledger = sample_ledger(&set.set_id);
+        ledger.entries.push(signed_entry(
+            &ledger.ledger_id,
+            &set.set_id,
+            &voter_id,
+            &signer,
+            0,
+        ));
+        let verdict = evaluate_verdict(&set, &ledger, 1_700_000_000_300).unwrap();
+        let pack_signer = Ed25519Signer::from_secret_material("receipt-lineage-pack-signer");
+
+        for created_at_ms in [
+            set.created_at_ms.saturating_sub(1),
+            ledger.created_at_ms.saturating_sub(1),
+            verdict.evaluated_at_ms.saturating_sub(1),
+        ] {
+            assert!(matches!(
+                build_receipt_pack(
+                    &set,
+                    &ledger,
+                    &verdict,
+                    vec!["audit:lineage".to_string()],
+                    &pack_signer,
+                    "receipt-lineage-pack-signer",
+                    created_at_ms,
+                ),
+                Err(ApprovalError::InvalidReceiptPack { reason })
+                    if reason.contains("creation timestamp predates")
+            ));
+        }
+
+        let mut vote_predating_verdict = verdict;
+        vote_predating_verdict.evaluated_at_ms = ledger.entries[0].timestamp_ms.saturating_sub(1);
+        vote_predating_verdict.verdict_id =
+            canonical_approval_verdict_id(&vote_predating_verdict).unwrap();
+        assert!(matches!(
+            build_receipt_pack(
+                &set,
+                &ledger,
+                &vote_predating_verdict,
+                vec!["audit:lineage".to_string()],
+                &pack_signer,
+                "receipt-lineage-pack-signer",
+                1_700_000_000_400,
+            ),
+            Err(ApprovalError::InvalidReceiptPack { reason })
+                if reason.contains("verdict predates a persisted approval vote")
         ));
     }
 
@@ -6458,8 +8152,13 @@ mod tests {
     }
 
     #[test]
-    fn harness_verdict_time_never_predates_latest_persisted_vote() {
-        let dir = TestDir::new("approval-harness-backward-clock");
+    fn harness_persists_chronological_verdict_and_receipt_for_authenticated_vote() {
+        let dir = TestDir::new("approval-harness-authenticated-chronology");
+        let signing_key_env = format!(
+            "SWARM_RUNTIME_APPROVAL_BACKWARD_CLOCK_KEY_{}",
+            std::process::id()
+        );
+        let _signing_key = ScopedEnv::set(&signing_key_env, "backward-clock-pack-key");
         let harness = DefaultApprovalHarness::from_path(
             dir.child("config-placeholder"),
             dir.child("approval-verdicts"),
@@ -6479,32 +8178,25 @@ mod tests {
         let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
             .ledger_id
             .clone();
-        let signature =
-            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
-        harness
-            .append_signed_vote(&ledger_id, &voter_id, &signature)
-            .unwrap();
-
-        let ledger_path = harness.ledger_store.report_path(&ledger_id);
-        let mut report: ApprovalLedgerReport =
-            serde_json::from_slice(&fs::read(&ledger_path).unwrap()).unwrap();
-        let mut entry = report.entries.remove(0);
-        let future_vote_ms = now_ms().saturating_add(3_600_000);
-        entry.timestamp_ms = future_vote_ms;
-        entry.envelope_hash = build_vote_envelope_hash(
-            &report,
-            &entry.entry_id,
-            &entry.voter_id,
-            &entry.signature,
-            entry.timestamp_ms,
-        )
-        .unwrap();
-        report.entries.push(entry);
-        fs::write(&ledger_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let empty_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let vote_timestamp_ms = now_ms();
+        let (intent, signature) =
+            signed_vote_intent(&empty_ledger.report, &voter_id, &signer, vote_timestamp_ms);
+        harness.append_signed_vote(&intent, &signature).unwrap();
 
         let verdict = harness.create_verdict(&set.set_id, &ledger_id).unwrap();
-        assert_eq!(verdict.report.evaluated_at_ms, future_vote_ms);
+        assert!(verdict.report.evaluated_at_ms >= vote_timestamp_ms);
         assert_eq!(verdict.report.status, ApprovalVerdictStatus::Approved);
+        let pack = harness
+            .ensure_approved_receipt_pack(
+                &set.set_id,
+                &ledger_id,
+                "backward-clock-pack-signer",
+                &signing_key_env,
+            )
+            .unwrap();
+        assert!(pack.report.created_at_ms >= verdict.report.evaluated_at_ms);
+        verify_receipt_pack(&pack.report).unwrap();
     }
 
     #[test]
