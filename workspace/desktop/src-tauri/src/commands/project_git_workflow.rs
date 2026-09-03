@@ -193,6 +193,8 @@ pub async fn publish_project_owner_announcement(
     state: State<'_, AppState>,
 ) -> Result<ProjectOwnerAnnouncementResult, String> {
     validate_project_owner_announcement(&input)?;
+    // INV-29: renderer content never signs as a swarm governance marker.
+    crate::perch_sign_gate::perch_sign_gate(input.kind, &input.content)?;
     let target_owner = input.target_owner.trim().to_ascii_lowercase();
     if normalize_event_id(&target_owner).is_none() {
         return Err("Invalid project owner.".to_string());

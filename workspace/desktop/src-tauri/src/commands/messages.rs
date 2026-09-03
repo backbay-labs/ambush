@@ -430,6 +430,11 @@ pub async fn send_channel_message(
     let emoji = emoji_tags.unwrap_or_default();
     let mention_refs_only = mention_tags.unwrap_or_default();
     let link_previews = link_preview_tags.unwrap_or_default();
+    let kind_num = kind.unwrap_or(ambush_core_pkg::kind::KIND_STREAM_MESSAGE);
+    // INV-29: gate the exact string every builder arm below signs (trimmed)
+    // before any signing identity is resolved.
+    let gate_kind = u16::try_from(kind_num).map_err(|_| "invalid kind".to_string())?;
+    crate::perch_sign_gate::perch_sign_gate(gate_kind, content.trim())?;
     // Resolve the relay AND the signing identity once and use them for every
     // read and the submission. Callers that captured a tenant scope before an
     // await (Projects agent sends) pass `expected_relay_url` and
@@ -447,7 +452,6 @@ pub async fn send_channel_message(
         expected_signer_pubkey.as_deref(),
         &signing_keys.public_key().to_hex(),
     )?;
-    let kind_num = kind.unwrap_or(ambush_core_pkg::kind::KIND_STREAM_MESSAGE);
     if sent_from_thread_tag.is_some() && kind_num != ambush_core_pkg::kind::KIND_STREAM_MESSAGE {
         return Err("sent-from-thread provenance requires a stream message".into());
     }
@@ -713,6 +717,8 @@ pub async fn send_managed_agent_channel_message(
     if trimmed.is_empty() {
         return Err("message content is required".into());
     }
+    // INV-29: the managed agent's key signs `trimmed` below; gate it first.
+    crate::perch_sign_gate::perch_sign_gate(crate::perch_sign_gate::KIND_STREAM_MESSAGE, trimmed)?;
     let marker = marker
         .as_deref()
         .map(str::trim)
@@ -903,6 +909,9 @@ pub async fn edit_message(
     if trimmed.is_empty() && input.media_tags.is_empty() {
         return Err("edit must have content or attachments".into());
     }
+    // INV-29: the edit (kind 40003) replaces the rendered body of a kind 9
+    // message, so it is gated as the kind it renders as.
+    crate::perch_sign_gate::perch_sign_gate(crate::perch_sign_gate::KIND_STREAM_MESSAGE, trimmed)?;
     let mention_refs: Vec<&str> = input.mention_pubkeys.iter().map(|s| s.as_str()).collect();
     let builder = events::build_message_edit(
         channel_uuid,

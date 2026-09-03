@@ -116,6 +116,8 @@ pub async fn sign_event(
     tags: Vec<Vec<String>>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    // INV-29: renderer content never signs as a swarm governance marker.
+    crate::perch_sign_gate::perch_sign_gate(kind, &content)?;
     let keys = state.signing_keys()?;
 
     tauri::async_runtime::spawn_blocking(move || {

@@ -50,6 +50,10 @@ pub async fn set_canvas(
 ) -> Result<serde_json::Value, String> {
     let uuid = uuid::Uuid::parse_str(&channel_id)
         .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
+    // INV-29: renderer content never signs as a swarm governance marker.
+    let canvas_kind = u16::try_from(ambush_core_pkg::kind::KIND_CANVAS)
+        .map_err(|_| "invalid kind".to_string())?;
+    crate::perch_sign_gate::perch_sign_gate(canvas_kind, &content)?;
     let builder = events::build_set_canvas(uuid, &content)?;
     let result = submit_event(builder, &state).await?;
 

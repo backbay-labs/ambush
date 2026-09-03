@@ -36,6 +36,9 @@ mod native_websocket_batch;
 mod nostr_bind;
 pub mod nostr_convert;
 mod observed_unread;
+pub mod perch_sign_gate;
+#[cfg(test)]
+mod perch_sign_gate_inventory_tests;
 mod persona_catalog;
 mod prevent_sleep;
 mod ptt_shortcut;
