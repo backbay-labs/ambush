@@ -21,6 +21,7 @@ import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
 import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
 import { useAppShellKeyboardShortcuts } from "@/app/useAppShellKeyboardShortcuts";
 import { useAppShellDesktopNotifications } from "@/app/useAppShellDesktopNotifications";
+import { useAppShellBackgroundSync } from "@/app/useAppShellBackgroundSync";
 import { useAppShellLifecycleEffects } from "@/app/useAppShellLifecycleEffects";
 import { useChannelActivityProjection } from "@/app/useChannelActivityProjection";
 import { useTauriWindowDrag } from "@/app/useTauriWindowDrag";
@@ -36,7 +37,6 @@ import {
 } from "@/features/channels/hooks";
 import { useDmResurfaceFromMessages } from "@/features/channels/useDmResurfaceFromMessages";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
-import { useMembershipNotifications } from "@/features/channels/useMembershipNotifications";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useThreadFollows } from "@/features/messages/lib/useThreadFollows";
 import {
@@ -45,27 +45,13 @@ import {
 } from "@/features/notifications/hooks";
 import { PreventSleepProvider } from "@/features/agents/usePreventSleep";
 import { requestOpenCreateAgent } from "@/features/agents/openCreateAgentEvent";
-import { useAgentsDataRefresh } from "@/features/agents/lib/useAgentsDataRefresh";
-import { useManagedAgentRuntimeReconciliation } from "@/features/agents/useManagedAgentRuntimeReconciliation";
-import { useAutoRestartPolicy } from "@/features/agents/lib/useAutoRestartPolicy";
-import { usePersonaSync } from "@/features/agents/lib/usePersonaSync";
-import { useAgentObserverIngestion } from "@/features/agents/useAgentObserverIngestion";
 import { AgentManagementDialogs } from "@/features/agents/ui/AgentManagementDialogs";
 import { RequestedAgentCreateDialogs } from "@/features/agents/ui/RequestedAgentCreateDialogs";
-import {
-  usePresenceSession,
-  usePresenceSubscription,
-} from "@/features/presence/hooks";
+import { usePresenceSession } from "@/features/presence/hooks";
 import {
   useSetUserStatusMutation,
   useUserStatusQuery,
-  useUserStatusSubscription,
 } from "@/features/user-status/hooks";
-import { useCommunityEmojiLiveUpdates } from "@/features/custom-emoji/hooks";
-import { useArchiveSync } from "@/features/local-archive/useArchiveSync";
-import { useArchiveAgentMetricsBridge } from "@/features/local-archive/useArchiveAgentMetricsBridge";
-import { useObserverArchiveReconciliation } from "@/features/local-archive/useObserverArchiveSeed";
-import { useAgentMetricArchiveSeed } from "@/features/local-archive/useAgentMetricArchiveSeed";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { SendFeedbackController } from "@/features/settings/ui/SendFeedbackController";
 import {
@@ -90,8 +76,6 @@ import { useAddCommunityDialogState } from "@/features/communities/addCommunityP
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { useRelayAutoHeal } from "@/shared/api/useRelayAutoHeal";
-import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import { useWebviewScrollBoundaryLock } from "@/shared/hooks/useWebviewScrollBoundaryLock";
 import { joinChannel } from "@/shared/api/tauri";
 import type { Channel, ChannelVisibility, SearchHit } from "@/shared/api/types";
@@ -141,7 +125,6 @@ export function AppShell() {
   const mainInsetRef = React.useRef<HTMLElement>(null);
   const location = useLocation();
   const queryClient = useQueryClient();
-  useManagedAgentRuntimeReconciliation(communitiesHook.communities); // sync storage snapshot
   const {
     goAgents,
     goChannel,
@@ -178,7 +161,6 @@ export function AppShell() {
   )
     ? locationSearchSection
     : DEFAULT_SETTINGS_SECTION;
-  const startupReady = useDeferredStartup();
   const identityQuery = useIdentityQuery();
   const { mutedChannelIds, muteChannel, unmuteChannel } = useChannelMutes(
     identityQuery.data?.pubkey,
@@ -188,43 +170,12 @@ export function AppShell() {
     identityQuery.data?.pubkey,
     communitiesHook.activeCommunity?.relayUrl,
   );
-  usePersonaSync(
-    identityQuery.data?.pubkey,
-    communitiesHook.activeCommunity?.relayUrl,
-  );
-  useAgentsDataRefresh();
-  // Chunk F: auto-restart drifted idle agents (per-agent opt-out, default ON).
-  useAutoRestartPolicy();
-  // Owner-global observer ingestion: receives + decrypts agent observer
-  // frames and keeps derived active-turn liveness in sync app-wide, so no
-  // individual screen/panel has to mount its own bridge for ingestion.
-  // Intentionally mounted without a `startupReady`/identity guard: before
-  // `currentPubkey` resolves the hook ingests managed agents only, and
-  // relay-owned agents join automatically once identity arrives. Adding a
-  // guard here would drop managed-agent coverage during startup.
-  useAgentObserverIngestion();
-  // Kind 24200 is relay-ephemeral, so reconciliation runs eagerly (not
-  // deferred): seeds kind 24200 for fresh identities, no-ops for explicit
-  // opt-outs. Frames before the listener opens are permanently lost.
-  const observerReconciled = useObserverArchiveReconciliation(
-    identityQuery.data?.pubkey,
-  );
-  // useArchiveSync must wait for reconciliation, or listeners could open
-  // before kind 24200 is guaranteed present in the subscription.
-  useArchiveSync(observerReconciled);
-  // The archive batch now persists in Rust, so the agent-metrics invalidation
-  // signal arrives as a Tauri event rather than an in-process call.
-  useArchiveAgentMetricsBridge();
-  // Kind 44200 is relay-persisted (durable) and stays deferred: missed
-  // startup frames can be replayed, so there's no ordering constraint.
-  const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
-  useAgentMetricArchiveSeed(deferredPubkey);
+  const { deferredPubkey } = useAppShellBackgroundSync({
+    communities: communitiesHook.communities,
+    pubkey: identityQuery.data?.pubkey,
+    relayUrl: communitiesHook.activeCommunity?.relayUrl,
+  });
   const profileQuery = useProfileQuery();
-  useRelayAutoHeal();
-  usePresenceSubscription();
-  useUserStatusSubscription();
-  useCommunityEmojiLiveUpdates();
-  useMembershipNotifications(identityQuery.data?.pubkey);
   const presenceSession = usePresenceSession(deferredPubkey);
   const selfStatusQuery = useUserStatusQuery(
     deferredPubkey ? [deferredPubkey] : [],
