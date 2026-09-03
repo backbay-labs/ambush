@@ -5,6 +5,7 @@ import { deriveShellRoute, markAllReadSources } from "@/app/AppShell.helpers";
 import { useTerminalContext } from "@/app/useTerminalContext";
 import { AppShellProvider } from "@/app/AppShellContext";
 import { AppShellOverlays, TerminalBootstrap } from "@/app/AppShellOverlays";
+import { AppShellSettingsSurface } from "@/app/AppShellSettingsSurface";
 import { AppShellChannelSurface } from "@/app/AppShellChannelSurface";
 import { AppHuddleShell } from "@/app/AppHuddleShell";
 import { AppTopChrome } from "@/app/AppTopChrome";
@@ -58,7 +59,6 @@ import { SendFeedbackController } from "@/features/settings/ui/SendFeedbackContr
 import {
   DEFAULT_SETTINGS_SECTION,
   type SettingsSection,
-  isSettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
 import { useDueReminderBadgeCount } from "@/features/reminders/hooks";
 import { useReminderNotifications } from "@/features/reminders/useReminderNotifications";
@@ -82,7 +82,6 @@ import { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarR
 import { AppShellTrayMenu } from "@/app/useAppShellTrayMenu";
 import { AppProfilePanelProvider } from "@/app/AppProfilePanelProvider";
 import { AppWorkflowEditorOverlayProvider } from "@/app/AppWorkflowEditorOverlayProvider";
-import { LazySettingsScreen } from "@/app/LazySettingsScreen";
 const EMPTY_CHANNELS: Channel[] = [];
 export function AppShell() {
   useWebviewZoomShortcuts();
@@ -149,13 +148,6 @@ export function AppShell() {
   });
   // Settings lives in history so back returns to the previous app entry.
   const settingsOpen = location.pathname === "/settings";
-  const locationSearchSection = (location.search as { section?: unknown })
-    .section;
-  const settingsSection: SettingsSection = isSettingsSection(
-    locationSearchSection,
-  )
-    ? locationSearchSection
-    : DEFAULT_SETTINGS_SECTION;
   const identityQuery = useIdentityQuery();
   const { mutedChannelIds, muteChannel, unmuteChannel } = useChannelMutes(
     identityQuery.data?.pubkey,
@@ -474,15 +466,6 @@ export function AppShell() {
     () => closeSettings(),
     [closeSettings],
   );
-  // Section switches rewrite the settings entry rather than stacking one
-  // history entry per section, so back always exits settings in one step.
-  const handleSettingsSectionChange = React.useCallback(
-    (section: SettingsSection) => {
-      void goSettings(section, { replace: true });
-    },
-    [goSettings],
-  );
-
   const handleOpenSearchResult = React.useCallback(
     (hit: SearchHit, query: string) => {
       void openSearchHit(hit, { query });
@@ -612,45 +595,13 @@ export function AppShell() {
                     />
                   ) : null}
                   {settingsOpen ? (
-                    <div className="flex min-h-0 flex-1 overflow-hidden">
-                      <React.Suspense fallback={null}>
-                        <LazySettingsScreen
-                          currentPubkey={identityQuery.data?.pubkey}
-                          fallbackDisplayName={identityQuery.data?.displayName}
-                          isUpdatingDesktopNotifications={
-                            notificationSettings.isUpdatingDesktopEnabled
-                          }
-                          notificationErrorMessage={
-                            notificationSettings.errorMessage
-                          }
-                          notificationPermission={
-                            notificationSettings.permission
-                          }
-                          notificationSettings={notificationSettings.settings}
-                          onClose={handleCloseSettings}
-                          onSectionChange={handleSettingsSectionChange}
-                          onSetDesktopNotificationsEnabled={
-                            notificationSettings.setDesktopEnabled
-                          }
-                          onSetHomeBadgeEnabled={
-                            notificationSettings.setHomeBadgeEnabled
-                          }
-                          onSetSlotAlertsEnabled={
-                            notificationSettings.setSlotAlertsEnabled
-                          }
-                          onSetNotifyWhileViewing={
-                            notificationSettings.setNotifyWhileViewing
-                          }
-                          onSetAllSlotAlertsEnabled={
-                            notificationSettings.setAllSlotAlertsEnabled
-                          }
-                          onSetSoundForSlot={
-                            notificationSettings.setSoundForSlot
-                          }
-                          section={settingsSection}
-                        />
-                      </React.Suspense>
-                    </div>
+                    <AppShellSettingsSurface
+                      currentPubkey={identityQuery.data?.pubkey}
+                      fallbackDisplayName={identityQuery.data?.displayName}
+                      locationSearch={location.search}
+                      notificationSettings={notificationSettings}
+                      onClose={handleCloseSettings}
+                    />
                   ) : (
                     <div className="relative flex min-h-0 flex-1 overflow-visible">
                       {!isHuddleRoom ? (
