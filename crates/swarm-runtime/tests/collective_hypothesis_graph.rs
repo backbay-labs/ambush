@@ -2946,6 +2946,88 @@ fn terminal_publication_is_atomic() {
 }
 
 #[test]
+fn exact_terminal_publication_retry_returns_the_committed_snapshot() {
+    let mut fixture = terminal_task_fixture();
+    let proof = TaskCapabilityProof::signed_with(
+        fixture.request.task_id.clone(),
+        fixture.request.claimant.clone(),
+        fixture.request.role,
+        fixture.request.kind,
+        fixture.request.canonical_digest().unwrap(),
+        &fixture.claimant_key,
+        "hunter:terminal",
+    )
+    .unwrap();
+    let claim = fixture
+        .ledger
+        .claim_task(
+            &fixture.store,
+            fixture.request.clone(),
+            GraphLogicalTime::new(100),
+            1_000,
+            proof,
+        )
+        .unwrap();
+    let original = fixture.store.snapshot().unwrap();
+    let envelope = terminal_envelope(&fixture, &claim);
+    let evidence = vec![fixture.evidence.clone()];
+    let committed = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            original.revision(),
+            &claim,
+            envelope.clone(),
+            evidence.clone(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let committed_bytes = committed.canonical_bytes().unwrap();
+
+    // A client that lost the successful response may retry either the exact
+    // original request or the same request after refreshing the revision.
+    for revision in [original.revision(), committed.revision()] {
+        let replayed = fixture
+            .ledger
+            .complete_task(
+                &fixture.store,
+                revision,
+                &claim,
+                envelope.clone(),
+                evidence.clone(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(replayed.canonical_bytes().unwrap(), committed_bytes);
+    }
+
+    let mut changed_envelope = envelope;
+    changed_envelope.completion.summary_digest = "digest:changed-retry".to_string();
+    assert!(matches!(
+        fixture.ledger.complete_task(
+            &fixture.store,
+            committed.revision(),
+            &claim,
+            changed_envelope,
+            evidence,
+            None,
+            None,
+            None,
+        ),
+        Err(GraphStoreError::InvalidTransition { reason })
+            if reason.contains("differs from the committed task publication")
+    ));
+    assert_eq!(
+        fixture.store.snapshot().unwrap().canonical_bytes().unwrap(),
+        committed_bytes
+    );
+}
+
+#[test]
 fn production_complete_task_enforces_signed_lineage() {
     let mut fixture = terminal_task_fixture();
     let proof = TaskCapabilityProof::signed_with(
@@ -4185,6 +4267,50 @@ fn challenge_completion_retains_edge_lineage() {
             edge_id: fixture.edge_id
         }
     );
+}
+
+#[test]
+fn exact_decision_terminal_retry_normalizes_only_the_assigned_sequence() {
+    let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
+    let claim = claim_decision_task(&mut fixture);
+    let original = fixture.store.snapshot().unwrap();
+    let (envelope, decision) = decision_terminal(&fixture, &claim);
+    assert_eq!(decision.sequence, 0);
+    let committed = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            original.revision(),
+            &claim,
+            envelope.clone(),
+            vec![fixture.evidence.clone()],
+            Some(decision.clone()),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(
+        committed.terminal_outbox()[&claim.task_id]
+            .decision
+            .as_ref()
+            .unwrap()
+            .sequence
+            > 0
+    );
+    let replayed = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            original.revision(),
+            &claim,
+            envelope,
+            vec![fixture.evidence],
+            Some(decision),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(replayed, committed);
 }
 
 #[test]

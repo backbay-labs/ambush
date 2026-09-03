@@ -664,6 +664,17 @@ impl HypothesisTaskLedger {
         memory_expiry: Option<StrategyMemoryExpiryEnvelope>,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
         let snapshot = store.snapshot()?;
+        let retry_candidate = TaskTerminalOutboxEntry {
+            envelope: envelope.clone(),
+            evidence: evidence.clone(),
+            decision: decision.clone(),
+            memory: memory.clone(),
+            memory_expiry: memory_expiry.clone(),
+            producer_key_id: claim.claimant.clone(),
+        };
+        if let Some(committed) = exact_terminal_retry(&snapshot, claim, &retry_candidate)? {
+            return Ok(committed);
+        }
         if snapshot.revision() != revision {
             return Err(GraphStoreError::StalePredecessor {
                 expected_generation: revision.generation,
@@ -1533,6 +1544,98 @@ fn validate_configured_terminal_time(
     Ok(())
 }
 
+fn retry_decision_matches(
+    committed: Option<&DecisionRecord>,
+    candidate: Option<&DecisionRecord>,
+) -> bool {
+    match (committed, candidate) {
+        (None, None) => true,
+        (Some(committed), Some(candidate)) => {
+            if candidate.sequence != 0 && candidate.sequence != committed.sequence {
+                return false;
+            }
+            let mut normalized_committed = committed.clone();
+            normalized_committed.sequence = 0;
+            let mut normalized_candidate = candidate.clone();
+            normalized_candidate.sequence = 0;
+            normalized_committed == normalized_candidate
+        }
+        _ => false,
+    }
+}
+
+/// Recognize a response-lost retry from the durable task-scoped outbox.  This
+/// check deliberately runs before predecessor and active-lease validation:
+/// the successful CAS consumed both values.  The retained terminal proof,
+/// signed claim capability, and exact publication content are therefore the
+/// authoritative idempotency record.
+fn exact_terminal_retry(
+    snapshot: &GraphStoreSnapshot,
+    claim: &TaskClaim,
+    candidate: &TaskTerminalOutboxEntry,
+) -> Result<Option<GraphStoreSnapshot>, GraphStoreError> {
+    let Some(committed) = snapshot.state().terminal_outbox.get(&claim.task_id) else {
+        return Ok(None);
+    };
+    let task = snapshot.state().tasks.get(&claim.task_id).ok_or_else(|| {
+        GraphStoreError::InvalidState {
+            reason: "terminal outbox has no retained durable task".to_string(),
+        }
+    })?;
+    let descriptor = snapshot
+        .state()
+        .logical_task_descriptors
+        .get(&claim.task_id)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "terminal outbox has no persisted logical descriptor".to_string(),
+        })?;
+    let proof = task
+        .task
+        .terminal_history
+        .last()
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "terminal outbox task has no retained terminal proof".to_string(),
+        })?;
+    if task.task.state != TaskState::Completed
+        || claim.idempotency_key != task.task.request.idempotency_key
+        || claim.claimant != task.task.request.claimant
+        || claim.capability != task.task.request.kind
+        || claim.lease_id != proof.prior_lease.lease_id
+        || claim.fencing_token != proof.prior_lease.fencing_token
+        || candidate.producer_key_id != claim.claimant
+        || candidate.envelope.capability != claim.capability_proof
+        || committed.envelope.capability != claim.capability_proof
+    {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "terminal retry does not bind the committed task claim".to_string(),
+        });
+    }
+    claim
+        .capability_proof
+        .validate_for_claim(&task.task.request)
+        .map_err(GraphStoreError::Admission)?;
+    committed
+        .validate_for_committed_task_at(
+            &task.task,
+            descriptor,
+            &snapshot.state().limits,
+            snapshot.state().logical_time_high_water,
+        )
+        .map_err(GraphStoreError::Admission)?;
+    if committed.envelope != candidate.envelope
+        || committed.evidence != candidate.evidence
+        || !retry_decision_matches(committed.decision.as_ref(), candidate.decision.as_ref())
+        || committed.memory != candidate.memory
+        || committed.memory_expiry != candidate.memory_expiry
+        || committed.producer_key_id != candidate.producer_key_id
+    {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "terminal retry differs from the committed task publication".to_string(),
+        });
+    }
+    Ok(Some(snapshot.clone()))
+}
+
 /// Commit one already-validated terminal publication.  This is intentionally
 /// a public production seam so role adapters and independent tests exercise
 /// the same one-CAS path.  The function never writes an external memory store:
@@ -1545,6 +1648,9 @@ pub fn commit_terminal_once(
     mut publication: TaskTerminalOutboxEntry,
 ) -> Result<GraphStoreSnapshot, GraphStoreError> {
     let snapshot = store.snapshot()?;
+    if let Some(committed) = exact_terminal_retry(&snapshot, claim, &publication)? {
+        return Ok(committed);
+    }
     if snapshot.revision() != revision {
         return Err(GraphStoreError::StalePredecessor {
             expected_generation: revision.generation,
