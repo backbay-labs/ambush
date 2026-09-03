@@ -814,7 +814,7 @@ test("defers agent mentions until DM members finish loading", async ({
   page,
 }) => {
   await installMockBridge(page, {
-    channelMembersReadDelayMs: 5_000,
+    deferChannelMembersRead: true,
     managedAgents: [
       {
         pubkey: TEST_IDENTITIES.alice.pubkey,
@@ -860,7 +860,19 @@ test("defers agent mentions until DM members finish loading", async ({
   );
   await expect(input).toContainText("before members resolve");
 
-  await page.waitForTimeout(5_100);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__AMBUSH_E2E_CHANNEL_MEMBERS_READS_PENDING__?.() ?? 0,
+      ),
+    )
+    .toBeGreaterThan(0);
+  expect(
+    await page.evaluate(
+      () => window.__AMBUSH_E2E_RELEASE_CHANNEL_MEMBERS_READS__?.() ?? 0,
+    ),
+  ).toBeGreaterThan(0);
+  await page.waitForTimeout(50);
   await threadPanel.getByTestId("send-message").click();
 
   await expect(page.getByText(DM_THREAD_AGENT_MENTION_ERROR_TEXT)).toHaveCount(

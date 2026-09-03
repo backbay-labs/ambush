@@ -332,6 +332,8 @@ type E2eConfig = {
     /** Sequenced add-member failures. A string fails that call; null succeeds. */
     addChannelMembersErrors?: (string | null)[];
     channelMembersReadDelayMs?: number;
+    /** Hold membership reads until the E2E release seam is invoked. */
+    deferChannelMembersRead?: boolean;
     createManagedAgentDelayMs?: number;
     channelTemplates?: ChannelTemplate[];
     channelsReadError?: string;
@@ -1484,6 +1486,10 @@ declare global {
     /** Number of `get_thread_replies` calls currently held by
      *  `deferThreadReplies`. */
     __AMBUSH_E2E_THREAD_REPLIES_PENDING__?: () => number;
+    /** Flush every `get_channel_members` call held by `deferChannelMembersRead`. */
+    __AMBUSH_E2E_RELEASE_CHANNEL_MEMBERS_READS__?: () => number;
+    /** Number of membership reads currently held by the manual gate. */
+    __AMBUSH_E2E_CHANNEL_MEMBERS_READS_PENDING__?: () => number;
     /** Uploads that passed mock-native registration and began relay work. */
     __AMBUSH_E2E_LINK_PREVIEW_UPLOAD_STARTS__?: number;
   }
@@ -1594,6 +1600,7 @@ let deferredGetEventQueue: DeferredGetEvent[] = [];
 let deferredLinkPreviewMetadataQueue: Array<() => void> = [];
 let deferredLinkPreviewUploadQueue: Array<() => void> = [];
 let deferredThreadRepliesQueue: Array<() => void> = [];
+let deferredChannelMembersReadQueue: Array<() => void> = [];
 let cancelledMediaUploadIds = new Set<string>();
 let deferNextChannelsRead = false;
 let deferredChannelsReadResolve: (() => void) | null = null;
@@ -7249,6 +7256,11 @@ async function handleGetChannelMembers(
   if (delayMs > 0) {
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
   }
+  if (config?.mock?.deferChannelMembersRead) {
+    await new Promise<void>((resolve) => {
+      deferredChannelMembersReadQueue.push(resolve);
+    });
+  }
 
   const identity = getIdentity(config);
   if (!identity) {
@@ -11083,6 +11095,7 @@ export function maybeInstallE2eTauriMocks() {
   deferredLinkPreviewMetadataQueue = [];
   deferredLinkPreviewUploadQueue = [];
   deferredThreadRepliesQueue = [];
+  deferredChannelMembersReadQueue = [];
   cancelledMediaUploadIds = new Set<string>();
   window.__AMBUSH_E2E_LINK_PREVIEW_UPLOAD_STARTS__ = 0;
   window.__AMBUSH_E2E_RELEASE_LINK_PREVIEW_METADATA__ = () => {
@@ -11102,6 +11115,13 @@ export function maybeInstallE2eTauriMocks() {
   };
   window.__AMBUSH_E2E_THREAD_REPLIES_PENDING__ = () =>
     deferredThreadRepliesQueue.length;
+  window.__AMBUSH_E2E_RELEASE_CHANNEL_MEMBERS_READS__ = () => {
+    const queued = deferredChannelMembersReadQueue.splice(0);
+    for (const release of queued) release();
+    return queued.length;
+  };
+  window.__AMBUSH_E2E_CHANNEL_MEMBERS_READS_PENDING__ = () =>
+    deferredChannelMembersReadQueue.length;
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
     ? { ...config.mock.globalAgentConfig }
     : null;
