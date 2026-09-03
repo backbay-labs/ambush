@@ -199,7 +199,10 @@ impl OperatorPrincipalConfig {
     /// ids, unique token environments, at least one `read` scope) and the positional
     /// checks belong to `SwarmConfig::validate`, which calls this for every effective
     /// principal.
-    pub fn validate(&self) -> Result<(), ConfigValidationError> {
+    ///
+    /// Crate-internal like its `PlatformApiConfig` and `TlsConfig` siblings: the loader is
+    /// its only caller, and the phase-282 visibility baseline keeps it that way.
+    pub(super) fn validate(&self) -> Result<(), ConfigValidationError> {
         if let Some(key) = self.nostr_pubkey.as_deref()
             && !is_nostr_pubkey_hex(key)
         {
