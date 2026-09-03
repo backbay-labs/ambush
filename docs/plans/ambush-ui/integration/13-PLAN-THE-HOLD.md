@@ -45,7 +45,7 @@ Everything below is owed by `10-PLAN-MIGRATION.md`, `11-PLAN-GROUND.md` and `12-
 - [ ] `RuntimeEvent::CasePromoted` (B1d) exists, so `RuntimeEvent` has twelve variants and `runtime_event_matches_scope` at `crates/swarm-ingest-runtime/src/ingest/mod.rs:698-770` already carries a `CasePromoted => false` arm.
 - [ ] The relay patches are re-landed on `workspace/crates/ambush-relay` and `workspace/crates/ambush-core` (W3-7): `46010` in `required_scope_for_kind` and `requires_h_channel_scope` (`workspace/crates/ambush-relay/src/handlers/ingest.rs:704-733` today), `KIND_OPERATOR_ALARM_FRAME = 26006` in `P_GATED_KINDS` (`workspace/crates/ambush-core/src/kind.rs:159-169` today), and the two E2E binaries `e2e_workflow_approval.rs` and `e2e_operator_alarm_pgate.rs` under `workspace/crates/ambush-test-client/tests/`.
 - [ ] `perch_sign_gate` is wired at `sign_event` (`workspace/desktop/src-tauri/src/commands/identity.rs:108-135`), `send_channel_message` (`commands/messages.rs:409`) and the egress boundaries, with the inventory test (H2).
-- [ ] `resetCommunityState` is the typed `COLONY_RESETTERS` registry (H3) and `workspace/desktop/src/features/perch/colonyScopedRegistry.ts` exists.
+- [ ] `resetCommunityState` calls the typed `runResetters` registry (H3) and `workspace/desktop/src/features/communities/communityScopedRegistry.ts` exists with `COMMUNITY_SCOPED_SINGLETONS` and `RESETTERS`.
 - [ ] The E2E delegated module `workspace/desktop/src/testing/perch/e2ePerchBridge.ts` exists and the `if (command.startsWith("perch_"))` guard sits before `default:` at `workspace/desktop/src/testing/e2eBridge.ts:14605` (P0-20).
 - [ ] `commands/perch_writes.rs` exists with `perch_finding_feedback` and `perch_mint_incident`, `PERCH_WRITE_ROUTES` is `[&str; 5]`, and `tools/check-perch-write-allowlist.sh` is wired (H4). `commands/perch_reads.rs` may or may not exist; Task 19 creates or extends it.
 - [ ] `workspace/desktop/src/features/perch-evidence/` has `parseSwarmMarker`, the `swarmCardRegistry` `satisfies Record<…>` map with a `finding` entry, `EvidenceCardFrame`, `RefusalCards` and the `MessageBody` seam (P1-17), and `features/perch-watch/` exists with First card's findings queue and its three verbs.
@@ -77,7 +77,7 @@ Everything below is owed by `10-PLAN-MIGRATION.md`, `11-PLAN-GROUND.md` and `12-
 | `crates/swarm-ingest-runtime/src/ingest/perch_ops/mod.rs` (modify) | re-exports `holds` |
 | `crates/swarm-ingest-runtime/src/ingest/perch_ops/holds.rs` (create) | `HoldCapture::capture_hold`, `decide_hold`, `list_holds`, `get_hold`, the view builders, `HoldDecisionError` |
 | `crates/swarm-ingest-runtime/src/ingest/demo.rs` (modify) | `with_demo_cors` dropped from the stream response (B5); the two human-approved call sites gain `None` |
-| `crates/swarm-runtime-http/src/http/perch/mod.rs` (modify) | `perch_operator_router` gains the three hold routes; `PERCH_ROUTER_PATHS` grows to seven |
+| `crates/swarm-runtime-http/src/http/perch/mod.rs` (modify) | `perch_operator_router` gains two hold reads in Task 10 and decide in Task 13; `PERCH_ROUTER_PATHS` grows from three to six (W3-28) |
 | `crates/swarm-runtime-http/src/http/perch/holds.rs` (create) | `HeldActionView`, `HoldListResponse`, `HoldDetailResponse`, `HoldDecisionRequest`, `HoldDecisionResponse`, the three handlers, the 409 taxonomy |
 | `crates/swarm-runtime-http/src/http/review.rs` (modify) | `review_session_create_handler` takes `Extension(principal)` (B5) |
 | `crates/swarm-runtime-http/src/bin/swarm_detect.rs` (modify) | build the hold store from config, `with_hold_store`, spawn `HoldSweep`, boot `warn!` for Approve-without-Read |
@@ -138,7 +138,7 @@ Everything below is owed by `10-PLAN-MIGRATION.md`, `11-PLAN-GROUND.md` and `12-
 | `src/shared/ui/perch/HoldTtlClock.tsx`, `WriteStateRow.tsx` (create) | Tier B primitives |
 | `src/app/routes/index.tsx` (modify) | the `perch` flag seam: `WatchScreen` or `HomeScreen` |
 | `../preview-features.json` (modify) | the `perch` entry |
-| `tests/helpers/perchBridge.ts` (create from the skeleton) | fixture builders, `installPerchBridge`, `emitPerchHoldAlarm`, `advancePerchClock` |
+| `tests/helpers/perchBridge.ts` (extend First card's helper with the skeleton hold fixtures) | fixture builders, `installPerchBridge`, `emitPerchHoldAlarm`, `advancePerchClock` |
 | `tests/helpers/features.ts` (modify) | `E2E_OPT_IN_FEATURES = ["perch"]` |
 | `tests/e2e/perch-verdict-pane.spec.ts`, `perch-queue-lifecycle.spec.ts`, `perch-concurrent-decision.spec.ts`, `watch-queues.spec.ts`, `two-legged-write.spec.ts`, `grant-two-stroke.spec.ts` (create) | the Playwright coverage; registered in `playwright.config.ts` `smoke` |
 
@@ -3018,7 +3018,7 @@ git commit -s -m "feat(swarm-runtime): sweep expired holds and stalled decisions
   pub fn get_hold(state: &IngestState, hold_id: &str, now_ms: i64) -> Result<Option<HeldAction>, HoldReadError>
   pub struct HoldListing { pub holds: Vec<HeldAction>, pub open_count: usize, pub truncated: bool, pub health: HeldActionStoreHealth }
   pub enum HoldReadError { NoHoldStore, Store(HeldActionStoreError) }
-  pub const PERCH_ROUTER_PATHS: [&str; 7]
+  pub const PERCH_ROUTER_PATHS: [&str; 5] // three First-card paths plus the two reads; Task 13 makes six
   ```
   `GET /v1/response/holds` sorts `(expires_at_ms, hold_id)` ascending; both routes check `OperatorScope::Read`; `now_ms` is a query parameter ("absent means now").
 
@@ -3035,6 +3035,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use serde_json::Value;
     use std::sync::Arc;
+    use swarm_core::config::OperatorScope;
     use swarm_core::types::ResponseAction;
     use swarm_runtime::held_action::{HeldActionStore, HoldState, MemoryHeldActionStore};
     use tower::ServiceExt;
@@ -3073,6 +3074,20 @@ mod tests {
         (status, value)
     }
 
+    fn app_with_scopes(
+        state: swarm_ingest_runtime::ingest::IngestState,
+        scopes: Vec<OperatorScope>,
+        token: &str,
+    ) -> axum::Router {
+        let config = crate::http::tests::operator_config();
+        let auth = crate::http::auth::OperatorAuthState::for_test(
+            "perch-dev-operator",
+            scopes,
+            token,
+        );
+        crate::http::perch::perch_operator_router_for_test(&config, state, auth)
+    }
+
     #[tokio::test]
     async fn the_list_is_sorted_by_expiry_then_id_and_carries_the_honesty_fields() {
         let (state, _store) = seeded_state(&[
@@ -3080,7 +3095,7 @@ mod tests {
             (HoldState::Created, T0, "hold_aaaaaaaa-0000-4000-8000-000000000000"),
             (HoldState::Refused, T0, "hold_bbbbbbbb-0000-4000-8000-000000000000"),
         ]);
-        let app = crate::http::perch::perch_operator_router(&crate::http::tests::perch_operator_config(), state).unwrap();
+        let app = app_with_scopes(state, vec![OperatorScope::Read, OperatorScope::Approve], "secret-token");
         let (status, body) = get(app, &format!("/v1/response/holds?now_ms={}", T0 + 1), "secret-token").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["schema_version"], 1);
@@ -3099,7 +3114,7 @@ mod tests {
     #[tokio::test]
     async fn detail_derives_two_clock_facts_and_the_inverse_resolution() {
         let (state, _store) = seeded_state(&[(HoldState::Notified, T0, "hold_aaaaaaaa-0000-4000-8000-000000000000")]);
-        let app = crate::http::perch::perch_operator_router(&crate::http::tests::perch_operator_config(), state).unwrap();
+        let app = app_with_scopes(state, vec![OperatorScope::Read, OperatorScope::Approve], "secret-token");
         let (status, body) = get(
             app,
             &format!("/v1/response/holds/hold_aaaaaaaa-0000-4000-8000-000000000000?now_ms={}", T0 + 3_600_000 + 1),
@@ -3116,12 +3131,12 @@ mod tests {
     #[tokio::test]
     async fn reads_require_the_read_scope_and_an_unknown_id_is_404() {
         let (state, _store) = seeded_state(&[]);
-        let app = crate::http::perch::perch_operator_router(&crate::http::tests::perch_operator_config_approve_only(), state).unwrap();
+        let app = app_with_scopes(state, vec![OperatorScope::Approve], "approve-only-token");
         let (status, body) = get(app.clone(), "/v1/response/holds", "approve-only-token").await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(body["error"], "forbidden");
         let (state, _store) = seeded_state(&[]);
-        let app = crate::http::perch::perch_operator_router(&crate::http::tests::perch_operator_config(), state).unwrap();
+        let app = app_with_scopes(state, vec![OperatorScope::Read, OperatorScope::Approve], "secret-token");
         let (status, body) = get(app, "/v1/response/holds/hold_neverexisted-0000-4000-8000-000000000000", "secret-token").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["error"], "not_found");
@@ -3130,7 +3145,7 @@ mod tests {
     #[tokio::test]
     async fn no_hold_store_is_503_never_an_empty_list() {
         let state = crate::http::tests::perch_test_state();
-        let app = crate::http::perch::perch_operator_router(&crate::http::tests::perch_operator_config(), state).unwrap();
+        let app = app_with_scopes(state, vec![OperatorScope::Read, OperatorScope::Approve], "secret-token");
         let (status, body) = get(app, "/v1/response/holds", "secret-token").await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["error"], "internal_error");
@@ -3144,12 +3159,12 @@ mod tests {
         assert!(!perch.is_empty() && !local.is_empty(), "empty path set: the collector is broken");
         let overlap: Vec<_> = perch.intersection(&local).collect();
         assert!(overlap.is_empty(), "same path on two ports: {overlap:?}");
-        assert_eq!(perch.len(), 7);
+        assert_eq!(perch.len(), 5);
     }
 }
 ```
 
-`crate::http::tests::perch_test_state()`, `perch_operator_config()` (`principals: [{operator_id: "perch-dev-operator", token_env: "SWARM_OPERATOR_TEST_TOKEN", scopes: [read, approve]}]`, env set to `secret-token`) and `perch_operator_config_approve_only()` (`scopes: [approve]`, env `SWARM_OPERATOR_APPROVE_ONLY_TOKEN` = `approve-only-token`) are `pub(crate)` helpers in `http/tests.rs`; First card added the first two beside `operator_config()` (`:98`) or this task adds them now in the same shape as `operator_config()` with `runtime.mode: LiveResponse` and `runtime.response: Default::default()`. `LOCAL_OPERATOR_SURFACE_PATHS` is a `pub(crate) const [&str; 49]` added to `http/state.rs` listing the 49 `.route(` paths verbatim; the router at `:294-…` is rewritten to iterate nothing — it keeps its literal `.route(` calls and a second test in `state.rs` asserts `LOCAL_OPERATOR_SURFACE_PATHS.len() == 49` and that every entry appears as a `.route("<path>"` literal in the file (`include_str!("state.rs")`), so the array cannot drift from the router.
+`crate::http::tests::perch_test_state()` is a `pub(crate)` helper in `http/tests.rs`; First card also makes the existing `operator_config()` visible to the `perch` test subtree. Every route test constructs its bearer through First card's test-only `OperatorAuthState::for_test` and `perch_operator_router_for_test`; it must not set process-global environment variables. `LOCAL_OPERATOR_SURFACE_PATHS` is a `pub(crate) const [&str; 49]` added to `http/state.rs` listing the 49 `.route(` paths verbatim; the router at `:294-…` is rewritten to iterate nothing — it keeps its literal `.route(` calls and a second test in `state.rs` asserts `LOCAL_OPERATOR_SURFACE_PATHS.len() == 49` and that every entry appears as a `.route("<path>"` literal in the file (`include_str!("state.rs")`), so the array cannot drift from the router.
 
 - [ ] **Step 2: Run and watch it fail.**
 
@@ -3457,14 +3472,12 @@ pub mod holds;
 
 /// Every path this router declares, so the disjointness test has a set to
 /// compare and a route cannot be added without being counted.
-pub const PERCH_ROUTER_PATHS: [&str; 7] = [
+pub const PERCH_ROUTER_PATHS: [&str; 5] = [
     "/v1/response/holds",
     "/v1/response/holds/{hold_id}",
-    "/v1/response/holds/{hold_id}/decide",
     "/v1/operator/findings/reviewed",
     "/v1/operator/findings/{finding_id}/feedback",
     "/v1/operator/incidents",
-    "/v1/operator/pheromone/deposits",
 ];
 ```
 
@@ -3473,10 +3486,11 @@ and the three `.route(` calls:
 ```rust
         .route(PERCH_ROUTER_PATHS[0], get(holds::hold_list_handler))
         .route(PERCH_ROUTER_PATHS[1], get(holds::hold_detail_handler))
-        .route(PERCH_ROUTER_PATHS[2], post(holds::hold_decide_handler))
 ```
 
-(`hold_decide_handler` is Task 13; until then leave the third `.route(` out and set the array to the six First card declares plus the decide path, asserting `len() == 7` only once Task 13 lands — do not ship a route with no handler.)
+(`hold_decide_handler` is Task 13. That task inserts the decide path as element 2, mounts the
+third `.route(`, and changes the exact count from five to six. Do not predeclare either the decide
+path or Operator-complete's deposits path before their handlers exist; W3-28.)
 
 Boot warning in `swarm_detect.rs`, where `config.operator.enabled` is first read (`:1115`):
 
@@ -3501,7 +3515,7 @@ cargo test -p swarm-runtime-http http::perch
 cargo test -p swarm-runtime-http http::state::local_operator_surface_paths
 ```
 
-Expected: the five tests pass (the disjointness test asserts seven once Task 13 lands; until then assert six and flip the number in Task 13).
+Expected: the five tests pass (the disjointness test asserts five here and Task 13 flips it to six).
 
 - [ ] **Step 5: Commit.**
 
@@ -4804,7 +4818,14 @@ pub(super) async fn hold_decide_handler(
 }
 ```
 
-Then add the third `.route(PERCH_ROUTER_PATHS[2], post(holds::hold_decide_handler))` in `perch/mod.rs` and flip the disjointness assertion to seven. Route tests in `holds.rs`'s `mod tests`: a 403 with no `Approve`; a 422 with a flipped signature byte asserting `body["error"] == "bad_request"` and the hold still `notified`; a 409 `decision_in_flight` with `Retry-After: 1` produced by seeding a `deciding` hold with the same intent id; a 200 refuse whose body has `replayed: false`, `decision.outcome == "refused_by_operator"`, `decision.dispatched == false`; the same body re-posted returning `replayed: true` byte-identical `decision`.
+Then insert `"/v1/response/holds/{hold_id}/decide"` as `PERCH_ROUTER_PATHS[2]`, add the third
+`.route(PERCH_ROUTER_PATHS[2], post(holds::hold_decide_handler))` in `perch/mod.rs`, and flip the
+disjointness assertion from five to six (W3-28). Route tests in `holds.rs`'s `mod tests`: a 403
+with no `Approve`; a 422 with a flipped signature byte asserting `body["error"] == "bad_request"`
+and the hold still `notified`; a 409 `decision_in_flight` with `Retry-After: 1` produced by seeding
+a `deciding` hold with the same intent id; a 200 refuse whose body has `replayed: false`,
+`decision.outcome == "refused_by_operator"`, `decision.dispatched == false`; the same body
+re-posted returning `replayed: true` byte-identical `decision`.
 
 - [ ] **Step 11: Run.**
 
@@ -5071,11 +5092,16 @@ cargo test -p swarm-perch-bridge a_held_trigger
 cargo test -p swarm-perch-bridge the_hold_card_body
 ```
 
-Expected: `HoldId::parse` panics on `todo!`; `hold_card` takes no arguments; `hold_notice_tags` does not exist.
+Expected: the R-3 `HoldId` and `Held` routing regression tests already pass from First
+card; `hold_card` has only the finding-era shape and `hold_notice_tags` does not exist,
+so the card/tag tests fail to compile. A regression failure in either of the first two
+commands is a First-card defect and must be repaired there, not accepted as this task's
+red phase.
 
 - [ ] **Step 3: Implement.**
 
-`channels.rs`:
+`channels.rs`: retain First card's complete R-3 parser (shown here as the contract this
+task re-verifies; it is not a stub replacement):
 
 ```rust
 impl HoldId {
@@ -5092,54 +5118,14 @@ impl HoldId {
 }
 ```
 
-`ensure_case_channel`'s body (replacing the `todo!`), with the routing map a `BTreeMap<String, Uuid>` persisted as JSON in the sidecar under a `std::sync::Mutex`-free single-owner struct (the publisher task is the only caller):
+Keep First card's `ensure_case_channel` implementation and `hunts` persistence map.
+This task extends its `Held` regression corpus and renames `CreateChannel` / `AddMember`
+to `CreateCaseChannel` / `AddOperator` consistently if those hold-specific names are
+preferred; it must not introduce a second `by_hunt` representation or rewrite the
+already-durable routing algorithm.
 
-```rust
-    pub fn ensure_case_channel(
-        &mut self,
-        trigger: &CasePromotionTrigger,
-        operators: &[String],
-        ttl_seconds: i32,
-    ) -> Result<(Uuid, Vec<PublishStep>), BridgeError> {
-        let hunt_id = match trigger {
-            CasePromotionTrigger::Held { hunt_id, .. } | CasePromotionTrigger::Promoted { hunt_id, .. } => hunt_id.clone(),
-        };
-        if let Some(existing) = self.by_hunt.get(&hunt_id).copied() {
-            if let CasePromotionTrigger::Promoted { case_id, .. } = trigger {
-                if *case_id != existing {
-                    return Err(BridgeError::CaseChannelConflict {
-                        hunt_id,
-                        existing: existing.to_string(),
-                        incoming: case_id.to_string(),
-                    });
-                }
-            }
-            return Ok((existing, Vec::new()));
-        }
-        let case = match trigger {
-            CasePromotionTrigger::Held { .. } => Uuid::new_v4(),
-            CasePromotionTrigger::Promoted { case_id, .. } => *case_id,
-        };
-        let mut steps = vec![PublishStep::CreateCaseChannel {
-            channel: case,
-            name: format!("case-{}", &case.simple().to_string()[..8]),
-            ttl_seconds,
-        }];
-        for operator in operators {
-            steps.push(PublishStep::AddOperator { channel: case, operator_pubkey: operator.clone() });
-        }
-        self.by_hunt.insert(hunt_id, case);
-        self.persist()?;
-        Ok((case, steps))
-    }
-
-    /// The routed channel for a hunt, if any.
-    pub fn case_for_hunt(&self, hunt_id: &str) -> Option<Uuid> {
-        self.by_hunt.get(hunt_id).copied()
-    }
-```
-
-`PublishStep` gains, replacing the skeleton's `PublishHold` and `PublishAlarm`:
+`PublishStep` gains the following hold variants (there are no copied skeleton variants
+left after First card's atomic-unit gate):
 
 ```rust
     /// kind:9 `swarm:hold:v1` into the case channel. First, so the notice can
@@ -5188,7 +5174,7 @@ pub fn hold_card(
             "hunt_id": hold.action_request.hunt_id.0,
             "finding_card_id": finding_card_id,
         },
-        "hold": swarm_perch_wire::cards::hold_view_from_record(hold),
+        "hold": hold_view_from_record(hold),
     });
     let envelope = crate::envelope::unsigned_envelope(issuer, seq, prev_envelope_hash, issued_at, fact);
     CardBody {
@@ -5223,7 +5209,7 @@ pub fn hold_notice_content(card: &CardBody) -> String {
 }
 ```
 
-`swarm_perch_wire::cards::hold_view_from_record(&HeldAction) -> serde_json::Value` is a small P1-26 wire function that projects the record onto the `HeldActionView` minus the two clock fields (`remaining_ms`, `expired` are never on a card); if P1-26 did not ship it, add it there in this task — it is `serde_json::to_value(hold)` with `notified_at_ms`, `deciding_intent_event_id`, `cas_instant_ms`, `prior_state`, `case_channel`, `notice_event_id`, `card_event_id` removed and `leases_a_containment: hold.leases_a_containment()` and `inverse_resolution: []` added. `TagSet::assert_publishable(46010)` already refuses `ExtraNoticeTag`, `MissingHoldTag`, `NoRecipients`, `ThreadedHoldNotice`; extend it so `assert_publishable(26006)` refuses `ScopedHoldAlarm` when `h` is set and `NoRecipients(26006)` when `p` is empty (P1-26 shipped both variants; this step only confirms the two branches exist).
+`crate::cards::hold_view_from_record(&HeldAction) -> serde_json::Value` is a bridge-owned adapter that projects the engine record onto the neutral `HeldActionView` shape minus the two clock fields (`remaining_ms`, `expired` are never on a card). Implement it here as `serde_json::to_value(hold)` with `notified_at_ms`, `deciding_intent_event_id`, `cas_instant_ms`, `prior_state`, `case_channel`, `notice_event_id`, `card_event_id` removed and `leases_a_containment: hold.leases_a_containment()` and `inverse_resolution: []` added. It must not move into `swarm-perch-wire`: accepting `HeldAction` there would violate W3-27's zero-engine-dependency boundary. `TagSet::assert_publishable(46010)` already refuses `ExtraNoticeTag`, `MissingHoldTag`, `NoRecipients`, `ThreadedHoldNotice`; extend it so `assert_publishable(26006)` refuses `ScopedHoldAlarm` when `h` is set and `NoRecipients(26006)` when `p` is empty (P1-26 shipped both variants; this step only confirms the two branches exist).
 
 `lib.rs` — `BridgeBuildInput` gains:
 
@@ -6457,7 +6443,7 @@ git commit -s -m "feat(desktop): add perch_record_verdict, the leg-1 card built 
 **Files:**
 - Modify: `workspace/desktop/src/testing/perch/e2ePerchBridge.ts`
 - Modify: `workspace/desktop/src/testing/e2eBridge.ts` (four lines: `26006` in `P_GATED_KINDS` at `:5324-5330`; `installPerchControlSeams({ emitGlobalEvent: emitMockGlobalEvent, emitChannelEvent: emitMockLiveEvent })` beside the `startsWith("perch_")` guard)
-- Create: `workspace/desktop/tests/helpers/perchBridge.ts` (from `build/skeleton/tests/playwright/helpers/perchBridge.ts`, `__BUZZ_E2E_*` → `__AMBUSH_E2E_*`)
+- Modify: `workspace/desktop/tests/helpers/perchBridge.ts` (extend First card's helper from `build/skeleton/tests/playwright/helpers/perchBridge.ts`, `__BUZZ_E2E_*` → `__AMBUSH_E2E_*`; retain its one-call install contract)
 - Modify: `workspace/desktop/tests/helpers/features.ts`, `tests/helpers/bridge.ts` (`seedPreviewFeaturesEnabled` skips `E2E_OPT_IN_FEATURES` unless the spec passes `enableFeatures`)
 - Test: `workspace/desktop/src/testing/perch/e2ePerchBridge.test.mjs`
 
@@ -6633,7 +6619,7 @@ const missing = PERCH_TAURI_COMMANDS.filter((c) => !HANDLED_COMMANDS.has(c));
 if (missing.length > 0) throw new Error(`e2ePerchBridge has no handler for: ${missing.join(", ")}`);
 ```
 
-(`HANDLED_COMMANDS` is a `Set` listing every `case` label; `randomHex64`, `actionFor`, `rehearsalFor`, `defaultFixtureFromDemo` are small local helpers, the last reading `perchDemoFixture.json`.) In `e2eBridge.ts`: add `26006` to the `P_GATED_KINDS` `Set` (`:5324`), and next to the `startsWith("perch_")` guard call `installPerchControlSeams({ emitGlobalEvent: emitMockGlobalEvent, emitChannelEvent: emitMockLiveEvent })` once during install. The fixture seam: at module load, `seedPerchFixture((window as any).__AMBUSH_E2E_PERCH__ ?? defaultFixtureFromDemo())`. In `tests/helpers/features.ts` add `export const E2E_OPT_IN_FEATURES = ["perch"];` and in `bridge.ts`'s `seedPreviewFeaturesEnabled` seed `PREVIEW_FEATURE_IDS.filter((id) => !E2E_OPT_IN_FEATURES.includes(id) || options.enableFeatures?.includes(id))` — so the 162 existing specs keep Home unchanged and perch specs pass `installMockBridge(page, mock, { enableFeatures: ["perch"] })`.
+(`HANDLED_COMMANDS` is a `Set` listing every `case` label; `randomHex64`, `actionFor`, `rehearsalFor`, `defaultFixtureFromDemo` are small local helpers, the last reading `perchDemoFixture.json`.) In `e2eBridge.ts`: add `26006` to the `P_GATED_KINDS` `Set` (`:5324`), and next to the `startsWith("perch_")` guard call `installPerchControlSeams({ emitGlobalEvent: emitMockGlobalEvent, emitChannelEvent: emitMockLiveEvent })` once during install. The fixture seam: at module load, `seedPerchFixture((window as any).__AMBUSH_E2E_PERCH__ ?? defaultFixtureFromDemo())`. In `tests/helpers/features.ts` keep `E2E_OPT_IN_FEATURES = ["perch"]`; in `bridge.ts`, `seedPreviewFeaturesEnabled` keeps ordinary specs off unless `options.enableFeatures` names it. Extend `installPerchBridge` to pass that option internally. Existing specs keep calling `installMockBridge`; perch specs call only `installPerchBridge`.
 
 - [ ] **Step 4: Run.**
 
@@ -6647,11 +6633,12 @@ Expected: 4 node tests pass; two existing smoke specs unchanged (the guard has n
 - [ ] **Step 5: Commit.**
 
 ```bash
-cd workspace && git add desktop/src/testing desktop/tests/helpers preview-features.json
+cd workspace && git add desktop/src/testing desktop/tests/helpers
 git commit -s -m "test(desktop): teach the perch e2e module holds, decisions and the alarm control seam"
 ```
 
-(`preview-features.json` gains the `perch` entry in Task 24; leave it out of this commit if Task 24 has not run — the `enableFeatures` option is inert for an unknown id.)
+(`preview-features.json` is not edited here: Ground Task 11 already registered `perch`, off by
+default. This task changes only how tests opt into that existing entry.)
 
 ---
 
@@ -6663,7 +6650,7 @@ git commit -s -m "test(desktop): teach the perch e2e module holds, decisions and
 - Modify: `workspace/desktop/src/shared/api/perchSubscriptions.ts` (`watch-alarm`, `case-activity` specs live; `PERCH_CASE_REPAIR_KINDS` assertion wired to `get_channel_reconnect_repair_kinds`)
 - Modify: `workspace/desktop/src/shared/api/perchEphemeralStore.ts` (the `26006` arm and `drainPerchAlarms` — present in the skeleton; verified)
 - Create: `workspace/desktop/src/shared/api/perchHoldAlarm.ts` (`useHoldAlarmRefetch`)
-- Modify: `workspace/desktop/src/features/perch/colonyScopedRegistry.ts` (the `perchEphemeralStore`, `perchSubscriptions`, `holdListMirror`, `reconcileDivergenceCounter`, `verdictSpool`, `keymapArmingState`, `escapeSurfaceLease` resetters point at real functions)
+- Modify: `workspace/desktop/src/features/communities/communityScopedRegistry.ts` (the `perchEphemeralStore`, `perchSubscriptions`, `holdListMirror`, `reconcileDivergenceCounter`, `verdictSpool`, `keymapArmingState`, `escapeSurfaceLease` resetters point at real functions)
 - Test: `workspace/desktop/src/shared/api/perchHoldAlarm.test.mjs`, `perchEphemeralStore.test.mjs`
 
 **Interfaces:**
@@ -6768,7 +6755,7 @@ export function perchOperatorIdentity() {
 }
 ```
 
-with `perchRecordVerdict` and `perchDecideHold` as the skeleton declares them (`PerchDecideOutcome` gains `readonly rule: string | null` and `readonly replayed: boolean`). `PERCH_READ_COMMANDS` gains `perch_operator_identity` and `PERCH_TAURI_COMMANDS` is re-derived. In `perchSubscriptions.ts`, `syncPerchSubscriptions` is exported and `resetPerchSubscriptions()` disposes every open REQ; `perchCaseLiveKinds()` replaces its placeholders with the real `CHANNEL_EVENT_KINDS` and `KIND_CHANNEL_THREAD_SUMMARY` imports. Every `perch*` module's `reset*` export is bound in `colonyScopedRegistry.ts`'s `COLONY_RESETTERS` (replacing the skeleton's `declare function` stubs with imports), and `pnpm test` runs `perchResetterRegistry.test.mjs` with `PERCH_FEATURES_ROOT` unset (the sweep finds the real tree).
+with `perchRecordVerdict` and `perchDecideHold` as the skeleton declares them (`PerchDecideOutcome` gains `readonly rule: string | null` and `readonly replayed: boolean`). `PERCH_READ_COMMANDS` gains `perch_operator_identity` and `PERCH_TAURI_COMMANDS` is re-derived. In `perchSubscriptions.ts`, `syncPerchSubscriptions` is exported and `resetPerchSubscriptions()` disposes every open REQ; `perchCaseLiveKinds()` replaces its placeholders with the real `CHANNEL_EVENT_KINDS` and `KIND_CHANNEL_THREAD_SUMMARY` imports. Every `perch*` module's `reset*` export is bound in `features/communities/communityScopedRegistry.ts`'s `RESETTERS`, and its id is present in `COMMUNITY_SCOPED_SINGLETONS`; `pnpm test` runs `communityScopedRegistry.test.mjs` with `PERCH_FEATURES_ROOT` unset (the sweep finds the real tree).
 
 - [ ] **Step 4: Run.**
 
@@ -6790,7 +6777,7 @@ git commit -s -m "feat(desktop): add the hold keys, the alarm-driven refetch and
 ## Task 24: The Watch — the `perch` flag, the four queues, and the reconciled HOLDS queue
 
 **Files:**
-- Modify: `workspace/preview-features.json` (the `perch` entry, `defaultEnabled` omitted = off)
+- Verify: `workspace/preview-features.json` (`perch` already exists with `defaultEnabled` omitted = off; Ground Task 11)
 - Modify: `workspace/desktop/src/app/routes/index.tsx` (the seam)
 - Create: `workspace/desktop/src/features/perch-watch/lib/watchQueues.ts`, `lib/holdRows.ts`, `lib/holdRows.test.mjs`, `useHoldQueue.ts`
 - Create: `workspace/desktop/src/features/perch-watch/ui/WatchQueueSection.tsx`, `ui/VerdictQueueRow.tsx`
@@ -7045,16 +7032,9 @@ function HomeRouteComponent() {
 }
 ```
 
-(`goCase` is First card's navigation callback to `/cases/$caseId`.) `workspace/preview-features.json` gains:
-
-```json
-    {
-      "id": "perch",
-      "name": "Operator console",
-      "description": "The Watch, cases, holds and verdicts for a connected swarm daemon",
-      "platforms": ["desktop"]
-    }
-```
+(`goCase` is First card's navigation callback to `/cases/$caseId`.) Assert Ground Task 11's
+`workspace/preview-features.json` entry still names `perch`, targets desktop and omits
+`defaultEnabled`; do not add a duplicate entry. Task 28 owns the one later change to this row.
 
 - [ ] **Step 4: Write the Playwright coverage.**
 
@@ -7062,7 +7042,6 @@ function HomeRouteComponent() {
 
 ```ts
 import { expect, test } from "@playwright/test";
-import { installMockBridge } from "../helpers/bridge";
 import { waitForAnimations } from "../helpers/animations";
 import { PERCH_HOLD_A, PERCH_HOLD_B, installPerchBridge, perchFixture, perchHold, waitForPerchQueue } from "../helpers/perchBridge";
 
@@ -7070,7 +7049,6 @@ test("the four queues render with their ratified labels and holds sort oldest fi
   const older = perchHold({ hold_id: PERCH_HOLD_A, held_at_ms: 1_773_738_882_600 });
   const newer = perchHold({ hold_id: PERCH_HOLD_B, action_kind: "block_egress", held_at_ms: 1_773_738_900_000, containment_lease_id: null });
   await installPerchBridge(page, perchFixture({ holds: [newer, older] }));
-  await installMockBridge(page, undefined, { enableFeatures: ["perch"] });
   await page.goto("/");
   await waitForPerchQueue(page);
   await waitForAnimations(page);
@@ -7086,14 +7064,13 @@ test("the four queues render with their ratified labels and holds sort oldest fi
 
 test("with the daemon unreachable the count is unavailable, never zero, and the selection does not jump", async ({ page }) => {
   await installPerchBridge(page, perchFixture({ holds: [perchHold()], daemonUnreachable: true }));
-  await installMockBridge(page, undefined, { enableFeatures: ["perch"] });
   await page.goto("/");
   await expect(page.getByTestId("perch-queue-count-holds")).toContainText("count unavailable");
   await expect(page.getByTestId("perch-queue-holds")).not.toContainText(/all clear|no data|caught up/i);
 });
 ```
 
-(`daemonUnreachable: true` makes the mock module throw `daemon unreachable: connection refused` from `perch_list_holds`.) `perch-queue-lifecycle.spec.ts` is the skeleton file with `installMockBridge(page, undefined, { enableFeatures: ["perch"] })`, `__BUZZ_E2E_*` → `__AMBUSH_E2E_*`, and only tests 01, 03a, 03b, 03c and 07 registered now; the other four are added by the tasks that land their surfaces (02 with `/handoff` in Operator-complete, INV-32's rendered half in Task 26, 05 and 06 with the lane list and empty states First card owns).
+(`daemonUnreachable: true` makes the mock module throw `daemon unreachable: connection refused` from `perch_list_holds`.) `perch-queue-lifecycle.spec.ts` is the skeleton file with `installPerchBridge(page, fixture)`, `__BUZZ_E2E_*` → `__AMBUSH_E2E_*`, and only tests 01, 03a, 03b, 03c and 07 registered now; the other four are added by the tasks that land their surfaces (02 with `/handoff` in Operator-complete, INV-32's rendered half in Task 26, 05 and 06 with the lane list and empty states First card owns).
 
 - [ ] **Step 5: Run.**
 
@@ -7108,7 +7085,7 @@ Expected: green. Hash the lifecycle screenshots if any are captured (`shasum -a 
 - [ ] **Step 6: Commit.**
 
 ```bash
-cd workspace && git add preview-features.json desktop/src desktop/tests desktop/playwright.config.ts
+cd workspace && git add desktop/src desktop/tests desktop/playwright.config.ts
 git commit -s -m "feat(desktop): remap Home into The Watch behind the perch flag with a reconciled holds queue"
 ```
 
@@ -7852,7 +7829,7 @@ Invariants landed with their subjects: INV-01 (19, 20), INV-02 (25), INV-10 (26)
 
 Contradictions in the plan set this plan resolved rather than deferred, each flagged in the summary: the store's crate (`12`/`20` say `swarm-ingest-runtime`, `16`'s skeleton test says `swarm-runtime`; `swarm-runtime` wins because the bridge must hold the store handle without linking the ingest crate, W3-13); the terminal hold card's trigger (`12` §4.7 publishes no `ResponseHeld` on `granted → executed|failed` while `13`'s hold schema requires one terminal card; `decide_hold` publishes `ResponseHeld` on every terminal transition); `HeldActionView` lacking `case_channel` while `14` §7.3.1 builds the leg-1 card's `locator.case_channel` from it (three fields added to the record and the view); the `26006` frame schema id under the rename (`swarm.perch.frame.hold_alarm.v1`); the wire schema's example `key_id: "perch-operator-1"`, which `swarm_crypto::verify_detached_signature` would refuse (the console computes `sha256(pubkey)`); `hold_ttl_ms_by_threat_class` keyed by slug, not `ThreatClass`, because of the `Custom(String)` variant.
 
-Out of this milestone by design: the `swarm:receipt:v1`, `swarm:lease:v1` and `swarm:rollback:v1` presenters (the receipt is in the decide response body and on the terminal hold card's `decision.receipt_id`; the bridge's producer question for the receipt card — `11` §4.2 versus the wire skeleton's `narrowing.rs` dropping `ResponseExecution` — is Operator-complete's to settle), `/handoff` and INV-19's control, B2g-s, `P1-16`'s counters (First card), a Settings card for the daemon base URL and bearer (the env fallback and `perch_configure_daemon` carry the demo).
+Out of this milestone by design: the `swarm:receipt:v1`, `swarm:lease:v1` and `swarm:rollback:v1` presenters (the receipt is in the decide response body and on the terminal hold card's `decision.receipt_id`; the bridge's exhaustive event-to-wire classifier deliberately does not publish `ResponseExecution` as a receipt card, so Operator-complete must name and test the actual producer), `/handoff` and INV-19's control, B2g-s, `P1-16`'s counters (First card), a Settings card for the daemon base URL and bearer (the env fallback and `perch_configure_daemon` carry the demo).
 
 ## Exit criteria
 
@@ -7906,6 +7883,6 @@ Engineer-days (1 engineer-week = 5 days). Rust tasks serialize through the one R
 | 26 Keymap + grant | 6 | the dwell gate is where the time goes |
 | 27 Two-legged write + superseded | 5 | two Playwright specs incl. two contexts |
 | 28 Exit | 3 | the demo run and the gate sweep |
-| **Total** | **93.5 days** | ≈ 18.7 engineer-weeks: 11.9 Rust (Tasks 3–21 engine and Tauri), 6.3 frontend, 0.5 decisions. `20-TASK-BREAKDOWN.md` priced the same scope at 17.75 ew; the difference is the bridge hold path (`P0-19` covered findings only), the relay verification, and the Tauri crate's daemon client, none of which had a card. |
+| **Total** | **94 days** | 18.8 engineer-weeks: 11.8 Rust (Tasks 3–21 engine and Tauri), 6.8 frontend, 0.2 decisions. `20-TASK-BREAKDOWN.md` priced the same scope at 17.75 ew; the difference is the bridge hold path (`P0-19` covered findings only), the relay verification, and the Tauri crate's daemon client, none of which had a card. |
 
 Honest risks to the sizing: Task 13's `classify_execution` rule mapping depends on the exact `rule_name` strings `static_gate.rs` and `configurable_gate.rs` emit and may need a day of reading; Task 26's dwell gate has two timing mechanisms and Playwright timing on CI has cost a day in every comparable feature; Task 2 undecided by the time Task 13 starts costs the voter-binding step and Task 21 in full.

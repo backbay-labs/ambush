@@ -15,7 +15,7 @@ stands as wave 1 wrote it.
 
 | # | File | What it settles | Read it if you are… |
 |---|---|---|---|
-| **00** | [`00-DECISIONS.md`](00-DECISIONS.md) | The four decisions of 2026-09-02 (naming, one repository, whole workspace, runtime mode), the twenty-two amendment rows they force, and the integrator rulings on wave 2's internal contradictions | everyone, first |
+| **00** | [`00-DECISIONS.md`](00-DECISIONS.md) | The four decisions of 2026-09-02 (naming, one repository, whole workspace, runtime mode), the amendment rows they force, and the integrator rulings on wave 2's internal contradictions | everyone, first |
 | **01** | [`01-DESIGN.md`](01-DESIGN.md) | The design as it now stands in one repository: layout, processes, the wire, the two-legged write, the safety spine, error handling, testing — with the deltas from wave 1/2 called out | anyone about to build |
 | **10** | [`10-PLAN-MIGRATION.md`](10-PLAN-MIGRATION.md) | The repository merge, task by task: history rewrite, second Cargo workspace, ignore rules, CI and hook re-rooting, verification | the person doing it today |
 | **11** | [`11-PLAN-GROUND.md`](11-PLAN-GROUND.md) | Ground: the rename, the three file splits, the relay patches re-landed, the CSP pin and sign gate, the dev compose, the operator `nostr_pubkey` | the first engineering milestone |

@@ -116,7 +116,7 @@
 - Test: existing colocated `*.test.mjs` for each file; `workspace/desktop/tests/e2e/` smoke project
 
 **Interfaces:**
-- Produces (MR-2, the seam that First card uses): `MessageBody.tsx` exporting `MessageBody(props: MessageBodyProps)` where `MessageBodyProps` carries `message`, `profiles` (required, per `15` §6.2, so provenance does not silently degrade), and the five render-affecting ranges `15` §4.3 names; a `default:` branch that calls `parseWaveMessageContent` and then markdown, with **one comment line marking where `useSwarmCardSurface()` will be inserted by First card** (`// perch seam: see 12-PLAN-FIRST-CARD.md Task 15`).
+- Produces (MR-2, the seam that First card uses): `MessageBody.tsx` exporting `MessageBody(props: MessageBodyProps)` where `MessageBodyProps` carries `message`, `profiles` (required, per `15` §6.2, so provenance does not silently degrade), and the five render-affecting ranges `15` §4.3 names; a `default:` branch that calls `parseWaveMessageContent` and then markdown, with **one comment line marking where `useSwarmCardSurface()` will be inserted by First card** (`// perch seam: see 12-PLAN-FIRST-CARD.md Task 17`).
 
 - [ ] **Step 1: Re-derive the anchors.** The drafts were cut at `eed74bde2`; re-anchor them against the moved files:
   ```bash
