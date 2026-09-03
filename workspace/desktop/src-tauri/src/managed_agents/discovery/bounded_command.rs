@@ -692,7 +692,7 @@ mod tests {
         );
         let mut cmd = Command::new("/bin/sh");
         cmd.args(["-c", &script]);
-        let result = run_watchdogged(cmd, Duration::from_millis(300), Duration::from_secs(5));
+        let result = run_watchdogged(cmd, Duration::from_secs(2), Duration::from_secs(5));
         assert!(
             result.is_none(),
             "a timed-out probe must fail closed even when an escaped writer holds the pipe"
