@@ -602,11 +602,12 @@ impl HypothesisTaskLedger {
         )
         .map_err(GraphStoreError::Admission)?;
         publication
-            .validate_for_task_at(
+            .validate_for_task_at_with_history(
                 &entry.task,
                 descriptor,
                 &self.limits,
                 snapshot.state().logical_time_high_water,
+                &snapshot.state().hypotheses,
             )
             .map_err(GraphStoreError::Admission)?;
         commit_terminal_once(store, revision, claim, publication)
@@ -1323,15 +1324,16 @@ pub fn commit_terminal_once(
         .validate_for_claim(&entry.task.request)
         .map_err(GraphStoreError::Admission)?;
     publication
-        .validate_for_task_at(
+        .validate_for_task_at_with_history(
             &entry.task,
             descriptor,
             &snapshot.state().limits,
             snapshot.state().logical_time_high_water,
+            &snapshot.state().hypotheses,
         )
         .map_err(GraphStoreError::Admission)?;
     publication
-        .validate_memory_graph_references(&snapshot.state().graph, &snapshot.state().hypotheses)
+        .validate_graph_references(&snapshot.state().graph, &snapshot.state().hypotheses)
         .map_err(GraphStoreError::Admission)?;
     validate_completion_kind(
         entry.task.request.kind,
@@ -1385,6 +1387,7 @@ pub fn commit_terminal_once(
             .map_err(GraphStoreError::Admission)?;
     }
     if let Some(decision) = publication.decision.clone() {
+        let decision_id = decision.decision_id.clone();
         if let Some(link) = &publication.envelope.decision_link {
             match &link.target {
                 TaskTarget::Edge { edge_id } => {
@@ -1428,7 +1431,17 @@ pub fn commit_terminal_once(
         // exact sequenced value in the outbox as well; storing the caller's
         // pre-append sequence-zero value would make reload validation report
         // that the publication is absent from hypothesis history.
-        publication.decision = updated.decision_history.last().cloned();
+        publication.decision = Some(
+            updated
+                .decision_history
+                .iter()
+                .find(|sequenced| sequenced.decision_id == decision_id)
+                .cloned()
+                .ok_or_else(|| GraphStoreError::InvalidState {
+                    reason: "terminal decision disappeared from durable hypothesis history"
+                        .to_string(),
+                })?,
+        );
         next.hypotheses
             .insert(updated.hypothesis_id.clone(), updated);
     }

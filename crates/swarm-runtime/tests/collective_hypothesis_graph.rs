@@ -3745,6 +3745,46 @@ fn decision_terminal_with(
     (envelope, decision)
 }
 
+fn envelope_for_decision(
+    fixture: &DecisionTaskFixture,
+    claim: &swarm_runtime::hypothesis_graph::TaskClaim,
+    decision: &DecisionRecord,
+    completed_at: GraphLogicalTime,
+) -> TaskTerminalEnvelope {
+    let completion_kind = match fixture.request.kind {
+        TaskKind::ChallengeEdge => TaskCompletionKind::EdgeChallenged,
+        TaskKind::FalsifyHypothesis => TaskCompletionKind::HypothesisFalsified,
+        TaskKind::AcquireEvidence => panic!("decision fixture requires a decision task"),
+    };
+    let link = TaskDecisionLink::new(
+        claim.task_id.clone(),
+        fixture.target.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        Some(decision.decision_id.clone()),
+    )
+    .unwrap();
+    TaskTerminalEnvelope::new(
+        claim.task_id.clone(),
+        claim.idempotency_key.clone(),
+        claim.lease_id.clone(),
+        claim.fencing_token,
+        TaskCompletion::new(
+            completion_kind,
+            claim.claimant.clone(),
+            completed_at,
+            [fixture.evidence.evidence_id.clone()],
+            "00".repeat(32),
+        )
+        .unwrap(),
+        Some(link),
+        claim.claimant.clone(),
+        claim.capability_proof.clone(),
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:terminal")
+    .unwrap()
+}
+
 #[test]
 fn terminal_decision_kind_and_time_fail_closed_before_cas() {
     let mut wrong_kind_fixture =
@@ -3936,6 +3976,117 @@ fn challenge_completion_retains_edge_lineage() {
         TaskTarget::Edge {
             edge_id: fixture.edge_id
         }
+    );
+}
+
+#[test]
+fn challenge_completion_rejects_an_unrelated_hypothesis() {
+    let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
+    let claim = claim_decision_task(&mut fixture);
+    let before = fixture.store.snapshot().unwrap();
+    let before_bytes = before.canonical_bytes().unwrap();
+    let decision = DecisionRecord::new(
+        DecisionKind::Challenge,
+        HypothesisId::new("hypothesis:decision-control"),
+        [fixture.evidence.evidence_id.clone()],
+        GraphProducerRole::Challenger,
+        fixture.request.claimant.clone(),
+        GraphLogicalTime::new(200),
+        "unrelated hypothesis must not satisfy an edge challenge",
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:producer")
+    .unwrap();
+    let envelope = envelope_for_decision(&fixture, &claim, &decision, GraphLogicalTime::new(200));
+    assert!(matches!(
+        fixture.ledger.complete_task(
+            &fixture.store,
+            before.revision(),
+            &claim,
+            envelope,
+            vec![fixture.evidence.clone()],
+            Some(decision),
+            None,
+            None,
+        ),
+        Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+            if reason.contains("edge is not claimed by the decision hypothesis")
+    ));
+    assert_eq!(
+        fixture.store.snapshot().unwrap().canonical_bytes().unwrap(),
+        before_bytes
+    );
+}
+
+#[test]
+fn duplicate_terminal_decision_reuses_its_original_sequence() {
+    let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
+    let claim = claim_decision_task(&mut fixture);
+    let duplicate = DecisionRecord::new(
+        DecisionKind::Challenge,
+        fixture.hypothesis_id.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        GraphProducerRole::Challenger,
+        fixture.request.claimant.clone(),
+        GraphLogicalTime::new(150),
+        "decision completed after durable reconciliation",
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:producer")
+    .unwrap();
+    let later = DecisionRecord::new(
+        DecisionKind::Challenge,
+        fixture.hypothesis_id.clone(),
+        [fixture.evidence.evidence_id.clone()],
+        GraphProducerRole::Challenger,
+        fixture.request.claimant.clone(),
+        GraphLogicalTime::new(160),
+        "later independent challenge",
+    )
+    .unwrap()
+    .signed_with(&fixture.claimant_key, "decision:producer")
+    .unwrap();
+    let claimed = fixture.store.snapshot().unwrap();
+    let mut reconciled = claimed.state().clone();
+    let updated = reconciled.hypotheses[&fixture.hypothesis_id]
+        .clone()
+        .append_decision(duplicate.clone())
+        .unwrap()
+        .append_decision(later)
+        .unwrap();
+    reconciled
+        .hypotheses
+        .insert(fixture.hypothesis_id.clone(), updated);
+    reconciled.logical_time_high_water = GraphLogicalTime::new(160);
+    let reconciled = fixture
+        .store
+        .compare_and_swap(claimed.revision(), reconciled)
+        .unwrap();
+    let envelope = envelope_for_decision(&fixture, &claim, &duplicate, GraphLogicalTime::new(200));
+    let completed = fixture
+        .ledger
+        .complete_task(
+            &fixture.store,
+            reconciled.revision(),
+            &claim,
+            envelope,
+            vec![fixture.evidence.clone()],
+            Some(duplicate.clone()),
+            None,
+            None,
+        )
+        .unwrap();
+    let outbox_decision = completed.terminal_outbox()[&claim.task_id]
+        .decision
+        .as_ref()
+        .unwrap();
+    assert_eq!(outbox_decision.decision_id, duplicate.decision_id);
+    assert_eq!(outbox_decision.sequence, 1);
+    assert_eq!(
+        completed.hypotheses()[&fixture.hypothesis_id]
+            .decision_history
+            .len(),
+        2
     );
 }
 
