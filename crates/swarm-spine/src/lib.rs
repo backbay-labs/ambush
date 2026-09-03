@@ -71,12 +71,12 @@ pub use envelope::{
     parse_issuer_pubkey_hex, sign_envelope, verify_envelope,
 };
 pub use hypothesis_graph_store::{
-    ConfiguredHypothesisGraphStore, DurableTaskRecord, FileHypothesisGraphStore, GraphCasEnvelope,
+    ConfiguredHypothesisGraphStore, DurableTaskRecord, FileHypothesisGraphStore,
+    GRAPH_STATE_MIGRATION_CURRENT, GRAPH_STATE_MIGRATION_HYPOTHESES, GRAPH_STATE_MIGRATION_LEGACY,
     GraphStoreError, GraphStoreRevision, GraphStoreSnapshot, GraphStoreState, HypothesisGraphStore,
-    MemoryHypothesisGraphStore, TaskClaimEnvelope, TaskClaimResult, TaskCreationEnvelope,
-    TaskExpiryEnvelope, TaskFailure, TaskFailureEnvelope, TaskMutationResult, TaskReclaimEnvelope,
-    TaskRenewalEnvelope, TaskStore, TaskTerminalClockEnvelope, TaskTerminalOperationKind,
-    TaskTerminalResult, validate_task_failure_envelope, validate_task_logical_identity,
+    MemoryHypothesisGraphStore, ReasoningStateUpdate, SchedulerBudgetPolicy, TaskClaimResult,
+    TaskFailure, TaskMutationResult, TaskStore, TaskTerminalResult,
+    legacy_graph_state_migration_marker, validate_task_logical_identity,
     validate_task_terminal_envelope,
 };
 pub use incident::{

@@ -44,7 +44,7 @@ The context file has no Deferred Ideas heading. Raw-telemetry export, peer-autho
 | HERDMEM-01 | Investigations export typed attack abstractions, causal motifs, detector/response outcomes, and strategy utility without raw telemetry, secrets, host identifiers, or operator credentials. The export schema is versioned and rejects unredacted fields. | Add a separate typed allowlist projection; never serialize ReplayBundle, InvestigationBundle, Sphinx EntityNode/contributions, incidents, or generic evidence views. Use Serde unknown-field rejection and keyed opaque refs. |
 | HERDMEM-02 | Every memory record carries signer/provenance lineage, source-corpus digest, confidence, expiry, and transformation history. Import rejects tampered, replayed, stale, schema-invalid, or privacy-violating records and records the refusal reason. | Put registry-anchored envelope, strict chain/nonce/expiry verification, and durable refusal state in swarm-spine. |
 | HERDMEM-03 | A receiving swarm requires independent local corroboration before using a peer memory for prioritization. No single publisher can raise confidence or authorize containment; conflicting memories remain visible as contradictions. | Tag imported origin separately, join only with local evidence, retain contradiction sets, and keep memory above the policy/response TCB boundary. |
-| HERDMEM-04 | Retrieved memory changes the next investigation's task ordering only when its context matches the current graph and source evidence. The benchmark compares memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage. | Adapt Sphinx/strategy retrieval to a corroboration-gated priority delta and reuse the deterministic replay harness for three isolated arms. |
+| HERDMEM-04 | Retrieved memory changes the next investigation's task ordering only when its context matches the current graph and source evidence. The benchmark compares memory-enabled, single-agent, and no-memory controls on hypothesis time, chain recall, false causal edges, duplicate work, and evidence coverage. | Adapt Sphinx/strategy retrieval to a corroboration-gated priority delta; drive all three arms through Phase 288's Arena-owned `Phase287ArenaSynthesisAdapter` and real Phase 287 Blue bridge, consuming only Runtime-owned `ArenaSynthesisInput`/`ArenaSourceRef` lineage. `DefaultReplayHarness` or a generic replay substitute is not evidence. |
 | HERDMEM-05 | Memory retention, expiry, revocation, poisoning quarantine, and operator deletion are durable and restart-safe. Garbage collection removes expired payloads and dependent indexes without leaving actionable orphan state. | Use a tombstone-first lifecycle ledger, atomic committed generations, restart recovery, registry revocation, and complete dependent-index GC. |
 | HERDMEM-06 | Herd-memory acceptance requires checked-integer time improvement `>= 2,000 bp` or chain-recall improvement `>= 1,000 bp` versus the single-agent control, false-edge `<= 1,000 bp`, duplicate-work `<= 500 bp`, at least one previously unseen evasion across the withheld corpus, and withheld-campaign relative gap `<= 500 bp` versus in-sample. | Add deterministic event/virtual-clock metrics, unseen-evasion accounting, and an evaluator-only held-out corpus digest. |
 </phase_requirements>
@@ -58,6 +58,117 @@ The current producers are too rich to export directly. ReplayBundle, Investigati
 Place typed envelope, registry, chain, refusal, tombstone, and lifecycle primitives in swarm-spine (TCB), and projection, import/quarantine, corroboration, graph matching, task ordering, and benchmark integration in swarm-runtime. Imported memory may only contribute a bounded task-ordering hint. It must never count as local source diversity, authorize confidence, create a receipt, reach policy/response, or bypass approval.
 
 **Primary recommendation:** Build a versioned HerdMemoryEnvelope around a privacy-minimized HerdMemoryBody, verify it against a locally configured and rotatable TrustedHerdIssuerRegistry plus a durable per-stream head/nonce ledger, retain every refusal and contradiction, and expose imports only through corroboration-gated advisory priority.
+
+**Upstream Phase 288 contract (authoritative for this phase):** Phase 289 does not own or recreate
+the bridge. `crates/swarm-arena/src/synthesis_adapter.rs` owns
+`Phase287ArenaSynthesisAdapter`, which runs the real `BlueRuntimeAdapter` and emits the pure
+Runtime DTO `ArenaSynthesisInput` from `crates/swarm-runtime/src/synthesis/arena_input.rs`.
+Every `ArenaSourceRef` carries the closed `ArenaSourceRole` (`BlueOutcome`, `ArenaIngestResult`,
+`Phase286InvestigationCapture`, `ArenaArtifactStore`, `PairReport`, or
+`SignedBlueLearnedState`), schema version, canonical ID, content digest, payload digest, and
+partition digest. The adapter preserves the full signed learned-state envelope and Phase 286
+capture/artifact/pair evidence. Runtime consumes the DTO but never imports `swarm-arena`; any
+benchmark, evaluator, or herd-memory projection must validate these refs against the pinned
+Phase 288 adapter/closure evidence and the Phase 287 exact tuple
+`tactic_id|technique_id|fixture_primitive|order_relation|timing_bucket`. A generic replay harness,
+static fixture, detector-only seam, or second Runtime adapter is not an acceptable upstream
+contract.
+
+## Phase 289 repair contract (2026-08-23)
+
+The upstream closure dependency is executable and external to implementation.
+Before any Phase 289 fixture, compilation, benchmark, or lifecycle operation,
+`tools/check-herd-memory-upstreams.sh --run -- <command>` must be the first
+operation; its internal first step is
+`--require-accepted --locked-tree` and it must
+resolve the exact closure sets:
+
+| upstream | closure summary | independent records | retained canonical evidence |
+|---|---|---|---|
+| Phase 286 | `.planning/phases/286-collective-hypothesis-graph/286-07B-SUMMARY.md` | `286-P0-P2-REVIEW.md`, `286-VERIFICATION.md` | `artifacts/phase286/collective-report-one.json` plus its recomputed digest |
+| Phase 287 | `.planning/phases/287-adversarial-co-evolution-arena/287-06-SUMMARY.md` | `287-P0-P2-REVIEW.md`, `287-VERIFICATION.md`, `287-VALIDATION.md` | `artifacts/phase287/final-gate/arena-report.json`, `arena-lineage.json`, and `final-gate-evidence.json`, with the recomputed report/newline/lineage digest |
+| Phase 288 | `.planning/phases/288-autonomous-detector-response-synthesis/288-07-SUMMARY.md` | `288-P0-P2-REVIEW.md`, `288-VERIFICATION.md`, `288-VALIDATION.md` | `artifacts/synthesis/run-1/manifest.json`, `arena-report.signed.json`, `synthesis-packet.signed.json`, `controls.json`, and `pair-report-view.json`, with its `phase287_evidence_digest`/frozen-tree digest |
+
+The gate requires regular non-symlink files, complete status, exact one-to-one
+task/requirement/artifact rows, exactly one anchored zero for each P0/P1/P2,
+distinct reviewer/implementer, reviewed `HEAD` and `HEAD^{tree}`, and
+recomputed canonical SHA-256 evidence. The Phase 286 validation ledger by
+itself is explicitly insufficient. Missing, partial, path-only, planned,
+pending, substituted, stale, dirty, or untracked evidence fails closed. Once
+the gate passes it resolves the actual Phase 287 adapter/runtime DTO/Cargo
+membership/corpus and Phase 288 runtime-contract/source/tree/evidence digests;
+Phase 289 may not guess paths or precompute placeholder hashes.
+The accepted result is retained only at
+`artifacts/phase289/upstream-prerequisite-gate.json`; later plans must consume
+that record and re-run the executable gate, never infer acceptance from the
+pin file or a path-only summary.
+
+The detached lineage contract is typed and complete. `ArenaLineage` contains
+adapter artifact, Runtime DTO, Cargo membership, corpus, detached source digest,
+six source-role refs (each with role/schema/canonical-ID/content/payload/
+partition digests), plus a selected source ref and detached aggregate source
+digest, capture, receipt, preview, rollback, and
+`SignedStateExpectation`. The latter
+contains kind, signer, stream, sequence, generation, predecessor, fence,
+schema, signature, payload, content, capture, receipt, preview, and rollback.
+Each role/schema/canonical ID/content/payload/partition, the selected source and
+aggregate source digest, and each signed-state field is independently mutated
+and rejected before projection/export/import or
+evaluator scoring. Raw telemetry, host IDs, secrets, and withheld cases cannot
+be represented in this detached manifest.
+
+Import and export use one atomic lifecycle coordinator under
+`lifecycle OS lock -> registry lock`. The import API verifies and imports in
+one CAS with registry generation/epoch/nonce/head revalidation. The export API
+is `prepare_export`/`commit_export` and persists generation, predecessor, source
+high-water, nonce, fence, and digest-only crash journal; recovery turns an
+orphan reservation into durable refusal/retry state. Memory and file backends
+must have identical canonical operation-log state. The durable lifecycle
+snapshot authenticates schema, domain, trusted issuer root anchor, registry
+generation, epoch, predecessor, source high-water, nonce ledger, fence, state
+digest, and signature. Root-anchor custody/provisioning is owner-only,
+create-new, no-follow, fsync/rename/parent-sync, and mutations of scope,
+schema, domain, epoch, rotation, revocation, replacement, and forgery fail.
+
+The issuer root is independently authenticated by an external root public-key
+digest and out-of-band custody. Its canonical subject excludes self digest and
+signature fields, and root-signed anchor/rotation/revocation statements form a
+generation chain; a self-carried legacy self-key signature cannot authenticate
+itself. Export signing is a separate config-bound `HerdMemoryExportSigner`
+private-key custody, distinct from the HMAC `FileOpaqueKeyProvider`; callers
+cannot supply a signer or raw key, and root/scope/domain/schema/epoch/rotation/
+revocation are rechecked at commit.
+
+The public byte boundary is bounded `deserialize_and_import(&[u8])`; it checks
+size before parse, rejects duplicate/unknown/noncanonical/trailing data, uses
+typed deny-unknown decoding, and persists refusal without exposing a typed
+envelope bypass. `TaskOrderHint` uses `BTreeSet<Digest64>` and `Digest64`, never
+String or generic maps.
+
+The evaluator corpus/resolver is physically isolated in a separate
+`tools/herd-memory-evaluator` process mounted from a CI secret. Candidate code
+receives only a public corpus version/digest and an opaque one-shot handle; the
+separately signed/pinned evaluator bundle and root live outside the candidate
+tree. Authenticated IPC request/response messages and a typed
+`SignedFreezeReceipt` bind evaluator root, artifact digest, process nonce,
+issuance/freeze/lineage, export generation, and expiry. The process protocol
+returns only issuance ID, aggregate result digest, unseen count, and withheld
+gap. Fresh per-process issuance IDs and signed freeze receipts prevent
+reuse/replay and tests assert no path/content/key/FD/env/log leakage. The typed control table runs all three arms through the real Phase 288
+candidate/`empty_frozen` path with identical campaign/fixture/partition/source/
+clock/scheduler inputs, distinct arm provenance, measurable imported advisory
+effect, and no scorer-only or duplicate replay.
+
+Final review assignment/provenance is root-signed and out-of-band; the
+implementer cannot author reviewer results or root evidence. Final review
+freezes an explicit allowlist and canonical sorted
+`path\0blob_sha256\0mode\n` tree manifest, binds `HEAD^{tree}` and rejects
+dirty/untracked/out-of-allowlist files. The sole root helper
+`tools/sha256-root.sh` emits unprefixed lowercase 64-hex output and has a
+format test. A parser recomputes severity and requires exactly one structured
+row for every task, HERDMEM requirement, `must_haves` artifact, upstream pin,
+arm, and control; missing/duplicate/mismatched rows and implementer-authored
+reviewer results fail closed.
 
 ## Standard Stack
 
@@ -86,7 +197,7 @@ Place typed envelope, registry, chain, refusal, tombstone, and lifecycle primiti
 
 **Installation:** No new dependency is needed. Reuse workspace dependencies and Cargo.lock.
 
-**Version verification:** These versions are from Cargo.lock on 2026-08-21. Run <code>cargo metadata --locked --format-version 1 --no-deps</code> before implementation and preserve the checked-in resolution unless a deliberate protocol review changes it.
+**Version verification:** These versions are from Cargo.lock on 2026-08-21. Run <code>cargo metadata --locked --offline --format-version 1 --no-deps</code> before implementation and preserve the checked-in resolution unless a deliberate protocol review changes it.
 
 ## Architecture Patterns
 
@@ -97,6 +208,8 @@ crates/swarm-core/src/config/state.rs       # Herd scope/epoch/TTL/registry conf
 crates/swarm-spine/src/herd_memory.rs       # Typed body/envelope/registry/chain/lifecycle
 crates/swarm-spine/tests/herd_memory_negative.rs
 crates/swarm-runtime/src/herd_memory.rs    # Projection/import/corroboration/advisory adapter
+crates/swarm-runtime/src/synthesis/arena_input.rs # Runtime-owned pure ArenaSynthesisInput DTO
+crates/swarm-arena/src/synthesis_adapter.rs # Phase287ArenaSynthesisAdapter; sole concrete bridge producer
 crates/swarm-runtime/src/sphinx_agent.rs    # Call safe projection; never export raw graph nodes
 crates/swarm-runtime/src/strategy.rs       # Imported origin and context-gated score adapter
 crates/swarm-runtime/tests/herd_memory_integration.rs
@@ -147,7 +260,7 @@ Accepted payload, indexes, per-stream head, nonce ledger, refusal report, quaran
 
 ### Pattern 5: Deterministic three-arm/withheld evaluation
 
-Run memory-enabled, single-agent, and no-memory arms through the same seeded replay/investigation path, scheduler, virtual clock, and in-sample corpus. Use event count or virtual time for hypothesis time. Persist seed, corpus digests, memory-set digest, scheduler, and gate inputs. Load held-out scenarios only in the evaluator after export/calibration and reject contamination. Keep wall-clock observations non-gating, as existing ReplayEvaluationObservation does.
+Run memory-enabled, single-agent, and no-memory arms through the same Phase 287 Blue bridge by invoking Phase 288's Arena-owned `Phase287ArenaSynthesisAdapter`, then pass the resulting Runtime-owned `ArenaSynthesisInput` to the benchmark scorer. Preserve identical seeded campaigns, scheduler, virtual clock, in-sample corpus, source refs, and signed-state lineage; no `DefaultReplayHarness`, generic replay, detector-only shortcut, or Runtime-to-Arena dependency may stand in for the bridge. Use event count or virtual time for hypothesis time. Persist seed, corpus digests, memory-set digest, scheduler, and gate inputs. Load held-out scenarios only in the evaluator after export/calibration and reject contamination. Keep wall-clock observations non-gating, as existing ReplayEvaluationObservation does.
 
 ### Anti-patterns to avoid
 
@@ -173,7 +286,7 @@ Run memory-enabled, single-agent, and no-memory arms through the same seeded rep
 | Schema rejection | Broad Value filter/redaction | Typed structs plus deny_unknown_fields and negative fixtures | New fields fail closed. |
 | Cleanup | remove_file plus index rewrite | Tombstone-first atomic generation/recovery | Prevents orphan/resurrection state. |
 | Corroboration | Count signatures/records | Independent local evidence producer set | Same publisher is not independent evidence. |
-| Benchmark | Synthetic score or one arm | Existing replay harness with three arms and held-out digest | Tests production path and generalization. |
+| Benchmark | Synthetic score or one arm | Phase288 Arena-owned `Phase287ArenaSynthesisAdapter` -> real Phase287 Blue bridge -> Runtime `ArenaSynthesisInput`, with three arms and held-out digest | Tests the production bridge, typed lineage, and generalization. |
 
 ## Common Pitfalls
 
@@ -234,10 +347,10 @@ Existing replay code correctly stores wall-clock latency as non-gating observati
 #[serde(deny_unknown_fields)]
 pub struct OpaqueEntityRef {
     pub kind: OpaqueEntityKind,
-    pub ref_digest: String,
+    pub ref_digest: Digest64,
     pub key_epoch: u64,
-    pub tenant_scope_digest: String,
-    pub export_namespace_digest: String,
+    pub tenant_scope_digest: Digest64,
+    pub export_namespace_digest: Digest64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,13 +396,13 @@ Construct the wire reference before dropping normalized; raw normalized values m
 ### Verification order
 
 ~~~rust
-fn verify_import(
+fn verify_import_locked(
     envelope: &HerdMemoryEnvelope,
     scope: &ReceiverScope,
     registry: &TrustedHerdIssuerRegistry,
-    state: &HerdMemoryState,
+    state: &mut HerdMemoryState,
     now_ms: i64,
-) -> Result<VerifiedHerdMemory, HerdMemoryRefusal> {
+) -> Result<HerdMemoryImportTicket, HerdMemoryRefusal> {
     envelope.validate_schema_and_bounds()?;
     scope.check(envelope.tenant_id, envelope.receiver_swarm_id, envelope.epoch)?;
     let issuer = registry.active_key(
@@ -311,12 +424,20 @@ fn verify_import(
     if state.nonce_seen(envelope.issuer_key_id, envelope.nonce) {
         return Err(HerdMemoryRefusal::Replay);
     }
-    state.verify_strict_head(envelope)?;
-    Ok(VerifiedHerdMemory::from(envelope.clone()))
+    let reservation = state.reserve_nonce_and_head(envelope)?;
+    let ticket = HerdMemoryImportTicket::new(envelope, reservation)?;
+    // The caller keeps the same lifecycle lock while re-reading all anchors.
+    state.revalidate_generation_epoch_nonce_and_head(&ticket)?;
+    state.commit_verify_and_import(ticket)
 }
 ~~~
 
-Signature success is not authorization; refusal and accepted state must be persisted.
+`HerdMemoryImportTicket` is private, non-serializable, non-debug, non-cloneable,
+and single-use. The coordinator consumes it in the same locked CAS that writes
+accepted payload/status/head/nonce/index state; a generation, epoch, revocation,
+nonce, or head change returns a durable typed refusal and commits no payload.
+Signature success is not authorization; refusal and accepted state must be
+persisted.
 
 ### Corroboration-gated ordering
 
@@ -339,7 +460,13 @@ fn learned_priority_delta(
 
 The returned value is a task ordering hint, never a policy verdict or permit.
 
-## Plan-Sized Work Decomposition
+## Historical Plan-Sized Work Decomposition (non-authoritative)
+
+The decomposition below is retained as the initial research sketch only. Its
+wave labels and prose are not executable ownership or dependency instructions;
+the current `*-PLAN.md` files, `289-VALIDATION.md`, and the accepted Wave 0
+gate are authoritative. Do not copy commands, paths, or implementation
+boundaries from this historical section into closure evidence.
 
 ### Wave 0: Contract and fixtures
 
@@ -367,7 +494,7 @@ The returned value is a task ordering hint, never a policy verdict or permit.
 
 ### Wave 4: Evaluation and acceptance
 
-- Run memory-enabled, single-agent, and no-memory arms through the production replay/investigation path with fixed seeds and in-sample digest.
+- Run memory-enabled, single-agent, and no-memory arms through the Phase 288 Arena-owned `Phase287ArenaSynthesisAdapter` and real Phase 287 Blue bridge, with fixed seeds, typed `ArenaSynthesisInput` lineage, and in-sample digest.
 - Report hypothesis time, chain recall, false edges, duplicate work, evidence coverage, unseen evasion, and input digests.
 - Evaluate held-out only after export/calibration; enforce the HERDMEM-06 thresholds and preserve machine-readable evidence.
 
@@ -397,43 +524,96 @@ The returned value is a task ordering hint, never a policy verdict or permit.
 
 ## Validation Architecture
 
+> **Historical, non-authoritative examples.** The commands and file-existence
+> rows in this research section describe the initial research state only; they
+> are not execution gates and may contain pre-repair broad filters or stale
+> paths. The authoritative commands are the `<automated>` fields in the
+> Phase 289 plans and `289-VALIDATION.md`, all of which use the Wave 0 upstream
+> prerequisite gate plus `--locked --offline` and exact filters where required.
+
+### Research update graph and authority
+
+This research document is a historical input, not an executable source of
+truth. The authoritative update graph is:
+
+```text
+289-00W-PLAN.md (gate + --run wrapper + root helper)
+        -> 289-00-PLAN.md (public truth, immutable allowlist, exact matrix)
+        -> 289-01..289-06-PLAN.md (typed implementation contracts/tests)
+        -> 289-07-PLAN.md + 289-VALIDATION.md + 289-P0-P2-REVIEW.md + 289-VERIFICATION.md
+```
+
+The pre-repair Test Framework, Existing controls, Phase Requirements to Test
+Map, Sampling Rate, and Wave 0 Gaps sections below are historical examples;
+their commands, paths, filters, and File Exists values must never be copied
+into execution or closure evidence. When they disagree with a plan, the
+plan's `<automated>` command wins; when a plan disagrees with current upstream
+closure, the accepted Wave 0 gate and typed pins win. Update this graph only by
+editing plan/validation artifacts, never by silently reinterpreting stale
+research commands.
+
+### Current resolved planning table (authoritative)
+
+The following table resolves the research sketch into the current plan-owned
+contracts. It is the only research summary that may be used to reconcile plan
+ownership; the historical tables below remain explicitly non-authoritative and
+retain truthful `No — Wave 0`/pending existence cells.
+
+| owner | resolved contract and handoff | exact proof or gate |
+|---|---|---|
+| `289-00W` | Tools-only prerequisite: execute the external closure gate first, retain `artifacts/phase289/upstream-prerequisite-gate.json`, and own the sole root SHA-256 helper. It resolves actual Phase 286 07B, Phase 287 06, and Phase 288 07 closure/review/validation/tree/evidence records before any fixture or implementation work. | `bash tools/check-herd-memory-upstreams.sh --require-accepted --locked-tree`; all later commands use `bash tools/check-herd-memory-upstreams.sh --run -- ...`; missing/partial/path-only evidence fails closed. |
+| `289-00` | Plan-owned public truth: immutable frozen-tree allowlist, typed `ArenaLineage`/`SignedStateExpectation` with six unique roles and complete signed-state fields, `ArenaContractPins`, canonical `Digest64`/typed IDs, three-arm truth, exact eight-file Phase 287 corpus inventory plus `oracle-registry.json` cardinality/aggregate manifest digest, and `herd-memory-metrics-v1` names/formula IDs. It consumes resolved pins and never invents upstream or withheld values. | `allowlist_oracle_rejects_nested_privacy_fields`; `phase287_corpus_inventory_is_exactly_eight_files`; `sha256_root_output_is_unprefixed_lowercase_64_hex`; all lineage/digest/self-field mutations fail before scoring. |
+| `289-01`, `289-01B`, `289-01C` | Config, privacy body, and config-bound opaque reference provider. Raw telemetry/host IDs/secrets/credentials/authority fields are schema-prohibited; HMAC entity references are not signing authority. | `herd_memory_config_contract`; `typed_body_rejects_unknown_and_prohibited_fields`; `file_provider_bootstrap_requires_secure_root`; `factory_requires_config_bound_file_provider`. |
+| `289-02` | TCB trust: resolver-only private `ExternalRootKeyPin`/`ResolvedExternalRootKey`, bytes-only `NeutralSignatureBytes`, explicit externally keyed `verify(subject, signature)`, opaque config-bound `HerdMemoryRootVerifier` facade, root-signed issuer/rotation/revocation, strict scope/epoch/nonce/head, and private raw-byte decode token. No embedded/self-key verifier can authenticate itself. | `registry_rotation_requires_continuity_and_scope`; `registry_restart_preserves_rotation_and_revocation_history`; root subject/key/path/custody/replacement and unknown/duplicate/noncanonical/oversize mutations fail closed. |
+| `289-03` | One config-owned lifecycle handle/store/clock/lock authority. Import is one verify-and-import CAS; export is `prepare_export`/`commit_export` with root-signed `ExportSignerAnchor` and a distinct self-field-excluded lifecycle export subject, generation/predecessor/source-highwater/nonce/fence journal, recovery, crash/concurrency/revocation races, and memory/file parity. | `export_signer_requires_config_bound_custody`; `export_anchor_root_subject_excludes_anchor_self_fields`; `lifecycle_export_subject_excludes_snapshot_self_fields`; `verify_and_import_rejects_crash_revocation_epoch_and_concurrent_same_head`; no public store, clock, candidate, token, signer, or verified-value bypass. |
+| `289-04` | Runtime allowlist projection consumes only the Arena-owned Phase 287 adapter and Runtime-owned Phase 288 `ArenaSynthesisInput`; Runtime has no CampaignStage conversion, tuple constructor, or fingerprint type. Its Arena-side contract is owned by 289-06 in the existing adapter seam, with literal five-scalar bytes, Phase 287 golden-vector equality, per-tuple digests, sorted `phase_287_known_evasion_set_sha256`, and derived attribution outside the tuple digest but inside authenticated ArenaLineage. Export routes only to the lifecycle reservation pair. | `arena_synthesis_input_accepts_phase287_lineage_and_phase288_adapter_evidence`; `projection_serialization_rejects_authority_and_raw_fields`. |
+| `289-05` | Runtime importer exposes only bounded `deserialize_and_import(&[u8])`, forwards to the handle, and gates advisory ordering on graph/source match plus independent local corroboration. Withheld records, candidate envelopes/tokens, stores, and clocks are not public injection seams. | `restart_revocation_and_quarantine_remove_actionable_memory`; `imported_memory_cannot_reach_response_authority`; poisoning/quarantine/contradiction/revocation/delete/restart mutations retain only typed durable review state. |
+| `289-06` | Deterministic real-bridge three-arm table: `memory_enabled`, `single_agent`, and `no_memory` share candidate/`empty_frozen`, inputs, scheduler, source lineage, and clock but have distinct provenance; imported advisory effect is measurable. The existing Arena adapter seam owns exhaustive CampaignStage conversion, exact literal bytes/golden vector, per-tuple digest, sorted known-set aggregate, and derived authenticated attribution; a separate evaluator process owns private tuple/record/aggregate/fingerprint types and emits only signed aggregate results. One canonical authenticated IPC schema carries signed wire `issuance_id` copies while the private capability remains non-serializable. | `three_arms_use_real_blue_bridge_and_preserve_typed_lineage`; `phase287_campaign_stage_conversion_is_exhaustive`; `phase287_tuple_golden_vector_matches_upstream`; `phase287_known_set_aggregate_digest_is_sorted_and_pinned`; `phase287_attribution_is_derived_from_authenticated_source`; `three_arms_emit_identical_input_digests`; `evidence_coverage_formula_zero_and_rounding_are_exact`; canonical metric names and `evidence_coverage_formula_id` are parser-enforced. |
+| `289-07` plus review/verification | Two-scope/two-freeze closure: candidate/public Scope A emits a root-signed `CandidateFreezeReceipt` binding the one lineage/tree/allowlist/export-anchor/generation digest set; evaluator Scope B then receives a fresh authenticated capability, and independent root-signed reviewer assignment/provenance follows. `ReviewRootArtifactKind` and private authenticated `VerifiedReviewProvenance` distinguish assignment/result records. Review parser recomputes severity and requires one row for every task, requirement, artifact, upstream pin, arm, and control; root/validation/bridge subjects are structured catalog entries within the 84 rows. | `independent_closure_artifact_mutations_fail_closed`, exact CI wiring, frozen `HEAD^{tree}`/dirty/untracked checks, and 84-row/cardinality/arithmetic validation. |
+
+All current plan commands are `--locked --offline` (except native rustfmt's
+flagless `cargo fmt -- --check`) and all non-Wave-0 task commands begin with the
+mandatory wrapper. This table describes planned contracts only: it does not
+turn any future file into an existing artifact or change the validation
+document's pre-execution false cells.
+
 The project config explicitly sets workflow.nyquist_validation to true, so validation planning is required.
 
-### Test Framework
+### Historical Test Framework (non-authoritative)
 
 | Property | Value |
 |----------|-------|
 | Framework | Rust built-in test harness with test and tokio::test |
 | Config file | Cargo.toml workspace; no separate runner |
-| Quick run command | <code>cargo test -p swarm-spine --lib herd_memory</code> or <code>cargo test -p swarm-runtime --lib herd_memory</code> |
-| Full suite command | <code>cargo test --workspace</code> |
+| Quick run command | <code>cargo test -p swarm-spine --lib herd_memory --locked --offline</code> or <code>cargo test -p swarm-runtime --lib herd_memory --locked --offline</code> |
+| Full suite command | <code>cargo test --workspace --locked --offline</code> |
 
-### Existing controls
+### Historical Existing Controls (non-authoritative)
 
-- <code>cargo test -p swarm-spine --lib envelope::tests</code> covers generic envelope roundtrip and tampered fact rejection.
-- <code>cargo test -p swarm-spine --test negative_envelope_and_chain</code> covers missing issuer/signature/hash, forged issuer, malformed key/signature, replay, fork, sequence, predecessor, and cross-issuer splice mutations.
+- <code>cargo test -p swarm-spine --lib envelope::tests --locked --offline</code> covers generic envelope roundtrip and tampered fact rejection.
+- <code>cargo test -p swarm-spine --test negative_envelope_and_chain --locked --offline</code> covers missing issuer/signature/hash, forged issuer, malformed key/signature, replay, fork, sequence, predecessor, and cross-issuer splice mutations.
 - Sphinx restart/tamper/replay tests in swarm-runtime preserve local snapshot behavior but do not prove peer registry/nonce/expiry/tombstone safety.
 - Strategy sparse-memory and latency-invariance tests preserve the advisory/deterministic score boundary.
 - Generic evidence verification tests must remain separate from herd privacy export.
 
-### Phase Requirements to Test Map
+### Historical Phase Requirements to Test Map (non-authoritative)
 
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |-------------|----------|-----------|-------------------|--------------|
-| HERDMEM-01 | Allowlist exports only typed abstractions/motifs/outcomes/utility; prohibited and unknown fields fail, including nested values | unit + negative serialization | <code>cargo test -p swarm-spine --lib herd_memory_export_rejects_privacy_violation</code> | No — Wave 0, new herd_memory module |
-| HERDMEM-02 | Registry signature/content/provenance/scope/time/nonce/strict chain checks; tamper/replay/stale/schema/privacy refusal persists | unit + integration | <code>cargo test -p swarm-spine --test herd_memory_negative</code> | No — Wave 0, new integration test |
-| HERDMEM-03 | Imported memory cannot count as corroboration/diversity or authorize; context and local evidence gate ordering; conflicts remain visible | integration + authority negative | <code>cargo test -p swarm-runtime --test herd_memory_integration corroboration_and_conflicts</code> | No — Wave 0 |
-| HERDMEM-04 | Matching graph/source evidence alone changes ordering; three arms report all required metrics | deterministic integration/benchmark | <code>cargo test -p swarm-runtime --test herd_memory_benchmark ordering_requires_context</code> | No — Wave 0 |
-| HERDMEM-05 | Expiry, rotation, revocation, quarantine, tombstone/delete, GC, indexes, and restart recover without actionable orphan | restart/fault integration | <code>cargo test -p swarm-runtime --test herd_memory_integration lifecycle_survives_restart</code> | No — Wave 0 |
-| HERDMEM-06 | Checked-integer `>=2,000 bp` time OR `>=1,000 bp` recall; false-edge `<=1,000 bp`; duplicate-work `<=500 bp`; unseen evasion; withheld relative gap `<=500 bp` | benchmark gate | <code>cargo test -p swarm-runtime --test herd_memory_benchmark acceptance_gate</code> | No — Wave 0 |
+| HERDMEM-01 | Allowlist exports only typed abstractions/motifs/outcomes/utility; prohibited and unknown fields fail, including nested values | unit + negative serialization | <code>cargo test -p swarm-spine --lib herd_memory_export_rejects_privacy_violation --locked --offline</code> | No — Wave 0, new herd_memory module |
+| HERDMEM-02 | Registry signature/content/provenance/scope/time/nonce/strict chain checks; tamper/replay/stale/schema/privacy refusal persists | unit + integration | <code>cargo test -p swarm-spine --test herd_memory_negative --locked --offline</code> | No — Wave 0, new integration test |
+| HERDMEM-03 | Imported memory cannot count as corroboration/diversity or authorize; context and local evidence gate ordering; conflicts remain visible | integration + authority negative | <code>cargo test -p swarm-runtime --test herd_memory_integration corroboration_and_conflicts --locked --offline</code> | No — Wave 0 |
+| HERDMEM-04 | Matching graph/source evidence alone changes ordering; three arms report all required metrics | deterministic integration/benchmark | <code>cargo test -p swarm-runtime --test herd_memory_benchmark ordering_requires_context --locked --offline</code> | No — Wave 0 |
+| HERDMEM-05 | Expiry, rotation, revocation, quarantine, tombstone/delete, GC, indexes, and restart recover without actionable orphan | restart/fault integration | <code>cargo test -p swarm-runtime --test herd_memory_integration lifecycle_survives_restart --locked --offline</code> | No — Wave 0 |
+| HERDMEM-06 | Checked-integer `>=2,000 bp` time OR `>=1,000 bp` recall; false-edge `<=1,000 bp`; duplicate-work `<=500 bp`; unseen evasion; withheld relative gap `<=500 bp` | benchmark gate | <code>cargo test -p swarm-runtime --test herd_memory_benchmark acceptance_gate --locked --offline</code> | No — Wave 0 |
 
-### Sampling Rate
+### Historical Sampling Rate (non-authoritative)
 
 - Per task commit: focused spine/runtime herd tests plus the relevant existing negative control.
-- Per wave merge: <code>cargo test -p swarm-spine --lib && cargo test -p swarm-runtime --lib herd_memory && cargo test -p swarm-runtime --test herd_memory_integration</code>.
+- Per wave merge: <code>cargo test -p swarm-spine --lib --locked --offline && cargo test -p swarm-runtime --lib herd_memory --locked --offline && cargo test -p swarm-runtime --test herd_memory_integration --locked --offline</code>.
 - Phase gate: full workspace suite, deterministic three-arm benchmark, and held-out evaluator green before verification.
 
-### Wave 0 Gaps
+### Historical Wave 0 Gaps (non-authoritative)
 
 - New swarm-spine herd_memory module with body/envelope/registry/head/nonce/refusal/tombstone and unit tests.
 - New swarm-spine herd_memory_negative integration test.
@@ -474,7 +654,7 @@ The project config explicitly sets workflow.nyquist_validation to true, so valid
 
 ### Secondary (MEDIUM confidence)
 
-- Phase 286, 287, and 288 context files — upstream graph, adversarial, synthesis, replay, and withheld contracts consumed by Phase 289.
+- Phase 286, 287, and 288 context/plan/validation files — upstream graph, adversarial, and synthesis contracts consumed by Phase 289, including the Arena-owned adapter and Runtime-owned DTO paths above.
 
 ### Tertiary (LOW confidence)
 

@@ -26,10 +26,12 @@ use std::sync::{
 #[cfg(test)]
 use std::time::Duration;
 use swarm_core::hypothesis_graph::{
-    EvidenceWitness, FencingToken, GraphAdmissionError, GraphId, GraphLogicalTime,
-    GraphResourceLimits, HYPOTHESIS_GRAPH_SCHEMA_VERSION, HypothesisGraph, IdempotencyKey, LeaseId,
-    TaskCapabilityProof, TaskClaimRequest, TaskId, TaskLease, TaskRecord, TaskState,
-    TaskTerminalEnvelope, TaskTerminalProof, derive_logical_task_id,
+    ConfidenceDistribution, EvidenceWitness, FencingToken, GraphAdmissionError, GraphId,
+    GraphLogicalTime, GraphResourceLimits, HYPOTHESIS_GRAPH_SCHEMA_VERSION, Hypothesis,
+    HypothesisGraph, HypothesisId, LeaseId, LogicalTaskDescriptor, SchedulerBudget,
+    TaskCapabilityProof, TaskClaimRequest, TaskCompletion, TaskId, TaskKind, TaskLease, TaskRecord,
+    TaskState, TaskTarget, TaskTerminalEnvelope, TaskTerminalOutboxEntry, TaskTerminalProof,
+    UncertaintyReason, derive_logical_task_id,
 };
 use swarm_core::types::AgentId;
 use swarm_crypto::{
@@ -37,6 +39,108 @@ use swarm_crypto::{
 };
 
 pub const GRAPH_STORE_SCHEMA_VERSION: u32 = 1;
+pub const GRAPH_STATE_MIGRATION_LEGACY: u32 = 0;
+pub const GRAPH_STATE_MIGRATION_HYPOTHESES: u32 = 1;
+pub const GRAPH_STATE_MIGRATION_CURRENT: u32 = GRAPH_STATE_MIGRATION_HYPOTHESES;
+
+pub const fn legacy_graph_state_migration_marker() -> u32 {
+    GRAPH_STATE_MIGRATION_LEGACY
+}
+
+fn default_graph_state_migration_marker() -> u32 {
+    GRAPH_STATE_MIGRATION_LEGACY
+}
+
+fn default_graph_limits() -> GraphResourceLimits {
+    GraphResourceLimits::default()
+}
+
+fn skip_default_graph_limits(value: &GraphResourceLimits) -> bool {
+    value == &GraphResourceLimits::default()
+}
+
+/// Deployment-owned scheduler ceilings for a graph-store stream.
+///
+/// `SchedulerBudget` is persisted data supplied by an application boundary;
+/// it is not the authority for its own ceilings.  A store keeps this policy
+/// separately and requires every authenticated budget to carry the exact
+/// configured pair before accepting or reloading a reasoning generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchedulerBudgetPolicy {
+    max_work_units: u32,
+    max_claims: u16,
+}
+
+impl SchedulerBudgetPolicy {
+    pub fn new(max_work_units: u32, max_claims: u16) -> Result<Self, GraphAdmissionError> {
+        let policy = Self {
+            max_work_units,
+            max_claims,
+        };
+        if max_work_units == 0 || max_work_units > SchedulerBudget::MAX_WORK_UNITS {
+            return Err(GraphAdmissionError::InvalidLimit {
+                field: "scheduler.max_work_units_per_tick".to_string(),
+                reason: format!("must be between 1 and {}", SchedulerBudget::MAX_WORK_UNITS),
+            });
+        }
+        if max_claims == 0 || max_claims > SchedulerBudget::MAX_CLAIMS {
+            return Err(GraphAdmissionError::InvalidLimit {
+                field: "scheduler.max_claims_per_tick".to_string(),
+                reason: format!("must be between 1 and {}", SchedulerBudget::MAX_CLAIMS),
+            });
+        }
+        Ok(policy)
+    }
+
+    pub fn from_config(
+        config: &swarm_core::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphAdmissionError> {
+        config.validate_reasoning_limits()?;
+        Self::new(config.max_work_units_per_tick, config.max_claims_per_tick)
+    }
+
+    pub const fn global() -> Self {
+        Self {
+            max_work_units: SchedulerBudget::MAX_WORK_UNITS,
+            max_claims: SchedulerBudget::MAX_CLAIMS,
+        }
+    }
+
+    pub const fn max_work_units(&self) -> u32 {
+        self.max_work_units
+    }
+
+    pub const fn max_claims(&self) -> u16 {
+        self.max_claims
+    }
+
+    /// Stable policy identity used in diagnostics and contract tests.
+    pub const fn identity(&self) -> (u32, u16) {
+        (self.max_work_units, self.max_claims)
+    }
+
+    fn validate_budget(&self, budget: &SchedulerBudget) -> Result<(), GraphStoreError> {
+        if budget.max_work_units != self.max_work_units || budget.max_claims != self.max_claims {
+            return Err(GraphStoreError::InvalidState {
+                reason: format!(
+                    "scheduler budget policy identity {:?} does not match configured store policy {:?}",
+                    (budget.max_work_units, budget.max_claims),
+                    self.identity()
+                ),
+            });
+        }
+        budget
+            .validate_with_limits(self.max_work_units, self.max_claims)
+            .map_err(GraphStoreError::Admission)
+    }
+}
+
+impl Default for SchedulerBudgetPolicy {
+    fn default() -> Self {
+        Self::global()
+    }
+}
+
 pub const GRAPH_STORE_STATE_KIND: &str = "collective_hypothesis_graph";
 pub const GRAPH_STORE_STATE_FILE: &str = "state.json";
 pub const GRAPH_STORE_LOCK_FILE: &str = "state.lock";
@@ -158,6 +262,15 @@ impl DurableTaskRecord {
                     reason: "task history contains another task ID".to_string(),
                 });
             }
+            if !matches!(
+                prior.state,
+                TaskState::Completed | TaskState::Failed | TaskState::Expired
+            ) || prior.lease.is_some()
+            {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "task history must contain only terminal, unleased records".to_string(),
+                });
+            }
         }
         if self.task.request.task_id.as_str().trim().is_empty() {
             return Err(GraphStoreError::InvalidState {
@@ -193,10 +306,26 @@ pub struct TaskMonotonicity {
     pub terminal_state: Option<TaskState>,
     pub request_digest: String,
     pub task_digest: String,
+    /// Digest of the complete retained wrapper history.  This is omitted on
+    /// legacy v0 tombstones so their authenticated wire bytes remain exact;
+    /// newly admitted reasoning tasks bind it in their tombstone.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub history_digest: String,
 }
 
 impl TaskMonotonicity {
-    fn from_record(record: &DurableTaskRecord) -> Result<Self, GraphStoreError> {
+    pub fn from_record(record: &DurableTaskRecord) -> Result<Self, GraphStoreError> {
+        Self::from_record_with_history(record, true)
+    }
+
+    fn from_record_legacy(record: &DurableTaskRecord) -> Result<Self, GraphStoreError> {
+        Self::from_record_with_history(record, false)
+    }
+
+    fn from_record_with_history(
+        record: &DurableTaskRecord,
+        bind_history: bool,
+    ) -> Result<Self, GraphStoreError> {
         let request_identity = (
             &record.task.request.task_id,
             &record.task.request.kind,
@@ -214,6 +343,16 @@ impl TaskMonotonicity {
                 reason: error.to_string(),
             }
         })?;
+        let history_digest = if bind_history {
+            let history_bytes = canonical_json_bytes(&record.history).map_err(|error| {
+                GraphStoreError::Canonicalization {
+                    reason: error.to_string(),
+                }
+            })?;
+            sha256_hex(&history_bytes)
+        } else {
+            String::new()
+        };
         let lease_epoch = record
             .task
             .lease
@@ -271,6 +410,7 @@ impl TaskMonotonicity {
             terminal_state,
             request_digest: sha256_hex(&request_bytes),
             task_digest: sha256_hex(&task_bytes),
+            history_digest,
         })
     }
 
@@ -278,6 +418,14 @@ impl TaskMonotonicity {
         if self.request_digest != current.request_digest {
             return Err(GraphStoreError::InvalidState {
                 reason: format!("task {task_id} immutable request regressed or changed"),
+            });
+        }
+        if !current.history_digest.is_empty()
+            && self.history_digest != current.history_digest
+            && self.history_len == current.history_len
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: format!("task {task_id} retained history digest changed"),
             });
         }
         if self.wrapper_generation < current.wrapper_generation
@@ -310,6 +458,31 @@ impl TaskMonotonicity {
     }
 }
 
+fn tombstone_matches_record(
+    observed: &TaskMonotonicity,
+    record: &DurableTaskRecord,
+    migration_marker: u32,
+) -> Result<bool, GraphStoreError> {
+    let expected = if migration_marker == GRAPH_STATE_MIGRATION_LEGACY {
+        TaskMonotonicity::from_record_legacy(record)?
+    } else {
+        TaskMonotonicity::from_record(record)?
+    };
+    if observed == &expected {
+        return Ok(true);
+    }
+    Ok(migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES
+        && observed.history_digest.is_empty()
+        && observed.wrapper_generation == expected.wrapper_generation
+        && observed.core_generation == expected.core_generation
+        && observed.attempts == expected.attempts
+        && observed.history_len == expected.history_len
+        && observed.lease_epoch == expected.lease_epoch
+        && observed.terminal_state == expected.terminal_state
+        && observed.request_digest == expected.request_digest
+        && observed.task_digest == expected.task_digest)
+}
+
 /// The canonical unsigned state covered by a generation digest and signature.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -320,25 +493,192 @@ pub struct GraphStoreState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predecessor_digest: Option<String>,
     pub graph: HypothesisGraph,
+    /// Durable reasoning projection carried in the same signed generation as
+    /// graph and task state.  Empty legacy values are omitted so an
+    /// authenticated Plan 03 state keeps its historical canonical bytes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub hypotheses: BTreeMap<HypothesisId, Hypothesis>,
     pub tasks: BTreeMap<TaskId, DurableTaskRecord>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub logical_task_descriptors: BTreeMap<TaskId, LogicalTaskDescriptor>,
     #[serde(default)]
     pub task_tombstones: BTreeMap<TaskId, TaskMonotonicity>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub terminal_outbox: BTreeMap<TaskId, TaskTerminalOutboxEntry>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub task_failure_outbox: BTreeMap<TaskId, TaskFailureOutboxEntry>,
     pub fencing_counter: u64,
+    #[serde(
+        default = "default_graph_limits",
+        skip_serializing_if = "skip_default_graph_limits"
+    )]
+    pub limits: GraphResourceLimits,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub cross_graph_links: std::collections::BTreeSet<(GraphId, GraphId)>,
+    /// Config-bound scheduler admission state. Legacy marker-0 states omit
+    /// this field entirely; once attached, the budget is part of the same
+    /// signed generation as tasks and coordinator publications.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduler_budget: Option<SchedulerBudget>,
+    #[serde(
+        default = "default_graph_state_migration_marker",
+        skip_serializing_if = "is_legacy_graph_state_migration"
+    )]
+    pub migration_marker: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_projection_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_projection_digest: Option<String>,
     pub logical_time_high_water: GraphLogicalTime,
+}
+
+fn is_legacy_graph_state_migration(marker: &u32) -> bool {
+    *marker == GRAPH_STATE_MIGRATION_LEGACY
+}
+
+/// Typed input for the one-way legacy-to-reasoning state transformation.
+///
+/// Keeping this as a value object prevents call sites from accidentally
+/// swapping one of the maps or digest fields in the old positional API. The
+/// builder defaults to empty reasoning projections and the current marker;
+/// migration callers should use `migration_to_hypotheses` explicitly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningStateUpdate {
+    hypotheses: BTreeMap<HypothesisId, Hypothesis>,
+    tasks: BTreeMap<TaskId, DurableTaskRecord>,
+    logical_task_descriptors: BTreeMap<TaskId, LogicalTaskDescriptor>,
+    terminal_outbox: BTreeMap<TaskId, TaskTerminalOutboxEntry>,
+    task_failure_outbox: BTreeMap<TaskId, TaskFailureOutboxEntry>,
+    limits: GraphResourceLimits,
+    cross_graph_links: std::collections::BTreeSet<(GraphId, GraphId)>,
+    scheduler_budget: Option<SchedulerBudget>,
+    migration_marker: u32,
+    result_projection_digest: Option<String>,
+    operator_projection_digest: Option<String>,
+    logical_time_high_water: GraphLogicalTime,
+}
+
+impl ReasoningStateUpdate {
+    pub fn migration_to_hypotheses(
+        limits: GraphResourceLimits,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> Self {
+        Self {
+            limits,
+            logical_time_high_water,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_hypotheses(mut self, hypotheses: BTreeMap<HypothesisId, Hypothesis>) -> Self {
+        self.hypotheses = hypotheses;
+        self
+    }
+
+    pub fn with_tasks(mut self, tasks: BTreeMap<TaskId, DurableTaskRecord>) -> Self {
+        self.tasks = tasks;
+        self
+    }
+
+    pub fn with_logical_task_descriptors(
+        mut self,
+        descriptors: BTreeMap<TaskId, LogicalTaskDescriptor>,
+    ) -> Self {
+        self.logical_task_descriptors = descriptors;
+        self
+    }
+
+    pub fn with_terminal_outbox(
+        mut self,
+        terminal_outbox: BTreeMap<TaskId, TaskTerminalOutboxEntry>,
+    ) -> Self {
+        self.terminal_outbox = terminal_outbox;
+        self
+    }
+
+    pub fn with_task_failure_outbox(
+        mut self,
+        task_failure_outbox: BTreeMap<TaskId, TaskFailureOutboxEntry>,
+    ) -> Self {
+        self.task_failure_outbox = task_failure_outbox;
+        self
+    }
+
+    pub fn with_cross_graph_links(
+        mut self,
+        cross_graph_links: std::collections::BTreeSet<(GraphId, GraphId)>,
+    ) -> Self {
+        self.cross_graph_links = cross_graph_links;
+        self
+    }
+
+    /// Attach the already config-validated scheduler budget to the same
+    /// reasoning transition as tasks, hypotheses, and coordinator history.
+    /// The spine revalidates its bounded wire invariants and monotonicity at
+    /// the CAS boundary; it never constructs a caller-selected budget.
+    pub fn with_scheduler_budget(mut self, scheduler_budget: SchedulerBudget) -> Self {
+        self.scheduler_budget = Some(scheduler_budget);
+        self
+    }
+
+    pub fn with_projection_digests(
+        mut self,
+        result_projection_digest: Option<String>,
+        operator_projection_digest: Option<String>,
+    ) -> Self {
+        self.result_projection_digest = result_projection_digest;
+        self.operator_projection_digest = operator_projection_digest;
+        self
+    }
+
+    pub fn with_migration_marker(mut self, migration_marker: u32) -> Self {
+        self.migration_marker = migration_marker;
+        self
+    }
+}
+
+impl Default for ReasoningStateUpdate {
+    fn default() -> Self {
+        Self {
+            hypotheses: BTreeMap::new(),
+            tasks: BTreeMap::new(),
+            logical_task_descriptors: BTreeMap::new(),
+            terminal_outbox: BTreeMap::new(),
+            task_failure_outbox: BTreeMap::new(),
+            limits: GraphResourceLimits::default(),
+            cross_graph_links: std::collections::BTreeSet::new(),
+            scheduler_budget: None,
+            migration_marker: GRAPH_STATE_MIGRATION_HYPOTHESES,
+            result_projection_digest: None,
+            operator_projection_digest: None,
+            logical_time_high_water: GraphLogicalTime::new(0),
+        }
+    }
 }
 
 impl GraphStoreState {
     pub fn new(graph: HypothesisGraph) -> Result<Self, GraphStoreError> {
         graph.validate().map_err(GraphStoreError::Admission)?;
+        let limits = graph.limits.clone();
         Ok(Self {
             schema_version: GRAPH_STORE_SCHEMA_VERSION,
             graph_id: graph.graph_id.clone(),
             generation: 0,
             predecessor_digest: None,
             graph,
+            hypotheses: BTreeMap::new(),
             tasks: BTreeMap::new(),
+            logical_task_descriptors: BTreeMap::new(),
             task_tombstones: BTreeMap::new(),
+            terminal_outbox: BTreeMap::new(),
+            task_failure_outbox: BTreeMap::new(),
             fencing_counter: 0,
+            limits,
+            cross_graph_links: std::collections::BTreeSet::new(),
+            migration_marker: GRAPH_STATE_MIGRATION_LEGACY,
+            result_projection_digest: None,
+            operator_projection_digest: None,
+            scheduler_budget: None,
             logical_time_high_water: GraphLogicalTime::new(0),
         })
     }
@@ -361,6 +701,41 @@ impl GraphStoreState {
                     .to_string(),
             });
         }
+        if self.migration_marker > GRAPH_STATE_MIGRATION_CURRENT {
+            return Err(GraphStoreError::InvalidState {
+                reason: format!(
+                    "unknown graph-state migration marker {}",
+                    self.migration_marker
+                ),
+            });
+        }
+        if self.migration_marker == GRAPH_STATE_MIGRATION_LEGACY
+            && (!self.hypotheses.is_empty()
+                || !self.logical_task_descriptors.is_empty()
+                || !self.terminal_outbox.is_empty()
+                || !self.task_failure_outbox.is_empty()
+                || !self.cross_graph_links.is_empty()
+                || self.scheduler_budget.is_some()
+                || self.result_projection_digest.is_some()
+                || self.operator_projection_digest.is_some())
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "legacy graph-state marker cannot carry reasoning fields".to_string(),
+            });
+        }
+        if self.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES && self.limits != *limits {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning-state limits do not match configured store limits".to_string(),
+            });
+        }
+        if self.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES
+            && self.scheduler_budget.is_none()
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "marker-1 reasoning state requires a persisted scheduler budget"
+                    .to_string(),
+            });
+        }
         if self.graph_id != self.graph.graph_id {
             return Err(GraphStoreError::InvalidState {
                 reason: "store graph ID does not match graph payload".to_string(),
@@ -369,6 +744,16 @@ impl GraphStoreState {
         self.logical_time_high_water
             .validate()
             .map_err(GraphStoreError::Admission)?;
+        if let Some(scheduler_budget) = &self.scheduler_budget {
+            scheduler_budget
+                .validate()
+                .map_err(GraphStoreError::Admission)?;
+            if scheduler_budget.current_tick() > self.logical_time_high_water {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "scheduler budget logical tick exceeds graph high-water".to_string(),
+                });
+            }
+        }
         if self.generation == 0 {
             if self.predecessor_digest.is_some() {
                 return Err(GraphStoreError::InvalidState {
@@ -381,6 +766,96 @@ impl GraphStoreState {
             });
         }
         self.graph.validate().map_err(GraphStoreError::Admission)?;
+        if self.hypotheses.len() > limits.max_hypotheses {
+            return Err(GraphStoreError::ResourceLimit {
+                resource: "hypotheses".to_string(),
+                limit: limits.max_hypotheses,
+            });
+        }
+        if self.logical_task_descriptors.len() > limits.max_tasks
+            || self.terminal_outbox.len() > limits.max_tasks
+            || self.task_failure_outbox.len() > limits.max_tasks
+        {
+            return Err(GraphStoreError::ResourceLimit {
+                resource: "reasoning.tasks".to_string(),
+                limit: limits.max_tasks,
+            });
+        }
+        for (hypothesis_id, hypothesis) in &self.hypotheses {
+            if hypothesis_id != &hypothesis.hypothesis_id {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "hypothesis map key does not match hypothesis ID".to_string(),
+                });
+            }
+            hypothesis
+                .validate(limits)
+                .map_err(GraphStoreError::Admission)?;
+            for edge_id in &hypothesis.claims {
+                if !self.graph.edges.contains_key(edge_id) {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "hypothesis claim references an unknown graph edge".to_string(),
+                    });
+                }
+            }
+            for contradiction_id in &hypothesis.contradiction_ids {
+                if !self.graph.contradictions.contains_key(contradiction_id)
+                    && !self.graph.conflicts.contains_key(contradiction_id)
+                {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "hypothesis references an unknown contradiction".to_string(),
+                    });
+                }
+            }
+            for decision in &hypothesis.decision_history {
+                if self.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES
+                    && decision.decided_at > self.logical_time_high_water
+                {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "decision logical time exceeds the durable graph high-water"
+                            .to_string(),
+                    });
+                }
+                if decision
+                    .evidence_ids
+                    .iter()
+                    .any(|evidence_id| !self.graph.evidence.contains_key(evidence_id))
+                {
+                    return Err(GraphStoreError::Admission(
+                        GraphAdmissionError::UnknownEvidence,
+                    ));
+                }
+                decision
+                    .validate_identity_admission(&self.graph.evidence)
+                    .map_err(GraphStoreError::Admission)?;
+            }
+        }
+        for (task_id, descriptor) in &self.logical_task_descriptors {
+            descriptor.validate().map_err(GraphStoreError::Admission)?;
+            if task_id != &descriptor.task_id || descriptor.graph_id != self.graph_id {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "logical task descriptor is not bound to this graph".to_string(),
+                });
+            }
+            if !self.tasks.contains_key(task_id) {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "logical task descriptor has no durable task".to_string(),
+                });
+            }
+        }
+        if self.cross_graph_links.len() > limits.max_tasks {
+            return Err(GraphStoreError::ResourceLimit {
+                resource: "reasoning.cross_graph_links".to_string(),
+                limit: limits.max_tasks,
+            });
+        }
+        for (left, right) in &self.cross_graph_links {
+            if left.as_str().trim().is_empty() || right.as_str().trim().is_empty() || left == right
+            {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "cross-graph links must contain two distinct graph IDs".to_string(),
+                });
+            }
+        }
         if self.tasks.len() > limits.max_tasks {
             return Err(GraphStoreError::ResourceLimit {
                 resource: "tasks".to_string(),
@@ -400,14 +875,13 @@ impl GraphStoreState {
                 });
             }
             task.validate(limits)?;
-            let expected_tombstone = TaskMonotonicity::from_record(task)?;
             let observed_tombstone =
                 self.task_tombstones
                     .get(task_id)
                     .ok_or_else(|| GraphStoreError::InvalidState {
                         reason: "task map entry has no durable monotonic tombstone".to_string(),
                     })?;
-            if observed_tombstone != &expected_tombstone {
+            if !tombstone_matches_record(observed_tombstone, task, self.migration_marker)? {
                 return Err(GraphStoreError::InvalidState {
                     reason: "task tombstone does not describe the task map entry".to_string(),
                 });
@@ -465,7 +939,244 @@ impl GraphStoreState {
                 }
             }
         }
+        if self.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES {
+            for task_id in self.tasks.keys() {
+                if !self.logical_task_descriptors.contains_key(task_id) {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "reasoning task has no logical task descriptor".to_string(),
+                    });
+                }
+            }
+        }
+        for task_id in self.task_tombstones.keys() {
+            if !self.tasks.contains_key(task_id) {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "task tombstone has no durable task record".to_string(),
+                });
+            }
+        }
+        for (task_id, entry) in &self.terminal_outbox {
+            let task = self
+                .tasks
+                .get(task_id)
+                .ok_or_else(|| GraphStoreError::InvalidState {
+                    reason: "terminal outbox references an unknown task".to_string(),
+                })?;
+            if !matches!(task.task.state, TaskState::Completed | TaskState::Failed) {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "terminal outbox task is not terminal".to_string(),
+                });
+            }
+            let descriptor = self.logical_task_descriptors.get(task_id).ok_or_else(|| {
+                GraphStoreError::InvalidState {
+                    reason: "terminal outbox task has no logical descriptor".to_string(),
+                }
+            })?;
+            entry
+                .validate_for_committed_task_at(
+                    &task.task,
+                    descriptor,
+                    limits,
+                    self.logical_time_high_water,
+                )
+                .map_err(GraphStoreError::Admission)?;
+            entry
+                .validate_graph_references(&self.graph, &self.hypotheses)
+                .map_err(GraphStoreError::Admission)?;
+            for evidence in &entry.evidence {
+                match self.graph.evidence.get(&evidence.evidence_id) {
+                    Some(admitted) if admitted == evidence => {}
+                    Some(_) => {
+                        return Err(GraphStoreError::InvalidState {
+                            reason: "terminal outbox evidence differs from graph evidence"
+                                .to_string(),
+                        });
+                    }
+                    None => {
+                        return Err(GraphStoreError::Admission(
+                            GraphAdmissionError::UnknownEvidence,
+                        ));
+                    }
+                }
+            }
+            if let Some(decision) = &entry.decision {
+                if !decision
+                    .evidence_ids
+                    .iter()
+                    .all(|evidence_id| self.graph.evidence.contains_key(evidence_id))
+                {
+                    return Err(GraphStoreError::Admission(
+                        GraphAdmissionError::UnknownEvidence,
+                    ));
+                }
+                let hypothesis = self
+                    .hypotheses
+                    .get(&decision.hypothesis_id)
+                    .ok_or_else(|| GraphStoreError::InvalidState {
+                        reason: "terminal outbox decision has no owning hypothesis".to_string(),
+                    })?;
+                if !hypothesis.decision_history.contains(decision) {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "terminal outbox decision is absent from hypothesis history"
+                            .to_string(),
+                    });
+                }
+                if let Some(link) = &entry.envelope.decision_link {
+                    match &link.target {
+                        TaskTarget::Edge { edge_id } => {
+                            if !self.graph.edges.contains_key(edge_id) {
+                                return Err(GraphStoreError::InvalidState {
+                                    reason: "terminal decision targets an unknown edge".to_string(),
+                                });
+                            }
+                        }
+                        TaskTarget::Hypothesis { hypothesis_id } => {
+                            if hypothesis_id != &decision.hypothesis_id
+                                || !self.hypotheses.contains_key(hypothesis_id)
+                            {
+                                return Err(GraphStoreError::InvalidState {
+                                    reason: "terminal decision targets an unknown hypothesis"
+                                        .to_string(),
+                                });
+                            }
+                        }
+                        TaskTarget::Evidence { .. } => {
+                            return Err(GraphStoreError::InvalidState {
+                                reason: "terminal decision target cannot be evidence".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        for (task_id, entry) in &self.task_failure_outbox {
+            let task = self
+                .tasks
+                .get(task_id)
+                .ok_or_else(|| GraphStoreError::InvalidState {
+                    reason: "task failure outbox references an unknown task".to_string(),
+                })?;
+            let descriptor = self.logical_task_descriptors.get(task_id).ok_or_else(|| {
+                GraphStoreError::InvalidState {
+                    reason: "task failure outbox has no logical descriptor".to_string(),
+                }
+            })?;
+            entry.validate_for_failed_task(&task.task, descriptor, self.logical_time_high_water)?;
+        }
         Ok(())
+    }
+
+    /// Apply the exact legacy-to-reasoning transformation. The caller must
+    /// authenticate the legacy signed envelope before invoking this method.
+    pub fn with_reasoning_state(
+        mut base: Self,
+        update: ReasoningStateUpdate,
+    ) -> Result<Self, GraphStoreError> {
+        base.validate_with_limits(&base.graph.limits)?;
+        if base.migration_marker != GRAPH_STATE_MIGRATION_LEGACY {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning-state migration requires the legacy marker".to_string(),
+            });
+        }
+        if update.migration_marker != GRAPH_STATE_MIGRATION_HYPOTHESES {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning-state migration must target the hypotheses marker".to_string(),
+            });
+        }
+        if update.limits != base.graph.limits {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning-state limits do not match graph limits".to_string(),
+            });
+        }
+        if update.scheduler_budget.is_none() {
+            return Err(GraphStoreError::InvalidState {
+                reason: "marker-1 reasoning migration requires a persisted scheduler budget"
+                    .to_string(),
+            });
+        }
+        // Migration is not a replacement API. Every legacy task and its
+        // monotonic tombstone must survive byte-for-byte. Descriptors are
+        // required for every task in the marker-1 state, including legacy
+        // tasks, so callers must supply an authenticated backfill.
+        for (task_id, task) in &base.tasks {
+            match update.tasks.get(task_id) {
+                Some(candidate) if candidate == task => {}
+                Some(_) => {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "reasoning-state migration rewrote an existing task".to_string(),
+                    });
+                }
+                None => {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "reasoning-state migration removed an existing task".to_string(),
+                    });
+                }
+            }
+        }
+        let mut task_tombstones = BTreeMap::new();
+        for (task_id, task) in &update.tasks {
+            if task_id != &task.task.request.task_id {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "reasoning-state task map key does not match task ID".to_string(),
+                });
+            }
+            let tombstone = if let Some(prior) = base.task_tombstones.get(task_id) {
+                // Preserve the exact legacy tombstone rather than filling its
+                // new history digest during migration. The marker-1 validator
+                // accepts this one-way compatibility form; subsequent
+                // transitions bind the digest.
+                let expected_legacy = TaskMonotonicity::from_record_legacy(task)?;
+                if prior != &expected_legacy {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "reasoning-state migration rewrote an existing task tombstone"
+                            .to_string(),
+                    });
+                }
+                prior.clone()
+            } else {
+                TaskMonotonicity::from_record(task)?
+            };
+            task_tombstones.insert(task_id.clone(), tombstone);
+        }
+        for task_id in base.task_tombstones.keys() {
+            if !task_tombstones.contains_key(task_id) {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "reasoning-state migration removed an existing task tombstone"
+                        .to_string(),
+                });
+            }
+        }
+        for task_id in update.tasks.keys() {
+            if !base.tasks.contains_key(task_id)
+                && !update.logical_task_descriptors.contains_key(task_id)
+            {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "reasoning-state migration added a task without a logical descriptor"
+                        .to_string(),
+                });
+            }
+        }
+        base.hypotheses = update.hypotheses;
+        base.tasks = update.tasks;
+        base.logical_task_descriptors = update.logical_task_descriptors;
+        base.task_tombstones = task_tombstones;
+        base.terminal_outbox = update.terminal_outbox;
+        base.task_failure_outbox = update.task_failure_outbox;
+        base.limits = update.limits;
+        base.cross_graph_links = update.cross_graph_links;
+        base.scheduler_budget = update.scheduler_budget;
+        base.migration_marker = update.migration_marker;
+        base.result_projection_digest = update.result_projection_digest;
+        base.operator_projection_digest = update.operator_projection_digest;
+        if update.logical_time_high_water < base.logical_time_high_water {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "reasoning-state logical time high-water regressed".to_string(),
+            });
+        }
+        base.logical_time_high_water = update.logical_time_high_water;
+        let limits_for_validation = base.graph.limits.clone();
+        base.validate_with_limits(&limits_for_validation)?;
+        Ok(base)
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, GraphStoreError> {
@@ -499,105 +1210,11 @@ impl GraphStoreState {
     }
 }
 
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct GraphCasMaterial<'a> {
-    expected: &'a GraphStoreRevision,
-    state: &'a GraphStoreState,
-    authority_scope: &'a str,
-}
-
-/// Scheduler-authorized append-only graph replacement bound to one exact
-/// predecessor. Generic state CAS may add already validated graph records but
-/// may not delete or rewrite durable graph contents, inject a version, or
-/// mutate store-owned task and clock state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphCasEnvelope {
-    pub expected: GraphStoreRevision,
-    pub state: GraphStoreState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authority_witness: Option<EvidenceWitness>,
-}
-
-impl GraphCasEnvelope {
-    pub fn new(
-        expected: GraphStoreRevision,
-        state: GraphStoreState,
-    ) -> Result<Self, GraphStoreError> {
-        let envelope = Self {
-            expected,
-            state,
-            authority_witness: None,
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-
-    pub fn authorized_by(
-        mut self,
-        authority: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let scoped_agent_id = scoped_agent_id.into();
-        validate_authority_scope("graph CAS", &scoped_agent_id)?;
-        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
-        self.authority_witness = Some(
-            EvidenceWitness::new(
-                authority,
-                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
-                scoped_agent_id,
-                &bytes,
-            )
-            .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&GraphCasMaterial {
-            expected: &self.expected,
-            state: &self.state,
-            authority_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let authority_scope = self
-            .authority_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_bytes_for_scope(authority_scope)
-    }
-
-    fn validate(&self) -> Result<(), GraphStoreError> {
-        self.expected.validate()?;
-        validate_optional_scheduler_witness(
-            self.authority_witness.as_ref(),
-            &self.canonical_bytes_without_witness()?,
-        )
-    }
-
-    fn validate_for_store(&self, authority: &AgentId) -> Result<(), GraphStoreError> {
-        self.validate()?;
-        require_configured_scheduler_witness(
-            self.authority_witness.as_ref(),
-            authority,
-            &self.canonical_bytes_without_witness()?,
-            "durable graph CAS requires scheduler authority",
-        )
-    }
-}
-
 /// Public read result used by runtime coordinators and parity tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphStoreSnapshot {
-    pub state: GraphStoreState,
-    pub revision: GraphStoreRevision,
+    state: GraphStoreState,
+    revision: GraphStoreRevision,
 }
 
 /// Validate a terminal publication against the exact claimed task and its
@@ -611,6 +1228,7 @@ pub struct GraphStoreSnapshot {
 pub fn validate_task_terminal_envelope(
     task: &TaskRecord,
     envelope: &TaskTerminalEnvelope,
+    capability: &TaskCapabilityProof,
     limits: &GraphResourceLimits,
 ) -> Result<(), GraphStoreError> {
     // Core owns structural, signature, exact-task, lease, fence, completion,
@@ -619,6 +1237,11 @@ pub fn validate_task_terminal_envelope(
     envelope
         .validate_for_task(task, limits.max_task_lease_ms, limits.max_task_retries)
         .map_err(GraphStoreError::Admission)?;
+    if envelope.capability != *capability {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "terminal envelope capability differs from supplied capability".to_string(),
+        });
+    }
     if let Some(link) = &envelope.decision_link
         && link.target != task.request.target
     {
@@ -656,12 +1279,82 @@ pub fn validate_task_logical_identity(
 }
 
 impl GraphStoreSnapshot {
+    /// Borrow the already-authenticated durable state carried by this
+    /// snapshot.  Callers cannot construct a snapshot with an arbitrary state
+    /// because both fields and the constructor remain private to the spine.
+    pub fn state(&self) -> &GraphStoreState {
+        &self.state
+    }
+
+    /// Borrow the revision authenticated together with [`Self::state`].
+    pub fn revision(&self) -> &GraphStoreRevision {
+        &self.revision
+    }
+
+    /// Consume this authenticated snapshot into its owned parts.  This is
+    /// the only ownership transfer from a snapshot; it does not create a new
+    /// snapshot and therefore cannot fabricate a state/revision pairing.
+    pub fn into_parts(self) -> (GraphStoreState, GraphStoreRevision) {
+        (self.state, self.revision)
+    }
+
     pub fn graph(&self) -> &HypothesisGraph {
         &self.state.graph
     }
 
     pub fn tasks(&self) -> impl Iterator<Item = &DurableTaskRecord> {
         self.state.tasks.values()
+    }
+
+    pub fn hypotheses(&self) -> &BTreeMap<HypothesisId, Hypothesis> {
+        &self.state.hypotheses
+    }
+
+    pub fn decision_history(
+        &self,
+    ) -> impl Iterator<Item = &swarm_core::hypothesis_graph::DecisionRecord> {
+        self.state
+            .hypotheses
+            .values()
+            .flat_map(|hypothesis| hypothesis.decision_history.iter())
+    }
+
+    pub fn terminal_outbox(&self) -> &BTreeMap<TaskId, TaskTerminalOutboxEntry> {
+        &self.state.terminal_outbox
+    }
+
+    pub fn task_failure_outbox(&self) -> &BTreeMap<TaskId, TaskFailureOutboxEntry> {
+        &self.state.task_failure_outbox
+    }
+
+    pub fn logical_task_descriptors(&self) -> &BTreeMap<TaskId, LogicalTaskDescriptor> {
+        &self.state.logical_task_descriptors
+    }
+
+    pub fn limits(&self) -> &GraphResourceLimits {
+        &self.state.limits
+    }
+
+    pub fn cross_graph_links(&self) -> &std::collections::BTreeSet<(GraphId, GraphId)> {
+        &self.state.cross_graph_links
+    }
+
+    /// Return the authenticated scheduler budget, when this reasoning stream
+    /// has attached one. Legacy marker-0 streams intentionally return `None`.
+    pub fn scheduler_budget(&self) -> Option<&SchedulerBudget> {
+        self.state.scheduler_budget.as_ref()
+    }
+
+    pub fn migration_marker(&self) -> u32 {
+        self.state.migration_marker
+    }
+
+    pub fn result_projection_digest(&self) -> Option<&str> {
+        self.state.result_projection_digest.as_deref()
+    }
+
+    pub fn operator_projection_digest(&self) -> Option<&str> {
+        self.state.operator_projection_digest.as_deref()
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, GraphStoreError> {
@@ -675,6 +1368,151 @@ struct SignedGraphStoreState {
     state: GraphStoreState,
     digest: String,
     signature: DetachedSignature,
+}
+
+/// Exact Plan 03 state wire shape. New reasoning fields are deliberately not
+/// present and therefore cannot be filled by serde before the legacy bytes
+/// have been authenticated. This type is also used for canonical digest and
+/// signature verification, rather than converting through `GraphStoreState`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyDurableTaskRecord {
+    schema_version: u32,
+    task: TaskRecord,
+    generation: u64,
+    history: Vec<TaskRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyTaskMonotonicity {
+    wrapper_generation: u64,
+    core_generation: u64,
+    attempts: u16,
+    history_len: u32,
+    lease_epoch: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_state: Option<TaskState>,
+    request_digest: String,
+    task_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyGraphStoreState {
+    schema_version: u32,
+    graph_id: GraphId,
+    generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    predecessor_digest: Option<String>,
+    graph: HypothesisGraph,
+    tasks: BTreeMap<TaskId, LegacyDurableTaskRecord>,
+    #[serde(default)]
+    task_tombstones: BTreeMap<TaskId, LegacyTaskMonotonicity>,
+    fencing_counter: u64,
+    logical_time_high_water: GraphLogicalTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacySignedGraphStoreState {
+    state: LegacyGraphStoreState,
+    digest: String,
+    signature: DetachedSignature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyGraphStateSigningMaterial<'a> {
+    schema_version: u32,
+    state_kind: &'static str,
+    stream_id: &'a GraphId,
+    generation: u64,
+    digest: &'a str,
+    state: &'a LegacyGraphStoreState,
+}
+
+impl LegacyGraphStoreState {
+    fn canonical_bytes(&self) -> Result<Vec<u8>, GraphStoreError> {
+        let bytes =
+            canonical_json_bytes(self).map_err(|error| GraphStoreError::Canonicalization {
+                reason: error.to_string(),
+            })?;
+        if bytes.len() > persisted_json_limit() {
+            return Err(GraphStoreError::ResourceLimit {
+                resource: "persisted_file_bytes".to_string(),
+                limit: persisted_json_limit(),
+            });
+        }
+        Ok(bytes)
+    }
+
+    fn revision(&self, digest: impl Into<String>) -> GraphStoreRevision {
+        GraphStoreRevision::new(self.generation, digest)
+    }
+
+    fn into_current(self) -> GraphStoreState {
+        // Keep the new fields at their exact legacy wire defaults. In
+        // particular, `limits` must remain default when it was absent from
+        // the legacy bytes; otherwise reopening would change the signed
+        // canonical state before an explicit migration CAS.
+        GraphStoreState {
+            schema_version: self.schema_version,
+            graph_id: self.graph_id,
+            generation: self.generation,
+            predecessor_digest: self.predecessor_digest,
+            graph: self.graph,
+            hypotheses: BTreeMap::new(),
+            tasks: self
+                .tasks
+                .into_iter()
+                .map(|(task_id, record)| (task_id, record.into_current()))
+                .collect(),
+            logical_task_descriptors: BTreeMap::new(),
+            task_tombstones: self
+                .task_tombstones
+                .into_iter()
+                .map(|(task_id, tombstone)| (task_id, tombstone.into_current()))
+                .collect(),
+            terminal_outbox: BTreeMap::new(),
+            task_failure_outbox: BTreeMap::new(),
+            fencing_counter: self.fencing_counter,
+            limits: GraphResourceLimits::default(),
+            cross_graph_links: std::collections::BTreeSet::new(),
+            scheduler_budget: None,
+            migration_marker: GRAPH_STATE_MIGRATION_LEGACY,
+            result_projection_digest: None,
+            operator_projection_digest: None,
+            logical_time_high_water: self.logical_time_high_water,
+        }
+    }
+}
+
+impl LegacyDurableTaskRecord {
+    fn into_current(self) -> DurableTaskRecord {
+        DurableTaskRecord {
+            schema_version: self.schema_version,
+            task: self.task,
+            generation: self.generation,
+            history: self.history,
+        }
+    }
+}
+
+impl LegacyTaskMonotonicity {
+    fn into_current(self) -> TaskMonotonicity {
+        TaskMonotonicity {
+            wrapper_generation: self.wrapper_generation,
+            core_generation: self.core_generation,
+            attempts: self.attempts,
+            history_len: self.history_len,
+            lease_epoch: self.lease_epoch,
+            terminal_state: self.terminal_state,
+            request_digest: self.request_digest,
+            task_digest: self.task_digest,
+            history_digest: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2185,8 +3023,12 @@ fn verify_state(
     expected_graph_id: &GraphId,
     expected_signer: &AgentId,
     limits: &GraphResourceLimits,
+    scheduler_policy: &SchedulerBudgetPolicy,
 ) -> Result<(), GraphStoreError> {
     envelope.state.validate_with_limits(limits)?;
+    if let Some(budget) = &envelope.state.scheduler_budget {
+        scheduler_policy.validate_budget(budget)?;
+    }
     if envelope.state.graph_id != *expected_graph_id {
         return Err(GraphStoreError::InvalidState {
             reason: "persisted graph ID does not match the configured stream".to_string(),
@@ -2243,19 +3085,1057 @@ fn check_expected(
     Ok(())
 }
 
+struct AuthenticatedStateRead {
+    envelope: SignedGraphStoreState,
+}
+
+fn parse_state_value<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    value: serde_json::Value,
+) -> Result<T, GraphStoreError> {
+    serde_json::from_value(value).map_err(|source| GraphStoreError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Read and authenticate a state file without allowing current-state serde
+/// defaults to participate in legacy signature verification. A marker is the
+/// wire discriminator; a positive marker selects current parsing, while a
+/// marker-less (or explicitly zero-marked) object is parsed as the exact
+/// legacy shape unless it carries a non-default configured `limits` field.
+/// That sole current-v0 exception is safe to distinguish because Plan 03 could
+/// not emit the field and its signed canonical bytes include it.
+fn read_authenticated_state(
+    lock: &DurableFileLock,
+    state_path: &Path,
+    anchor_path: &Path,
+    high_water_path: &Path,
+    high_water_tail_path: &Path,
+    signer_id: &AgentId,
+    scheduler_policy: &SchedulerBudgetPolicy,
+) -> Result<AuthenticatedStateRead, GraphStoreError> {
+    let raw: serde_json::Value = lock.read_json(state_path)?;
+    let state_object = raw
+        .get("state")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "persisted state envelope has no state object".to_string(),
+        })?;
+    let has_nonlegacy_marker = state_object
+        .get("migration_marker")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|marker| marker > u64::from(GRAPH_STATE_MIGRATION_LEGACY));
+    let has_limits = state_object.contains_key("limits");
+
+    if has_nonlegacy_marker {
+        let envelope: SignedGraphStoreState = parse_state_value(state_path, raw.clone())?;
+        let graph_id = envelope.state.graph_id.clone();
+        let limits = envelope.state.graph.limits.clone();
+        verify_state(&envelope, &graph_id, signer_id, &limits, scheduler_policy)?;
+        return Ok(AuthenticatedStateRead { envelope });
+    }
+    if has_limits {
+        let candidate: SignedGraphStoreState = parse_state_value(state_path, raw.clone())?;
+        if candidate.state.limits != GraphResourceLimits::default() {
+            let graph_id = candidate.state.graph_id.clone();
+            let limits = candidate.state.graph.limits.clone();
+            verify_state(&candidate, &graph_id, signer_id, &limits, scheduler_policy)?;
+            return Ok(AuthenticatedStateRead {
+                envelope: candidate,
+            });
+        }
+    }
+
+    // No marker and no non-default limits is the exact legacy branch. Any
+    // newly introduced field (including an empty map) is rejected by the
+    // deny-unknown-fields legacy parser instead of being silently normalized.
+    let legacy: LegacySignedGraphStoreState = parse_state_value(state_path, raw)?;
+    let state_bytes = legacy.state.canonical_bytes()?;
+    let computed_digest = sha256_hex(&state_bytes);
+    if computed_digest != legacy.digest {
+        return Err(GraphStoreError::DigestMismatch {
+            expected: legacy.digest,
+            observed: computed_digest,
+        });
+    }
+    let signing_bytes = canonical_json_bytes(&LegacyGraphStateSigningMaterial {
+        schema_version: GRAPH_STORE_SCHEMA_VERSION,
+        state_kind: GRAPH_STORE_STATE_KIND,
+        stream_id: &legacy.state.graph_id,
+        generation: legacy.state.generation,
+        digest: &legacy.digest,
+        state: &legacy.state,
+    })
+    .map_err(|error| GraphStoreError::Canonicalization {
+        reason: error.to_string(),
+    })?;
+    verify_detached_signature(&signing_bytes, &legacy.signature).map_err(|error| {
+        GraphStoreError::InvalidSignature {
+            reason: error.to_string(),
+        }
+    })?;
+    let observed = AgentId::from_public_key_hex(&legacy.signature.public_key_hex);
+    if &observed != signer_id {
+        return Err(GraphStoreError::SignerMismatch {
+            expected: signer_id.clone(),
+            observed,
+        });
+    }
+
+    // Authenticate both local high-water replicas against the *legacy*
+    // revision before constructing a current GraphStoreState with defaults.
+    let persisted_revision = legacy.state.revision(legacy.digest.clone());
+    let head: DurableStateHead = lock.read_json(anchor_path)?;
+    let high_water = read_high_water(lock, high_water_path, high_water_tail_path)?;
+    let head_revision = verify_state_head(
+        &head,
+        GRAPH_STORE_STATE_KIND,
+        legacy.state.graph_id.as_str(),
+        signer_id,
+        lock.generation(),
+        &lock.identity_token(),
+    )?;
+    let high_water_revision = verify_state_head(
+        &high_water,
+        GRAPH_STORE_STATE_KIND,
+        legacy.state.graph_id.as_str(),
+        signer_id,
+        lock.generation(),
+        &lock.identity_token(),
+    )?;
+    validate_high_water_against_revisions(
+        &high_water_revision,
+        &head_revision,
+        &persisted_revision,
+        legacy.state.predecessor_digest.as_deref(),
+    )?;
+
+    let LegacySignedGraphStoreState {
+        state: legacy_state,
+        digest: legacy_digest,
+        signature: legacy_signature,
+    } = legacy;
+    let normalized = legacy_state.into_current();
+    // Validate only after the signature, digest, and high-water proofs above;
+    // this call is the first point at which defaults become visible.
+    normalized.validate_with_limits(&normalized.graph.limits)?;
+    Ok(AuthenticatedStateRead {
+        envelope: SignedGraphStoreState {
+            state: normalized,
+            digest: legacy_digest,
+            signature: legacy_signature,
+        },
+    })
+}
+
+/// Validate a direct reasoning CAS against the signed predecessor.  Ordinary
+/// task mutations still use the existing task APIs; the only task replacement
+/// admitted here is a terminal publication accompanied by its descriptor and
+/// outbox entry.  This keeps the one-transition reasoning boundary while
+/// retaining the durable monotonic fences from Plan 03.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitialDecisionAdmission<'a> {
+    Reject,
+    AuthenticatedCoordinator(&'a AgentId),
+}
+
+fn validate_reasoning_cas_transition(
+    current: &GraphStoreState,
+    candidate: &GraphStoreState,
+    limits: &GraphResourceLimits,
+    scheduler_policy: &SchedulerBudgetPolicy,
+    initial_decision_admission: InitialDecisionAdmission<'_>,
+) -> Result<(), GraphStoreError> {
+    if candidate.migration_marker < current.migration_marker {
+        return Err(GraphStoreError::InvalidState {
+            reason: "graph-state migration marker downgrade is forbidden".to_string(),
+        });
+    }
+    validate_scheduler_budget_transition(current, candidate)?;
+    if let Some(budget) = &candidate.scheduler_budget {
+        scheduler_policy.validate_budget(budget)?;
+    }
+    if candidate.migration_marker < GRAPH_STATE_MIGRATION_HYPOTHESES
+        && (candidate.tasks != current.tasks
+            || candidate.logical_task_descriptors != current.logical_task_descriptors
+            || candidate.terminal_outbox != current.terminal_outbox
+            || candidate.task_failure_outbox != current.task_failure_outbox)
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: "task replacement requires the reasoning-state migration marker".to_string(),
+        });
+    }
+
+    if current.migration_marker == GRAPH_STATE_MIGRATION_LEGACY
+        && candidate.migration_marker == GRAPH_STATE_MIGRATION_HYPOTHESES
+    {
+        // Marker promotion is a one-way schema migration, not a convenient
+        // graph/task replacement API. The graph stream, fencing high-water,
+        // and every legacy task/tombstone must be preserved exactly. The
+        // reasoning projections may be populated, and new descriptor-bound
+        // pending tasks may be admitted by `with_reasoning_state`.
+        if candidate.graph != current.graph {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning-state migration rewrote or advanced the legacy graph"
+                    .to_string(),
+            });
+        }
+        if candidate.tasks != current.tasks {
+            let existing_tasks_preserved = current
+                .tasks
+                .iter()
+                .all(|(task_id, task)| candidate.tasks.get(task_id) == Some(task));
+            if !existing_tasks_preserved {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "reasoning-state migration rewrote or removed a legacy task"
+                        .to_string(),
+                });
+            }
+        }
+        if candidate.task_tombstones != current.task_tombstones {
+            let existing_tombstones_preserved =
+                current.task_tombstones.iter().all(|(task_id, tombstone)| {
+                    candidate.task_tombstones.get(task_id) == Some(tombstone)
+                });
+            if !existing_tombstones_preserved {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "reasoning-state migration rewrote or removed a legacy task tombstone"
+                        .to_string(),
+                });
+            }
+        }
+        if candidate.fencing_counter != current.fencing_counter {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning-state migration changed the legacy fencing high-water"
+                    .to_string(),
+            });
+        }
+    }
+
+    validate_task_history_prefix(current, candidate)?;
+
+    // The graph itself is append-only.  Existing signed records cannot be
+    // removed or rewritten by a direct CAS, even when the candidate's graph
+    // version was manually advanced.
+    validate_append_only_map("nodes", &current.graph.nodes, &candidate.graph.nodes)?;
+    validate_append_only_map(
+        "evidence",
+        &current.graph.evidence,
+        &candidate.graph.evidence,
+    )?;
+    validate_append_only_map("edges", &current.graph.edges, &candidate.graph.edges)?;
+    validate_append_only_map(
+        "contradictions",
+        &current.graph.contradictions,
+        &candidate.graph.contradictions,
+    )?;
+    validate_append_only_map(
+        "conflicts",
+        &current.graph.conflicts,
+        &candidate.graph.conflicts,
+    )?;
+    let graph_changed = candidate.graph.nodes != current.graph.nodes
+        || candidate.graph.evidence != current.graph.evidence
+        || candidate.graph.edges != current.graph.edges
+        || candidate.graph.contradictions != current.graph.contradictions
+        || candidate.graph.conflicts != current.graph.conflicts;
+    if graph_changed && candidate.graph.version <= current.graph.version {
+        return Err(GraphStoreError::InvalidState {
+            reason: "graph records changed without advancing graph version".to_string(),
+        });
+    }
+    if candidate.graph.version < current.graph.version {
+        return Err(GraphStoreError::InvalidState {
+            reason: "graph version regressed".to_string(),
+        });
+    }
+
+    // Hypothesis records are durable epistemic alternatives.  Existing
+    // alternatives remain queryable, and their decision histories can only
+    // grow by appending the next sequence number.
+    for (hypothesis_id, prior) in &current.hypotheses {
+        let next = candidate.hypotheses.get(hypothesis_id).ok_or_else(|| {
+            GraphStoreError::InvalidState {
+                reason: "reasoning CAS removed an existing hypothesis".to_string(),
+            }
+        })?;
+        if next.confidence != prior.confidence || next.uncertainty != prior.uncertainty {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS rewrote hypothesis confidence or uncertainty without a typed authenticated transition"
+                    .to_string(),
+            });
+        }
+        if next.hypothesis_id != prior.hypothesis_id
+            || !prior.claims.is_subset(&next.claims)
+            || !prior.contradiction_ids.is_subset(&next.contradiction_ids)
+            || next.graph_version < prior.graph_version
+            || next.decision_history.len() < prior.decision_history.len()
+            || next
+                .decision_history
+                .iter()
+                .zip(&prior.decision_history)
+                .any(|(candidate_decision, prior_decision)| candidate_decision != prior_decision)
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "hypothesis state or decision history is not append-only".to_string(),
+            });
+        }
+        if next.decision_history[prior.decision_history.len()..]
+            .iter()
+            .any(|decision| decision.decided_at < current.logical_time_high_water)
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS appended a decision below the predecessor logical-time high-water"
+                    .to_string(),
+            });
+        }
+    }
+    for (hypothesis_id, hypothesis) in &candidate.hypotheses {
+        if current.hypotheses.contains_key(hypothesis_id) {
+            continue;
+        }
+        let descriptor_lineage =
+            candidate
+                .logical_task_descriptors
+                .iter()
+                .any(|(task_id, descriptor)| {
+                    !current.logical_task_descriptors.contains_key(task_id)
+                        && descriptor.kind == TaskKind::FalsifyHypothesis
+                        && matches!(
+                            &descriptor.target,
+                            TaskTarget::Hypothesis {
+                                hypothesis_id: target
+                            } if target == hypothesis_id
+                        )
+                });
+        let coordinator_shape = hypothesis.graph_version == 0
+            && hypothesis.claims.is_empty()
+            && hypothesis.contradiction_ids.is_empty()
+            && hypothesis.confidence == ConfidenceDistribution::uniform_two()
+            && hypothesis.uncertainty.iter().all(|reason| {
+                matches!(
+                    reason,
+                    UncertaintyReason::InsufficientEvidence
+                        | UncertaintyReason::ConflictingEvidence
+                )
+            });
+        let initial_history_is_authenticated = match initial_decision_admission {
+            InitialDecisionAdmission::Reject => {
+                hypothesis.decision_history.is_empty()
+                    && hypothesis.status == swarm_core::hypothesis_graph::HypothesisStatus::Live
+            }
+            InitialDecisionAdmission::AuthenticatedCoordinator(coordinator_identity) => {
+                if hypothesis.decision_history.is_empty() {
+                    hypothesis.status == swarm_core::hypothesis_graph::HypothesisStatus::Live
+                } else {
+                    hypothesis.decision_history.iter().all(|decision| {
+                        let coordinator_scoped = decision.witness.as_ref().is_some_and(|witness| {
+                            witness.scoped_agent_id == "hypothesis-coordinator"
+                        });
+                        coordinator_scoped && &decision.producer_identity == coordinator_identity
+                    })
+                }
+            }
+        };
+        // A falsification decision closes its own alternative, so the
+        // coordinator must not manufacture a task which can no longer run.
+        // Every still-live alternative retains descriptor lineage.
+        let task_lineage_is_complete = hypothesis.status
+            == swarm_core::hypothesis_graph::HypothesisStatus::Falsified
+            || descriptor_lineage;
+        if !coordinator_shape || !initial_history_is_authenticated || !task_lineage_is_complete {
+            return Err(GraphStoreError::InvalidState {
+                reason: "new hypothesis lacks authenticated coordinator seed/task lineage"
+                    .to_string(),
+            });
+        }
+    }
+
+    // Cross-graph links are bounded references, not a mutable side channel.
+    if !current
+        .cross_graph_links
+        .is_subset(&candidate.cross_graph_links)
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: "reasoning CAS removed an existing cross-graph link".to_string(),
+        });
+    }
+    if candidate.cross_graph_links.len() > limits.max_tasks {
+        return Err(GraphStoreError::ResourceLimit {
+            resource: "reasoning.cross_graph_links".to_string(),
+            limit: limits.max_tasks,
+        });
+    }
+
+    // Descriptors and outbox publications are append-only and must remain
+    // bound to the task map.  A new descriptor/task is admitted only as a
+    // pending task; a changed existing task is admitted only as one terminal
+    // task plus one new outbox entry.
+    for (task_id, prior) in &current.logical_task_descriptors {
+        let next = candidate
+            .logical_task_descriptors
+            .get(task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "reasoning CAS removed an existing task descriptor".to_string(),
+            })?;
+        if next != prior {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS rewrote an existing task descriptor".to_string(),
+            });
+        }
+    }
+    for (task_id, descriptor) in &candidate.logical_task_descriptors {
+        let task = candidate
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "candidate descriptor has no durable task".to_string(),
+            })?;
+        if descriptor.task_id != *task_id
+            || descriptor.target != task.task.request.target
+            || descriptor.kind != task.task.request.kind
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "candidate descriptor does not bind its task".to_string(),
+            });
+        }
+    }
+    for (task_id, prior) in &current.terminal_outbox {
+        let next = candidate.terminal_outbox.get(task_id).ok_or_else(|| {
+            GraphStoreError::InvalidState {
+                reason: "reasoning CAS removed an existing terminal outbox entry".to_string(),
+            }
+        })?;
+        if next != prior {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS rewrote an existing terminal outbox entry".to_string(),
+            });
+        }
+    }
+    for (task_id, prior) in &current.task_failure_outbox {
+        let next = candidate.task_failure_outbox.get(task_id).ok_or_else(|| {
+            GraphStoreError::InvalidState {
+                reason: "reasoning CAS removed an existing task failure outbox entry".to_string(),
+            }
+        })?;
+        if next != prior {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS rewrote an existing task failure outbox entry".to_string(),
+            });
+        }
+    }
+    for task_id in current.tasks.keys() {
+        if !candidate.tasks.contains_key(task_id) {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS removed an existing task".to_string(),
+            });
+        }
+    }
+    for (task_id, prior) in &current.task_tombstones {
+        let Some(next) = candidate.task_tombstones.get(task_id) else {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS removed an existing task tombstone".to_string(),
+            });
+        };
+        if let Some(candidate_task) = candidate.tasks.get(task_id)
+            && !tombstone_matches_record(next, candidate_task, candidate.migration_marker)?
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS task tombstone does not match its task".to_string(),
+            });
+        }
+        if candidate.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES
+            && candidate.tasks.get(task_id) != current.tasks.get(task_id)
+            && next.history_digest.is_empty()
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS changed task without binding its history digest".to_string(),
+            });
+        }
+        if candidate.tasks.get(task_id) == current.tasks.get(task_id) && next != prior {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS rewrote an existing task tombstone".to_string(),
+            });
+        }
+        next.compare_to(prior, task_id)?;
+    }
+    for (task_id, next) in &candidate.tasks {
+        let prior = current.tasks.get(task_id);
+        match prior {
+            None => {
+                if !matches!(next.task.state, TaskState::Pending)
+                    || !next.history.is_empty()
+                    || !candidate.logical_task_descriptors.contains_key(task_id)
+                    || candidate.terminal_outbox.contains_key(task_id)
+                    || candidate.task_failure_outbox.contains_key(task_id)
+                {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "new reasoning task must be pending and descriptor-bound"
+                            .to_string(),
+                    });
+                }
+            }
+            Some(prior) if next == prior => {}
+            Some(prior) => {
+                let prior_lease =
+                    prior
+                        .task
+                        .lease
+                        .as_ref()
+                        .ok_or_else(|| GraphStoreError::InvalidState {
+                            reason:
+                                "terminal task replacement requires the prior task's active lease"
+                                    .to_string(),
+                        })?;
+                if prior.task.state != TaskState::Claimed || prior.task.completion.is_some() {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "terminal task replacement requires a prior claimed task"
+                            .to_string(),
+                    });
+                }
+                if next.task.request != prior.task.request {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "terminal task replacement changed the claimed request identity"
+                            .to_string(),
+                    });
+                }
+                let completion_outbox = candidate.terminal_outbox.get(task_id);
+                let failure_outbox = candidate.task_failure_outbox.get(task_id);
+                let atomic_terminal_publication = match next.task.state {
+                    TaskState::Completed => {
+                        !current.terminal_outbox.contains_key(task_id)
+                            && !current.task_failure_outbox.contains_key(task_id)
+                            && completion_outbox.is_some()
+                            && failure_outbox.is_none()
+                    }
+                    TaskState::Failed => {
+                        !current.terminal_outbox.contains_key(task_id)
+                            && !current.task_failure_outbox.contains_key(task_id)
+                            && completion_outbox.is_none()
+                            && failure_outbox.is_some()
+                    }
+                    _ => false,
+                };
+                if !atomic_terminal_publication {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "task replacement is not an atomic terminal outbox publication"
+                            .to_string(),
+                    });
+                }
+                let proof = next.task.terminal_history.last().ok_or_else(|| {
+                    GraphStoreError::InvalidState {
+                        reason: "terminal task replacement has no retained terminal proof"
+                            .to_string(),
+                    }
+                })?;
+                if proof.prior_state != TaskState::Claimed
+                    || proof.prior_generation != prior.task.generation
+                    || proof.prior_lease != *prior_lease
+                {
+                    return Err(GraphStoreError::InvalidState {
+                        reason:
+                            "terminal proof does not bind the prior claimed lease and generation"
+                                .to_string(),
+                    });
+                }
+                if proof.completed_at < prior_lease.issued_at
+                    || proof.completed_at >= prior_lease.expires_at
+                {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "terminal proof is outside the prior active lease window"
+                            .to_string(),
+                    });
+                }
+                if proof.completed_at < current.logical_time_high_water
+                    || proof.completed_at < candidate.logical_time_high_water
+                {
+                    return Err(GraphStoreError::InvalidState {
+                        reason:
+                            "terminal completion logical time is below the durable graph high-water"
+                                .to_string(),
+                    });
+                }
+                if current.logical_time_high_water >= prior_lease.expires_at {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "prior claimed lease is expired at the durable logical high-water"
+                            .to_string(),
+                    });
+                }
+                let prior_high_water = current.task_tombstones.get(task_id).ok_or_else(|| {
+                    GraphStoreError::InvalidState {
+                        reason: "current task has no monotonic tombstone".to_string(),
+                    }
+                })?;
+                let next_high_water = candidate.task_tombstones.get(task_id).ok_or_else(|| {
+                    GraphStoreError::InvalidState {
+                        reason: "candidate task has no monotonic tombstone".to_string(),
+                    }
+                })?;
+                next_high_water.compare_to(prior_high_water, task_id)?;
+                let descriptor =
+                    candidate
+                        .logical_task_descriptors
+                        .get(task_id)
+                        .ok_or_else(|| GraphStoreError::InvalidState {
+                            reason: "terminal task replacement has no logical descriptor"
+                                .to_string(),
+                        })?;
+                if let Some(outbox) = completion_outbox {
+                    let envelope = &outbox.envelope;
+                    if envelope.task_id != prior.task.request.task_id
+                        || envelope.idempotency_key != prior.task.request.idempotency_key
+                        || envelope.lease_id != prior_lease.lease_id
+                        || envelope.fencing_token != prior_lease.fencing_token
+                        || envelope.producer != prior_lease.holder
+                        || envelope.capability.claimant != prior.task.request.claimant
+                        || envelope.capability.kind != prior.task.request.kind
+                        || envelope.capability.role != prior.task.request.role
+                    {
+                        return Err(GraphStoreError::InvalidState {
+                            reason:
+                                "terminal outbox is not bound to the prior claimed task identity"
+                                    .to_string(),
+                        });
+                    }
+                    // Re-run the publication against the claimed predecessor,
+                    // not only the materialized terminal candidate.
+                    outbox
+                        .validate_for_task_at(
+                            &prior.task,
+                            descriptor,
+                            limits,
+                            current.logical_time_high_water,
+                        )
+                        .map_err(GraphStoreError::Admission)?;
+                    outbox
+                        .validate_graph_references(&current.graph, &current.hypotheses)
+                        .map_err(GraphStoreError::Admission)?;
+                    outbox
+                        .validate_for_committed_task_at(
+                            &next.task,
+                            descriptor,
+                            limits,
+                            candidate.logical_time_high_water,
+                        )
+                        .map_err(GraphStoreError::Admission)?;
+                } else if let Some(outbox) = failure_outbox {
+                    outbox.validate_for_claimed_task(
+                        &prior.task,
+                        descriptor,
+                        current.logical_time_high_water,
+                    )?;
+                    outbox.validate_for_failed_task(
+                        &next.task,
+                        descriptor,
+                        candidate.logical_time_high_water,
+                    )?;
+                }
+            }
+        }
+    }
+    for (task_id, entry) in &candidate.terminal_outbox {
+        if let Some(prior_entry) = current.terminal_outbox.get(task_id)
+            && prior_entry != entry
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning CAS rewrote an existing terminal outbox entry".to_string(),
+            });
+        }
+        if !current.terminal_outbox.contains_key(task_id)
+            && current
+                .tasks
+                .get(task_id)
+                .is_some_and(|prior| candidate.tasks.get(task_id) == Some(prior))
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "terminal outbox publication is not atomic with task transition"
+                    .to_string(),
+            });
+        }
+        let task = candidate
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "terminal outbox references an unknown task".to_string(),
+            })?;
+        let descriptor = candidate
+            .logical_task_descriptors
+            .get(task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "terminal outbox task has no logical descriptor".to_string(),
+            })?;
+        entry
+            .validate_for_committed_task_at(
+                &task.task,
+                descriptor,
+                limits,
+                candidate.logical_time_high_water,
+            )
+            .map_err(GraphStoreError::Admission)?;
+    }
+    for (task_id, entry) in &candidate.task_failure_outbox {
+        if !current.task_failure_outbox.contains_key(task_id)
+            && current
+                .tasks
+                .get(task_id)
+                .is_some_and(|prior| candidate.tasks.get(task_id) == Some(prior))
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "task failure outbox publication is not atomic with task transition"
+                    .to_string(),
+            });
+        }
+        let task = candidate
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "task failure outbox references an unknown task".to_string(),
+            })?;
+        let descriptor = candidate
+            .logical_task_descriptors
+            .get(task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "task failure outbox has no logical descriptor".to_string(),
+            })?;
+        entry.validate_for_failed_task(
+            &task.task,
+            descriptor,
+            candidate.logical_time_high_water,
+        )?;
+    }
+    // Generic CAS is not a scheduler-admission API. Once a reasoning stream
+    // has a persisted budget, every task-map mutation must carry the exact
+    // derived work delta for new pending tasks; terminalization carries no
+    // scheduler delta. A caller cannot overcharge, reset, or move the budget
+    // to an unrelated logical tick while smuggling a task mutation through
+    // `compare_and_swap`.
+    if !(current.migration_marker == GRAPH_STATE_MIGRATION_LEGACY
+        && candidate.migration_marker == GRAPH_STATE_MIGRATION_HYPOTHESES
+        && current.tasks == candidate.tasks)
+    {
+        validate_reasoning_task_scheduler_delta(current, candidate)?;
+    }
+    Ok(())
+}
+
+/// Scheduler usage is a durable high-water, not a process-local hint. A
+/// candidate may advance to a newer logical tick (where core admission resets
+/// per-tick counters), but it may not lower the tick, reset counters at the
+/// same tick, or widen/change the config-bound ceilings. Legacy marker-0
+/// states have no budget; attaching the first validated budget is the only
+/// `None -> Some` transition permitted.
+fn validate_scheduler_budget_transition(
+    current: &GraphStoreState,
+    candidate: &GraphStoreState,
+) -> Result<(), GraphStoreError> {
+    if current.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES
+        && current.scheduler_budget.is_none()
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: "marker-1 predecessor has no persisted scheduler budget".to_string(),
+        });
+    }
+    if candidate.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES
+        && candidate.scheduler_budget.is_none()
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: "marker-1 candidate has no persisted scheduler budget".to_string(),
+        });
+    }
+    match (&current.scheduler_budget, &candidate.scheduler_budget) {
+        (None, None)
+            if current.migration_marker == GRAPH_STATE_MIGRATION_LEGACY
+                && candidate.migration_marker == GRAPH_STATE_MIGRATION_LEGACY =>
+        {
+            Ok(())
+        }
+        (None, Some(_))
+            if current.migration_marker == GRAPH_STATE_MIGRATION_LEGACY
+                && candidate.migration_marker == GRAPH_STATE_MIGRATION_HYPOTHESES =>
+        {
+            Ok(())
+        }
+        (None, None) | (None, Some(_)) => Err(GraphStoreError::InvalidState {
+            reason: "scheduler budget attachment is only valid for one-way legacy migration"
+                .to_string(),
+        }),
+        (Some(_), None) => Err(GraphStoreError::InvalidState {
+            reason: "scheduler budget was removed or reset".to_string(),
+        }),
+        (Some(current_budget), Some(candidate_budget)) => {
+            if current_budget.max_work_units != candidate_budget.max_work_units
+                || current_budget.max_claims != candidate_budget.max_claims
+            {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "scheduler budget policy identity/ceilings changed after attachment"
+                        .to_string(),
+                });
+            }
+            if candidate_budget.current_tick() < current_budget.current_tick() {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "scheduler budget logical tick regressed".to_string(),
+                });
+            }
+            if candidate_budget.current_tick() == current_budget.current_tick()
+                && (candidate_budget.work_units_used() < current_budget.work_units_used()
+                    || candidate_budget.claims_used() < current_budget.claims_used())
+            {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "scheduler budget counters regressed within a logical tick".to_string(),
+                });
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_exact_scheduler_budget_delta(
+    current: Option<&SchedulerBudget>,
+    candidate: Option<&SchedulerBudget>,
+    logical_tick: Option<GraphLogicalTime>,
+    expected_work_units: u32,
+    expected_claims: u16,
+) -> Result<(), GraphStoreError> {
+    if logical_tick.is_none() && expected_work_units == 0 && expected_claims == 0 {
+        if current != candidate {
+            return Err(GraphStoreError::InvalidState {
+                reason: "scheduler budget changed without a derived task admission".to_string(),
+            });
+        }
+        return Ok(());
+    }
+
+    let candidate_budget = candidate.ok_or_else(|| GraphStoreError::InvalidState {
+        reason: "task admission changed without a persisted scheduler budget".to_string(),
+    })?;
+    let logical_tick = logical_tick.ok_or_else(|| GraphStoreError::InvalidState {
+        reason: "scheduler task admission is missing its logical tick".to_string(),
+    })?;
+    if candidate_budget.current_tick() != logical_tick {
+        return Err(GraphStoreError::InvalidState {
+            reason: "scheduler budget logical tick does not match task admission".to_string(),
+        });
+    }
+
+    let (expected_work, expected_claims) = match current {
+        None => (expected_work_units, expected_claims),
+        Some(current_budget) => {
+            if logical_tick < current_budget.current_tick() {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "scheduler task admission logical tick regressed".to_string(),
+                });
+            }
+            if logical_tick == current_budget.current_tick() {
+                (
+                    current_budget
+                        .work_units_used()
+                        .checked_add(expected_work_units)
+                        .ok_or_else(|| GraphStoreError::InvalidState {
+                            reason: "scheduler work-unit delta overflow".to_string(),
+                        })?,
+                    current_budget
+                        .claims_used()
+                        .checked_add(expected_claims)
+                        .ok_or_else(|| GraphStoreError::InvalidState {
+                            reason: "scheduler claim delta overflow".to_string(),
+                        })?,
+                )
+            } else {
+                (expected_work_units, expected_claims)
+            }
+        }
+    };
+    if candidate_budget.work_units_used() != expected_work
+        || candidate_budget.claims_used() != expected_claims
+    {
+        return Err(GraphStoreError::InvalidState {
+            reason: format!(
+                "scheduler budget delta is not exact: expected work {expected_work}, claims {expected_claims}, observed work {}, claims {}",
+                candidate_budget.work_units_used(),
+                candidate_budget.claims_used()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_reasoning_task_scheduler_delta(
+    current: &GraphStoreState,
+    candidate: &GraphStoreState,
+) -> Result<(), GraphStoreError> {
+    let mut new_pending_tasks = 0_u32;
+    let mut admission_tick = None;
+    let mut task_map_changed = current.tasks != candidate.tasks;
+
+    for (task_id, next) in &candidate.tasks {
+        match current.tasks.get(task_id) {
+            None => {
+                task_map_changed = true;
+                new_pending_tasks = new_pending_tasks.checked_add(1).ok_or_else(|| {
+                    GraphStoreError::InvalidState {
+                        reason: "scheduler pending-task delta overflow".to_string(),
+                    }
+                })?;
+                if !matches!(next.task.state, TaskState::Pending) {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "scheduler work admission requires a new pending task".to_string(),
+                    });
+                }
+                let requested_at = next.task.request.requested_at;
+                if let Some(prior_tick) = admission_tick
+                    && prior_tick != requested_at
+                {
+                    return Err(GraphStoreError::InvalidState {
+                        reason: "new pending tasks in one CAS must share a logical tick"
+                            .to_string(),
+                    });
+                }
+                admission_tick = Some(requested_at);
+            }
+            Some(prior) if prior != next => {
+                task_map_changed = true;
+            }
+            Some(_) => {}
+        }
+    }
+
+    if !task_map_changed {
+        return validate_exact_scheduler_budget_delta(
+            current.scheduler_budget.as_ref(),
+            candidate.scheduler_budget.as_ref(),
+            None,
+            0,
+            0,
+        );
+    }
+    if new_pending_tasks == 0 {
+        // A valid direct CAS task replacement is terminalization, which has
+        // no scheduler charge. Any other changed-task shape was rejected by
+        // the terminal transition checks above.
+        return validate_exact_scheduler_budget_delta(
+            current.scheduler_budget.as_ref(),
+            candidate.scheduler_budget.as_ref(),
+            None,
+            0,
+            0,
+        );
+    }
+    validate_exact_scheduler_budget_delta(
+        current.scheduler_budget.as_ref(),
+        candidate.scheduler_budget.as_ref(),
+        admission_tick,
+        new_pending_tasks,
+        0,
+    )
+}
+
+/// Retained wrapper history is an append-only log. A candidate may append the
+/// next terminal attempt, but it may never rewrite an already persisted
+/// prefix, including when the candidate keeps the same task generation and
+/// tombstone high-water fields.
+fn validate_task_history_prefix(
+    current: &GraphStoreState,
+    candidate: &GraphStoreState,
+) -> Result<(), GraphStoreError> {
+    for (task_id, prior) in &current.tasks {
+        let next = candidate
+            .tasks
+            .get(task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: format!("task {task_id} was removed while validating history"),
+            })?;
+        if next.history.len() < prior.history.len()
+            || next
+                .history
+                .iter()
+                .zip(&prior.history)
+                .any(|(candidate_record, prior_record)| candidate_record != prior_record)
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: format!("task {task_id} history is not an append-only prefix"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_append_only_map<K, V>(
+    label: &str,
+    current: &BTreeMap<K, V>,
+    candidate: &BTreeMap<K, V>,
+) -> Result<(), GraphStoreError>
+where
+    K: Ord,
+    V: PartialEq,
+{
+    for (record_id, record) in current {
+        match candidate.get(record_id) {
+            Some(candidate_record) if candidate_record == record => {}
+            Some(_) => {
+                return Err(GraphStoreError::InvalidState {
+                    reason: format!("reasoning CAS rewrote an existing {label} record"),
+                });
+            }
+            None => {
+                return Err(GraphStoreError::InvalidState {
+                    reason: format!("reasoning CAS removed an existing {label} record"),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 struct StateMutation<R> {
     value: R,
     changed: bool,
 }
 
-fn refresh_task_tombstones(state: &mut GraphStoreState) -> Result<(), GraphStoreError> {
-    for (task_id, record) in &state.tasks {
-        let next = TaskMonotonicity::from_record(record)?;
-        if let Some(current) = state.task_tombstones.get(task_id) {
-            next.compare_to(current, task_id)?;
-        }
-        state.task_tombstones.insert(task_id.clone(), next);
+fn refresh_changed_task_tombstones(
+    current: &GraphStoreState,
+    candidate: &mut GraphStoreState,
+    preserve_legacy_tombstones: bool,
+) -> Result<(), GraphStoreError> {
+    let changed_task_ids: Vec<TaskId> = candidate
+        .tasks
+        .iter()
+        .filter_map(|(task_id, record)| {
+            (current.tasks.get(task_id) != Some(record)).then_some(task_id.clone())
+        })
+        .collect();
+    for task_id in changed_task_ids {
+        refresh_task_tombstone(candidate, &task_id, preserve_legacy_tombstones)?;
     }
+    Ok(())
+}
+
+fn refresh_task_tombstone(
+    state: &mut GraphStoreState,
+    task_id: &TaskId,
+    preserve_legacy_tombstone: bool,
+) -> Result<(), GraphStoreError> {
+    let record = state
+        .tasks
+        .get(task_id)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: format!("task tombstone refresh has no durable task {task_id}"),
+        })?;
+    let next = if state.migration_marker == GRAPH_STATE_MIGRATION_LEGACY
+        || (preserve_legacy_tombstone
+            && state
+                .task_tombstones
+                .get(task_id)
+                .is_some_and(|tombstone| tombstone.history_digest.is_empty()))
+    {
+        TaskMonotonicity::from_record_legacy(record)?
+    } else {
+        TaskMonotonicity::from_record(record)?
+    };
+    if let Some(current) = state.task_tombstones.get(task_id) {
+        next.compare_to(current, task_id)?;
+    }
+    state.task_tombstones.insert(task_id.clone(), next);
     Ok(())
 }
 
@@ -2264,6 +4144,7 @@ fn transition<R, F>(
     expected: Option<&GraphStoreRevision>,
     signer: &Keypair,
     limits: &GraphResourceLimits,
+    scheduler_policy: &SchedulerBudgetPolicy,
     operation: F,
 ) -> Result<(SignedGraphStoreState, R), GraphStoreError>
 where
@@ -2271,12 +4152,74 @@ where
 {
     let current_revision = current.revision()?;
     check_expected(&current_revision, expected)?;
+    transition_after_predecessor_check(
+        current,
+        signer,
+        limits,
+        scheduler_policy,
+        expected.is_none(),
+        operation,
+    )
+}
+
+fn transition_with_exact_retry<R, P, F>(
+    current: &SignedGraphStoreState,
+    expected: Option<&GraphStoreRevision>,
+    signer: &Keypair,
+    limits: &GraphResourceLimits,
+    scheduler_policy: &SchedulerBudgetPolicy,
+    exact_retry: P,
+    operation: F,
+) -> Result<(SignedGraphStoreState, R), GraphStoreError>
+where
+    P: FnOnce(&GraphStoreState) -> Result<Option<R>, GraphStoreError>,
+    F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
+{
+    if let Some(value) = exact_retry(&current.state)? {
+        return Ok((current.clone(), value));
+    }
+    let current_revision = current.revision()?;
+    check_expected(&current_revision, expected)?;
+    transition_after_predecessor_check(
+        current,
+        signer,
+        limits,
+        scheduler_policy,
+        expected.is_none(),
+        operation,
+    )
+}
+
+fn transition_after_predecessor_check<R, F>(
+    current: &SignedGraphStoreState,
+    signer: &Keypair,
+    limits: &GraphResourceLimits,
+    scheduler_policy: &SchedulerBudgetPolicy,
+    refresh_convenience_tombstones: bool,
+    operation: F,
+) -> Result<(SignedGraphStoreState, R), GraphStoreError>
+where
+    F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
+{
     let mut next_state = current.state.clone();
     let result = operation(&mut next_state)?;
     if !result.changed {
         return Ok((current.clone(), result.value));
     }
-    refresh_task_tombstones(&mut next_state)?;
+    // CAS candidates already carry their explicitly validated tombstones.
+    // Recomputing them here would normalize a tampered migration candidate
+    // before the append-only validator could reject it. Convenience task
+    // transitions refresh only the records changed by this operation, so an
+    // unrelated legacy tombstone is never rewritten as a side effect.
+    if refresh_convenience_tombstones {
+        refresh_changed_task_tombstones(&current.state, &mut next_state, false)?;
+    }
+    validate_scheduler_budget_transition(&current.state, &next_state)?;
+    if let Some(budget) = &next_state.scheduler_budget {
+        scheduler_policy.validate_budget(budget)?;
+    }
+    next_state.validate_with_limits(limits)?;
+    validate_task_history_prefix(&current.state, &next_state)?;
     next_state.generation =
         current
             .state
@@ -2372,6 +4315,53 @@ fn validate_request(request: &TaskClaimRequest) -> Result<(), GraphStoreError> {
     request.validate().map_err(GraphStoreError::Admission)
 }
 
+fn ensure_reasoning_descriptor_for_request(
+    state: &GraphStoreState,
+    request: &TaskClaimRequest,
+) -> Result<(), GraphStoreError> {
+    if state.migration_marker < GRAPH_STATE_MIGRATION_HYPOTHESES {
+        return Ok(());
+    }
+    let descriptor = state
+        .logical_task_descriptors
+        .get(&request.task_id)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "reasoning task admission requires a logical task descriptor".to_string(),
+        })?;
+    if descriptor.target != request.target || descriptor.kind != request.kind {
+        return Err(GraphStoreError::InvalidState {
+            reason: "logical task descriptor does not bind the claim request".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn reject_reasoning_terminal_transition(state: &GraphStoreState) -> Result<(), GraphStoreError> {
+    if state.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "reasoning terminal transitions require a descriptor-bound outbox CAS"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// The legacy task entry points predate persisted scheduler admission. They
+/// remain available for authenticated marker-0 streams, but may not mutate a
+/// marker-1 reasoning stream without carrying the next budget in the same
+/// operation-specific CAS.
+fn reject_unbudgeted_reasoning_task_surface(
+    state: &GraphStoreState,
+    operation: &str,
+) -> Result<(), GraphStoreError> {
+    if state.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: format!("reasoning {operation} requires atomic scheduler budget admission"),
+        });
+    }
+    Ok(())
+}
+
 /// Claim identity is the canonical idempotency key plus every immutable claim
 /// field.  `requested_at` is deliberately excluded: a retry that reaches the
 /// store at a later logical time must resolve to the original durable claim,
@@ -2383,6 +4373,19 @@ fn same_claim_identity(left: &TaskClaimRequest, right: &TaskClaimRequest) -> boo
         && left.target == right.target
         && left.role == right.role
         && left.claimant == right.claimant
+        && left.evidence_scope == right.evidence_scope
+}
+
+/// A pending descriptor is logical work, not a lease held by the coordinator's
+/// initially selected worker. Before the first claim, another capable worker
+/// may atomically bind its own claimant, request time, and capability digest;
+/// the descriptor-bound task identity, target, role, and evidence scope remain
+/// immutable.
+fn same_pending_work_identity(left: &TaskClaimRequest, right: &TaskClaimRequest) -> bool {
+    left.task_id == right.task_id
+        && left.kind == right.kind
+        && left.target == right.target
+        && left.role == right.role
         && left.evidence_scope == right.evidence_scope
 }
 
@@ -2441,133 +4444,20 @@ fn ensure_lease(
     Ok(lease.clone())
 }
 
-fn graph_map_extension_count<K, V>(
-    label: &str,
-    current: &BTreeMap<K, V>,
-    candidate: &BTreeMap<K, V>,
-) -> Result<usize, GraphStoreError>
-where
-    K: Ord,
-    V: PartialEq,
-{
-    if current
-        .iter()
-        .any(|(key, value)| candidate.get(key) != Some(value))
-    {
-        return Err(GraphStoreError::InvalidState {
-            reason: format!("graph CAS cannot delete or rewrite existing {label}"),
-        });
-    }
-    candidate
-        .len()
-        .checked_sub(current.len())
-        .ok_or_else(|| GraphStoreError::InvalidState {
-            reason: format!("graph CAS {label} count regressed"),
-        })
-}
-
-fn validate_graph_cas_successor(
-    current: &HypothesisGraph,
-    candidate: &HypothesisGraph,
-) -> Result<bool, GraphStoreError> {
-    if candidate.schema_version != current.schema_version
-        || candidate.graph_id != current.graph_id
-        || candidate.limits != current.limits
-    {
-        return Err(GraphStoreError::InvalidState {
-            reason: "graph CAS cannot replace graph identity, schema, or limits".to_string(),
-        });
-    }
-    let additions = [
-        graph_map_extension_count("nodes", &current.nodes, &candidate.nodes)?,
-        graph_map_extension_count("evidence", &current.evidence, &candidate.evidence)?,
-        graph_map_extension_count("edges", &current.edges, &candidate.edges)?,
-        graph_map_extension_count(
-            "contradictions",
-            &current.contradictions,
-            &candidate.contradictions,
-        )?,
-        graph_map_extension_count("conflicts", &current.conflicts, &candidate.conflicts)?,
-    ]
-    .into_iter()
-    .try_fold(0_usize, |total, count| total.checked_add(count))
-    .ok_or_else(|| GraphStoreError::InvalidState {
-        reason: "graph CAS addition count overflow".to_string(),
-    })?;
-    let addition_delta = u64::try_from(additions).map_err(|_| GraphStoreError::InvalidState {
-        reason: "graph CAS addition count does not fit the version counter".to_string(),
-    })?;
-    let expected_version = current.version.checked_add(addition_delta).ok_or_else(|| {
-        GraphStoreError::InvalidState {
-            reason: "graph CAS version would overflow".to_string(),
-        }
-    })?;
-    if candidate.version != expected_version {
-        return Err(GraphStoreError::InvalidState {
-            reason: format!(
-                "graph CAS version must advance exactly once per appended record: expected {expected_version}, observed {}",
-                candidate.version
-            ),
-        });
-    }
-    Ok(additions > 0)
-}
-
-fn graph_cas_op(
-    current: &mut GraphStoreState,
-    envelope: GraphCasEnvelope,
-    graph_id: &GraphId,
-    authority: &AgentId,
-    limits: &GraphResourceLimits,
-) -> Result<StateMutation<()>, GraphStoreError> {
-    envelope.validate_for_store(authority)?;
-    let state = envelope.state;
-    if &state.graph_id != graph_id {
-        return Err(GraphStoreError::InvalidState {
-            reason: "replacement graph ID differs from store stream".to_string(),
-        });
-    }
-    if state.generation != current.generation
-        || state.predecessor_digest != current.predecessor_digest
-    {
-        return Err(GraphStoreError::StalePredecessor {
-            expected_generation: current.generation,
-            expected_digest: current.digest()?,
-            observed_generation: state.generation,
-            observed_digest: state.digest()?,
-        });
-    }
-    if state.fencing_counter != current.fencing_counter {
-        return Err(GraphStoreError::InvalidState {
-            reason: "graph CAS cannot replace the store-owned fencing counter".to_string(),
-        });
-    }
-    if state.logical_time_high_water != current.logical_time_high_water {
-        return Err(GraphStoreError::InvalidState {
-            reason: "graph CAS cannot replace the store-owned logical time high-water".to_string(),
-        });
-    }
-    if state.tasks != current.tasks || state.task_tombstones != current.task_tombstones {
-        return Err(GraphStoreError::InvalidState {
-            reason: "graph CAS cannot replace task records or tombstones".to_string(),
-        });
-    }
-    state.validate_with_limits(limits)?;
-    let changed = validate_graph_cas_successor(&current.graph, &state.graph)?;
-    if changed {
-        current.graph = state.graph;
-    }
-    Ok(StateMutation { value: (), changed })
-}
-
 fn create_task_op(
     state: &mut GraphStoreState,
-    envelope: TaskCreationEnvelope,
-    authority: &AgentId,
+    request: TaskClaimRequest,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    envelope.validate_for_store(authority)?;
-    let request = envelope.request;
+    validate_request(&request)?;
+    if state.migration_marker >= GRAPH_STATE_MIGRATION_HYPOTHESES
+        && !state.tasks.contains_key(&request.task_id)
+    {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "reasoning task creation requires a descriptor-bound CAS".to_string(),
+        });
+    }
+    ensure_reasoning_descriptor_for_request(state, &request)?;
     if let Some(existing) = state.tasks.get(&request.task_id) {
         if same_claim_identity(&existing.task.request, &request) {
             return Ok(StateMutation {
@@ -2621,17 +4511,27 @@ fn create_task_op(
 
 fn claim_task_op(
     state: &mut GraphStoreState,
-    envelope: TaskClaimEnvelope,
-    authority: &AgentId,
+    request: TaskClaimRequest,
+    now: GraphLogicalTime,
+    duration_ms: u64,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    envelope.validate_for_store(authority, limits)?;
-    let request = envelope.request;
-    let now = envelope.claimed_at;
-    let duration_ms = envelope.duration_ms;
+    validate_request(&request)?;
+    ensure_reasoning_descriptor_for_request(state, &request)?;
+    now.validate().map_err(GraphStoreError::Admission)?;
+    if now < state.logical_time_high_water {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: format!(
+                "claim logical time regressed below persisted high-water {}",
+                state.logical_time_high_water
+            ),
+        });
+    }
     let existing = state.tasks.get(&request.task_id).cloned();
     if let Some(ref existing) = existing {
-        if !same_claim_identity(&existing.task.request, &request) {
+        let pending_rebind = existing.task.state == TaskState::Pending
+            && same_pending_work_identity(&existing.task.request, &request);
+        if !same_claim_identity(&existing.task.request, &request) && !pending_rebind {
             if existing.task.state == TaskState::Claimed {
                 return Err(GraphStoreError::AlreadyClaimed {
                     task_id: request.task_id,
@@ -2646,18 +4546,12 @@ fn claim_task_op(
                 task_id: request.task_id,
             });
         }
-        if existing.task.state == TaskState::Claimed
-            || matches!(
-                existing.task.state,
-                TaskState::Completed | TaskState::Failed
-            )
-        {
-            if existing.task.state == TaskState::Claimed
-                && existing
-                    .task
-                    .lease
-                    .as_ref()
-                    .is_some_and(|lease| now >= lease.expires_at)
+        if existing.task.state == TaskState::Claimed {
+            if existing
+                .task
+                .lease
+                .as_ref()
+                .is_some_and(|lease| now >= lease.expires_at)
             {
                 return Err(GraphStoreError::TaskExpiredNeedsReclaim {
                     task_id: request.task_id,
@@ -2669,6 +4563,14 @@ fn claim_task_op(
                     idempotent: true,
                 },
                 changed: false,
+            });
+        }
+        if matches!(
+            existing.task.state,
+            TaskState::Completed | TaskState::Failed
+        ) {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "terminal tasks cannot be claimed".to_string(),
             });
         }
         if existing.task.state == TaskState::Expired {
@@ -2688,9 +4590,16 @@ fn claim_task_op(
         fence,
         limits,
     )?;
-    let claim_request = existing
-        .as_ref()
-        .map_or_else(|| request.clone(), |entry| entry.task.request.clone());
+    let claim_request = existing.as_ref().map_or_else(
+        || request.clone(),
+        |entry| {
+            if entry.task.state == TaskState::Pending {
+                request.clone()
+            } else {
+                entry.task.request.clone()
+            }
+        },
+    );
     let task =
         if let Some(mut existing) = existing {
             if existing.task.state != TaskState::Pending {
@@ -2741,38 +4650,89 @@ fn claim_task_op(
     })
 }
 
-fn renew_task_op(
+fn claim_task_with_budget_op(
     state: &mut GraphStoreState,
-    envelope: TaskRenewalEnvelope,
-    authority: &AgentId,
+    request: TaskClaimRequest,
+    now: GraphLogicalTime,
+    duration_ms: u64,
+    scheduler_budget: SchedulerBudget,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    let current = state
-        .tasks
-        .get(&envelope.task_id)
-        .ok_or_else(|| GraphStoreError::TaskNotFound {
-            task_id: envelope.task_id.to_string(),
-        })?
-        .clone();
-    ensure_task_generation(&current, envelope.expected_generation)?;
-    envelope.validate_for_task(&current.task, authority, limits)?;
-    observe_logical_time(state, envelope.renewed_at)?;
-    let entry = task_entry_mut(state, envelope.task_id.as_str())?;
-    let old_lease = ensure_lease(entry, &envelope.lease_id, envelope.fencing_token)?;
+    let task_id = request.task_id.clone();
+    let prior_budget = state.scheduler_budget.clone();
+    let result = claim_task_op(state, request, now, duration_ms, limits)?;
+    if result.changed {
+        validate_exact_scheduler_budget_delta(
+            prior_budget.as_ref(),
+            Some(&scheduler_budget),
+            Some(now),
+            0,
+            1,
+        )?;
+        // CAS-bound callers bypass `transition`'s convenience-only tombstone
+        // refresh.  Claiming an existing pending record therefore has to
+        // refresh its derived monotonic witness here, before the budget and
+        // task are published in the same signed generation.  This also binds
+        // the history digest after a marker-0 -> marker-1 migration while
+        // preserving the idempotent retry path below.
+        // Only the claimed task is refreshed: direct reasoning CAS forbids
+        // rewriting an untouched task's legacy tombstone as a side effect.
+        refresh_task_tombstone(state, &task_id, false)?;
+        state.scheduler_budget = Some(scheduler_budget);
+    } else {
+        validate_exact_scheduler_budget_delta(
+            prior_budget.as_ref(),
+            Some(&scheduler_budget),
+            None,
+            0,
+            0,
+        )?;
+    }
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn renew_task_op(
+    state: &mut GraphStoreState,
+    task_id: &str,
+    expected_generation: u64,
+    lease_id: &LeaseId,
+    fence: FencingToken,
+    now: GraphLogicalTime,
+    duration_ms: u64,
+    limits: &GraphResourceLimits,
+) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
+    observe_logical_time(state, now)?;
+    let entry = task_entry_mut(state, task_id)?;
+    ensure_task_generation(entry, expected_generation)?;
+    let old_lease = ensure_lease(entry, lease_id, fence)?;
+    if entry.task.state != TaskState::Claimed {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "only claimed tasks can renew".to_string(),
+        });
+    }
+    if now < old_lease.issued_at {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "renewal clock precedes lease issuance".to_string(),
+        });
+    }
+    if now >= old_lease.expires_at {
+        return Err(GraphStoreError::LeaseExpired {
+            task_id: entry.task.request.task_id.clone(),
+        });
+    }
     let renewed = TaskLease::new(
         old_lease.lease_id.clone(),
         old_lease.holder.clone(),
-        envelope.renewed_at,
-        envelope
-            .renewed_at
-            .checked_add(i64::try_from(envelope.duration_ms).map_err(|_| {
-                GraphStoreError::InvalidLease {
-                    reason: "duration does not fit logical time".to_string(),
-                }
-            })?)
-            .ok_or_else(|| GraphStoreError::InvalidLease {
-                reason: "renewal expiry overflows logical time".to_string(),
+        now,
+        now.checked_add(
+            i64::try_from(duration_ms).map_err(|_| GraphStoreError::InvalidLease {
+                reason: "duration does not fit logical time".to_string(),
             })?,
+        )
+        .ok_or_else(|| GraphStoreError::InvalidLease {
+            reason: "renewal expiry overflows logical time".to_string(),
+        })?,
         old_lease.fencing_token,
     )
     .map_err(GraphStoreError::Admission)?;
@@ -2799,34 +4759,19 @@ fn renew_task_op(
 #[allow(clippy::too_many_arguments)]
 fn complete_task_op(
     state: &mut GraphStoreState,
+    task_id: &str,
     expected_generation: u64,
-    clock: TaskTerminalClockEnvelope,
-    envelope: TaskTerminalEnvelope,
-    authority: &AgentId,
+    lease_id: &LeaseId,
+    fence: FencingToken,
+    now: GraphLogicalTime,
+    completion: TaskCompletion,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    {
-        let entry =
-            state
-                .tasks
-                .get(&envelope.task_id)
-                .ok_or_else(|| GraphStoreError::TaskNotFound {
-                    task_id: envelope.task_id.to_string(),
-                })?;
-        ensure_task_generation(entry, expected_generation)?;
-        clock.validate_for_operation(
-            &entry.task,
-            expected_generation,
-            TaskTerminalOperationKind::Complete,
-            &envelope,
-            authority,
-        )?;
-    }
-    let now = clock.observed_at;
+    reject_reasoning_terminal_transition(state)?;
     observe_logical_time(state, now)?;
-    let entry = task_entry_mut(state, envelope.task_id.as_str())?;
+    let entry = task_entry_mut(state, task_id)?;
     ensure_task_generation(entry, expected_generation)?;
-    let lease = ensure_lease(entry, &envelope.lease_id, envelope.fencing_token)?;
+    let lease = ensure_lease(entry, lease_id, fence)?;
     if now < lease.issued_at {
         return Err(GraphStoreError::InvalidTransition {
             reason: "completion clock precedes lease issuance".to_string(),
@@ -2837,20 +4782,15 @@ fn complete_task_op(
             task_id: entry.task.request.task_id.clone(),
         });
     }
-    if envelope.completion.completed_at > now {
+    if completion.completed_at > now {
         return Err(GraphStoreError::InvalidTransition {
             reason: "completion time is ahead of the injected logical clock".to_string(),
         });
     }
-    validate_task_terminal_envelope(&entry.task, &envelope, limits)?;
     let task = entry
         .task
         .clone()
-        .complete(
-            envelope.completion,
-            envelope.fencing_token,
-            limits.max_task_lease_ms,
-        )
+        .complete(completion, fence, limits.max_task_lease_ms)
         .map_err(GraphStoreError::Admission)?;
     entry.task = task;
     entry.generation =
@@ -2872,34 +4812,19 @@ fn complete_task_op(
 #[allow(clippy::too_many_arguments)]
 fn fail_task_op(
     state: &mut GraphStoreState,
+    task_id: &str,
     expected_generation: u64,
-    clock: TaskTerminalClockEnvelope,
-    envelope: TaskFailureEnvelope,
-    authority: &AgentId,
+    lease_id: &LeaseId,
+    fence: FencingToken,
+    now: GraphLogicalTime,
+    failure: TaskFailure,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    {
-        let entry =
-            state
-                .tasks
-                .get(&envelope.task_id)
-                .ok_or_else(|| GraphStoreError::TaskNotFound {
-                    task_id: envelope.task_id.to_string(),
-                })?;
-        ensure_task_generation(entry, expected_generation)?;
-        clock.validate_for_operation(
-            &entry.task,
-            expected_generation,
-            TaskTerminalOperationKind::Fail,
-            &envelope,
-            authority,
-        )?;
-    }
-    let now = clock.observed_at;
+    reject_reasoning_terminal_transition(state)?;
     observe_logical_time(state, now)?;
-    let entry = task_entry_mut(state, envelope.task_id.as_str())?;
+    let entry = task_entry_mut(state, task_id)?;
     ensure_task_generation(entry, expected_generation)?;
-    let lease = ensure_lease(entry, &envelope.lease_id, envelope.fencing_token)?;
+    let lease = ensure_lease(entry, lease_id, fence)?;
     if entry.task.state != TaskState::Claimed {
         return Err(GraphStoreError::InvalidTransition {
             reason: "only claimed tasks can fail".to_string(),
@@ -2915,42 +4840,38 @@ fn fail_task_op(
             task_id: entry.task.request.task_id.clone(),
         });
     }
-    validate_task_failure_envelope(&entry.task, &envelope, limits)?;
-    if envelope.failure.failed_at > now {
+    failure.validate()?;
+    if failure.failed_at > now {
         return Err(GraphStoreError::InvalidTransition {
             reason: "failure time is ahead of the injected logical clock".to_string(),
         });
     }
-    let next_task_generation =
-        entry
-            .task
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| GraphStoreError::InvalidState {
-                reason: "task generation overflow".to_string(),
-            })?;
-    let next_entry_generation =
-        entry
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| GraphStoreError::InvalidState {
-                reason: "task generation overflow".to_string(),
-            })?;
-    let proof = TaskTerminalProof::new_failed(
+    if failure.failed_at < lease.issued_at || failure.failed_at > lease.expires_at {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "failure time must fall within the active lease".to_string(),
+        });
+    }
+    let proof = TaskTerminalProof::new(
         entry.task.generation,
         lease,
-        envelope.failure.failed_by,
-        envelope.failure.failed_at,
-        envelope.failure.summary_digest,
+        TaskState::Failed,
+        failure.failed_by,
+        failure.failed_at,
         limits.max_task_lease_ms,
     )
     .map_err(GraphStoreError::Admission)?;
     entry.task.terminal_history.push(proof);
     entry.task.state = TaskState::Failed;
-    entry.task.generation = next_task_generation;
+    entry.task.generation = entry.task.generation.saturating_add(1);
     entry.task.lease = None;
     entry.task.completion = None;
-    entry.generation = next_entry_generation;
+    entry.generation =
+        entry
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "task generation overflow".to_string(),
+            })?;
     Ok(StateMutation {
         value: TaskMutationMarker {
             task: entry.task.clone(),
@@ -2960,35 +4881,157 @@ fn fail_task_op(
     })
 }
 
-fn expire_task_op(
+fn fail_reasoning_task_op(
     state: &mut GraphStoreState,
-    envelope: TaskExpiryEnvelope,
-    authority: &AgentId,
+    expected_generation: u64,
+    publication: TaskFailureOutboxEntry,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
-    let current = state
-        .tasks
-        .get(&envelope.task_id)
-        .ok_or_else(|| GraphStoreError::TaskNotFound {
-            task_id: envelope.task_id.to_string(),
-        })?
-        .clone();
-    ensure_task_generation(&current, envelope.expected_generation)?;
-    envelope.validate_for_task(&current.task, authority, limits)?;
-    observe_logical_time(state, envelope.observed_at)?;
+    if let Some(marker) = exact_reasoning_failure_retry(state, &publication)? {
+        return Ok(StateMutation {
+            value: marker,
+            changed: false,
+        });
+    }
+    if state.migration_marker < GRAPH_STATE_MIGRATION_HYPOTHESES {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "descriptor-bound reasoning failure requires a marker-1 graph".to_string(),
+        });
+    }
+    let task_id = publication.task_id.clone();
+    let descriptor = state
+        .logical_task_descriptors
+        .get(&task_id)
+        .cloned()
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "reasoning failure task has no logical descriptor".to_string(),
+        })?;
+    let prior =
+        state
+            .tasks
+            .get(&task_id)
+            .cloned()
+            .ok_or_else(|| GraphStoreError::TaskNotFound {
+                task_id: task_id.to_string(),
+            })?;
+    ensure_task_generation(&prior, expected_generation)?;
+    publication.validate_for_claimed_task(
+        &prior.task,
+        &descriptor,
+        state.logical_time_high_water,
+    )?;
+    observe_logical_time(state, publication.failure.failed_at)?;
+    let lease = prior
+        .task
+        .lease
+        .as_ref()
+        .ok_or_else(|| GraphStoreError::InvalidTransition {
+            reason: "reasoning failure requires an active lease".to_string(),
+        })?;
+    let proof = TaskTerminalProof::new_failed(
+        prior.task.generation,
+        lease.clone(),
+        publication.failure.failed_by.clone(),
+        publication.failure.failed_at,
+        publication.failure.summary_digest.clone(),
+        limits.max_task_lease_ms,
+    )
+    .map_err(GraphStoreError::Admission)?;
+    let failed_task = {
+        let entry = task_entry_mut(state, task_id.as_str())?;
+        entry.task.terminal_history.push(proof);
+        entry.task.state = TaskState::Failed;
+        entry.task.generation = entry.task.generation.saturating_add(1);
+        entry.task.lease = None;
+        entry.task.completion = None;
+        entry.generation =
+            entry
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| GraphStoreError::InvalidState {
+                    reason: "task generation overflow".to_string(),
+                })?;
+        entry.task.clone()
+    };
+    refresh_task_tombstone(state, &task_id, false)?;
+    if state
+        .task_failure_outbox
+        .insert(task_id, publication)
+        .is_some()
     {
-        let entry = task_entry_mut(state, envelope.task_id.as_str())?;
+        return Err(GraphStoreError::InvalidState {
+            reason: "reasoning failure attempted to replace its durable outbox".to_string(),
+        });
+    }
+    Ok(StateMutation {
+        value: TaskMutationMarker {
+            task: failed_task,
+            idempotent: false,
+        },
+        changed: true,
+    })
+}
+
+fn exact_reasoning_failure_retry(
+    state: &GraphStoreState,
+    publication: &TaskFailureOutboxEntry,
+) -> Result<Option<TaskMutationMarker>, GraphStoreError> {
+    let Some(committed) = state.task_failure_outbox.get(&publication.task_id) else {
+        return Ok(None);
+    };
+    let task =
+        state
+            .tasks
+            .get(&publication.task_id)
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "reasoning failure outbox has no retained durable task".to_string(),
+            })?;
+    let descriptor = state
+        .logical_task_descriptors
+        .get(&publication.task_id)
+        .ok_or_else(|| GraphStoreError::InvalidState {
+            reason: "reasoning failure outbox has no logical descriptor".to_string(),
+        })?;
+    committed.validate_for_failed_task(&task.task, descriptor, state.logical_time_high_water)?;
+    if committed != publication {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "reasoning failure retry differs from the committed task publication"
+                .to_string(),
+        });
+    }
+    Ok(Some(TaskMutationMarker {
+        task: task.task.clone(),
+        idempotent: true,
+    }))
+}
+
+fn expire_task_op(
+    state: &mut GraphStoreState,
+    task_id: &str,
+    expected_generation: u64,
+    now: GraphLogicalTime,
+    limits: &GraphResourceLimits,
+) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
+    observe_logical_time(state, now)?;
+    {
+        let entry = task_entry_mut(state, task_id)?;
+        ensure_task_generation(entry, expected_generation)?;
+        if entry.task.state != TaskState::Claimed {
+            return Err(GraphStoreError::InvalidTransition {
+                reason: "only claimed tasks can expire".to_string(),
+            });
+        }
         entry.task = entry
             .task
             .clone()
-            .expire(envelope.observed_at, limits.max_task_lease_ms)
+            .expire(now, limits.max_task_lease_ms)
             .map_err(GraphStoreError::Admission)?;
     }
     // Expiry is itself a fencing barrier.  Advance the durable counter before
     // publishing the expired record so the token of the expired lease can
     // never authorize a later operation, including after a restart.
     next_fence(state)?;
-    let entry = task_entry_mut(state, envelope.task_id.as_str())?;
+    let entry = task_entry_mut(state, task_id)?;
     entry.generation =
         entry
             .generation
@@ -3007,32 +5050,59 @@ fn expire_task_op(
 
 fn reclaim_task_op(
     state: &mut GraphStoreState,
-    envelope: TaskReclaimEnvelope,
-    authority: &AgentId,
+    task_id: &str,
+    request: TaskClaimRequest,
+    now: GraphLogicalTime,
+    duration_ms: u64,
     limits: &GraphResourceLimits,
 ) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
+    validate_request(&request)?;
+    ensure_reasoning_descriptor_for_request(state, &request)?;
+    observe_logical_time(state, now)?;
+    if request.task_id.as_str() != task_id {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "reclaim request task ID differs from target".to_string(),
+        });
+    }
     let old = state
         .tasks
-        .get(&envelope.request.task_id)
+        .get(&TaskId::new(task_id))
         .ok_or_else(|| GraphStoreError::TaskNotFound {
-            task_id: envelope.request.task_id.to_string(),
+            task_id: task_id.to_string(),
         })?
         .clone();
-    ensure_task_generation(&old, envelope.expected_generation)?;
-    envelope.validate_for_task(&old.task, authority, limits)?;
-    observe_logical_time(state, envelope.reclaimed_at)?;
+    if old.task.state != TaskState::Expired {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "reclaim requires an expired task".to_string(),
+        });
+    }
+    if old.task.request.kind != request.kind
+        || old.task.request.target != request.target
+        || old.task.request.role != request.role
+        || old.task.request.evidence_scope != request.evidence_scope
+    {
+        return Err(GraphStoreError::InvalidTransition {
+            reason: "reclaim cannot change task target, role, or evidence scope".to_string(),
+        });
+    }
+    if old.task.attempts >= limits.max_task_retries {
+        return Err(GraphStoreError::ResourceLimit {
+            resource: "task.retries".to_string(),
+            limit: usize::from(limits.max_task_retries),
+        });
+    }
     let fence = next_fence(state)?;
     let lease = lease_for(
         state.graph_id.as_str(),
-        envelope.request.task_id.as_str(),
-        &envelope.request.claimant,
-        envelope.reclaimed_at,
-        envelope.duration_ms,
+        task_id,
+        &request.claimant,
+        now,
+        duration_ms,
         fence,
         limits,
     )?;
     let mut task = TaskRecord::claimed_with_limits(
-        envelope.request,
+        request,
         lease,
         limits.max_task_lease_ms,
         limits.max_task_retries,
@@ -3041,9 +5111,9 @@ fn reclaim_task_op(
     task.attempts = old.task.attempts.saturating_add(1);
     // A claimed core record cannot carry the prior terminal history by design;
     // it is retained in the spine wrapper instead.
-    let entry = state.tasks.get_mut(&task.request.task_id).ok_or_else(|| {
+    let entry = state.tasks.get_mut(&TaskId::new(task_id)).ok_or_else(|| {
         GraphStoreError::TaskNotFound {
-            task_id: task.request.task_id.to_string(),
+            task_id: task_id.to_string(),
         }
     })?;
     entry.history.push(old.task);
@@ -3064,957 +5134,81 @@ fn reclaim_task_op(
     })
 }
 
+/// Reclaim is a new claim attempt: it consumes one claim-capacity unit, but
+/// no work unit. The task history/tombstone and budget are committed in one
+/// generation. An exact retry of an active reclaimed lease is idempotent and
+/// therefore does not charge a second claim.
+fn reclaim_task_with_budget_op(
+    state: &mut GraphStoreState,
+    task_id: &str,
+    request: TaskClaimRequest,
+    now: GraphLogicalTime,
+    duration_ms: u64,
+    scheduler_budget: SchedulerBudget,
+    limits: &GraphResourceLimits,
+) -> Result<StateMutation<TaskMutationMarker>, GraphStoreError> {
+    validate_request(&request)?;
+    ensure_reasoning_descriptor_for_request(state, &request)?;
+    now.validate().map_err(GraphStoreError::Admission)?;
+    let prior_budget = state.scheduler_budget.clone();
+    let task_key = TaskId::new(task_id);
+    let idempotent = state.tasks.get(&task_key).is_some_and(|entry| {
+        entry.task.state == TaskState::Claimed && same_claim_identity(&entry.task.request, &request)
+    });
+    if idempotent {
+        let entry = state
+            .tasks
+            .get(&task_key)
+            .ok_or_else(|| GraphStoreError::TaskNotFound {
+                task_id: task_id.to_string(),
+            })?;
+        if entry
+            .task
+            .lease
+            .as_ref()
+            .is_some_and(|lease| now >= lease.expires_at)
+        {
+            return Err(GraphStoreError::TaskExpiredNeedsReclaim {
+                task_id: task_key.clone(),
+            });
+        }
+        validate_exact_scheduler_budget_delta(
+            prior_budget.as_ref(),
+            Some(&scheduler_budget),
+            None,
+            0,
+            0,
+        )?;
+        let task = entry.task.clone();
+        observe_logical_time(state, now)?;
+        return Ok(StateMutation {
+            value: TaskMutationMarker {
+                task,
+                idempotent: true,
+            },
+            changed: false,
+        });
+    }
+
+    let result = reclaim_task_op(state, task_id, request, now, duration_ms, limits)?;
+    if result.changed {
+        validate_exact_scheduler_budget_delta(
+            prior_budget.as_ref(),
+            Some(&scheduler_budget),
+            Some(now),
+            0,
+            1,
+        )?;
+        refresh_task_tombstone(state, &task_key, false)?;
+        state.scheduler_budget = Some(scheduler_budget);
+    }
+    Ok(result)
+}
+
 #[derive(Debug, Clone)]
 struct TaskMutationMarker {
     task: TaskRecord,
     idempotent: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct TaskCreationMaterial<'a> {
-    request: &'a TaskClaimRequest,
-    capability: &'a TaskCapabilityProof,
-    authority_scope: &'a str,
-}
-
-/// Dual-authority admission for a pending durable task. The claimant owns the
-/// exact request and the configured scheduler/store authority owns admission
-/// of its logical request time into the durable high-water mark.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskCreationEnvelope {
-    pub request: TaskClaimRequest,
-    pub capability: TaskCapabilityProof,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authority_witness: Option<EvidenceWitness>,
-}
-
-impl TaskCreationEnvelope {
-    pub fn new(
-        request: TaskClaimRequest,
-        capability: TaskCapabilityProof,
-    ) -> Result<Self, GraphStoreError> {
-        let envelope = Self {
-            request,
-            capability,
-            authority_witness: None,
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-
-    pub fn authorized_by(
-        mut self,
-        authority: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let scoped_agent_id = scoped_agent_id.into();
-        validate_authority_scope("task creation", &scoped_agent_id)?;
-        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
-        self.authority_witness = Some(
-            EvidenceWitness::new(
-                authority,
-                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
-                scoped_agent_id,
-                &bytes,
-            )
-            .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&TaskCreationMaterial {
-            request: &self.request,
-            capability: &self.capability,
-            authority_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let authority_scope = self
-            .authority_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_bytes_for_scope(authority_scope)
-    }
-
-    fn validate(&self) -> Result<(), GraphStoreError> {
-        validate_request(&self.request)?;
-        self.capability
-            .validate_for_claim(&self.request)
-            .map_err(GraphStoreError::Admission)?;
-        validate_optional_scheduler_witness(
-            self.authority_witness.as_ref(),
-            &self.canonical_bytes_without_witness()?,
-        )
-    }
-
-    fn validate_for_store(&self, authority: &AgentId) -> Result<(), GraphStoreError> {
-        self.validate()?;
-        require_configured_scheduler_witness(
-            self.authority_witness.as_ref(),
-            authority,
-            &self.canonical_bytes_without_witness()?,
-            "durable task creation requires scheduler authority",
-        )
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct TaskClaimMaterial<'a> {
-    request: &'a TaskClaimRequest,
-    claimed_at: GraphLogicalTime,
-    duration_ms: u64,
-    capability: &'a TaskCapabilityProof,
-    authority_scope: &'a str,
-}
-
-/// Dual-authority admission for an exact task lease. The claimant proves
-/// ownership of the request; the configured scheduler/store authority proves
-/// the authoritative lease time and duration before either durable counter is
-/// advanced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskClaimEnvelope {
-    pub request: TaskClaimRequest,
-    pub claimed_at: GraphLogicalTime,
-    pub duration_ms: u64,
-    pub capability: TaskCapabilityProof,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authority_witness: Option<EvidenceWitness>,
-}
-
-impl TaskClaimEnvelope {
-    pub fn new(
-        request: TaskClaimRequest,
-        claimed_at: GraphLogicalTime,
-        duration_ms: u64,
-        capability: TaskCapabilityProof,
-    ) -> Result<Self, GraphStoreError> {
-        let envelope = Self {
-            request,
-            claimed_at,
-            duration_ms,
-            capability,
-            authority_witness: None,
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-
-    pub fn authorized_by(
-        mut self,
-        authority: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let scoped_agent_id = scoped_agent_id.into();
-        validate_authority_scope("task claim", &scoped_agent_id)?;
-        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
-        self.authority_witness = Some(
-            EvidenceWitness::new(
-                authority,
-                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
-                scoped_agent_id,
-                &bytes,
-            )
-            .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&TaskClaimMaterial {
-            request: &self.request,
-            claimed_at: self.claimed_at,
-            duration_ms: self.duration_ms,
-            capability: &self.capability,
-            authority_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let authority_scope = self
-            .authority_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_bytes_for_scope(authority_scope)
-    }
-
-    fn validate(&self) -> Result<(), GraphStoreError> {
-        validate_request(&self.request)?;
-        self.claimed_at
-            .validate()
-            .map_err(GraphStoreError::Admission)?;
-        if self.claimed_at < self.request.requested_at {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "task claim time precedes its signed request".to_string(),
-            });
-        }
-        if self.duration_ms == 0 {
-            return Err(GraphStoreError::InvalidLease {
-                reason: "task claim duration must be positive".to_string(),
-            });
-        }
-        self.capability
-            .validate_for_claim(&self.request)
-            .map_err(GraphStoreError::Admission)?;
-        validate_optional_scheduler_witness(
-            self.authority_witness.as_ref(),
-            &self.canonical_bytes_without_witness()?,
-        )
-    }
-
-    fn validate_for_store(
-        &self,
-        authority: &AgentId,
-        limits: &GraphResourceLimits,
-    ) -> Result<(), GraphStoreError> {
-        self.validate()?;
-        if self.duration_ms > limits.max_task_lease_ms {
-            return Err(GraphStoreError::InvalidLease {
-                reason: "task claim duration exceeds the graph lease limit".to_string(),
-            });
-        }
-        require_configured_scheduler_witness(
-            self.authority_witness.as_ref(),
-            authority,
-            &self.canonical_bytes_without_witness()?,
-            "durable task claim requires scheduler authority",
-        )
-    }
-}
-
-fn validate_authority_scope(kind: &str, scope: &str) -> Result<(), GraphStoreError> {
-    if scope.trim().is_empty() || scope.len() > 128 {
-        return Err(GraphStoreError::InvalidState {
-            reason: format!("{kind} authority scope is invalid"),
-        });
-    }
-    Ok(())
-}
-
-fn validate_optional_scheduler_witness(
-    witness: Option<&EvidenceWitness>,
-    canonical_bytes: &[u8],
-) -> Result<(), GraphStoreError> {
-    if let Some(witness) = witness {
-        if witness.producer_role != swarm_core::hypothesis_graph::GraphProducerRole::Planner {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "task scheduler authority must use the planner role".to_string(),
-                },
-            ));
-        }
-        witness
-            .validate(canonical_bytes)
-            .map_err(GraphStoreError::Admission)?;
-    }
-    Ok(())
-}
-
-fn require_configured_scheduler_witness(
-    witness: Option<&EvidenceWitness>,
-    authority: &AgentId,
-    canonical_bytes: &[u8],
-    missing_reason: &str,
-) -> Result<(), GraphStoreError> {
-    let Some(witness) = witness else {
-        return Err(GraphStoreError::Admission(
-            GraphAdmissionError::InvalidWitness {
-                reason: missing_reason.to_string(),
-            },
-        ));
-    };
-    if &witness.producer_identity != authority {
-        return Err(GraphStoreError::Admission(
-            GraphAdmissionError::InvalidWitness {
-                reason: "task scheduler witness does not match the configured store authority"
-                    .to_string(),
-            },
-        ));
-    }
-    witness
-        .validate(canonical_bytes)
-        .map_err(GraphStoreError::Admission)
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct TaskRenewalMaterial<'a> {
-    task_id: &'a TaskId,
-    idempotency_key: &'a IdempotencyKey,
-    expected_generation: u64,
-    lease_id: &'a LeaseId,
-    fencing_token: FencingToken,
-    renewed_at: GraphLogicalTime,
-    duration_ms: u64,
-    capability: &'a TaskCapabilityProof,
-    renewal_scope: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct TaskRenewalAuthorityMaterial<'a> {
-    task_id: &'a TaskId,
-    idempotency_key: &'a IdempotencyKey,
-    expected_generation: u64,
-    lease_id: &'a LeaseId,
-    fencing_token: FencingToken,
-    renewed_at: GraphLogicalTime,
-    duration_ms: u64,
-    capability: &'a TaskCapabilityProof,
-    renewal_witness: &'a EvidenceWitness,
-    authority_scope: &'a str,
-}
-
-/// Dual-authority request to extend one exact active lease. The claimant owns
-/// the task capability; the configured scheduler/store authority owns the
-/// authoritative renewal clock and duration. Both signatures cover the exact
-/// durable generation, idempotency key, lease, and fencing token.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskRenewalEnvelope {
-    pub task_id: TaskId,
-    pub idempotency_key: IdempotencyKey,
-    pub expected_generation: u64,
-    pub lease_id: LeaseId,
-    pub fencing_token: FencingToken,
-    pub renewed_at: GraphLogicalTime,
-    pub duration_ms: u64,
-    pub capability: TaskCapabilityProof,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub renewal_witness: Option<EvidenceWitness>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authority_witness: Option<EvidenceWitness>,
-}
-
-impl TaskRenewalEnvelope {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        task_id: TaskId,
-        idempotency_key: IdempotencyKey,
-        expected_generation: u64,
-        lease_id: LeaseId,
-        fencing_token: FencingToken,
-        renewed_at: GraphLogicalTime,
-        duration_ms: u64,
-        capability: TaskCapabilityProof,
-    ) -> Result<Self, GraphStoreError> {
-        let envelope = Self {
-            task_id,
-            idempotency_key,
-            expected_generation,
-            lease_id,
-            fencing_token,
-            renewed_at,
-            duration_ms,
-            capability,
-            renewal_witness: None,
-            authority_witness: None,
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-
-    pub fn signed_with(
-        mut self,
-        signer: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let signer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
-        if signer_identity != self.capability.claimant {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "renewal signer does not match the capability claimant".to_string(),
-                },
-            ));
-        }
-        let scoped_agent_id = scoped_agent_id.into();
-        if scoped_agent_id.trim().is_empty() || scoped_agent_id.len() > 128 {
-            return Err(GraphStoreError::InvalidState {
-                reason: "renewal scope is invalid".to_string(),
-            });
-        }
-        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
-        self.renewal_witness = Some(
-            EvidenceWitness::new(signer, self.capability.role, scoped_agent_id, &bytes)
-                .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    pub fn authorized_by(
-        mut self,
-        authority: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let renewal_witness = self.renewal_witness.as_ref().ok_or_else(|| {
-            GraphStoreError::Admission(GraphAdmissionError::InvalidWitness {
-                reason: "scheduler cannot authorize a renewal without claimant authority"
-                    .to_string(),
-            })
-        })?;
-        let scoped_agent_id = scoped_agent_id.into();
-        validate_authority_scope("task renewal", &scoped_agent_id)?;
-        let bytes = self.canonical_authority_bytes_for_scope(renewal_witness, &scoped_agent_id)?;
-        self.authority_witness = Some(
-            EvidenceWitness::new(
-                authority,
-                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
-                scoped_agent_id,
-                &bytes,
-            )
-            .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    fn canonical_bytes_for_scope(&self, renewal_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&TaskRenewalMaterial {
-            task_id: &self.task_id,
-            idempotency_key: &self.idempotency_key,
-            expected_generation: self.expected_generation,
-            lease_id: &self.lease_id,
-            fencing_token: self.fencing_token,
-            renewed_at: self.renewed_at,
-            duration_ms: self.duration_ms,
-            capability: &self.capability,
-            renewal_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let renewal_scope = self
-            .renewal_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_bytes_for_scope(renewal_scope)
-    }
-
-    fn canonical_authority_bytes_for_scope(
-        &self,
-        renewal_witness: &EvidenceWitness,
-        authority_scope: &str,
-    ) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&TaskRenewalAuthorityMaterial {
-            task_id: &self.task_id,
-            idempotency_key: &self.idempotency_key,
-            expected_generation: self.expected_generation,
-            lease_id: &self.lease_id,
-            fencing_token: self.fencing_token,
-            renewed_at: self.renewed_at,
-            duration_ms: self.duration_ms,
-            capability: &self.capability,
-            renewal_witness,
-            authority_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_authority_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let renewal_witness = self.renewal_witness.as_ref().ok_or_else(|| {
-            GraphStoreError::Admission(GraphAdmissionError::InvalidWitness {
-                reason: "renewal scheduler authority requires claimant authority".to_string(),
-            })
-        })?;
-        let authority_scope = self
-            .authority_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_authority_bytes_for_scope(renewal_witness, authority_scope)
-    }
-
-    fn validate(&self) -> Result<(), GraphStoreError> {
-        self.renewed_at
-            .validate()
-            .map_err(GraphStoreError::Admission)?;
-        if self.expected_generation == 0 || self.duration_ms == 0 {
-            return Err(GraphStoreError::InvalidLease {
-                reason: "renewal generation and duration must be positive".to_string(),
-            });
-        }
-        if self.capability.task_id != self.task_id {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "renewal capability task does not match envelope task".to_string(),
-            });
-        }
-        if let Some(witness) = &self.renewal_witness {
-            if witness.producer_identity != self.capability.claimant
-                || witness.producer_role != self.capability.role
-            {
-                return Err(GraphStoreError::Admission(
-                    GraphAdmissionError::InvalidWitness {
-                        reason: "renewal witness does not bind claimant and capability role"
-                            .to_string(),
-                    },
-                ));
-            }
-            witness
-                .validate(&self.canonical_bytes_without_witness()?)
-                .map_err(GraphStoreError::Admission)?;
-        }
-        if self.authority_witness.is_some() {
-            validate_optional_scheduler_witness(
-                self.authority_witness.as_ref(),
-                &self.canonical_authority_bytes_without_witness()?,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn validate_for_task(
-        &self,
-        task: &TaskRecord,
-        authority: &AgentId,
-        limits: &GraphResourceLimits,
-    ) -> Result<(), GraphStoreError> {
-        self.validate()?;
-        task.validate_with_limits(limits.max_task_lease_ms, limits.max_task_retries)
-            .map_err(GraphStoreError::Admission)?;
-        if task.state != TaskState::Claimed || task.completion.is_some() {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "renewal envelope requires an active claimed task".to_string(),
-            });
-        }
-        let lease = task
-            .lease
-            .as_ref()
-            .ok_or_else(|| GraphStoreError::InvalidTransition {
-                reason: "renewal envelope requires the task's active lease".to_string(),
-            })?;
-        self.capability
-            .validate_for_claim(&task.request)
-            .map_err(GraphStoreError::Admission)?;
-        if self.task_id != task.request.task_id
-            || self.idempotency_key != task.request.idempotency_key
-            || self.lease_id != lease.lease_id
-            || self.fencing_token != lease.fencing_token
-            || self.capability.claimant != lease.holder
-        {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "renewal envelope does not bind the active task lease".to_string(),
-            });
-        }
-        if self.renewed_at < lease.issued_at {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "renewal clock precedes lease issuance".to_string(),
-            });
-        }
-        if self.renewed_at >= lease.expires_at {
-            return Err(GraphStoreError::LeaseExpired {
-                task_id: task.request.task_id.clone(),
-            });
-        }
-        require_configured_scheduler_witness(
-            self.authority_witness.as_ref(),
-            authority,
-            &self.canonical_authority_bytes_without_witness()?,
-            "durable task renewal requires scheduler authority",
-        )?;
-        if self.duration_ms > limits.max_task_lease_ms {
-            return Err(GraphStoreError::InvalidLease {
-                reason: "renewal duration exceeds the graph lease limit".to_string(),
-            });
-        }
-        let Some(witness) = self.renewal_witness.as_ref() else {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "durable task renewal requires a claimant signature".to_string(),
-                },
-            ));
-        };
-        witness
-            .validate(&self.canonical_bytes_without_witness()?)
-            .map_err(GraphStoreError::Admission)
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct TaskExpiryMaterial<'a> {
-    task_id: &'a TaskId,
-    idempotency_key: &'a IdempotencyKey,
-    expected_generation: u64,
-    lease_id: &'a LeaseId,
-    fencing_token: FencingToken,
-    observed_at: GraphLogicalTime,
-    expiry_scope: &'a str,
-}
-
-/// Scheduler-signed observation that one exact lease expired. The store only
-/// accepts a witness from its configured signing identity, preventing callers
-/// with a shared handle from advancing durable logical time themselves.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskExpiryEnvelope {
-    pub task_id: TaskId,
-    pub idempotency_key: IdempotencyKey,
-    pub expected_generation: u64,
-    pub lease_id: LeaseId,
-    pub fencing_token: FencingToken,
-    pub observed_at: GraphLogicalTime,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expiry_witness: Option<EvidenceWitness>,
-}
-
-impl TaskExpiryEnvelope {
-    pub fn new(
-        task_id: TaskId,
-        idempotency_key: IdempotencyKey,
-        expected_generation: u64,
-        lease_id: LeaseId,
-        fencing_token: FencingToken,
-        observed_at: GraphLogicalTime,
-    ) -> Result<Self, GraphStoreError> {
-        let envelope = Self {
-            task_id,
-            idempotency_key,
-            expected_generation,
-            lease_id,
-            fencing_token,
-            observed_at,
-            expiry_witness: None,
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-
-    pub fn signed_with(
-        mut self,
-        authority: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let scoped_agent_id = scoped_agent_id.into();
-        if scoped_agent_id.trim().is_empty() || scoped_agent_id.len() > 128 {
-            return Err(GraphStoreError::InvalidState {
-                reason: "expiry scope is invalid".to_string(),
-            });
-        }
-        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
-        self.expiry_witness = Some(
-            EvidenceWitness::new(
-                authority,
-                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
-                scoped_agent_id,
-                &bytes,
-            )
-            .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    fn canonical_bytes_for_scope(&self, expiry_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&TaskExpiryMaterial {
-            task_id: &self.task_id,
-            idempotency_key: &self.idempotency_key,
-            expected_generation: self.expected_generation,
-            lease_id: &self.lease_id,
-            fencing_token: self.fencing_token,
-            observed_at: self.observed_at,
-            expiry_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let expiry_scope = self
-            .expiry_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_bytes_for_scope(expiry_scope)
-    }
-
-    fn validate(&self) -> Result<(), GraphStoreError> {
-        self.observed_at
-            .validate()
-            .map_err(GraphStoreError::Admission)?;
-        if self.expected_generation == 0 {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "expiry generation must be positive".to_string(),
-            });
-        }
-        if let Some(witness) = &self.expiry_witness {
-            if witness.producer_role != swarm_core::hypothesis_graph::GraphProducerRole::Planner {
-                return Err(GraphStoreError::Admission(
-                    GraphAdmissionError::InvalidWitness {
-                        reason: "expiry witness must use the planner authority role".to_string(),
-                    },
-                ));
-            }
-            witness
-                .validate(&self.canonical_bytes_without_witness()?)
-                .map_err(GraphStoreError::Admission)?;
-        }
-        Ok(())
-    }
-
-    fn validate_for_task(
-        &self,
-        task: &TaskRecord,
-        authority: &AgentId,
-        limits: &GraphResourceLimits,
-    ) -> Result<(), GraphStoreError> {
-        self.validate()?;
-        task.validate_with_limits(limits.max_task_lease_ms, limits.max_task_retries)
-            .map_err(GraphStoreError::Admission)?;
-        if task.state != TaskState::Claimed || task.completion.is_some() {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "expiry envelope requires an active claimed task".to_string(),
-            });
-        }
-        let lease = task
-            .lease
-            .as_ref()
-            .ok_or_else(|| GraphStoreError::InvalidTransition {
-                reason: "expiry envelope requires the task's active lease".to_string(),
-            })?;
-        if self.task_id != task.request.task_id
-            || self.idempotency_key != task.request.idempotency_key
-            || self.lease_id != lease.lease_id
-            || self.fencing_token != lease.fencing_token
-        {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "expiry envelope does not bind the active task lease".to_string(),
-            });
-        }
-        if self.observed_at < lease.expires_at {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "expiry observation precedes lease expiry".to_string(),
-            });
-        }
-        let Some(witness) = self.expiry_witness.as_ref() else {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "durable task expiry requires an authority signature".to_string(),
-                },
-            ));
-        };
-        if &witness.producer_identity != authority {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "expiry witness does not match the configured store authority"
-                        .to_string(),
-                },
-            ));
-        }
-        witness
-            .validate(&self.canonical_bytes_without_witness()?)
-            .map_err(GraphStoreError::Admission)
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct TaskReclaimMaterial<'a> {
-    prior_idempotency_key: &'a IdempotencyKey,
-    expected_generation: u64,
-    request: &'a TaskClaimRequest,
-    reclaimed_at: GraphLogicalTime,
-    duration_ms: u64,
-    capability: &'a TaskCapabilityProof,
-    authority_scope: &'a str,
-}
-
-/// Scheduler-authorized reassignment of one exact expired task generation.
-/// The replacement claimant proves ownership of the new request while the
-/// configured store authority separately admits the reassignment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskReclaimEnvelope {
-    pub prior_idempotency_key: IdempotencyKey,
-    pub expected_generation: u64,
-    pub request: TaskClaimRequest,
-    pub reclaimed_at: GraphLogicalTime,
-    pub duration_ms: u64,
-    pub capability: TaskCapabilityProof,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authority_witness: Option<EvidenceWitness>,
-}
-
-impl TaskReclaimEnvelope {
-    pub fn new(
-        prior_idempotency_key: IdempotencyKey,
-        expected_generation: u64,
-        request: TaskClaimRequest,
-        reclaimed_at: GraphLogicalTime,
-        duration_ms: u64,
-        capability: TaskCapabilityProof,
-    ) -> Result<Self, GraphStoreError> {
-        let envelope = Self {
-            prior_idempotency_key,
-            expected_generation,
-            request,
-            reclaimed_at,
-            duration_ms,
-            capability,
-            authority_witness: None,
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-
-    pub fn authorized_by(
-        mut self,
-        authority: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let scoped_agent_id = scoped_agent_id.into();
-        if scoped_agent_id.trim().is_empty() || scoped_agent_id.len() > 128 {
-            return Err(GraphStoreError::InvalidState {
-                reason: "reclaim authority scope is invalid".to_string(),
-            });
-        }
-        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
-        self.authority_witness = Some(
-            EvidenceWitness::new(
-                authority,
-                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
-                scoped_agent_id,
-                &bytes,
-            )
-            .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&TaskReclaimMaterial {
-            prior_idempotency_key: &self.prior_idempotency_key,
-            expected_generation: self.expected_generation,
-            request: &self.request,
-            reclaimed_at: self.reclaimed_at,
-            duration_ms: self.duration_ms,
-            capability: &self.capability,
-            authority_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let authority_scope = self
-            .authority_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_bytes_for_scope(authority_scope)
-    }
-
-    fn validate(&self) -> Result<(), GraphStoreError> {
-        validate_request(&self.request)?;
-        self.reclaimed_at
-            .validate()
-            .map_err(GraphStoreError::Admission)?;
-        if self.expected_generation == 0 || self.duration_ms == 0 {
-            return Err(GraphStoreError::InvalidLease {
-                reason: "reclaim generation and duration must be positive".to_string(),
-            });
-        }
-        self.capability
-            .validate_for_claim(&self.request)
-            .map_err(GraphStoreError::Admission)?;
-        if let Some(witness) = &self.authority_witness {
-            if witness.producer_role != swarm_core::hypothesis_graph::GraphProducerRole::Planner {
-                return Err(GraphStoreError::Admission(
-                    GraphAdmissionError::InvalidWitness {
-                        reason: "reclaim authority must use the planner role".to_string(),
-                    },
-                ));
-            }
-            witness
-                .validate(&self.canonical_bytes_without_witness()?)
-                .map_err(GraphStoreError::Admission)?;
-        }
-        Ok(())
-    }
-
-    fn validate_for_task(
-        &self,
-        task: &TaskRecord,
-        authority: &AgentId,
-        limits: &GraphResourceLimits,
-    ) -> Result<(), GraphStoreError> {
-        self.validate()?;
-        task.validate_with_limits(limits.max_task_lease_ms, limits.max_task_retries)
-            .map_err(GraphStoreError::Admission)?;
-        if task.state != TaskState::Expired {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "reclaim requires an expired task".to_string(),
-            });
-        }
-        if self.prior_idempotency_key != task.request.idempotency_key
-            || self.request.task_id != task.request.task_id
-            || self.request.kind != task.request.kind
-            || self.request.target != task.request.target
-            || self.request.role != task.request.role
-            || self.request.evidence_scope != task.request.evidence_scope
-        {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "reclaim does not bind the exact expired task scope".to_string(),
-            });
-        }
-        if self.request.requested_at > self.reclaimed_at
-            || task
-                .terminal_history
-                .last()
-                .is_none_or(|proof| proof.completed_at > self.reclaimed_at)
-        {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "reclaim time precedes its request or expired-task proof".to_string(),
-            });
-        }
-        if task.attempts >= limits.max_task_retries {
-            return Err(GraphStoreError::ResourceLimit {
-                resource: "task.retries".to_string(),
-                limit: usize::from(limits.max_task_retries),
-            });
-        }
-        if self.duration_ms > limits.max_task_lease_ms {
-            return Err(GraphStoreError::InvalidLease {
-                reason: "reclaim duration exceeds the graph lease limit".to_string(),
-            });
-        }
-        let Some(witness) = self.authority_witness.as_ref() else {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "durable task reclaim requires scheduler authority".to_string(),
-                },
-            ));
-        };
-        if &witness.producer_identity != authority {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "reclaim witness does not match the configured store authority"
-                        .to_string(),
-                },
-            ));
-        }
-        witness
-            .validate(&self.canonical_bytes_without_witness()?)
-            .map_err(GraphStoreError::Admission)
-    }
 }
 
 /// A failure is terminal just like completion, but deliberately does not
@@ -4026,419 +5220,6 @@ pub struct TaskFailure {
     pub failed_by: AgentId,
     pub failed_at: GraphLogicalTime,
     pub summary_digest: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct TaskFailureMaterial<'a> {
-    task_id: &'a TaskId,
-    idempotency_key: &'a IdempotencyKey,
-    lease_id: &'a LeaseId,
-    fencing_token: FencingToken,
-    failure: &'a TaskFailure,
-    capability: &'a TaskCapabilityProof,
-    terminal_scope: &'a str,
-}
-
-/// A signed failure publication bound to one exact claim, capability, lease,
-/// and fence. The structural constructor intentionally leaves the witness
-/// absent so an assembled request cannot be mistaken for durable authority.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskFailureEnvelope {
-    pub task_id: TaskId,
-    pub idempotency_key: IdempotencyKey,
-    pub lease_id: LeaseId,
-    pub fencing_token: FencingToken,
-    pub failure: TaskFailure,
-    pub capability: TaskCapabilityProof,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub terminal_witness: Option<EvidenceWitness>,
-}
-
-impl TaskFailureEnvelope {
-    pub fn new(
-        task_id: TaskId,
-        idempotency_key: IdempotencyKey,
-        lease_id: LeaseId,
-        fencing_token: FencingToken,
-        failure: TaskFailure,
-        capability: TaskCapabilityProof,
-    ) -> Result<Self, GraphStoreError> {
-        let envelope = Self {
-            task_id,
-            idempotency_key,
-            lease_id,
-            fencing_token,
-            failure,
-            capability,
-            terminal_witness: None,
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-
-    pub fn signed_with(
-        mut self,
-        signer: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let signer_identity = AgentId::from_public_key_hex(&signer.public_key().to_hex());
-        if signer_identity != self.failure.failed_by || signer_identity != self.capability.claimant
-        {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "failure signer does not match the claimant actor".to_string(),
-                },
-            ));
-        }
-        let scoped_agent_id = scoped_agent_id.into();
-        if scoped_agent_id.trim().is_empty() || scoped_agent_id.len() > 128 {
-            return Err(GraphStoreError::InvalidState {
-                reason: "failure terminal scope is invalid".to_string(),
-            });
-        }
-        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
-        self.terminal_witness = Some(
-            EvidenceWitness::new(signer, self.capability.role, scoped_agent_id, &bytes)
-                .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    fn canonical_bytes_for_scope(&self, terminal_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&TaskFailureMaterial {
-            task_id: &self.task_id,
-            idempotency_key: &self.idempotency_key,
-            lease_id: &self.lease_id,
-            fencing_token: self.fencing_token,
-            failure: &self.failure,
-            capability: &self.capability,
-            terminal_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let terminal_scope = self
-            .terminal_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_bytes_for_scope(terminal_scope)
-    }
-
-    fn validate(&self) -> Result<(), GraphStoreError> {
-        self.failure.validate()?;
-        if self.capability.task_id != self.task_id {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "failure capability task does not match envelope task".to_string(),
-            });
-        }
-        if self.capability.claimant != self.failure.failed_by {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "failure actor and capability claimant must match".to_string(),
-                },
-            ));
-        }
-        if let Some(witness) = &self.terminal_witness {
-            if witness.producer_identity != self.failure.failed_by
-                || witness.producer_role != self.capability.role
-            {
-                return Err(GraphStoreError::Admission(
-                    GraphAdmissionError::InvalidWitness {
-                        reason: "failure witness does not bind actor and capability role"
-                            .to_string(),
-                    },
-                ));
-            }
-            witness
-                .validate(&self.canonical_bytes_without_witness()?)
-                .map_err(GraphStoreError::Admission)?;
-        }
-        Ok(())
-    }
-
-    fn validate_for_task(
-        &self,
-        task: &TaskRecord,
-        limits: &GraphResourceLimits,
-    ) -> Result<(), GraphStoreError> {
-        self.validate()?;
-        task.validate_with_limits(limits.max_task_lease_ms, limits.max_task_retries)
-            .map_err(GraphStoreError::Admission)?;
-        if task.state != TaskState::Claimed || task.completion.is_some() {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "failure envelope requires an active claimed task".to_string(),
-            });
-        }
-        let lease = task
-            .lease
-            .as_ref()
-            .ok_or_else(|| GraphStoreError::InvalidTransition {
-                reason: "failure envelope requires the task's active lease".to_string(),
-            })?;
-        self.capability
-            .validate_for_claim(&task.request)
-            .map_err(GraphStoreError::Admission)?;
-        if self.task_id != task.request.task_id
-            || self.idempotency_key != task.request.idempotency_key
-            || self.lease_id != lease.lease_id
-            || self.fencing_token != lease.fencing_token
-            || self.failure.failed_by != lease.holder
-        {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "failure envelope does not bind the active task lease".to_string(),
-            });
-        }
-        if self.failure.failed_at < lease.issued_at || self.failure.failed_at > lease.expires_at {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "failure time must fall within the active lease".to_string(),
-            });
-        }
-        let Some(witness) = self.terminal_witness.as_ref() else {
-            return Err(GraphStoreError::Admission(
-                GraphAdmissionError::InvalidWitness {
-                    reason: "durable task failure requires a signed terminal witness".to_string(),
-                },
-            ));
-        };
-        witness
-            .validate(&self.canonical_bytes_without_witness()?)
-            .map_err(GraphStoreError::Admission)
-    }
-}
-
-/// Terminal transition selected by the claimant and explicitly admitted by
-/// the scheduler authority. The discriminant is signed so one clock grant
-/// cannot be replayed across completion and failure paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskTerminalOperationKind {
-    Complete,
-    Fail,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct TaskTerminalClockMaterial<'a> {
-    task_id: &'a TaskId,
-    idempotency_key: &'a IdempotencyKey,
-    expected_generation: u64,
-    lease_id: &'a LeaseId,
-    fencing_token: FencingToken,
-    observed_at: GraphLogicalTime,
-    operation_kind: TaskTerminalOperationKind,
-    operation_digest: &'a str,
-    authority_scope: &'a str,
-}
-
-/// Scheduler-signed clock grant for one exact terminal operation. This keeps
-/// the durable logical high-water mark under coordinator authority while the
-/// claimant's terminal envelope independently proves the completion/failure
-/// payload. Binding the canonical terminal-envelope digest prevents a valid
-/// clock grant from being reused for a different terminal publication.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskTerminalClockEnvelope {
-    pub task_id: TaskId,
-    pub idempotency_key: IdempotencyKey,
-    pub expected_generation: u64,
-    pub lease_id: LeaseId,
-    pub fencing_token: FencingToken,
-    pub observed_at: GraphLogicalTime,
-    pub operation_kind: TaskTerminalOperationKind,
-    pub operation_digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authority_witness: Option<EvidenceWitness>,
-}
-
-impl TaskTerminalClockEnvelope {
-    pub fn for_completion(
-        expected_generation: u64,
-        observed_at: GraphLogicalTime,
-        envelope: &TaskTerminalEnvelope,
-    ) -> Result<Self, GraphStoreError> {
-        Self::new(
-            envelope.task_id.clone(),
-            envelope.idempotency_key.clone(),
-            expected_generation,
-            envelope.lease_id.clone(),
-            envelope.fencing_token,
-            observed_at,
-            TaskTerminalOperationKind::Complete,
-            terminal_operation_digest(envelope)?,
-        )
-    }
-
-    pub fn for_failure(
-        expected_generation: u64,
-        observed_at: GraphLogicalTime,
-        envelope: &TaskFailureEnvelope,
-    ) -> Result<Self, GraphStoreError> {
-        Self::new(
-            envelope.task_id.clone(),
-            envelope.idempotency_key.clone(),
-            expected_generation,
-            envelope.lease_id.clone(),
-            envelope.fencing_token,
-            observed_at,
-            TaskTerminalOperationKind::Fail,
-            terminal_operation_digest(envelope)?,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        task_id: TaskId,
-        idempotency_key: IdempotencyKey,
-        expected_generation: u64,
-        lease_id: LeaseId,
-        fencing_token: FencingToken,
-        observed_at: GraphLogicalTime,
-        operation_kind: TaskTerminalOperationKind,
-        operation_digest: String,
-    ) -> Result<Self, GraphStoreError> {
-        let envelope = Self {
-            task_id,
-            idempotency_key,
-            expected_generation,
-            lease_id,
-            fencing_token,
-            observed_at,
-            operation_kind,
-            operation_digest,
-            authority_witness: None,
-        };
-        envelope.validate()?;
-        Ok(envelope)
-    }
-
-    pub fn authorized_by(
-        mut self,
-        authority: &Keypair,
-        scoped_agent_id: impl Into<String>,
-    ) -> Result<Self, GraphStoreError> {
-        let scoped_agent_id = scoped_agent_id.into();
-        validate_authority_scope("terminal clock", &scoped_agent_id)?;
-        let bytes = self.canonical_bytes_for_scope(&scoped_agent_id)?;
-        self.authority_witness = Some(
-            EvidenceWitness::new(
-                authority,
-                swarm_core::hypothesis_graph::GraphProducerRole::Planner,
-                scoped_agent_id,
-                &bytes,
-            )
-            .map_err(GraphStoreError::Admission)?,
-        );
-        self.validate()?;
-        Ok(self)
-    }
-
-    fn canonical_bytes_for_scope(&self, authority_scope: &str) -> Result<Vec<u8>, GraphStoreError> {
-        canonical_json_bytes(&TaskTerminalClockMaterial {
-            task_id: &self.task_id,
-            idempotency_key: &self.idempotency_key,
-            expected_generation: self.expected_generation,
-            lease_id: &self.lease_id,
-            fencing_token: self.fencing_token,
-            observed_at: self.observed_at,
-            operation_kind: self.operation_kind,
-            operation_digest: &self.operation_digest,
-            authority_scope,
-        })
-        .map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })
-    }
-
-    fn canonical_bytes_without_witness(&self) -> Result<Vec<u8>, GraphStoreError> {
-        let authority_scope = self
-            .authority_witness
-            .as_ref()
-            .map_or("", |witness| witness.scoped_agent_id.as_str());
-        self.canonical_bytes_for_scope(authority_scope)
-    }
-
-    fn validate(&self) -> Result<(), GraphStoreError> {
-        self.observed_at
-            .validate()
-            .map_err(GraphStoreError::Admission)?;
-        if self.expected_generation == 0 {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "terminal clock generation must be positive".to_string(),
-            });
-        }
-        if self.operation_digest.len() != 64
-            || !self
-                .operation_digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(GraphStoreError::InvalidState {
-                reason: "terminal operation digest must be lowercase SHA-256 hex".to_string(),
-            });
-        }
-        validate_optional_scheduler_witness(
-            self.authority_witness.as_ref(),
-            &self.canonical_bytes_without_witness()?,
-        )
-    }
-
-    fn validate_for_operation<T: Serialize>(
-        &self,
-        task: &TaskRecord,
-        expected_generation: u64,
-        operation_kind: TaskTerminalOperationKind,
-        operation: &T,
-        authority: &AgentId,
-    ) -> Result<(), GraphStoreError> {
-        self.validate()?;
-        let lease = task
-            .lease
-            .as_ref()
-            .ok_or_else(|| GraphStoreError::InvalidTransition {
-                reason: "terminal clock requires the task's active lease".to_string(),
-            })?;
-        if self.task_id != task.request.task_id
-            || self.idempotency_key != task.request.idempotency_key
-            || self.expected_generation != expected_generation
-            || self.lease_id != lease.lease_id
-            || self.fencing_token != lease.fencing_token
-            || self.operation_kind != operation_kind
-            || self.operation_digest != terminal_operation_digest(operation)?
-        {
-            return Err(GraphStoreError::InvalidTransition {
-                reason: "terminal clock does not bind the exact task operation".to_string(),
-            });
-        }
-        require_configured_scheduler_witness(
-            self.authority_witness.as_ref(),
-            authority,
-            &self.canonical_bytes_without_witness()?,
-            "durable terminal operation requires scheduler clock authority",
-        )
-    }
-}
-
-fn terminal_operation_digest<T: Serialize>(operation: &T) -> Result<String, GraphStoreError> {
-    let bytes =
-        canonical_json_bytes(operation).map_err(|error| GraphStoreError::Canonicalization {
-            reason: error.to_string(),
-        })?;
-    Ok(sha256_hex(&bytes))
-}
-
-/// Validate a signed failure publication at the durable task-store boundary.
-pub fn validate_task_failure_envelope(
-    task: &TaskRecord,
-    envelope: &TaskFailureEnvelope,
-    limits: &GraphResourceLimits,
-) -> Result<(), GraphStoreError> {
-    envelope.validate_for_task(task, limits)
 }
 
 impl TaskFailure {
@@ -4456,7 +5237,7 @@ impl TaskFailure {
         Ok(failure)
     }
 
-    fn validate(&self) -> Result<(), GraphStoreError> {
+    pub fn validate(&self) -> Result<(), GraphStoreError> {
         if self.failed_by.0.trim().is_empty() || self.failed_by.0.len() > 256 {
             return Err(GraphStoreError::InvalidState {
                 reason: "failure actor identity is invalid".to_string(),
@@ -4468,6 +5249,175 @@ impl TaskFailure {
         if self.summary_digest.trim().is_empty() || self.summary_digest.len() > 128 {
             return Err(GraphStoreError::InvalidState {
                 reason: "failure summary digest is invalid".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskFailureOutboxEntry {
+    pub task_id: TaskId,
+    pub lease_id: LeaseId,
+    pub fencing_token: FencingToken,
+    pub failure: TaskFailure,
+    pub capability: TaskCapabilityProof,
+    pub witness: EvidenceWitness,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct TaskFailureOutboxMaterial<'a> {
+    task_id: &'a TaskId,
+    lease_id: &'a LeaseId,
+    fencing_token: FencingToken,
+    failure: &'a TaskFailure,
+    capability: &'a TaskCapabilityProof,
+    scope: &'a str,
+}
+
+impl TaskFailureOutboxEntry {
+    pub fn new(
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        failure: TaskFailure,
+        capability: TaskCapabilityProof,
+        signer: &Keypair,
+        scope: impl Into<String>,
+    ) -> Result<Self, GraphStoreError> {
+        let lease = task
+            .lease
+            .as_ref()
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "reasoning failure publication requires an active lease".to_string(),
+            })?;
+        let scope = scope.into();
+        let material = TaskFailureOutboxMaterial {
+            task_id: &task.request.task_id,
+            lease_id: &lease.lease_id,
+            fencing_token: lease.fencing_token,
+            failure: &failure,
+            capability: &capability,
+            scope: &scope,
+        };
+        let bytes =
+            canonical_json_bytes(&material).map_err(|error| GraphStoreError::Canonicalization {
+                reason: error.to_string(),
+            })?;
+        let witness = EvidenceWitness::new(signer, task.request.role, scope, &bytes)
+            .map_err(GraphStoreError::Admission)?;
+        let entry = Self {
+            task_id: task.request.task_id.clone(),
+            lease_id: lease.lease_id.clone(),
+            fencing_token: lease.fencing_token,
+            failure,
+            capability,
+            witness,
+        };
+        entry.validate_for_claimed_task(task, descriptor, GraphLogicalTime::new(0))?;
+        Ok(entry)
+    }
+
+    fn canonical_bytes(&self) -> Result<Vec<u8>, GraphStoreError> {
+        canonical_json_bytes(&TaskFailureOutboxMaterial {
+            task_id: &self.task_id,
+            lease_id: &self.lease_id,
+            fencing_token: self.fencing_token,
+            failure: &self.failure,
+            capability: &self.capability,
+            scope: &self.witness.scoped_agent_id,
+        })
+        .map_err(|error| GraphStoreError::Canonicalization {
+            reason: error.to_string(),
+        })
+    }
+
+    fn validate_common(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> Result<(), GraphStoreError> {
+        self.failure.validate()?;
+        descriptor.validate().map_err(GraphStoreError::Admission)?;
+        self.capability
+            .validate_for_claim(&task.request)
+            .map_err(GraphStoreError::Admission)?;
+        if descriptor.task_id != self.task_id
+            || descriptor.task_id != task.request.task_id
+            || descriptor.target != task.request.target
+            || descriptor.kind != task.request.kind
+            || self.failure.failed_by != task.request.claimant
+            || self.witness.producer_identity != task.request.claimant
+            || self.witness.producer_role != task.request.role
+            || self.failure.failed_at < logical_time_high_water
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning failure publication does not bind task, descriptor, claimant, or logical time"
+                    .to_string(),
+            });
+        }
+        self.witness
+            .validate(&self.canonical_bytes()?)
+            .map_err(GraphStoreError::Admission)
+    }
+
+    pub fn validate_for_claimed_task(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> Result<(), GraphStoreError> {
+        self.validate_common(task, descriptor, logical_time_high_water)?;
+        let lease = task
+            .lease
+            .as_ref()
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "reasoning failure publication requires the prior active lease".to_string(),
+            })?;
+        if task.state != TaskState::Claimed
+            || task.completion.is_some()
+            || self.lease_id != lease.lease_id
+            || self.fencing_token != lease.fencing_token
+            || self.failure.failed_by != lease.holder
+            || self.failure.failed_at < lease.issued_at
+            || self.failure.failed_at >= lease.expires_at
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning failure publication does not bind the active lease".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_failed_task(
+        &self,
+        task: &TaskRecord,
+        descriptor: &LogicalTaskDescriptor,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> Result<(), GraphStoreError> {
+        self.validate_common(task, descriptor, GraphLogicalTime::new(0))?;
+        let proof = task
+            .terminal_history
+            .last()
+            .ok_or_else(|| GraphStoreError::InvalidState {
+                reason: "failed reasoning task has no terminal proof".to_string(),
+            })?;
+        if task.state != TaskState::Failed
+            || task.lease.is_some()
+            || task.completion.is_some()
+            || proof.terminal_state != TaskState::Failed
+            || proof.completer != self.failure.failed_by
+            || proof.completed_at != self.failure.failed_at
+            || proof.failure_summary_digest.as_ref() != Some(&self.failure.summary_digest)
+            || proof.prior_lease.lease_id != self.lease_id
+            || proof.prior_lease.fencing_token != self.fencing_token
+            || self.failure.failed_at > logical_time_high_water
+        {
+            return Err(GraphStoreError::InvalidState {
+                reason: "reasoning failure outbox does not match the durable failed task"
+                    .to_string(),
             });
         }
         Ok(())
@@ -4635,46 +5585,168 @@ pub trait HypothesisGraphStore: Send + Sync {
     fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError>;
     fn compare_and_swap(
         &self,
-        envelope: GraphCasEnvelope,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
     ) -> Result<GraphStoreSnapshot, GraphStoreError>;
-    fn create_task(
+    /// Commit one coordinator-built seed generation whose initial decision
+    /// history is authenticated by coordinator-scoped record witnesses.
+    /// Ordinary CAS deliberately rejects initial decision history so callers
+    /// cannot bypass the runtime signer's admission boundary.
+    fn compare_and_swap_coordinator_seed(
         &self,
-        envelope: TaskCreationEnvelope,
-    ) -> Result<TaskMutationResult, GraphStoreError>;
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        coordinator_identity: &AgentId,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        let _ = (expected, state, coordinator_identity);
+        Err(GraphStoreError::InvalidTransition {
+            reason: "store backend does not implement authenticated coordinator seed admission"
+                .to_string(),
+        })
+    }
+    fn create_task(&self, request: TaskClaimRequest)
+    -> Result<TaskMutationResult, GraphStoreError>;
     fn create_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        envelope: TaskCreationEnvelope,
+        request: TaskClaimRequest,
     ) -> Result<TaskMutationResult, GraphStoreError>;
-    fn claim_task(&self, envelope: TaskClaimEnvelope) -> Result<TaskClaimResult, GraphStoreError>;
+    fn claim_task(
+        &self,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+    ) -> Result<TaskClaimResult, GraphStoreError>;
     fn claim_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        envelope: TaskClaimEnvelope,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError>;
+    /// Claim a task and publish the caller's next scheduler budget in one
+    /// signed generation. The budget is charged only when the claim changes
+    /// durable task state; an idempotent retry leaves it untouched.
+    fn claim_task_with_budget(
+        &self,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let _ = (request, now, lease_duration_ms, scheduler_budget);
+        Err(GraphStoreError::InvalidTransition {
+            reason: "store backend does not implement atomic claim-plus-budget admission"
+                .to_string(),
+        })
+    }
+    /// CAS-bound variant of [`Self::claim_task_with_budget`].
+    fn claim_task_cas_with_budget(
+        &self,
+        expected: &GraphStoreRevision,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let _ = (expected, request, now, lease_duration_ms, scheduler_budget);
+        Err(GraphStoreError::InvalidTransition {
+            reason: "store backend does not implement atomic claim-plus-budget admission"
+                .to_string(),
+        })
+    }
+    /// Reclaim an expired task and publish the caller's next scheduler budget
+    /// in one signed generation. Reclaim consumes one claim-capacity unit and
+    /// no work unit; an exact retry of the active reclaimed lease is
+    /// idempotent and leaves the budget untouched.
+    fn reclaim_task_with_budget(
+        &self,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let _ = (task_id, request, now, lease_duration_ms, scheduler_budget);
+        Err(GraphStoreError::InvalidTransition {
+            reason: "store backend does not implement atomic reclaim-plus-budget admission"
+                .to_string(),
+        })
+    }
+    /// CAS-bound variant of [`Self::reclaim_task_with_budget`].
+    fn reclaim_task_cas_with_budget(
+        &self,
+        expected: &GraphStoreRevision,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let _ = (
+            expected,
+            task_id,
+            request,
+            now,
+            lease_duration_ms,
+            scheduler_budget,
+        );
+        Err(GraphStoreError::InvalidTransition {
+            reason: "store backend does not implement atomic reclaim-plus-budget admission"
+                .to_string(),
+        })
+    }
     fn renew_task(
         &self,
-        envelope: TaskRenewalEnvelope,
+        task_id: &str,
+        expected_generation: u64,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskMutationResult, GraphStoreError>;
     fn complete_task(
         &self,
+        task_id: &str,
         expected_generation: u64,
-        clock: TaskTerminalClockEnvelope,
-        envelope: TaskTerminalEnvelope,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        completion: TaskCompletion,
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn fail_task(
         &self,
+        task_id: &str,
         expected_generation: u64,
-        clock: TaskTerminalClockEnvelope,
-        envelope: TaskFailureEnvelope,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        failure: TaskFailure,
     ) -> Result<TaskTerminalResult, GraphStoreError>;
+    fn fail_reasoning_task_cas(
+        &self,
+        expected: &GraphStoreRevision,
+        expected_generation: u64,
+        publication: TaskFailureOutboxEntry,
+    ) -> Result<TaskTerminalResult, GraphStoreError> {
+        let _ = (expected, expected_generation, publication);
+        Err(GraphStoreError::InvalidTransition {
+            reason: "store backend does not implement atomic reasoning failure publication"
+                .to_string(),
+        })
+    }
     fn expire_task(
         &self,
-        envelope: TaskExpiryEnvelope,
+        task_id: &str,
+        expected_generation: u64,
+        now: GraphLogicalTime,
     ) -> Result<TaskTerminalResult, GraphStoreError>;
     fn reclaim_task(
         &self,
-        envelope: TaskReclaimEnvelope,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError>;
 }
 
@@ -4687,12 +5759,36 @@ pub struct MemoryHypothesisGraphStore {
     inner: Arc<RwLock<SignedGraphStoreState>>,
     signer: Keypair,
     limits: GraphResourceLimits,
+    scheduler_policy: SchedulerBudgetPolicy,
     graph_id: GraphId,
     signer_id: AgentId,
 }
 
 impl MemoryHypothesisGraphStore {
     pub fn new(graph: HypothesisGraph, signer: Keypair) -> Result<Self, GraphStoreError> {
+        Self::new_with_scheduler_policy(graph, signer, SchedulerBudgetPolicy::global())
+    }
+
+    pub fn new_with_config(
+        graph: HypothesisGraph,
+        signer: Keypair,
+        config: &swarm_core::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphStoreError> {
+        if graph.limits != config.resource_limits() {
+            return Err(GraphStoreError::InvalidState {
+                reason: "graph limits do not match the configured scheduler deployment".to_string(),
+            });
+        }
+        let scheduler_policy =
+            SchedulerBudgetPolicy::from_config(config).map_err(GraphStoreError::Admission)?;
+        Self::new_with_scheduler_policy(graph, signer, scheduler_policy)
+    }
+
+    pub fn new_with_scheduler_policy(
+        graph: HypothesisGraph,
+        signer: Keypair,
+        scheduler_policy: SchedulerBudgetPolicy,
+    ) -> Result<Self, GraphStoreError> {
         let limits = graph.limits.clone();
         let graph_id = graph.graph_id.clone();
         let signer_id = AgentId::from_public_key_hex(&signer.public_key().to_hex());
@@ -4702,6 +5798,7 @@ impl MemoryHypothesisGraphStore {
             inner: Arc::new(RwLock::new(signed)),
             signer,
             limits,
+            scheduler_policy,
             graph_id,
             signer_id,
         })
@@ -4720,12 +5817,28 @@ impl MemoryHypothesisGraphStore {
         Self::new(graph, signer)
     }
 
+    pub fn open_with_config(
+        graph_id: GraphId,
+        limits: GraphResourceLimits,
+        signer: Keypair,
+        config: &swarm_core::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphStoreError> {
+        let graph = HypothesisGraph::new(graph_id, limits).map_err(GraphStoreError::Admission)?;
+        Self::new_with_config(graph, signer, config)
+    }
+
     fn read_signed(&self) -> Result<SignedGraphStoreState, GraphStoreError> {
         let guard = self
             .inner
             .read()
             .map_err(|_| GraphStoreError::PoisonedLock)?;
-        verify_state(&guard, &self.graph_id, &self.signer_id, &self.limits)?;
+        verify_state(
+            &guard,
+            &self.graph_id,
+            &self.signer_id,
+            &self.limits,
+            &self.scheduler_policy,
+        )?;
         Ok(guard.clone())
     }
 
@@ -4741,8 +5854,57 @@ impl MemoryHypothesisGraphStore {
             .inner
             .write()
             .map_err(|_| GraphStoreError::PoisonedLock)?;
-        verify_state(&guard, &self.graph_id, &self.signer_id, &self.limits)?;
-        let (next, value) = transition(&guard, expected, &self.signer, &self.limits, operation)?;
+        verify_state(
+            &guard,
+            &self.graph_id,
+            &self.signer_id,
+            &self.limits,
+            &self.scheduler_policy,
+        )?;
+        let (next, value) = transition(
+            &guard,
+            expected,
+            &self.signer,
+            &self.limits,
+            &self.scheduler_policy,
+            operation,
+        )?;
+        if next != *guard {
+            *guard = next;
+        }
+        Ok((guard.snapshot()?, value))
+    }
+
+    fn mutate_with_exact_retry<R, P, F>(
+        &self,
+        expected: Option<&GraphStoreRevision>,
+        exact_retry: P,
+        operation: F,
+    ) -> Result<(GraphStoreSnapshot, R), GraphStoreError>
+    where
+        P: FnOnce(&GraphStoreState) -> Result<Option<R>, GraphStoreError>,
+        F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
+    {
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| GraphStoreError::PoisonedLock)?;
+        verify_state(
+            &guard,
+            &self.graph_id,
+            &self.signer_id,
+            &self.limits,
+            &self.scheduler_policy,
+        )?;
+        let (next, value) = transition_with_exact_retry(
+            &guard,
+            expected,
+            &self.signer,
+            &self.limits,
+            &self.scheduler_policy,
+            exact_retry,
+            operation,
+        )?;
         if next != *guard {
             *guard = next;
         }
@@ -4779,6 +5941,70 @@ impl MemoryHypothesisGraphStore {
             idempotent: marker.idempotent,
         }
     }
+
+    fn compare_and_swap_reasoning(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        initial_decision_admission: InitialDecisionAdmission<'_>,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        let (snapshot, _) = self.mutate(Some(expected), |current| {
+            if state.graph_id != self.graph_id {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "replacement graph ID differs from store stream".to_string(),
+                });
+            }
+            if state.generation != current.generation
+                || state.predecessor_digest != current.predecessor_digest
+            {
+                return Err(GraphStoreError::StalePredecessor {
+                    expected_generation: current.generation,
+                    expected_digest: current.digest()?,
+                    observed_generation: state.generation,
+                    observed_digest: state.digest()?,
+                });
+            }
+            if state.fencing_counter < current.fencing_counter {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "compare-and-swap candidate fencing counter regressed".to_string(),
+                });
+            }
+            if state.logical_time_high_water < current.logical_time_high_water {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "compare-and-swap candidate logical time high-water regressed"
+                        .to_string(),
+                });
+            }
+            state.validate_with_limits(&self.limits)?;
+            validate_reasoning_cas_transition(
+                current,
+                &state,
+                &self.limits,
+                &self.scheduler_policy,
+                initial_decision_admission,
+            )?;
+            current.graph = state.graph;
+            current.hypotheses = state.hypotheses;
+            current.tasks = state.tasks;
+            current.logical_task_descriptors = state.logical_task_descriptors;
+            current.task_tombstones = state.task_tombstones;
+            current.terminal_outbox = state.terminal_outbox;
+            current.task_failure_outbox = state.task_failure_outbox;
+            current.fencing_counter = state.fencing_counter;
+            current.limits = state.limits;
+            current.cross_graph_links = state.cross_graph_links;
+            current.scheduler_budget = state.scheduler_budget;
+            current.migration_marker = state.migration_marker;
+            current.result_projection_digest = state.result_projection_digest;
+            current.operator_projection_digest = state.operator_projection_digest;
+            current.logical_time_high_water = state.logical_time_high_water;
+            Ok(StateMutation {
+                value: (),
+                changed: true,
+            })
+        })?;
+        Ok(snapshot)
+    }
 }
 
 impl HypothesisGraphStore for MemoryHypothesisGraphStore {
@@ -4788,45 +6014,54 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn compare_and_swap(
         &self,
-        envelope: GraphCasEnvelope,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
-        let expected = envelope.expected.clone();
-        let (snapshot, _) = self.mutate(Some(&expected), |current| {
-            graph_cas_op(
-                current,
-                envelope,
-                &self.graph_id,
-                &self.signer_id,
-                &self.limits,
-            )
-        })?;
-        Ok(snapshot)
+        self.compare_and_swap_reasoning(expected, state, InitialDecisionAdmission::Reject)
+    }
+
+    fn compare_and_swap_coordinator_seed(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        coordinator_identity: &AgentId,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        self.compare_and_swap_reasoning(
+            expected,
+            state,
+            InitialDecisionAdmission::AuthenticatedCoordinator(coordinator_identity),
+        )
     }
 
     fn create_task(
         &self,
-        envelope: TaskCreationEnvelope,
+        request: TaskClaimRequest,
     ) -> Result<TaskMutationResult, GraphStoreError> {
-        let (snapshot, marker) = self.mutate(None, |state| {
-            create_task_op(state, envelope, &self.signer_id, &self.limits)
-        })?;
+        let (snapshot, marker) =
+            self.mutate(None, |state| create_task_op(state, request, &self.limits))?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn create_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        envelope: TaskCreationEnvelope,
+        request: TaskClaimRequest,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            create_task_op(state, envelope, &self.signer_id, &self.limits)
+            create_task_op(state, request, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
-    fn claim_task(&self, envelope: TaskClaimEnvelope) -> Result<TaskClaimResult, GraphStoreError> {
+    fn claim_task(
+        &self,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            claim_task_op(state, envelope, &self.signer_id, &self.limits)
+            reject_unbudgeted_reasoning_task_surface(state, "claim")?;
+            claim_task_op(state, request, now, lease_duration_ms, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -4834,37 +6069,100 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
     fn claim_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        envelope: TaskClaimEnvelope,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            claim_task_op(state, envelope, &self.signer_id, &self.limits)
+            reject_unbudgeted_reasoning_task_surface(state, "claim")?;
+            claim_task_op(state, request, now, lease_duration_ms, &self.limits)
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn claim_task_with_budget(
+        &self,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(None, |state| {
+            claim_task_with_budget_op(
+                state,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+                &self.limits,
+            )
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn claim_task_cas_with_budget(
+        &self,
+        expected: &GraphStoreRevision,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(Some(expected), |state| {
+            claim_task_with_budget_op(
+                state,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn renew_task(
         &self,
-        envelope: TaskRenewalEnvelope,
+        task_id: &str,
+        expected_generation: u64,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            renew_task_op(state, envelope, &self.signer_id, &self.limits)
+            renew_task_op(
+                state,
+                task_id,
+                expected_generation,
+                lease_id,
+                fence,
+                now,
+                lease_duration_ms,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn complete_task(
         &self,
+        task_id: &str,
         expected_generation: u64,
-        clock: TaskTerminalClockEnvelope,
-        envelope: TaskTerminalEnvelope,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        completion: TaskCompletion,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
             complete_task_op(
                 state,
+                task_id,
                 expected_generation,
-                clock,
-                envelope,
-                &self.signer_id,
+                lease_id,
+                fence,
+                now,
+                completion,
                 &self.limits,
             )
         })?;
@@ -4873,39 +6171,117 @@ impl HypothesisGraphStore for MemoryHypothesisGraphStore {
 
     fn fail_task(
         &self,
+        task_id: &str,
         expected_generation: u64,
-        clock: TaskTerminalClockEnvelope,
-        envelope: TaskFailureEnvelope,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        failure: TaskFailure,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
             fail_task_op(
                 state,
+                task_id,
                 expected_generation,
-                clock,
-                envelope,
-                &self.signer_id,
+                lease_id,
+                fence,
+                now,
+                failure,
                 &self.limits,
             )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
+    fn fail_reasoning_task_cas(
+        &self,
+        expected: &GraphStoreRevision,
+        expected_generation: u64,
+        publication: TaskFailureOutboxEntry,
+    ) -> Result<TaskTerminalResult, GraphStoreError> {
+        let retry_publication = publication.clone();
+        let (snapshot, marker) = self.mutate_with_exact_retry(
+            Some(expected),
+            |state| exact_reasoning_failure_retry(state, &retry_publication),
+            |state| fail_reasoning_task_op(state, expected_generation, publication, &self.limits),
+        )?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
     fn expire_task(
         &self,
-        envelope: TaskExpiryEnvelope,
+        task_id: &str,
+        expected_generation: u64,
+        now: GraphLogicalTime,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            expire_task_op(state, envelope, &self.signer_id, &self.limits)
+            expire_task_op(state, task_id, expected_generation, now, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn reclaim_task(
         &self,
-        envelope: TaskReclaimEnvelope,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            reclaim_task_op(state, envelope, &self.signer_id, &self.limits)
+            reject_unbudgeted_reasoning_task_surface(state, "reclaim")?;
+            reclaim_task_op(
+                state,
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                &self.limits,
+            )
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn reclaim_task_with_budget(
+        &self,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(None, |state| {
+            reclaim_task_with_budget_op(
+                state,
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+                &self.limits,
+            )
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn reclaim_task_cas_with_budget(
+        &self,
+        expected: &GraphStoreRevision,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(Some(expected), |state| {
+            reclaim_task_with_budget_op(
+                state,
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -4990,79 +6366,24 @@ fn ensure_private_file_metadata(
 }
 
 pub(crate) fn prepare_private_store_root(path: &Path) -> Result<(), GraphStoreError> {
-    reject_parent_directory_components(path)?;
     ensure_no_symlink_ancestors(path)?;
     ensure_path_not_symlink(path)?;
-    let mut missing = Vec::new();
-    let mut cursor = Some(path);
-    while let Some(candidate) = cursor {
-        match fs::symlink_metadata(candidate) {
-            Ok(_) => break,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                missing.push(candidate.to_path_buf());
-                cursor = candidate
-                    .parent()
-                    .filter(|parent| !parent.as_os_str().is_empty());
-            }
-            Err(source) => {
-                return Err(GraphStoreError::Write {
-                    path: candidate.to_path_buf(),
-                    source,
-                });
-            }
-        }
-    }
+    let existed = fs::symlink_metadata(path).is_ok();
     fs::create_dir_all(path).map_err(|source| GraphStoreError::Write {
         path: path.to_path_buf(),
         source,
     })?;
-    for created in missing.iter().rev() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(created, fs::Permissions::from_mode(0o700)).map_err(|source| {
-                GraphStoreError::Write {
-                    path: created.clone(),
-                    source,
-                }
-            })?;
-        }
-        File::open(created)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|source| GraphStoreError::Write {
-                path: created.clone(),
+    #[cfg(unix)]
+    if !existed {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|source| {
+            GraphStoreError::Write {
+                path: path.to_path_buf(),
                 source,
-            })?;
-        let parent = durability_parent(created);
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|source| GraphStoreError::Write {
-                path: parent.to_path_buf(),
-                source,
-            })?;
+            }
+        })?;
     }
     ensure_private_store_root_mode(path)
-}
-
-fn reject_parent_directory_components(path: &Path) -> Result<(), GraphStoreError> {
-    if path
-        .components()
-        .any(|component| component == std::path::Component::ParentDir)
-    {
-        return Err(GraphStoreError::InvalidState {
-            reason: format!(
-                "store root contains a parent-directory component: {}",
-                path.display()
-            ),
-        });
-    }
-    Ok(())
-}
-
-fn durability_parent(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
 }
 
 fn ensure_no_symlink_ancestors(path: &Path) -> Result<(), GraphStoreError> {
@@ -6610,12 +7931,12 @@ fn atomic_write_json_at(
                 path: path.to_path_buf(),
             });
         }
-        let mode = u64::from(target_stat.st_mode & 0o7777);
+        let mode = target_stat.st_mode & 0o7777;
         if mode != 0o600 {
             return Err(GraphStoreError::InsecurePermissions {
                 path: path.to_path_buf(),
                 expected: 0o600,
-                observed: u32::try_from(mode).unwrap_or(u32::MAX),
+                observed: u32::from(mode),
             });
         }
     } else {
@@ -6628,46 +7949,33 @@ fn atomic_write_json_at(
         }
     }
 
+    let suffix = TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let target_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("state");
-    let mut allocated = None;
-    for _ in 0..64 {
-        let suffix = TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let restart_nonce = uuid::Uuid::new_v4().simple();
-        let temporary_name = CString::new(format!(
-            ".{target_name}.tmp.{}.{restart_nonce}.{suffix}",
-            std::process::id()
-        ))
-        .map_err(|_| GraphStoreError::InvalidState {
-            reason: "temporary JSON file name contains NUL".to_string(),
-        })?;
-        let temporary_fd = unsafe {
-            libc::openat(
-                dir_fd,
-                temporary_name.as_ptr(),
-                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                0o600,
-            )
-        };
-        if temporary_fd >= 0 {
-            allocated = Some((temporary_name, temporary_fd));
-            break;
-        }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::AlreadyExists {
-            return Err(GraphStoreError::Write {
-                path: path.to_path_buf(),
-                source,
-            });
-        }
-    }
-    let Some((temporary_name, temporary_fd)) = allocated else {
-        return Err(GraphStoreError::InvalidState {
-            reason: "could not allocate a restart-unique temporary JSON file".to_string(),
-        });
+    let temporary_name = CString::new(format!(
+        ".{target_name}.tmp.{}.{}",
+        std::process::id(),
+        suffix
+    ))
+    .map_err(|_| GraphStoreError::InvalidState {
+        reason: "temporary JSON file name contains NUL".to_string(),
+    })?;
+    let temporary_fd = unsafe {
+        libc::openat(
+            dir_fd,
+            temporary_name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
     };
+    if temporary_fd < 0 {
+        return Err(GraphStoreError::Write {
+            path: path.to_path_buf(),
+            source: io::Error::last_os_error(),
+        });
+    }
     let mut temporary = unsafe { File::from_raw_fd(temporary_fd) };
     let write_result: Result<(), GraphStoreError> = (|| {
         temporary
@@ -7100,6 +8408,7 @@ pub struct FileHypothesisGraphStore {
     mutation_lock: Mutex<()>,
     signer: Keypair,
     limits: GraphResourceLimits,
+    scheduler_policy: SchedulerBudgetPolicy,
     graph_id: GraphId,
     signer_id: AgentId,
 }
@@ -7110,7 +8419,32 @@ impl FileHypothesisGraphStore {
         graph: HypothesisGraph,
         signer: Keypair,
     ) -> Result<Self, GraphStoreError> {
-        Self::open_internal(path.as_ref(), Some(graph), signer)
+        Self::new_with_scheduler_policy(path, graph, signer, SchedulerBudgetPolicy::global())
+    }
+
+    pub fn new_with_config(
+        path: impl AsRef<Path>,
+        graph: HypothesisGraph,
+        signer: Keypair,
+        config: &swarm_core::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphStoreError> {
+        if graph.limits != config.resource_limits() {
+            return Err(GraphStoreError::InvalidState {
+                reason: "graph limits do not match the configured scheduler deployment".to_string(),
+            });
+        }
+        let scheduler_policy =
+            SchedulerBudgetPolicy::from_config(config).map_err(GraphStoreError::Admission)?;
+        Self::new_with_scheduler_policy(path, graph, signer, scheduler_policy)
+    }
+
+    pub fn new_with_scheduler_policy(
+        path: impl AsRef<Path>,
+        graph: HypothesisGraph,
+        signer: Keypair,
+        scheduler_policy: SchedulerBudgetPolicy,
+    ) -> Result<Self, GraphStoreError> {
+        Self::open_internal(path.as_ref(), Some(graph), signer, scheduler_policy)
     }
 
     pub fn open_with_graph(
@@ -7126,13 +8460,41 @@ impl FileHypothesisGraphStore {
         signer: Keypair,
     ) -> Result<Self, GraphStoreError> {
         let path = path.as_ref().to_path_buf();
-        Self::open_internal(&path, None, signer)
+        Self::open_internal(&path, None, signer, SchedulerBudgetPolicy::global())
+    }
+
+    pub fn open_with_signer_and_config(
+        path: impl AsRef<Path>,
+        signer: Keypair,
+        config: &swarm_core::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphStoreError> {
+        let path = path.as_ref().to_path_buf();
+        let scheduler_policy =
+            SchedulerBudgetPolicy::from_config(config).map_err(GraphStoreError::Admission)?;
+        let store = Self::open_internal(&path, None, signer, scheduler_policy)?;
+        if store.limits != config.resource_limits() {
+            return Err(GraphStoreError::InvalidState {
+                reason: "persisted graph limits do not match the configured scheduler deployment"
+                    .to_string(),
+            });
+        }
+        Ok(store)
+    }
+
+    pub fn open_with_signer_and_scheduler_policy(
+        path: impl AsRef<Path>,
+        signer: Keypair,
+        scheduler_policy: SchedulerBudgetPolicy,
+    ) -> Result<Self, GraphStoreError> {
+        let path = path.as_ref().to_path_buf();
+        Self::open_internal(&path, None, signer, scheduler_policy)
     }
 
     fn open_internal(
         path: &Path,
         initial_graph: Option<HypothesisGraph>,
         signer: Keypair,
+        scheduler_policy: SchedulerBudgetPolicy,
     ) -> Result<Self, GraphStoreError> {
         prepare_private_store_root(path)?;
         let lock_path = path.join(GRAPH_STORE_LOCK_FILE);
@@ -7168,10 +8530,18 @@ impl FileHypothesisGraphStore {
                 });
             }
             lock.revalidate()?;
-            let mut envelope: SignedGraphStoreState = lock.read_json(&state_path)?;
+            let authenticated = read_authenticated_state(
+                &lock,
+                &state_path,
+                &anchor_path,
+                &high_water_path,
+                &high_water_tail_path,
+                &signer_id,
+                &scheduler_policy,
+            )?;
+            let mut envelope = authenticated.envelope;
             let limits = envelope.state.graph.limits.clone();
             let graph_id = envelope.state.graph_id.clone();
-            verify_state(&envelope, &graph_id, &signer_id, &limits)?;
             let mut state_revision = envelope.revision()?;
             // Resolve a pending write-ahead intent before reading or
             // validating the ordinary state/head/high-water tuple.  Rollback
@@ -7207,8 +8577,21 @@ impl FileHypothesisGraphStore {
                 &lock.identity_token(),
             )?;
             if recovered {
-                envelope = lock.read_json(&state_path)?;
-                verify_state(&envelope, &graph_id, &signer_id, &limits)?;
+                // Re-enter the wire-discriminated reader after recovery.  A
+                // recovered legacy record must still be authenticated as the
+                // exact legacy shape; routing this second read through
+                // `SignedGraphStoreState` would reintroduce serde defaults
+                // before the legacy digest/signature check.
+                envelope = read_authenticated_state(
+                    &lock,
+                    &state_path,
+                    &anchor_path,
+                    &high_water_path,
+                    &high_water_tail_path,
+                    &signer_id,
+                    &scheduler_policy,
+                )?
+                .envelope;
                 state_revision = envelope.revision()?;
                 head = lock.read_json(&anchor_path)?;
                 head_revision = verify_state_head(
@@ -7342,6 +8725,7 @@ impl FileHypothesisGraphStore {
             mutation_lock: Mutex::new(()),
             signer,
             limits,
+            scheduler_policy,
             graph_id,
             signer_id,
         })
@@ -7398,8 +8782,16 @@ impl FileHypothesisGraphStore {
                 path: self.monotonic_anchor.path().to_path_buf(),
             });
         }
-        let mut envelope: SignedGraphStoreState = self.lock.read_json(&self.state_path)?;
-        verify_state(&envelope, &self.graph_id, &self.signer_id, &self.limits)?;
+        let authenticated = read_authenticated_state(
+            &self.lock,
+            &self.state_path,
+            &self.anchor_path,
+            &self.high_water_path,
+            &self.high_water_tail_path,
+            &self.signer_id,
+            &self.scheduler_policy,
+        )?;
+        let mut envelope = authenticated.envelope;
         let mut state_revision = envelope.revision()?;
         // Pending rollback is a recovery decision, not an ordinary tuple
         // validation failure.  Resolve it before loading the head/high-water
@@ -7438,8 +8830,19 @@ impl FileHypothesisGraphStore {
             &self.lock.identity_token(),
         )?;
         if recovered {
-            envelope = self.lock.read_json(&self.state_path)?;
-            verify_state(&envelope, &self.graph_id, &self.signer_id, &self.limits)?;
+            // Preserve the exact legacy-wire authentication boundary after a
+            // recovered write, too.  Defaults are only allowed after the
+            // marker-specific digest/signature/high-water checks complete.
+            envelope = read_authenticated_state(
+                &self.lock,
+                &self.state_path,
+                &self.anchor_path,
+                &self.high_water_path,
+                &self.high_water_tail_path,
+                &self.signer_id,
+                &self.scheduler_policy,
+            )?
+            .envelope;
             state_revision = envelope.revision()?;
             head = self.lock.read_json(&self.anchor_path)?;
             head_revision = verify_state_head(
@@ -7518,12 +8921,33 @@ impl FileHypothesisGraphStore {
     where
         F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
     {
+        self.mutate_with_exact_retry(expected, |_| Ok(None), operation)
+    }
+
+    fn mutate_with_exact_retry<R, P, F>(
+        &self,
+        expected: Option<&GraphStoreRevision>,
+        exact_retry: P,
+        operation: F,
+    ) -> Result<(GraphStoreSnapshot, R), GraphStoreError>
+    where
+        P: FnOnce(&GraphStoreState) -> Result<Option<R>, GraphStoreError>,
+        F: FnOnce(&mut GraphStoreState) -> Result<StateMutation<R>, GraphStoreError>,
+    {
         let _mutation_guard = self
             .mutation_lock
             .lock()
             .map_err(|_| GraphStoreError::PoisonedLock)?;
         let current = self.read_signed()?;
-        let (next, value) = transition(&current, expected, &self.signer, &self.limits, operation)?;
+        let (next, value) = transition_with_exact_retry(
+            &current,
+            expected,
+            &self.signer,
+            &self.limits,
+            &self.scheduler_policy,
+            exact_retry,
+            operation,
+        )?;
         if next != current {
             let external_lock = self.monotonic_anchor.acquire_lock()?;
             let external_records = self.monotonic_anchor.read_records_locked(&external_lock)?;
@@ -7674,54 +9098,142 @@ impl FileHypothesisGraphStore {
             idempotent: marker.idempotent,
         }
     }
+
+    fn compare_and_swap_reasoning(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        initial_decision_admission: InitialDecisionAdmission<'_>,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        let (snapshot, _) = self.mutate(Some(expected), |current| {
+            if state.graph_id != self.graph_id {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "replacement graph ID differs from store stream".to_string(),
+                });
+            }
+            if state.generation != current.generation
+                || state.predecessor_digest != current.predecessor_digest
+            {
+                return Err(GraphStoreError::StalePredecessor {
+                    expected_generation: current.generation,
+                    expected_digest: current.digest()?,
+                    observed_generation: state.generation,
+                    observed_digest: state.digest()?,
+                });
+            }
+            if state.fencing_counter < current.fencing_counter {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "compare-and-swap candidate fencing counter regressed".to_string(),
+                });
+            }
+            if state.logical_time_high_water < current.logical_time_high_water {
+                return Err(GraphStoreError::InvalidState {
+                    reason: "compare-and-swap candidate logical time high-water regressed"
+                        .to_string(),
+                });
+            }
+            state.validate_with_limits(&self.limits)?;
+            validate_reasoning_cas_transition(
+                current,
+                &state,
+                &self.limits,
+                &self.scheduler_policy,
+                initial_decision_admission,
+            )?;
+            current.graph = state.graph;
+            current.hypotheses = state.hypotheses;
+            current.tasks = state.tasks;
+            current.logical_task_descriptors = state.logical_task_descriptors;
+            current.task_tombstones = state.task_tombstones;
+            current.terminal_outbox = state.terminal_outbox;
+            current.task_failure_outbox = state.task_failure_outbox;
+            current.fencing_counter = state.fencing_counter;
+            current.limits = state.limits;
+            current.cross_graph_links = state.cross_graph_links;
+            current.scheduler_budget = state.scheduler_budget;
+            current.migration_marker = state.migration_marker;
+            current.result_projection_digest = state.result_projection_digest;
+            current.operator_projection_digest = state.operator_projection_digest;
+            current.logical_time_high_water = state.logical_time_high_water;
+            Ok(StateMutation {
+                value: (),
+                changed: true,
+            })
+        })?;
+        Ok(snapshot)
+    }
 }
 
 impl HypothesisGraphStore for FileHypothesisGraphStore {
+    fn fail_reasoning_task_cas(
+        &self,
+        expected: &GraphStoreRevision,
+        expected_generation: u64,
+        publication: TaskFailureOutboxEntry,
+    ) -> Result<TaskTerminalResult, GraphStoreError> {
+        let retry_publication = publication.clone();
+        let (snapshot, marker) = self.mutate_with_exact_retry(
+            Some(expected),
+            |state| exact_reasoning_failure_retry(state, &retry_publication),
+            |state| fail_reasoning_task_op(state, expected_generation, publication, &self.limits),
+        )?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
     fn snapshot(&self) -> Result<GraphStoreSnapshot, GraphStoreError> {
         self.read_signed()?.snapshot()
     }
 
     fn compare_and_swap(
         &self,
-        envelope: GraphCasEnvelope,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
-        let expected = envelope.expected.clone();
-        let (snapshot, _) = self.mutate(Some(&expected), |current| {
-            graph_cas_op(
-                current,
-                envelope,
-                &self.graph_id,
-                &self.signer_id,
-                &self.limits,
-            )
-        })?;
-        Ok(snapshot)
+        self.compare_and_swap_reasoning(expected, state, InitialDecisionAdmission::Reject)
+    }
+
+    fn compare_and_swap_coordinator_seed(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        coordinator_identity: &AgentId,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        self.compare_and_swap_reasoning(
+            expected,
+            state,
+            InitialDecisionAdmission::AuthenticatedCoordinator(coordinator_identity),
+        )
     }
 
     fn create_task(
         &self,
-        envelope: TaskCreationEnvelope,
+        request: TaskClaimRequest,
     ) -> Result<TaskMutationResult, GraphStoreError> {
-        let (snapshot, marker) = self.mutate(None, |state| {
-            create_task_op(state, envelope, &self.signer_id, &self.limits)
-        })?;
+        let (snapshot, marker) =
+            self.mutate(None, |state| create_task_op(state, request, &self.limits))?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn create_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        envelope: TaskCreationEnvelope,
+        request: TaskClaimRequest,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            create_task_op(state, envelope, &self.signer_id, &self.limits)
+            create_task_op(state, request, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
-    fn claim_task(&self, envelope: TaskClaimEnvelope) -> Result<TaskClaimResult, GraphStoreError> {
+    fn claim_task(
+        &self,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            claim_task_op(state, envelope, &self.signer_id, &self.limits)
+            reject_unbudgeted_reasoning_task_surface(state, "claim")?;
+            claim_task_op(state, request, now, lease_duration_ms, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -7729,37 +9241,100 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
     fn claim_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        envelope: TaskClaimEnvelope,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(Some(expected), |state| {
-            claim_task_op(state, envelope, &self.signer_id, &self.limits)
+            reject_unbudgeted_reasoning_task_surface(state, "claim")?;
+            claim_task_op(state, request, now, lease_duration_ms, &self.limits)
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn claim_task_with_budget(
+        &self,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(None, |state| {
+            claim_task_with_budget_op(
+                state,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+                &self.limits,
+            )
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn claim_task_cas_with_budget(
+        &self,
+        expected: &GraphStoreRevision,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(Some(expected), |state| {
+            claim_task_with_budget_op(
+                state,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn renew_task(
         &self,
-        envelope: TaskRenewalEnvelope,
+        task_id: &str,
+        expected_generation: u64,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            renew_task_op(state, envelope, &self.signer_id, &self.limits)
+            renew_task_op(
+                state,
+                task_id,
+                expected_generation,
+                lease_id,
+                fence,
+                now,
+                lease_duration_ms,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn complete_task(
         &self,
+        task_id: &str,
         expected_generation: u64,
-        clock: TaskTerminalClockEnvelope,
-        envelope: TaskTerminalEnvelope,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        completion: TaskCompletion,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
             complete_task_op(
                 state,
+                task_id,
                 expected_generation,
-                clock,
-                envelope,
-                &self.signer_id,
+                lease_id,
+                fence,
+                now,
+                completion,
                 &self.limits,
             )
         })?;
@@ -7768,17 +9343,22 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn fail_task(
         &self,
+        task_id: &str,
         expected_generation: u64,
-        clock: TaskTerminalClockEnvelope,
-        envelope: TaskFailureEnvelope,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        failure: TaskFailure,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
             fail_task_op(
                 state,
+                task_id,
                 expected_generation,
-                clock,
-                envelope,
-                &self.signer_id,
+                lease_id,
+                fence,
+                now,
+                failure,
                 &self.limits,
             )
         })?;
@@ -7787,20 +9367,78 @@ impl HypothesisGraphStore for FileHypothesisGraphStore {
 
     fn expire_task(
         &self,
-        envelope: TaskExpiryEnvelope,
+        task_id: &str,
+        expected_generation: u64,
+        now: GraphLogicalTime,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            expire_task_op(state, envelope, &self.signer_id, &self.limits)
+            expire_task_op(state, task_id, expected_generation, now, &self.limits)
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
 
     fn reclaim_task(
         &self,
-        envelope: TaskReclaimEnvelope,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         let (snapshot, marker) = self.mutate(None, |state| {
-            reclaim_task_op(state, envelope, &self.signer_id, &self.limits)
+            reject_unbudgeted_reasoning_task_surface(state, "reclaim")?;
+            reclaim_task_op(
+                state,
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                &self.limits,
+            )
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn reclaim_task_with_budget(
+        &self,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(None, |state| {
+            reclaim_task_with_budget_op(
+                state,
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+                &self.limits,
+            )
+        })?;
+        Ok(Self::result_from_marker(snapshot, marker))
+    }
+
+    fn reclaim_task_cas_with_budget(
+        &self,
+        expected: &GraphStoreRevision,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        let (snapshot, marker) = self.mutate(Some(expected), |state| {
+            reclaim_task_with_budget_op(
+                state,
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+                &self.limits,
+            )
         })?;
         Ok(Self::result_from_marker(snapshot, marker))
     }
@@ -7822,6 +9460,26 @@ impl ConfiguredHypothesisGraphStore {
         )?))
     }
 
+    pub fn memory_with_config(
+        graph: HypothesisGraph,
+        signer: Keypair,
+        config: &swarm_core::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphStoreError> {
+        Ok(Self::Memory(MemoryHypothesisGraphStore::new_with_config(
+            graph, signer, config,
+        )?))
+    }
+
+    pub fn memory_with_scheduler_policy(
+        graph: HypothesisGraph,
+        signer: Keypair,
+        scheduler_policy: SchedulerBudgetPolicy,
+    ) -> Result<Self, GraphStoreError> {
+        Ok(Self::Memory(
+            MemoryHypothesisGraphStore::new_with_scheduler_policy(graph, signer, scheduler_policy)?,
+        ))
+    }
+
     pub fn local_files(
         path: impl AsRef<Path>,
         graph: HypothesisGraph,
@@ -7829,6 +9487,17 @@ impl ConfiguredHypothesisGraphStore {
     ) -> Result<Self, GraphStoreError> {
         Ok(Self::LocalFiles(FileHypothesisGraphStore::new(
             path, graph, signer,
+        )?))
+    }
+
+    pub fn local_files_with_config(
+        path: impl AsRef<Path>,
+        graph: HypothesisGraph,
+        signer: Keypair,
+        config: &swarm_core::config::HypothesisGraphConfig,
+    ) -> Result<Self, GraphStoreError> {
+        Ok(Self::LocalFiles(FileHypothesisGraphStore::new_with_config(
+            path, graph, signer, config,
         )?))
     }
 }
@@ -7843,104 +9512,292 @@ impl HypothesisGraphStore for ConfiguredHypothesisGraphStore {
 
     fn compare_and_swap(
         &self,
-        envelope: GraphCasEnvelope,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
     ) -> Result<GraphStoreSnapshot, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.compare_and_swap(envelope),
-            Self::LocalFiles(store) => store.compare_and_swap(envelope),
+            Self::Memory(store) => store.compare_and_swap(expected, state),
+            Self::LocalFiles(store) => store.compare_and_swap(expected, state),
+        }
+    }
+
+    fn compare_and_swap_coordinator_seed(
+        &self,
+        expected: &GraphStoreRevision,
+        state: GraphStoreState,
+        coordinator_identity: &AgentId,
+    ) -> Result<GraphStoreSnapshot, GraphStoreError> {
+        match self {
+            Self::Memory(store) => {
+                store.compare_and_swap_coordinator_seed(expected, state, coordinator_identity)
+            }
+            Self::LocalFiles(store) => {
+                store.compare_and_swap_coordinator_seed(expected, state, coordinator_identity)
+            }
         }
     }
 
     fn create_task(
         &self,
-        envelope: TaskCreationEnvelope,
+        request: TaskClaimRequest,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.create_task(envelope),
-            Self::LocalFiles(store) => store.create_task(envelope),
+            Self::Memory(store) => store.create_task(request),
+            Self::LocalFiles(store) => store.create_task(request),
         }
     }
 
     fn create_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        envelope: TaskCreationEnvelope,
+        request: TaskClaimRequest,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.create_task_cas(expected, envelope),
-            Self::LocalFiles(store) => store.create_task_cas(expected, envelope),
+            Self::Memory(store) => store.create_task_cas(expected, request),
+            Self::LocalFiles(store) => store.create_task_cas(expected, request),
         }
     }
 
-    fn claim_task(&self, envelope: TaskClaimEnvelope) -> Result<TaskClaimResult, GraphStoreError> {
+    fn claim_task(
+        &self,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.claim_task(envelope),
-            Self::LocalFiles(store) => store.claim_task(envelope),
+            Self::Memory(store) => store.claim_task(request, now, lease_duration_ms),
+            Self::LocalFiles(store) => store.claim_task(request, now, lease_duration_ms),
         }
     }
 
     fn claim_task_cas(
         &self,
         expected: &GraphStoreRevision,
-        envelope: TaskClaimEnvelope,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.claim_task_cas(expected, envelope),
-            Self::LocalFiles(store) => store.claim_task_cas(expected, envelope),
+            Self::Memory(store) => store.claim_task_cas(expected, request, now, lease_duration_ms),
+            Self::LocalFiles(store) => {
+                store.claim_task_cas(expected, request, now, lease_duration_ms)
+            }
+        }
+    }
+
+    fn claim_task_with_budget(
+        &self,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        match self {
+            Self::Memory(store) => {
+                store.claim_task_with_budget(request, now, lease_duration_ms, scheduler_budget)
+            }
+            Self::LocalFiles(store) => {
+                store.claim_task_with_budget(request, now, lease_duration_ms, scheduler_budget)
+            }
+        }
+    }
+
+    fn claim_task_cas_with_budget(
+        &self,
+        expected: &GraphStoreRevision,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        match self {
+            Self::Memory(store) => store.claim_task_cas_with_budget(
+                expected,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+            ),
+            Self::LocalFiles(store) => store.claim_task_cas_with_budget(
+                expected,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+            ),
+        }
+    }
+
+    fn reclaim_task_with_budget(
+        &self,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        match self {
+            Self::Memory(store) => store.reclaim_task_with_budget(
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+            ),
+            Self::LocalFiles(store) => store.reclaim_task_with_budget(
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+            ),
+        }
+    }
+
+    fn reclaim_task_cas_with_budget(
+        &self,
+        expected: &GraphStoreRevision,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
+        scheduler_budget: SchedulerBudget,
+    ) -> Result<TaskClaimResult, GraphStoreError> {
+        match self {
+            Self::Memory(store) => store.reclaim_task_cas_with_budget(
+                expected,
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+            ),
+            Self::LocalFiles(store) => store.reclaim_task_cas_with_budget(
+                expected,
+                task_id,
+                request,
+                now,
+                lease_duration_ms,
+                scheduler_budget,
+            ),
         }
     }
 
     fn renew_task(
         &self,
-        envelope: TaskRenewalEnvelope,
+        task_id: &str,
+        expected_generation: u64,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskMutationResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.renew_task(envelope),
-            Self::LocalFiles(store) => store.renew_task(envelope),
+            Self::Memory(store) => store.renew_task(
+                task_id,
+                expected_generation,
+                lease_id,
+                fence,
+                now,
+                lease_duration_ms,
+            ),
+            Self::LocalFiles(store) => store.renew_task(
+                task_id,
+                expected_generation,
+                lease_id,
+                fence,
+                now,
+                lease_duration_ms,
+            ),
         }
     }
 
     fn complete_task(
         &self,
+        task_id: &str,
         expected_generation: u64,
-        clock: TaskTerminalClockEnvelope,
-        envelope: TaskTerminalEnvelope,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        completion: TaskCompletion,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.complete_task(expected_generation, clock, envelope),
-            Self::LocalFiles(store) => store.complete_task(expected_generation, clock, envelope),
+            Self::Memory(store) => store.complete_task(
+                task_id,
+                expected_generation,
+                lease_id,
+                fence,
+                now,
+                completion,
+            ),
+            Self::LocalFiles(store) => store.complete_task(
+                task_id,
+                expected_generation,
+                lease_id,
+                fence,
+                now,
+                completion,
+            ),
         }
     }
 
     fn fail_task(
         &self,
+        task_id: &str,
         expected_generation: u64,
-        clock: TaskTerminalClockEnvelope,
-        envelope: TaskFailureEnvelope,
+        lease_id: &LeaseId,
+        fence: FencingToken,
+        now: GraphLogicalTime,
+        failure: TaskFailure,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.fail_task(expected_generation, clock, envelope),
-            Self::LocalFiles(store) => store.fail_task(expected_generation, clock, envelope),
+            Self::Memory(store) => {
+                store.fail_task(task_id, expected_generation, lease_id, fence, now, failure)
+            }
+            Self::LocalFiles(store) => {
+                store.fail_task(task_id, expected_generation, lease_id, fence, now, failure)
+            }
+        }
+    }
+
+    fn fail_reasoning_task_cas(
+        &self,
+        expected: &GraphStoreRevision,
+        expected_generation: u64,
+        publication: TaskFailureOutboxEntry,
+    ) -> Result<TaskTerminalResult, GraphStoreError> {
+        match self {
+            Self::Memory(store) => {
+                store.fail_reasoning_task_cas(expected, expected_generation, publication)
+            }
+            Self::LocalFiles(store) => {
+                store.fail_reasoning_task_cas(expected, expected_generation, publication)
+            }
         }
     }
 
     fn expire_task(
         &self,
-        envelope: TaskExpiryEnvelope,
+        task_id: &str,
+        expected_generation: u64,
+        now: GraphLogicalTime,
     ) -> Result<TaskTerminalResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.expire_task(envelope),
-            Self::LocalFiles(store) => store.expire_task(envelope),
+            Self::Memory(store) => store.expire_task(task_id, expected_generation, now),
+            Self::LocalFiles(store) => store.expire_task(task_id, expected_generation, now),
         }
     }
 
     fn reclaim_task(
         &self,
-        envelope: TaskReclaimEnvelope,
+        task_id: &str,
+        request: TaskClaimRequest,
+        now: GraphLogicalTime,
+        lease_duration_ms: u64,
     ) -> Result<TaskClaimResult, GraphStoreError> {
         match self {
-            Self::Memory(store) => store.reclaim_task(envelope),
-            Self::LocalFiles(store) => store.reclaim_task(envelope),
+            Self::Memory(store) => store.reclaim_task(task_id, request, now, lease_duration_ms),
+            Self::LocalFiles(store) => store.reclaim_task(task_id, request, now, lease_duration_ms),
         }
     }
 }
@@ -7952,8 +9809,9 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use swarm_core::hypothesis_graph::{
-        ActorNode, EvidenceId, EvidenceScope, EvidenceSourceFamily, GraphNode, GraphProducerRole,
-        TaskCapabilityProof, TaskCompletion, TaskCompletionKind, TaskId, TaskKind, TaskTarget,
+        ActorNode, CausalEdge, CausalRelation, ConfidenceBucket, ConfidenceDistribution, EdgeState,
+        EventNode, EvidenceId, EvidenceScope, EvidenceSourceFamily, GraphNode, GraphProducerRole,
+        TaskCompletionKind, TaskId, TaskKind, TaskTarget, UncertaintyReason,
     };
 
     fn signer(byte: u8) -> Keypair {
@@ -7989,276 +9847,152 @@ mod tests {
         request_at(byte, task_suffix, GraphLogicalTime::new(100))
     }
 
-    fn capability_for_request(
-        request: &TaskClaimRequest,
-        claimant_byte: u8,
-    ) -> TaskCapabilityProof {
-        let claimant = signer(claimant_byte);
-        TaskCapabilityProof::signed_with(
-            request.task_id.clone(),
-            request.claimant.clone(),
-            request.role,
-            request.kind,
-            request.canonical_digest().unwrap(),
-            &claimant,
-            format!("task-capability:{}", request.task_id),
-        )
-        .unwrap()
-    }
-
-    fn signed_creation_envelope(
-        request: TaskClaimRequest,
-        claimant_byte: u8,
-        authority_byte: u8,
-    ) -> TaskCreationEnvelope {
-        let capability = capability_for_request(&request, claimant_byte);
-        let task_id = request.task_id.clone();
-        TaskCreationEnvelope::new(request, capability)
-            .unwrap()
-            .authorized_by(&signer(authority_byte), format!("task-create:{task_id}"))
-            .unwrap()
-    }
-
-    fn signed_graph_cas_envelope(
-        expected: GraphStoreRevision,
-        state: GraphStoreState,
-        authority_byte: u8,
-    ) -> GraphCasEnvelope {
-        GraphCasEnvelope::new(expected, state)
-            .unwrap()
-            .authorized_by(&signer(authority_byte), "graph-cas:test")
-            .unwrap()
-    }
-
-    fn claim_envelope(
-        request: TaskClaimRequest,
-        claimed_at: GraphLogicalTime,
-        duration_ms: u64,
-        claimant_byte: u8,
-    ) -> TaskClaimEnvelope {
-        let capability = capability_for_request(&request, claimant_byte);
-        TaskClaimEnvelope::new(request, claimed_at, duration_ms, capability).unwrap()
-    }
-
-    fn signed_claim_envelope(
-        request: TaskClaimRequest,
-        claimed_at: GraphLogicalTime,
-        duration_ms: u64,
-        claimant_byte: u8,
-        authority_byte: u8,
-    ) -> TaskClaimEnvelope {
-        let task_id = request.task_id.clone();
-        claim_envelope(request, claimed_at, duration_ms, claimant_byte)
-            .authorized_by(&signer(authority_byte), format!("task-claim:{task_id}"))
-            .unwrap()
-    }
-
-    fn signed_terminal_envelope(
-        request: &TaskClaimRequest,
-        lease: &TaskLease,
-        completion: TaskCompletion,
-        signer_byte: u8,
-    ) -> TaskTerminalEnvelope {
-        let claimant = signer(signer_byte);
-        let capability = TaskCapabilityProof::signed_with(
-            request.task_id.clone(),
-            request.claimant.clone(),
-            request.role,
-            request.kind,
-            request.canonical_digest().unwrap(),
-            &claimant,
-            format!("task-capability:{}", request.task_id),
+    fn logical_request(byte: u8, task_suffix: &str) -> (LogicalTaskDescriptor, TaskClaimRequest) {
+        let evidence_id = EvidenceId::new(format!("evidence:logical:{task_suffix}"));
+        let target = TaskTarget::Evidence {
+            evidence_id: evidence_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            GraphId::new("graph:test"),
+            target.clone(),
+            TaskKind::AcquireEvidence,
+            "ab".repeat(32),
         )
         .unwrap();
-        TaskTerminalEnvelope::new(
-            request.task_id.clone(),
-            request.idempotency_key.clone(),
-            lease.lease_id.clone(),
-            lease.fencing_token,
-            completion,
-            None,
-            request.claimant.clone(),
-            capability,
-        )
-        .unwrap()
-        .signed_with(&claimant, format!("task-terminal:{}", request.task_id))
-        .unwrap()
-    }
-
-    fn signed_failure_envelope(
-        request: &TaskClaimRequest,
-        lease: &TaskLease,
-        failed_at: GraphLogicalTime,
-        summary_digest: &str,
-        signer_byte: u8,
-    ) -> TaskFailureEnvelope {
-        let claimant = signer(signer_byte);
-        let capability = TaskCapabilityProof::signed_with(
-            request.task_id.clone(),
-            request.claimant.clone(),
-            request.role,
-            request.kind,
-            request.canonical_digest().unwrap(),
-            &claimant,
-            format!("task-capability:{}", request.task_id),
+        let claimant_key = signer(byte);
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            TaskKind::AcquireEvidence,
+            target,
+            GraphProducerRole::Hunter,
+            AgentId::from_public_key_hex(&claimant_key.public_key().to_hex()),
+            EvidenceScope::new([], [evidence_id], []).unwrap(),
+            GraphLogicalTime::new(100),
         )
         .unwrap();
-        TaskFailureEnvelope::new(
-            request.task_id.clone(),
-            request.idempotency_key.clone(),
-            lease.lease_id.clone(),
-            lease.fencing_token,
-            TaskFailure::new(request.claimant.clone(), failed_at, summary_digest).unwrap(),
-            capability,
-        )
-        .unwrap()
-        .signed_with(&claimant, format!("task-failure:{}", request.task_id))
-        .unwrap()
+        (descriptor, request)
     }
 
-    fn signed_completion_clock(
-        expected_generation: u64,
-        observed_at: GraphLogicalTime,
-        envelope: &TaskTerminalEnvelope,
-        authority_byte: u8,
-    ) -> TaskTerminalClockEnvelope {
-        TaskTerminalClockEnvelope::for_completion(expected_generation, observed_at, envelope)
-            .unwrap()
-            .authorized_by(
-                &signer(authority_byte),
-                format!("task-terminal-clock:{}", envelope.task_id),
+    fn budget_at(logical_tick: GraphLogicalTime, work_units: u32, claims: u16) -> SchedulerBudget {
+        let config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..swarm_core::config::HypothesisGraphConfig::default()
+        };
+        let mut budget = SchedulerBudget::new_with_config(&config, logical_tick).unwrap();
+        budget
+            .admit_at(&config, logical_tick, work_units, claims)
+            .unwrap();
+        budget
+    }
+
+    fn budget_policy() -> SchedulerBudgetPolicy {
+        SchedulerBudgetPolicy::new(10, 2).unwrap()
+    }
+
+    fn migrate_with_budget(
+        store: &dyn HypothesisGraphStore,
+        budget: SchedulerBudget,
+        logical_time_high_water: GraphLogicalTime,
+    ) -> GraphStoreSnapshot {
+        let initial = store.snapshot().unwrap();
+        let candidate = GraphStoreState::with_reasoning_state(
+            initial.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                logical_time_high_water,
             )
+            .with_scheduler_budget(budget),
+        )
+        .unwrap();
+        store
+            .compare_and_swap(&initial.revision, candidate)
             .unwrap()
     }
 
-    fn signed_failure_clock(
-        expected_generation: u64,
-        observed_at: GraphLogicalTime,
-        envelope: &TaskFailureEnvelope,
-        authority_byte: u8,
-    ) -> TaskTerminalClockEnvelope {
-        TaskTerminalClockEnvelope::for_failure(expected_generation, observed_at, envelope)
-            .unwrap()
-            .authorized_by(
-                &signer(authority_byte),
-                format!("task-failure-clock:{}", envelope.task_id),
+    /// Build the important migration boundary for budgeted claims: a legacy
+    /// pending task already has an authenticated v0 tombstone, so promotion
+    /// must preserve its empty history digest until the first v1 transition
+    /// refreshes it.
+    fn migrate_legacy_pending_with_budget(
+        store: &dyn HypothesisGraphStore,
+        descriptor: LogicalTaskDescriptor,
+        request: TaskClaimRequest,
+        budget: SchedulerBudget,
+    ) -> GraphStoreSnapshot {
+        store.create_task(request.clone()).unwrap();
+        let initial = store.snapshot().unwrap();
+        let candidate = GraphStoreState::with_reasoning_state(
+            initial.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                request.requested_at,
             )
+            .with_tasks(initial.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor,
+            )]))
+            .with_scheduler_budget(budget),
+        )
+        .unwrap();
+        let migrated = store
+            .compare_and_swap(&initial.revision, candidate)
+            .unwrap();
+        assert!(
+            migrated
+                .state
+                .task_tombstones
+                .values()
+                .all(|tombstone| tombstone.history_digest.is_empty())
+        );
+        migrated
+    }
+
+    fn migrate_legacy_expired_with_budget(
+        store: &dyn HypothesisGraphStore,
+        descriptor: LogicalTaskDescriptor,
+        request: TaskClaimRequest,
+        budget: SchedulerBudget,
+    ) -> GraphStoreSnapshot {
+        let claimed = store
+            .claim_task(request.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        store
+            .expire_task(
+                request.task_id.as_str(),
+                claimed.task_generation,
+                GraphLogicalTime::new(110),
+            )
+            .unwrap();
+        let initial = store.snapshot().unwrap();
+        let candidate = GraphStoreState::with_reasoning_state(
+            initial.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(110),
+            )
+            .with_tasks(initial.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor,
+            )]))
+            .with_scheduler_budget(budget),
+        )
+        .unwrap();
+        store
+            .compare_and_swap(&initial.revision, candidate)
             .unwrap()
     }
 
-    fn signed_renewal_envelope(
-        request: &TaskClaimRequest,
-        lease: &TaskLease,
-        expected_generation: u64,
-        renewed_at: GraphLogicalTime,
-        duration_ms: u64,
-        signer_byte: u8,
-        authority_byte: u8,
-    ) -> TaskRenewalEnvelope {
-        let claimant = signer(signer_byte);
-        let capability = TaskCapabilityProof::signed_with(
-            request.task_id.clone(),
-            request.claimant.clone(),
-            request.role,
-            request.kind,
-            request.canonical_digest().unwrap(),
-            &claimant,
-            format!("task-capability:{}", request.task_id),
-        )
-        .unwrap();
-        TaskRenewalEnvelope::new(
-            request.task_id.clone(),
-            request.idempotency_key.clone(),
-            expected_generation,
-            lease.lease_id.clone(),
-            lease.fencing_token,
-            renewed_at,
-            duration_ms,
-            capability,
-        )
-        .unwrap()
-        .signed_with(&claimant, format!("task-renewal:{}", request.task_id))
-        .unwrap()
-        .authorized_by(
-            &signer(authority_byte),
-            format!("task-renewal-authority:{}", request.task_id),
-        )
-        .unwrap()
-    }
-
-    fn signed_expiry_envelope(
-        request: &TaskClaimRequest,
-        lease: &TaskLease,
-        expected_generation: u64,
-        observed_at: GraphLogicalTime,
-        authority_byte: u8,
-    ) -> TaskExpiryEnvelope {
-        TaskExpiryEnvelope::new(
-            request.task_id.clone(),
-            request.idempotency_key.clone(),
-            expected_generation,
-            lease.lease_id.clone(),
-            lease.fencing_token,
-            observed_at,
-        )
-        .unwrap()
-        .signed_with(
-            &signer(authority_byte),
-            format!("task-expiry:{}", request.task_id),
-        )
-        .unwrap()
-    }
-
-    fn reclaim_envelope(
-        prior_request: &TaskClaimRequest,
-        expected_generation: u64,
-        request: TaskClaimRequest,
-        reclaimed_at: GraphLogicalTime,
-        duration_ms: u64,
-        claimant_byte: u8,
-    ) -> TaskReclaimEnvelope {
-        let claimant = signer(claimant_byte);
-        let capability = TaskCapabilityProof::signed_with(
-            request.task_id.clone(),
-            request.claimant.clone(),
-            request.role,
-            request.kind,
-            request.canonical_digest().unwrap(),
-            &claimant,
-            format!("task-capability:{}", request.task_id),
-        )
-        .unwrap();
-        TaskReclaimEnvelope::new(
-            prior_request.idempotency_key.clone(),
-            expected_generation,
-            request,
-            reclaimed_at,
-            duration_ms,
-            capability,
-        )
-        .unwrap()
-    }
-
-    fn signed_reclaim_envelope(
-        prior_request: &TaskClaimRequest,
-        expected_generation: u64,
-        request: TaskClaimRequest,
-        reclaimed_at: GraphLogicalTime,
-        duration_ms: u64,
-        claimant_byte: u8,
-        authority_byte: u8,
-    ) -> TaskReclaimEnvelope {
-        let task_id = request.task_id.clone();
-        reclaim_envelope(
-            prior_request,
-            expected_generation,
-            request,
-            reclaimed_at,
-            duration_ms,
-            claimant_byte,
-        )
-        .authorized_by(&signer(authority_byte), format!("task-reclaim:{task_id}"))
-        .unwrap()
+    fn tamper_budget_field(
+        budget: &SchedulerBudget,
+        field: &str,
+        value: serde_json::Value,
+    ) -> SchedulerBudget {
+        let mut wire = serde_json::to_value(budget).unwrap();
+        wire[field] = value;
+        serde_json::from_value(wire).unwrap()
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -8270,127 +10004,2292 @@ mod tests {
     }
 
     #[test]
-    fn graph_atomic_write_ignores_stale_temps_from_a_prior_process_epoch() {
-        let path = temp_dir("stale-atomic-temps");
-        let store = FileHypothesisGraphStore::new(&path, graph(), signer(91)).unwrap();
-        let first_counter = TEMP_FILE_COUNTER.load(std::sync::atomic::Ordering::Relaxed);
-        for counter in first_counter..first_counter.saturating_add(64) {
-            let stale = path.join(format!(
-                ".{GRAPH_STORE_STATE_FILE}.tmp.{}.{counter}",
-                std::process::id()
+    fn legacy_signed_bytes_are_verified_before_reasoning_defaults() {
+        let path = temp_dir("legacy-defaults");
+        let key = signer(81);
+        let store = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
+        let original_state = fs::read(store.state_path()).unwrap();
+        drop(store);
+
+        // Remove every optional reasoning field to model a signed v0 state.
+        // These fields all default to the empty/legacy values, so the
+        // canonical state digest and detached signature remain valid.
+        let mut legacy: serde_json::Value = serde_json::from_slice(&original_state).unwrap();
+        let state = legacy
+            .get_mut("state")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap();
+        for field in [
+            "hypotheses",
+            "logical_task_descriptors",
+            "terminal_outbox",
+            "limits",
+            "cross_graph_links",
+            "scheduler_budget",
+            "migration_marker",
+            "result_projection_digest",
+            "operator_projection_digest",
+        ] {
+            state.remove(field);
+        }
+        fs::write(
+            path.join(GRAPH_STORE_STATE_FILE),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        // An attacker cannot add an empty reasoning map and rely on its
+        // skip-serialization default to preserve the old signature. The
+        // exact legacy parser rejects the field before normalization.
+        let mut unknown_field = legacy.clone();
+        unknown_field["state"]["hypotheses"] = serde_json::json!({});
+        fs::write(
+            path.join(GRAPH_STORE_STATE_FILE),
+            serde_json::to_vec(&unknown_field).unwrap(),
+        )
+        .unwrap();
+        assert!(FileHypothesisGraphStore::open_with_signer(&path, key.clone()).is_err());
+
+        let mut zero_marker = legacy.clone();
+        zero_marker["state"]["migration_marker"] = serde_json::json!(0);
+        fs::write(
+            path.join(GRAPH_STORE_STATE_FILE),
+            serde_json::to_vec(&zero_marker).unwrap(),
+        )
+        .unwrap();
+        assert!(FileHypothesisGraphStore::open_with_signer(&path, key.clone()).is_err());
+        fs::write(path.join(GRAPH_STORE_STATE_FILE), original_state).unwrap();
+
+        let reopened = FileHypothesisGraphStore::open_with_signer(&path, key.clone()).unwrap();
+        let snapshot = reopened.snapshot().unwrap();
+        assert_eq!(snapshot.migration_marker(), GRAPH_STATE_MIGRATION_LEGACY);
+        assert!(snapshot.scheduler_budget().is_none());
+        assert_eq!(
+            snapshot.state.logical_time_high_water,
+            GraphLogicalTime::new(0)
+        );
+        drop(reopened);
+
+        // A tampered value must fail signature verification; serde defaults
+        // are never allowed to turn an unauthenticated legacy payload into a
+        // reasoning state.
+        let mut tampered: serde_json::Value =
+            serde_json::from_slice(&fs::read(path.join(GRAPH_STORE_STATE_FILE)).unwrap()).unwrap();
+        tampered["state"]["logical_time_high_water"] = serde_json::json!(7);
+        fs::write(
+            path.join(GRAPH_STORE_STATE_FILE),
+            serde_json::to_vec(&tampered).unwrap(),
+        )
+        .unwrap();
+        assert!(FileHypothesisGraphStore::open_with_signer(&path, key).is_err());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn scheduler_budget_survives_file_reopen_and_state_deserialize() {
+        let path = temp_dir("scheduler-budget-reopen");
+        let key = signer(83);
+        let store = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let budget = budget_at(GraphLogicalTime::new(7), 6, 1);
+        let migrated = migrate_with_budget(&store, budget.clone(), GraphLogicalTime::new(7));
+        assert_eq!(migrated.scheduler_budget(), Some(&budget));
+
+        let encoded = serde_json::to_vec(migrated.state()).unwrap();
+        let decoded: GraphStoreState = serde_json::from_slice(&encoded).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.scheduler_budget, Some(budget.clone()));
+        drop(migrated);
+        drop(store);
+
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        let reopened_snapshot = reopened.snapshot().unwrap();
+        assert_eq!(reopened_snapshot.scheduler_budget(), Some(&budget));
+        assert_eq!(reopened_snapshot.state().scheduler_budget, Some(budget));
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn scheduler_budget_cas_rejects_reset_rollback_overflow_and_tamper_without_mutation() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(84),
+            budget_policy(),
+        )
+        .unwrap();
+        let budget = budget_at(GraphLogicalTime::new(7), 6, 1);
+        let migrated = migrate_with_budget(&store, budget.clone(), GraphLogicalTime::new(7));
+        let baseline_state = migrated.state.clone();
+        let baseline_revision = migrated.revision.clone();
+
+        let mut reset = baseline_state.clone();
+        reset.scheduler_budget = None;
+        assert!(matches!(
+            store.compare_and_swap(&baseline_revision, reset),
+            Err(GraphStoreError::InvalidState { reason }) if reason.contains("budget")
+        ));
+        assert_eq!(store.snapshot().unwrap().state, baseline_state);
+
+        let mut rollback = baseline_state.clone();
+        rollback.scheduler_budget = Some(tamper_budget_field(
+            &budget,
+            "work_units_used",
+            serde_json::json!(5),
+        ));
+        assert!(matches!(
+            store.compare_and_swap(&baseline_revision, rollback),
+            Err(GraphStoreError::InvalidState { reason }) if reason.contains("counters regressed")
+        ));
+        assert_eq!(store.snapshot().unwrap().state, baseline_state);
+
+        let mut widened = baseline_state.clone();
+        widened.scheduler_budget = Some(tamper_budget_field(
+            &budget,
+            "max_work_units",
+            serde_json::json!(9),
+        ));
+        assert!(matches!(
+            store.compare_and_swap(&baseline_revision, widened),
+            Err(GraphStoreError::InvalidState { reason }) if reason.contains("ceilings changed")
+        ));
+        assert_eq!(store.snapshot().unwrap().state, baseline_state);
+
+        let mut overflow_wire = serde_json::to_value(&budget).unwrap();
+        overflow_wire["work_units_used"] = serde_json::json!(u32::MAX);
+        assert!(serde_json::from_value::<SchedulerBudget>(overflow_wire).is_err());
+        assert_eq!(store.snapshot().unwrap().state, baseline_state);
+    }
+
+    #[test]
+    fn direct_cas_create_requires_exact_work_delta_and_tick() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(125),
+            budget_policy(),
+        )
+        .unwrap();
+        let migrated = migrate_with_budget(
+            &store,
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+            GraphLogicalTime::new(100),
+        );
+        let (descriptor, request) = logical_request(125, "direct-create-budget");
+        let durable = DurableTaskRecord {
+            schema_version: GRAPH_STORE_SCHEMA_VERSION,
+            task: TaskRecord {
+                schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+                request: request.clone(),
+                state: TaskState::Pending,
+                generation: 1,
+                attempts: 1,
+                lease: None,
+                completion: None,
+                terminal_history: Vec::new(),
+            },
+            generation: 1,
+            history: Vec::new(),
+        };
+        let mut candidate = migrated.state.clone();
+        candidate
+            .tasks
+            .insert(request.task_id.clone(), durable.clone());
+        candidate
+            .logical_task_descriptors
+            .insert(request.task_id.clone(), descriptor);
+        candidate.task_tombstones.insert(
+            request.task_id.clone(),
+            TaskMonotonicity::from_record(&durable).unwrap(),
+        );
+
+        for bad_budget in [
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+            budget_at(GraphLogicalTime::new(100), 2, 0),
+            budget_at(GraphLogicalTime::new(101), 1, 0),
+        ] {
+            let mut bad_candidate = candidate.clone();
+            bad_candidate.scheduler_budget = Some(bad_budget);
+            let before = store.snapshot().unwrap();
+            let error = store
+                .compare_and_swap(&before.revision, bad_candidate)
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                GraphStoreError::InvalidState { reason }
+                    if reason.contains("scheduler budget")
             ));
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(stale)
-                .unwrap();
+            assert_eq!(store.snapshot().unwrap(), before);
         }
 
-        store
-            .create_task(signed_creation_envelope(
-                request(92, "stale-temp-restart"),
-                92,
-                91,
-            ))
+        candidate.scheduler_budget = Some(budget_at(GraphLogicalTime::new(100), 1, 0));
+        let accepted = store
+            .compare_and_swap(&migrated.revision, candidate)
             .unwrap();
-        assert!(
-            store
-                .snapshot()
-                .unwrap()
-                .state
-                .task("task:stale-temp-restart")
-                .is_some()
-        );
-        drop(store);
-        let _ = fs::remove_dir_all(path);
-    }
-
-    #[test]
-    fn relative_top_level_store_root_syncs_the_working_directory() {
-        assert_eq!(durability_parent(Path::new("graph-state")), Path::new("."));
         assert_eq!(
-            durability_parent(Path::new("state/graph")),
-            Path::new("state")
+            accepted.scheduler_budget(),
+            Some(&budget_at(GraphLogicalTime::new(100), 1, 0))
+        );
+        assert_eq!(
+            accepted.state().tasks[&request.task_id].task.state,
+            TaskState::Pending
         );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn graph_store_root_rejects_parent_components_before_filesystem_mutation() {
-        use std::os::unix::fs::PermissionsExt;
+    fn claim_with_budget_commits_task_and_budget_in_one_generation() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(85),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(86, "budget-claim");
+        let task = TaskRecord {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            request: request.clone(),
+            state: TaskState::Pending,
+            generation: 1,
+            attempts: 1,
+            lease: None,
+            completion: None,
+            terminal_history: Vec::new(),
+        };
+        let durable = DurableTaskRecord {
+            schema_version: GRAPH_STORE_SCHEMA_VERSION,
+            task,
+            generation: 1,
+            history: Vec::new(),
+        };
+        let mut tasks = BTreeMap::new();
+        tasks.insert(descriptor.task_id.clone(), durable);
+        let mut descriptors = BTreeMap::new();
+        descriptors.insert(descriptor.task_id.clone(), descriptor);
+        let initial = store.snapshot().unwrap();
+        let initial_revision = initial.revision.clone();
+        let migrated = GraphStoreState::with_reasoning_state(
+            initial.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(100),
+            )
+            .with_tasks(tasks)
+            .with_logical_task_descriptors(descriptors)
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(100), 1, 0)),
+        )
+        .unwrap();
+        let migrated = store.compare_and_swap(&initial_revision, migrated).unwrap();
 
-        let parent = temp_dir("parent-component-refusal");
-        fs::create_dir_all(&parent).unwrap();
-        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
-        let intermediate = parent.join("untrusted-new-directory");
-        let requested = intermediate.join("..").join("graph");
+        let config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..swarm_core::config::HypothesisGraphConfig::default()
+        };
+        let mut next_budget = budget_at(GraphLogicalTime::new(100), 1, 0);
+        next_budget
+            .admit_at(&config, GraphLogicalTime::new(100), 0, 1)
+            .unwrap();
+        let claimed = store
+            .claim_task_with_budget(
+                request.clone(),
+                GraphLogicalTime::new(100),
+                100,
+                next_budget.clone(),
+            )
+            .unwrap();
+        assert!(!claimed.idempotent);
+        let after_claim = store.snapshot().unwrap();
+        assert_eq!(
+            after_claim.revision().generation,
+            migrated.revision().generation + 1
+        );
+        assert_eq!(after_claim.scheduler_budget(), Some(&next_budget));
+        assert_eq!(
+            after_claim.state().tasks[&request.task_id].task.state,
+            TaskState::Claimed
+        );
 
-        let error = prepare_private_store_root(&requested).unwrap_err();
+        let mut failed_budget = next_budget.clone();
+        failed_budget
+            .admit_at(&config, GraphLogicalTime::new(100), 1, 0)
+            .unwrap();
+        let before_failed_cas = after_claim.state.clone();
+        let before_failed_revision = after_claim.revision.clone();
+        assert!(matches!(
+            store.claim_task_cas_with_budget(
+                &migrated.revision,
+                request,
+                GraphLogicalTime::new(100),
+                100,
+                failed_budget,
+            ),
+            Err(GraphStoreError::StalePredecessor { .. })
+        ));
+        let after_failed = store.snapshot().unwrap();
+        assert_eq!(after_failed.state, before_failed_cas);
+        assert_eq!(after_failed.revision, before_failed_revision);
+    }
+
+    #[test]
+    fn claim_with_budget_refreshes_legacy_tombstone_atomically() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(100),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(101, "budget-legacy-tombstone");
+        let migrated = migrate_legacy_pending_with_budget(
+            &store,
+            descriptor,
+            request.clone(),
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+        );
+        let task_id = request.task_id.clone();
+        let legacy_tombstone = migrated.state.task_tombstones[&task_id].clone();
+        assert!(legacy_tombstone.history_digest.is_empty());
+
+        let config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..swarm_core::config::HypothesisGraphConfig::default()
+        };
+        let mut next_budget = budget_at(GraphLogicalTime::new(100), 0, 0);
+        next_budget
+            .admit_at(&config, GraphLogicalTime::new(100), 0, 1)
+            .unwrap();
+        let claimed = store
+            .claim_task_cas_with_budget(
+                &migrated.revision,
+                request,
+                GraphLogicalTime::new(100),
+                10,
+                next_budget.clone(),
+            )
+            .unwrap();
+        assert!(!claimed.idempotent);
+
+        let after = store.snapshot().unwrap();
+        let durable = after.state.tasks.get(&task_id).unwrap();
+        let refreshed = after.state.task_tombstones.get(&task_id).unwrap();
+        assert_eq!(refreshed, &TaskMonotonicity::from_record(durable).unwrap());
+        assert!(!refreshed.history_digest.is_empty());
+        assert_eq!(after.scheduler_budget(), Some(&next_budget));
+        assert_eq!(
+            after.revision.generation,
+            migrated.revision.generation + 1,
+            "task, tombstone, and budget must publish in one generation"
+        );
+    }
+
+    #[test]
+    fn claim_with_budget_preserves_untouched_legacy_tombstones() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(108),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor_one, request_one) = logical_request(109, "budget-tombstone-one");
+        let (descriptor_two, request_two) = logical_request(110, "budget-tombstone-two");
+        store.create_task(request_one.clone()).unwrap();
+        store.create_task(request_two.clone()).unwrap();
+        let initial = store.snapshot().unwrap();
+        let candidate = GraphStoreState::with_reasoning_state(
+            initial.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(100),
+            )
+            .with_tasks(initial.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([
+                (descriptor_one.task_id.clone(), descriptor_one),
+                (descriptor_two.task_id.clone(), descriptor_two),
+            ]))
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(100), 0, 0)),
+        )
+        .unwrap();
+        let migrated = store
+            .compare_and_swap(&initial.revision, candidate)
+            .unwrap();
+        let untouched_tombstone = migrated.state.task_tombstones[&request_two.task_id].clone();
+        assert!(untouched_tombstone.history_digest.is_empty());
+
+        let config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..swarm_core::config::HypothesisGraphConfig::default()
+        };
+        let mut next_budget = budget_at(GraphLogicalTime::new(100), 0, 0);
+        next_budget
+            .admit_at(&config, GraphLogicalTime::new(100), 0, 1)
+            .unwrap();
+        store
+            .claim_task_cas_with_budget(
+                &migrated.revision,
+                request_one.clone(),
+                GraphLogicalTime::new(100),
+                10,
+                next_budget,
+            )
+            .unwrap();
+        let after = store.snapshot().unwrap();
+        assert_eq!(
+            after.state.task_tombstones[&request_two.task_id], untouched_tombstone,
+            "a claim must not rewrite an unrelated legacy tombstone"
+        );
+        assert!(
+            !after.state.task_tombstones[&request_one.task_id]
+                .history_digest
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn claim_with_budget_retry_is_byte_identical_and_does_not_recharge() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(102),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(103, "budget-retry");
+        let migrated = migrate_legacy_pending_with_budget(
+            &store,
+            descriptor,
+            request.clone(),
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+        );
+        let config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..swarm_core::config::HypothesisGraphConfig::default()
+        };
+        let mut charged_budget = budget_at(GraphLogicalTime::new(100), 0, 0);
+        charged_budget
+            .admit_at(&config, GraphLogicalTime::new(100), 0, 1)
+            .unwrap();
+        store
+            .claim_task_with_budget(
+                request.clone(),
+                GraphLogicalTime::new(100),
+                10,
+                charged_budget.clone(),
+            )
+            .unwrap();
+        let before_retry = store.snapshot().unwrap();
+        let before_bytes = serde_json::to_vec(before_retry.state()).unwrap();
+
+        // A retry carrying a different, higher local charge is not accepted:
+        // callers cannot smuggle a budget delta through the idempotency path.
+        let retry_budget = budget_at(GraphLogicalTime::new(100), 2, 2);
+        let before_invalid_retry = store.snapshot().unwrap();
+        assert!(matches!(
+            store.claim_task_with_budget(
+                request.clone(),
+                GraphLogicalTime::new(100),
+                10,
+                retry_budget,
+            ),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("scheduler budget changed")
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_invalid_retry);
+        let retry = store
+            .claim_task_with_budget(
+                request,
+                GraphLogicalTime::new(100),
+                10,
+                charged_budget.clone(),
+            )
+            .unwrap();
+        assert!(retry.idempotent);
+        let after_retry = store.snapshot().unwrap();
+        assert_eq!(after_retry.revision, before_retry.revision);
+        assert_eq!(
+            serde_json::to_vec(after_retry.state()).unwrap(),
+            before_bytes
+        );
+        assert_eq!(after_retry.scheduler_budget(), Some(&charged_budget));
+        assert_eq!(
+            after_retry.revision.generation,
+            before_retry.revision.generation
+        );
+        assert!(after_retry.revision.generation > migrated.revision.generation);
+    }
+
+    #[test]
+    fn claim_with_budget_rejects_tombstone_regression_without_mutation() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(104),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(105, "budget-tombstone-regression");
+        let task_id = request.task_id.clone();
+        let migrated = migrate_legacy_pending_with_budget(
+            &store,
+            descriptor,
+            request.clone(),
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+        );
+        let config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..swarm_core::config::HypothesisGraphConfig::default()
+        };
+        let mut next_budget = budget_at(GraphLogicalTime::new(100), 0, 0);
+        next_budget
+            .admit_at(&config, GraphLogicalTime::new(100), 0, 1)
+            .unwrap();
+        store
+            .claim_task_cas_with_budget(
+                &migrated.revision,
+                request,
+                GraphLogicalTime::new(100),
+                10,
+                next_budget,
+            )
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let mut regressed = before.state.clone();
+        regressed
+            .task_tombstones
+            .get_mut(&task_id)
+            .unwrap()
+            .history_digest
+            .clear();
+        let error = store
+            .compare_and_swap(&before.revision, regressed)
+            .unwrap_err();
         assert!(matches!(
             error,
-            GraphStoreError::InvalidState { ref reason }
-                if reason.contains("parent-directory component")
+            GraphStoreError::InvalidState { reason }
+                if reason.contains("rewrote an existing task tombstone")
         ));
-        assert!(!intermediate.exists());
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+
+    #[test]
+    fn claim_with_budget_persist_failure_leaves_task_tombstone_and_budget_unchanged() {
+        let path = temp_dir("budget-claim-persist-failure");
+        let key = signer(106);
+        let store = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(107, "budget-persist-failure");
+        let migrated = migrate_legacy_pending_with_budget(
+            &store,
+            descriptor,
+            request.clone(),
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+        );
+        let before_bytes = fs::read(store.state_path()).unwrap();
+        let before = store.snapshot().unwrap();
+        let config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..swarm_core::config::HypothesisGraphConfig::default()
+        };
+        let mut next_budget = budget_at(GraphLogicalTime::new(100), 0, 0);
+        next_budget
+            .admit_at(&config, GraphLogicalTime::new(100), 0, 1)
+            .unwrap();
+        install_test_commit_failure(path.clone(), CommitFailureBoundary::State);
+        assert!(matches!(
+            store.claim_task_cas_with_budget(
+                &migrated.revision,
+                request,
+                GraphLogicalTime::new(100),
+                10,
+                next_budget,
+            ),
+            Err(GraphStoreError::Write { .. })
+        ));
+
+        // Reading the same handle performs the durable journal recovery. The
+        // failed publication must roll back every part of the candidate, not
+        // leave a charged budget beside an unclaimed or refreshed task.
+        let after = store.snapshot().unwrap();
+        assert_eq!(after, before);
+        assert_eq!(fs::read(store.state_path()).unwrap(), before_bytes);
+        drop(store);
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        assert_eq!(reopened.snapshot().unwrap(), before);
+        drop(reopened);
+        assert_eq!(migrated.revision, before.revision);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_graph_state_migrates_v0_to_v1_preserving_logical_time_high_water() {
+        let memory = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(82),
+            budget_policy(),
+        )
+        .unwrap();
+        let memory_initial = memory.snapshot().unwrap();
+        let missing_budget = GraphStoreState::with_reasoning_state(
+            memory_initial.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(42),
+            ),
+        );
+        assert!(matches!(
+            missing_budget,
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("persisted scheduler budget")
+        ));
+        let mut direct_marker_one = memory_initial.state.clone();
+        direct_marker_one.migration_marker = GRAPH_STATE_MIGRATION_HYPOTHESES;
+        assert!(matches!(
+            memory.compare_and_swap(&memory_initial.revision, direct_marker_one),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("persisted scheduler budget")
+        ));
+        assert_eq!(memory.snapshot().unwrap(), memory_initial);
+        let memory_candidate = GraphStoreState::with_reasoning_state(
+            memory_initial.state,
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(42),
+            )
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(42), 0, 0)),
+        )
+        .unwrap();
+        let memory_migrated = memory
+            .compare_and_swap(&memory_initial.revision, memory_candidate)
+            .unwrap();
         assert_eq!(
-            fs::metadata(&parent).unwrap().permissions().mode() & 0o7777,
-            0o755
+            memory_migrated.migration_marker(),
+            GRAPH_STATE_MIGRATION_HYPOTHESES
+        );
+        assert_eq!(
+            memory_migrated.state.logical_time_high_water,
+            GraphLogicalTime::new(42)
         );
 
-        fs::remove_dir_all(parent).unwrap();
+        let path = temp_dir("legacy-migration");
+        let key = signer(83);
+        {
+            let file = FileHypothesisGraphStore::new_with_scheduler_policy(
+                &path,
+                graph(),
+                key.clone(),
+                budget_policy(),
+            )
+            .unwrap();
+            let initial = file.snapshot().unwrap();
+            let candidate = GraphStoreState::with_reasoning_state(
+                initial.state,
+                ReasoningStateUpdate::migration_to_hypotheses(
+                    GraphResourceLimits::default(),
+                    GraphLogicalTime::new(42),
+                )
+                .with_scheduler_budget(budget_at(GraphLogicalTime::new(42), 0, 0)),
+            )
+            .unwrap();
+            let migrated = file.compare_and_swap(&initial.revision, candidate).unwrap();
+            assert_eq!(
+                migrated.migration_marker(),
+                GRAPH_STATE_MIGRATION_HYPOTHESES
+            );
+        }
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        let snapshot = reopened.snapshot().unwrap();
+        assert_eq!(
+            snapshot.migration_marker(),
+            GRAPH_STATE_MIGRATION_HYPOTHESES
+        );
+        assert_eq!(
+            snapshot.state.logical_time_high_water,
+            GraphLogicalTime::new(42)
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn scheduler_budget_policy_is_bound_to_store_configuration() {
+        let config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 10,
+            max_claims_per_tick: 2,
+            ..swarm_core::config::HypothesisGraphConfig::default()
+        };
+        let graph = HypothesisGraph::new(
+            GraphId::new("graph:configured-budget"),
+            config.resource_limits(),
+        )
+        .unwrap();
+        let signing_key = signer(126);
+        let store =
+            MemoryHypothesisGraphStore::new_with_config(graph, signing_key, &config).unwrap();
+        let migrated = migrate_with_budget(
+            &store,
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+            GraphLogicalTime::new(100),
+        );
+        let before = store.snapshot().unwrap();
+        let mut widened = before.state().clone();
+        widened.scheduler_budget = Some(tamper_budget_field(
+            widened.scheduler_budget.as_ref().unwrap(),
+            "max_work_units",
+            serde_json::json!(11),
+        ));
+        let policy_error = store
+            .compare_and_swap(before.revision(), widened)
+            .unwrap_err();
+        assert!(
+            format!("{policy_error:?}").contains("policy identity"),
+            "unexpected policy rejection: {policy_error:?}"
+        );
+        assert_eq!(store.snapshot().unwrap(), before);
+        assert_eq!(migrated.scheduler_budget().unwrap().max_work_units, 10);
+
+        let path = temp_dir("configured-budget-policy");
+        let key = signer(127);
+        let file = FileHypothesisGraphStore::new_with_config(
+            &path,
+            HypothesisGraph::new(
+                GraphId::new("graph:configured-file-budget"),
+                config.resource_limits(),
+            )
+            .unwrap(),
+            key.clone(),
+            &config,
+        )
+        .unwrap();
+        let file_migrated = migrate_with_budget(
+            &file,
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+            GraphLogicalTime::new(100),
+        );
+        drop(file);
+        let reopened =
+            FileHypothesisGraphStore::open_with_signer_and_config(&path, key.clone(), &config)
+                .unwrap();
+        assert_eq!(reopened.snapshot().unwrap(), file_migrated);
+        drop(reopened);
+        let mismatched_config = swarm_core::config::HypothesisGraphConfig {
+            max_work_units_per_tick: 11,
+            max_claims_per_tick: 2,
+            ..config
+        };
+        assert!(
+            FileHypothesisGraphStore::open_with_signer_and_config(&path, key, &mismatched_config,)
+                .is_err()
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_task_tombstone_wire_reopens_before_migration() {
+        let path = temp_dir("legacy-task-wire");
+        let key = signer(95);
+        let original_state = {
+            let file = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
+            let claim = file
+                .claim_task(request(95, "legacy-task"), GraphLogicalTime::new(100), 10)
+                .unwrap();
+            file.expire_task(
+                "task:legacy-task",
+                claim.task_generation,
+                GraphLogicalTime::new(110),
+            )
+            .unwrap();
+            file.reclaim_task(
+                "task:legacy-task",
+                request(96, "legacy-task"),
+                GraphLogicalTime::new(111),
+                10,
+            )
+            .unwrap();
+            fs::read(file.state_path()).unwrap()
+        };
+        let reopened = FileHypothesisGraphStore::open_with_signer(&path, key).unwrap();
+        assert_eq!(reopened.snapshot().unwrap().migration_marker(), 0);
+        assert_eq!(
+            fs::read(path.join(GRAPH_STORE_STATE_FILE)).unwrap(),
+            original_state
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn unknown_graph_state_migration_marker_is_rejected() {
+        let store = MemoryHypothesisGraphStore::new(graph(), signer(84)).unwrap();
+        let before = store.snapshot().unwrap();
+        let mut candidate = before.state.clone();
+        candidate.migration_marker = GRAPH_STATE_MIGRATION_CURRENT + 1;
+        assert!(matches!(
+            store.compare_and_swap(&before.revision, candidate),
+            Err(GraphStoreError::InvalidState { .. })
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+
+    #[test]
+    fn migration_marker_downgrade_is_rejected() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(87),
+            budget_policy(),
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
+        let migrated = store
+            .compare_and_swap(
+                &before.revision,
+                GraphStoreState::with_reasoning_state(
+                    before.state,
+                    ReasoningStateUpdate::migration_to_hypotheses(
+                        GraphResourceLimits::default(),
+                        GraphLogicalTime::new(1),
+                    )
+                    .with_scheduler_budget(budget_at(
+                        GraphLogicalTime::new(1),
+                        0,
+                        0,
+                    )),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut downgraded = migrated.state.clone();
+        downgraded.migration_marker = GRAPH_STATE_MIGRATION_LEGACY;
+        downgraded.scheduler_budget = None;
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, downgraded),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("migration marker downgrade")
+        ));
+        assert_eq!(store.snapshot().unwrap(), migrated);
+    }
+
+    #[test]
+    fn direct_cas_cannot_rewrite_hypothesis_confidence_or_uncertainty() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(124),
+            budget_policy(),
+        )
+        .unwrap();
+        let initial = store.snapshot().unwrap();
+        let hypothesis_id = HypothesisId::new("hypothesis:direct-cas-audit");
+        let hypothesis = Hypothesis::new(
+            hypothesis_id.clone(),
+            ConfidenceDistribution::uniform_two(),
+            [UncertaintyReason::InsufficientEvidence],
+            [],
+        )
+        .unwrap();
+        let target = TaskTarget::Hypothesis {
+            hypothesis_id: hypothesis_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            initial.state.graph_id.clone(),
+            target.clone(),
+            TaskKind::FalsifyHypothesis,
+            "cd".repeat(32),
+        )
+        .unwrap();
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            descriptor.kind,
+            target,
+            GraphProducerRole::Falsifier,
+            AgentId::from_public_key_hex(&signer(124).public_key().to_hex()),
+            EvidenceScope::new([], [EvidenceId::new("evidence:direct-cas-audit")], []).unwrap(),
+            GraphLogicalTime::new(1),
+        )
+        .unwrap();
+        let task = TaskRecord {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            request,
+            state: TaskState::Pending,
+            generation: 1,
+            attempts: 1,
+            lease: None,
+            completion: None,
+            terminal_history: Vec::new(),
+        };
+        let durable = DurableTaskRecord {
+            schema_version: GRAPH_STORE_SCHEMA_VERSION,
+            task,
+            generation: 1,
+            history: Vec::new(),
+        };
+        let migrated = GraphStoreState::with_reasoning_state(
+            initial.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(1),
+            )
+            .with_hypotheses(BTreeMap::from([(hypothesis_id.clone(), hypothesis)]))
+            .with_tasks(BTreeMap::from([(descriptor.task_id.clone(), durable)]))
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor,
+            )]))
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(1), 1, 0)),
+        )
+        .unwrap();
+        let migrated = store.compare_and_swap(&initial.revision, migrated).unwrap();
+        let before_bytes = migrated.canonical_bytes().unwrap();
+
+        let mut confidence_rewrite = migrated.state.clone();
+        confidence_rewrite
+            .hypotheses
+            .get_mut(&hypothesis_id)
+            .unwrap()
+            .confidence = ConfidenceDistribution::new([
+            (ConfidenceBucket::High, 6_000),
+            (ConfidenceBucket::Low, 4_000),
+        ])
+        .unwrap();
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, confidence_rewrite),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("confidence or uncertainty")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
+
+        let mut uncertainty_rewrite = migrated.state.clone();
+        uncertainty_rewrite
+            .hypotheses
+            .get_mut(&hypothesis_id)
+            .unwrap()
+            .uncertainty
+            .insert(UncertaintyReason::PartialOrdering);
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, uncertainty_rewrite),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("confidence or uncertainty")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
+    }
+
+    #[test]
+    fn direct_cas_cannot_drop_existing_task_or_tombstone() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(88),
+            budget_policy(),
+        )
+        .unwrap();
+        let claimed = store
+            .claim_task(request(88, "drop"), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let migration = GraphStoreState::with_reasoning_state(
+            before.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                claimed.task.request.requested_at,
+            )
+            .with_scheduler_budget(budget_at(claimed.task.request.requested_at, 0, 0))
+            .with_tasks(before.state.tasks.clone()),
+        );
+        assert!(matches!(
+            migration,
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("logical task descriptor")
+        ));
+
+        let mut dropped = before.state.clone();
+        dropped.tasks.clear();
+        dropped.task_tombstones.clear();
+        assert!(matches!(
+            store.compare_and_swap(&before.revision, dropped),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("task replacement requires the reasoning-state migration marker")
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+
+    #[test]
+    fn marker_one_requires_bidirectional_task_descriptor_binding() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(89),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(89, "descriptor-binding");
+        let claimed = store
+            .claim_task(request.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let legacy_tasks = before.state.tasks.clone();
+        let legacy_tombstones = before.state.task_tombstones.clone();
+        let migrated = GraphStoreState::with_reasoning_state(
+            before.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(100),
+            )
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(100), 0, 0))
+            .with_tasks(before.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor.clone(),
+            )])),
+        )
+        .unwrap();
+        let mut migration_rewrite = migrated.clone();
+        let migration_task_id = claimed.task.request.task_id.clone();
+        let migration_task = migration_rewrite.tasks.get(&migration_task_id).unwrap();
+        migration_rewrite.task_tombstones.insert(
+            migration_task_id,
+            TaskMonotonicity::from_record(migration_task).unwrap(),
+        );
+        assert!(matches!(
+            store.compare_and_swap(&before.revision, migration_rewrite),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("rewrote or removed a legacy task tombstone")
+        ));
+        let migrated = store.compare_and_swap(&before.revision, migrated).unwrap();
+        assert_eq!(migrated.state.tasks, legacy_tasks);
+        assert_eq!(migrated.state.task_tombstones, legacy_tombstones);
+
+        // Even a correctly recomputed v1 digest is a rewrite when supplied
+        // directly at the marker boundary; only the typed migration helper
+        // may preserve the legacy tombstone representation.
+        let task_id = claimed.task.request.task_id.clone();
+        let mut rewritten_tombstone = migrated.state.clone();
+        let task = rewritten_tombstone.tasks.get(&task_id).unwrap();
+        rewritten_tombstone
+            .task_tombstones
+            .insert(task_id, TaskMonotonicity::from_record(task).unwrap());
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, rewritten_tombstone),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("rewrote an existing task tombstone")
+        ));
+
+        // A marker-1 state with a task but no reverse descriptor binding is
+        // invalid even when the task/tombstone pair itself is well formed.
+        let (extra_descriptor, extra_request) = logical_request(90, "descriptorless");
+        let extra_task = TaskRecord {
+            schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+            request: extra_request,
+            state: TaskState::Pending,
+            generation: 1,
+            attempts: 1,
+            lease: None,
+            completion: None,
+            terminal_history: Vec::new(),
+        };
+        let extra_durable = DurableTaskRecord {
+            schema_version: GRAPH_STORE_SCHEMA_VERSION,
+            task: extra_task.clone(),
+            generation: 1,
+            history: Vec::new(),
+        };
+        let mut descriptorless = migrated.state.clone();
+        descriptorless
+            .tasks
+            .insert(extra_descriptor.task_id.clone(), extra_durable.clone());
+        descriptorless.task_tombstones.insert(
+            extra_descriptor.task_id.clone(),
+            TaskMonotonicity::from_record(&extra_durable).unwrap(),
+        );
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, descriptorless),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("no logical task descriptor")
+        ));
+
+        // The convenience create API has no descriptor argument and therefore
+        // cannot introduce a marker-1 task. Runtime creation uses its typed
+        // descriptor CAS instead.
+        let before_unbound_create = store.snapshot().unwrap();
+        assert!(matches!(
+            store.create_task(logical_request(91, "create-without-descriptor").1),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("descriptor-bound CAS")
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_unbound_create);
+        assert!(matches!(
+            store.claim_task_with_budget(
+                logical_request(92, "claim-without-descriptor").1,
+                GraphLogicalTime::new(100),
+                10,
+                budget_at(GraphLogicalTime::new(100), 0, 0),
+            ),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("logical task descriptor")
+        ));
+
+        // A low-level completion cannot terminalize a marker-1 task: the
+        // capability, lineage, evidence, and outbox must be committed by one
+        // reasoning CAS.
+        let entry = migrated
+            .state
+            .tasks
+            .get(&claimed.task.request.task_id)
+            .unwrap();
+        let lease = entry.task.lease.as_ref().unwrap();
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::EvidenceAdded,
+            lease.holder.clone(),
+            GraphLogicalTime::new(105),
+            [EvidenceId::new("evidence:logical:descriptor-binding")],
+            "summary:low-level-terminal",
+        )
+        .unwrap();
+        let before_terminal = store.snapshot().unwrap();
+        assert!(matches!(
+            store.complete_task(
+                claimed.task.request.task_id.as_str(),
+                entry.generation,
+                &lease.lease_id,
+                lease.fencing_token,
+                GraphLogicalTime::new(105),
+                completion,
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("outbox CAS")
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_terminal);
+    }
+
+    #[test]
+    fn marker_zero_to_one_cas_rejects_graph_rewrite_or_advance() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(92),
+            budget_policy(),
+        )
+        .unwrap();
+        let before = store.snapshot().unwrap();
+        let mut candidate = GraphStoreState::with_reasoning_state(
+            before.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(1),
+            )
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(1), 0, 0)),
+        )
+        .unwrap();
+        candidate.graph.version = candidate.graph.version.saturating_add(1);
+        assert!(matches!(
+            store.compare_and_swap(&before.revision, candidate),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("rewrote or advanced the legacy graph")
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
+    }
+
+    fn assert_fabricated_claim_cas_is_rejected_without_mutation(
+        store: &dyn HypothesisGraphStore,
+        byte: u8,
+    ) -> GraphStoreSnapshot {
+        let (descriptor, request) = logical_request(byte, "fabricated-claim-cas");
+        // Keep the task unclaimed through the typed marker-0 -> marker-1
+        // migration. The forged candidate below is therefore a direct CAS
+        // attempt to invent an active lease, rather than a public claim.
+        store.create_task(request.clone()).unwrap();
+        let initial = store.snapshot().unwrap();
+        let migrated = GraphStoreState::with_reasoning_state(
+            initial.state().clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(100),
+            )
+            .with_tasks(initial.state().tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor,
+            )]))
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(100), 0, 0)),
+        )
+        .unwrap();
+        let migrated = store
+            .compare_and_swap(initial.revision(), migrated)
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let before_bytes = before.canonical_bytes().unwrap();
+        let task_id = request.task_id.clone();
+        let mut fabricated = before.state().clone();
+        let entry = fabricated.tasks.get_mut(&task_id).unwrap();
+        let forged_lease = TaskLease::new(
+            LeaseId::new("lease:forged-direct-cas"),
+            request.claimant.clone(),
+            GraphLogicalTime::new(100),
+            GraphLogicalTime::new(110),
+            FencingToken::new(1),
+        )
+        .unwrap();
+        entry.task = TaskRecord::claimed_with_limits(
+            request,
+            forged_lease,
+            GraphResourceLimits::default().max_task_lease_ms,
+            GraphResourceLimits::default().max_task_retries,
+        )
+        .unwrap();
+        fabricated.fencing_counter = 1;
+        fabricated
+            .task_tombstones
+            .insert(task_id, TaskMonotonicity::from_record(entry).unwrap());
+        let error = store
+            .compare_and_swap(before.revision(), fabricated)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                GraphStoreError::InvalidState { reason }
+                    if reason.contains("prior task's active lease")
+                        || reason.contains("prior claimed task")
+            ),
+            "unexpected fabricated claim rejection: {error:?}"
+        );
+        let after = store.snapshot().unwrap();
+        assert_eq!(after.revision(), before.revision());
+        assert_eq!(after.canonical_bytes().unwrap(), before_bytes);
+        assert_eq!(after, before);
+        assert_eq!(migrated.revision(), before.revision());
+        before
+    }
+
+    #[test]
+    fn direct_cas_rejects_fabricated_claim_clone_across_backends() {
+        let memory = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(122),
+            budget_policy(),
+        )
+        .unwrap();
+        let memory_before = assert_fabricated_claim_cas_is_rejected_without_mutation(&memory, 122);
+        assert_eq!(
+            memory.snapshot().unwrap().canonical_bytes().unwrap(),
+            memory_before.canonical_bytes().unwrap()
+        );
+
+        let configured = ConfiguredHypothesisGraphStore::memory_with_scheduler_policy(
+            graph(),
+            signer(123),
+            budget_policy(),
+        )
+        .unwrap();
+        let configured_before =
+            assert_fabricated_claim_cas_is_rejected_without_mutation(&configured, 123);
+        assert_eq!(
+            configured.snapshot().unwrap().canonical_bytes().unwrap(),
+            configured_before.canonical_bytes().unwrap()
+        );
+
+        let path = temp_dir("fabricated-claim-cas-file");
+        let key = signer(124);
+        let file = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let file_before = assert_fabricated_claim_cas_is_rejected_without_mutation(&file, 124);
+        let file_bytes = file_before.canonical_bytes().unwrap();
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().canonical_bytes().unwrap(),
+            file_bytes
+        );
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn direct_cas_rejects_terminal_task_without_outbox() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(93),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(93, "no-outbox");
+        let claimed = store
+            .claim_task(request, GraphLogicalTime::new(100), 10)
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let migrated = GraphStoreState::with_reasoning_state(
+            before.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(100),
+            )
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(100), 0, 0))
+            .with_tasks(before.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor,
+            )])),
+        )
+        .unwrap();
+        let migrated = store.compare_and_swap(&before.revision, migrated).unwrap();
+        let task_id = claimed.task.request.task_id.clone();
+        let mut terminal = migrated.state.clone();
+        let entry = terminal.tasks.get_mut(&task_id).unwrap();
+        let lease = entry.task.lease.clone().unwrap();
+        entry.task = entry
+            .task
+            .clone()
+            .complete(
+                TaskCompletion::new(
+                    TaskCompletionKind::EvidenceAdded,
+                    lease.holder.clone(),
+                    GraphLogicalTime::new(105),
+                    [EvidenceId::new("evidence:logical:no-outbox")],
+                    "summary:no-outbox",
+                )
+                .unwrap(),
+                lease.fencing_token,
+                GraphResourceLimits::default().max_task_lease_ms,
+            )
+            .unwrap();
+        entry.generation = entry.generation.saturating_add(1);
+        terminal.task_tombstones.insert(
+            task_id.clone(),
+            TaskMonotonicity::from_record(entry).unwrap(),
+        );
+        terminal.logical_time_high_water = GraphLogicalTime::new(105);
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, terminal.clone()),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("atomic terminal outbox publication")
+        ));
+        assert_eq!(store.snapshot().unwrap(), migrated);
+    }
+
+    #[test]
+    fn direct_cas_rejects_wrong_completion_kind_in_outbox() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(97),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(96, "wrong-kind");
+        let claimed = store
+            .claim_task(request.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let migrated = GraphStoreState::with_reasoning_state(
+            before.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(100),
+            )
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(100), 0, 0))
+            .with_tasks(before.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor.clone(),
+            )])),
+        )
+        .unwrap();
+        let migrated = store.compare_and_swap(&before.revision, migrated).unwrap();
+        let task_id = claimed.task.request.task_id.clone();
+        let mut terminal = migrated.state.clone();
+        let entry = terminal.tasks.get_mut(&task_id).unwrap();
+        let lease = entry.task.lease.clone().unwrap();
+        let claimant_key = signer(96);
+        let claimant = entry.task.request.claimant.clone();
+        let completion = TaskCompletion::new(
+            TaskCompletionKind::NoFinding,
+            claimant.clone(),
+            GraphLogicalTime::new(105),
+            std::iter::empty(),
+            "summary:wrong-kind",
+        )
+        .unwrap();
+        let terminal_task = entry
+            .task
+            .clone()
+            .complete(
+                completion.clone(),
+                lease.fencing_token,
+                GraphResourceLimits::default().max_task_lease_ms,
+            )
+            .unwrap();
+        entry.task = terminal_task.clone();
+        entry.generation = entry.generation.saturating_add(1);
+        terminal.task_tombstones.insert(
+            task_id.clone(),
+            TaskMonotonicity::from_record(entry).unwrap(),
+        );
+        let capability = TaskCapabilityProof::signed_with(
+            task_id.clone(),
+            claimant.clone(),
+            swarm_core::hypothesis_graph::GraphProducerRole::Hunter,
+            TaskKind::AcquireEvidence,
+            request.canonical_digest().unwrap(),
+            &claimant_key,
+            "hunter-wrong-kind",
+        )
+        .unwrap();
+        let envelope = TaskTerminalEnvelope::new(
+            task_id.clone(),
+            terminal_task.request.idempotency_key.clone(),
+            lease.lease_id.clone(),
+            lease.fencing_token,
+            completion,
+            None,
+            claimant,
+            capability,
+        )
+        .unwrap()
+        .signed_with(&claimant_key, "terminal-wrong-kind")
+        .unwrap();
+        let valid_entry = TaskTerminalOutboxEntry {
+            envelope,
+            evidence: Vec::new(),
+            decision: None,
+            memory: None,
+            memory_expiry: None,
+            producer_key_id: AgentId::from_public_key_hex(&claimant_key.public_key().to_hex()),
+        };
+        valid_entry
+            .validate_for_committed_task_at(
+                &terminal_task,
+                &descriptor,
+                &GraphResourceLimits::default(),
+                GraphLogicalTime::new(105),
+            )
+            .unwrap();
+        terminal
+            .terminal_outbox
+            .insert(task_id.clone(), valid_entry);
+        terminal.logical_time_high_water = GraphLogicalTime::new(105);
+        let mut missing_history_digest = terminal.clone();
+        missing_history_digest
+            .task_tombstones
+            .get_mut(&task_id)
+            .unwrap()
+            .history_digest
+            .clear();
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, missing_history_digest),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("without binding its history digest")
+        ));
+        assert_eq!(store.snapshot().unwrap(), migrated);
+        let mut mismatched_prior = terminal.clone();
+        mismatched_prior
+            .tasks
+            .get_mut(&task_id)
+            .unwrap()
+            .task
+            .terminal_history
+            .last_mut()
+            .unwrap()
+            .prior_lease
+            .fencing_token = FencingToken::new(99);
+        let mismatched_task = mismatched_prior.tasks.get(&task_id).unwrap();
+        mismatched_prior.task_tombstones.insert(
+            task_id.clone(),
+            TaskMonotonicity::from_record(mismatched_task).unwrap(),
+        );
+        mismatched_prior.fencing_counter = 99;
+        let mismatched_error = store
+            .compare_and_swap(&migrated.revision, mismatched_prior)
+            .unwrap_err();
+        let mismatched_error_debug = format!("{mismatched_error:?}");
+        assert!(
+            mismatched_error_debug.contains("terminal proof does not bind the prior claimed lease")
+                || mismatched_error_debug
+                    .contains("terminal outbox envelope does not bind the retained proof"),
+            "unexpected terminal proof rejection: {mismatched_error:?}"
+        );
+        assert_eq!(store.snapshot().unwrap(), migrated);
+        // The otherwise valid publication is tampered after construction.
+        // Core validation must reject the wrong completion kind before CAS.
+        terminal
+            .terminal_outbox
+            .get_mut(&task_id)
+            .unwrap()
+            .envelope
+            .completion
+            .kind = TaskCompletionKind::EdgeChallenged;
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, terminal.clone()),
+            Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+                if reason.contains("task kind does not permit")
+        ));
+        assert_eq!(store.snapshot().unwrap(), migrated);
+        let valid_terminal = {
+            let mut candidate = terminal.clone();
+            candidate
+                .terminal_outbox
+                .get_mut(&task_id)
+                .unwrap()
+                .envelope
+                .completion
+                .kind = TaskCompletionKind::NoFinding;
+            candidate
+        };
+        let mut raised_state = migrated.state.clone();
+        raised_state.logical_time_high_water = GraphLogicalTime::new(120);
+        let raised = store
+            .compare_and_swap(&migrated.revision, raised_state)
+            .unwrap();
+        let mut backdated_terminal = valid_terminal;
+        backdated_terminal.generation = raised.revision().generation;
+        backdated_terminal.predecessor_digest = raised.state().predecessor_digest.clone();
+        backdated_terminal.logical_time_high_water = GraphLogicalTime::new(120);
+        assert!(matches!(
+            store.compare_and_swap(&raised.revision, backdated_terminal),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("below the durable graph high-water")
+        ));
+        assert_eq!(store.snapshot().unwrap(), raised);
+    }
+
+    #[test]
+    fn direct_cas_rejects_history_replacement_even_with_matching_high_water() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(94),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(94, "history-prefix");
+        let claimed = store
+            .claim_task(request.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        store
+            .expire_task(
+                claimed.task.request.task_id.as_str(),
+                claimed.task_generation,
+                GraphLogicalTime::new(110),
+            )
+            .unwrap();
+        store
+            .reclaim_task(
+                claimed.task.request.task_id.as_str(),
+                request,
+                GraphLogicalTime::new(111),
+                10,
+            )
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let migrated = GraphStoreState::with_reasoning_state(
+            before.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(111),
+            )
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(111), 0, 0))
+            .with_tasks(before.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor,
+            )])),
+        )
+        .unwrap();
+        let migrated = store.compare_and_swap(&before.revision, migrated).unwrap();
+        let mut rewritten = migrated.state.clone();
+        rewritten
+            .tasks
+            .get_mut(&claimed.task.request.task_id)
+            .unwrap()
+            .history[0]
+            .request
+            .requested_at = GraphLogicalTime::new(101);
+        let error = store
+            .compare_and_swap(&migrated.revision, rewritten)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                GraphStoreError::InvalidState { reason }
+                    if reason.contains("history is not an append-only prefix")
+            ),
+            "unexpected history replacement error: {error:?}"
+        );
+        assert_eq!(store.snapshot().unwrap(), migrated);
+    }
+
+    #[test]
+    fn marker_one_reclaim_appends_history_and_refreshes_its_digest() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(98),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(98, "marker-one-reclaim");
+        let claimed = store
+            .claim_task(request.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        store
+            .expire_task(
+                claimed.task.request.task_id.as_str(),
+                claimed.task_generation,
+                GraphLogicalTime::new(110),
+            )
+            .unwrap();
+        let before = store.snapshot().unwrap();
+        let migrated = GraphStoreState::with_reasoning_state(
+            before.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(110),
+            )
+            .with_tasks(before.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([(
+                descriptor.task_id.clone(),
+                descriptor,
+            )]))
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(110), 0, 0)),
+        )
+        .unwrap();
+        let migrated = store.compare_and_swap(&before.revision, migrated).unwrap();
+        let next_budget = budget_at(GraphLogicalTime::new(111), 0, 1);
+        let reclaimed = store
+            .reclaim_task_cas_with_budget(
+                &migrated.revision,
+                claimed.task.request.task_id.as_str(),
+                request,
+                GraphLogicalTime::new(111),
+                10,
+                next_budget.clone(),
+            )
+            .unwrap();
+        assert_eq!(reclaimed.task.state, TaskState::Claimed);
+        let current = store.snapshot().unwrap();
+        let durable = current
+            .state
+            .tasks
+            .get(&claimed.task.request.task_id)
+            .unwrap();
+        assert_eq!(durable.history.len(), 1);
+        assert!(
+            !current
+                .state
+                .task_tombstones
+                .get(&claimed.task.request.task_id)
+                .unwrap()
+                .history_digest
+                .is_empty()
+        );
+        assert_eq!(current.scheduler_budget(), Some(&next_budget));
+        assert!(current.revision.generation > migrated.revision.generation);
+    }
+
+    fn assert_marker_one_raw_task_surfaces_are_quarantined(
+        store: &dyn HypothesisGraphStore,
+    ) -> GraphStoreSnapshot {
+        let (pending_descriptor, pending_request) = logical_request(111, "raw-budget-pending");
+        let (expired_descriptor, expired_request) = logical_request(112, "raw-budget-expired");
+        store.create_task(pending_request.clone()).unwrap();
+        let expired_claim = store
+            .claim_task(expired_request.clone(), GraphLogicalTime::new(100), 10)
+            .unwrap();
+        store
+            .expire_task(
+                expired_request.task_id.as_str(),
+                expired_claim.task_generation,
+                GraphLogicalTime::new(110),
+            )
+            .unwrap();
+        let initial = store.snapshot().unwrap();
+        let migrated = GraphStoreState::with_reasoning_state(
+            initial.state.clone(),
+            ReasoningStateUpdate::migration_to_hypotheses(
+                GraphResourceLimits::default(),
+                GraphLogicalTime::new(110),
+            )
+            .with_tasks(initial.state.tasks.clone())
+            .with_logical_task_descriptors(BTreeMap::from([
+                (pending_descriptor.task_id.clone(), pending_descriptor),
+                (expired_descriptor.task_id.clone(), expired_descriptor),
+            ]))
+            // The claim capacity is already exhausted. Raw marker-1 APIs
+            // must still reject before touching the task or budget.
+            .with_scheduler_budget(budget_at(GraphLogicalTime::new(110), 0, 2)),
+        )
+        .unwrap();
+        let migrated = store.compare_and_swap(&initial.revision, migrated).unwrap();
+        let before_bytes = migrated.canonical_bytes().unwrap();
+
+        let raw_claim = store.claim_task(pending_request.clone(), GraphLogicalTime::new(111), 10);
+        assert!(matches!(
+            raw_claim,
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("atomic scheduler budget admission")
+        ));
+        let after_raw_claim = store.snapshot().unwrap();
+        assert_eq!(after_raw_claim.canonical_bytes().unwrap(), before_bytes);
+        assert_eq!(after_raw_claim.revision, migrated.revision);
+
+        let raw_claim_cas = store.claim_task_cas(
+            &migrated.revision,
+            pending_request,
+            GraphLogicalTime::new(111),
+            10,
+        );
+        assert!(matches!(
+            raw_claim_cas,
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("atomic scheduler budget admission")
+        ));
+        let raw_reclaim = store.reclaim_task(
+            expired_request.task_id.clone().as_str(),
+            expired_request,
+            GraphLogicalTime::new(111),
+            10,
+        );
+        assert!(matches!(
+            raw_reclaim,
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("atomic scheduler budget admission")
+        ));
+        let after_raw_reclaim = store.snapshot().unwrap();
+        assert_eq!(after_raw_reclaim.canonical_bytes().unwrap(), before_bytes);
+        assert_eq!(after_raw_reclaim.revision, migrated.revision);
+        after_raw_reclaim
+    }
+
+    #[test]
+    fn marker_one_raw_claim_and_reclaim_are_quarantined_after_budget_exhaustion() {
+        let memory = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(113),
+            budget_policy(),
+        )
+        .unwrap();
+        let memory_baseline = assert_marker_one_raw_task_surfaces_are_quarantined(&memory);
+        assert_eq!(
+            memory.snapshot().unwrap().canonical_bytes().unwrap(),
+            memory_baseline.canonical_bytes().unwrap()
+        );
+
+        let path = temp_dir("raw-budget-quarantine");
+        let key = signer(114);
+        let file = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let file_baseline = assert_marker_one_raw_task_surfaces_are_quarantined(&file);
+        assert_eq!(
+            file.snapshot().unwrap().canonical_bytes().unwrap(),
+            file_baseline.canonical_bytes().unwrap()
+        );
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().canonical_bytes().unwrap(),
+            file_baseline.canonical_bytes().unwrap()
+        );
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    fn assert_budgeted_reclaim_is_atomic_and_idempotent(
+        store: &dyn HypothesisGraphStore,
+    ) -> GraphStoreSnapshot {
+        let (descriptor, request) = logical_request(115, "budgeted-reclaim");
+        let migrated = migrate_legacy_expired_with_budget(
+            store,
+            descriptor,
+            request.clone(),
+            budget_at(GraphLogicalTime::new(110), 0, 0),
+        );
+        let next_budget = budget_at(GraphLogicalTime::new(111), 0, 1);
+        let reclaimed = store
+            .reclaim_task_cas_with_budget(
+                &migrated.revision,
+                request.task_id.as_str(),
+                request.clone(),
+                GraphLogicalTime::new(111),
+                10,
+                next_budget.clone(),
+            )
+            .unwrap();
+        assert!(!reclaimed.idempotent);
+        let after_reclaim = store.snapshot().unwrap();
+        assert_eq!(after_reclaim.scheduler_budget(), Some(&next_budget));
+        assert_eq!(after_reclaim.state.tasks[&request.task_id].history.len(), 1);
+        assert_eq!(
+            after_reclaim.revision.generation,
+            migrated.revision.generation + 1
+        );
+        let before_retry_bytes = after_reclaim.canonical_bytes().unwrap();
+        // A caller-supplied overcharge is rejected even for an idempotent
+        // retry; the durable budget, not the retry payload, is authoritative.
+        let before_invalid_retry = store.snapshot().unwrap();
+        assert!(matches!(
+            store.reclaim_task_with_budget(
+                request.task_id.clone().as_str(),
+                request.clone(),
+                GraphLogicalTime::new(111),
+                10,
+                budget_at(GraphLogicalTime::new(111), 0, 2),
+            ),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("scheduler budget changed")
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_invalid_retry);
+        let retry = store
+            .reclaim_task_with_budget(
+                request.task_id.clone().as_str(),
+                request,
+                GraphLogicalTime::new(111),
+                10,
+                next_budget.clone(),
+            )
+            .unwrap();
+        assert!(retry.idempotent);
+        let after_retry = store.snapshot().unwrap();
+        assert_eq!(after_retry.revision, after_reclaim.revision);
+        assert_eq!(after_retry.canonical_bytes().unwrap(), before_retry_bytes);
+        assert_eq!(after_retry.scheduler_budget(), Some(&next_budget));
+        after_retry
+    }
+
+    #[test]
+    fn budgeted_reclaim_charges_claim_once_and_survives_file_restart() {
+        let memory = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(116),
+            budget_policy(),
+        )
+        .unwrap();
+        let memory_after = assert_budgeted_reclaim_is_atomic_and_idempotent(&memory);
+        assert_eq!(
+            memory.snapshot().unwrap().canonical_bytes().unwrap(),
+            memory_after.canonical_bytes().unwrap()
+        );
+
+        let path = temp_dir("budgeted-reclaim-restart");
+        let key = signer(117);
+        let file = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let file_after = assert_budgeted_reclaim_is_atomic_and_idempotent(&file);
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().canonical_bytes().unwrap(),
+            file_after.canonical_bytes().unwrap()
+        );
+        assert_eq!(
+            reopened
+                .snapshot()
+                .unwrap()
+                .scheduler_budget()
+                .unwrap()
+                .claims_used(),
+            1
+        );
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    fn assert_reasoning_expiry_and_budgeted_reclaim(
+        store: &dyn HypothesisGraphStore,
+        claimant_seed: u8,
+    ) -> GraphStoreSnapshot {
+        let (descriptor, request) = logical_request(claimant_seed, "reasoning-expiry");
+        let migrated = migrate_legacy_pending_with_budget(
+            store,
+            descriptor,
+            request.clone(),
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+        );
+        let claimed = store
+            .claim_task_cas_with_budget(
+                &migrated.revision,
+                request.clone(),
+                GraphLogicalTime::new(100),
+                10,
+                budget_at(GraphLogicalTime::new(100), 0, 1),
+            )
+            .expect("reasoning task claim");
+        let expired = store
+            .expire_task(
+                request.task_id.as_str(),
+                claimed.task_generation,
+                GraphLogicalTime::new(110),
+            )
+            .expect("reasoning lease expiry");
+        assert_eq!(expired.task.state, TaskState::Expired);
+        assert!(expired.task.lease.is_none());
+        let after_expiry = store.snapshot().expect("expired snapshot");
+        assert_eq!(
+            after_expiry.scheduler_budget(),
+            Some(&budget_at(GraphLogicalTime::new(100), 0, 1))
+        );
+
+        let reclaimed = store
+            .reclaim_task_cas_with_budget(
+                &after_expiry.revision,
+                request.task_id.as_str(),
+                request.clone(),
+                GraphLogicalTime::new(111),
+                10,
+                budget_at(GraphLogicalTime::new(111), 0, 1),
+            )
+            .expect("budgeted reasoning reclaim");
+        assert_eq!(reclaimed.task.state, TaskState::Claimed);
+        assert_eq!(reclaimed.task.attempts, 2);
+        let after_reclaim = store.snapshot().expect("reclaimed snapshot");
+        let durable = &after_reclaim.state.tasks[&request.task_id];
+        assert_eq!(durable.history.len(), 1);
+        assert_eq!(durable.history[0].state, TaskState::Expired);
+        assert_eq!(
+            after_reclaim.scheduler_budget(),
+            Some(&budget_at(GraphLogicalTime::new(111), 0, 1))
+        );
+        after_reclaim
+    }
+
+    #[test]
+    fn reasoning_leases_expire_and_reclaim_across_memory_and_file_backends() {
+        let memory = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(125),
+            budget_policy(),
+        )
+        .unwrap();
+        let memory_after = assert_reasoning_expiry_and_budgeted_reclaim(&memory, 125);
+        assert_eq!(memory.snapshot().unwrap(), memory_after);
+
+        let path = temp_dir("reasoning-expiry-reclaim");
+        let key = signer(126);
+        let file = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let file_after = assert_reasoning_expiry_and_budgeted_reclaim(&file, 126);
+        let expected_bytes = file_after.canonical_bytes().unwrap();
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().canonical_bytes().unwrap(),
+            expected_bytes
+        );
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    fn assert_terminal_claim_retries_are_rejected_without_mutation(
+        store: &dyn HypothesisGraphStore,
+        claimant_seed: u8,
+    ) -> GraphStoreSnapshot {
+        let completed_request = request(claimant_seed, "completed-claim-retry");
+        let completed_claim = store
+            .claim_task(completed_request.clone(), GraphLogicalTime::new(100), 10)
+            .expect("claim completed task");
+        let completed_lease = completed_claim.task.lease.clone().expect("active lease");
+        let completed_evidence = match &completed_request.target {
+            TaskTarget::Evidence { evidence_id } => evidence_id.clone(),
+            _ => unreachable!("fixture is evidence acquisition"),
+        };
+        store
+            .complete_task(
+                completed_request.task_id.as_str(),
+                completed_claim.task_generation,
+                &completed_lease.lease_id,
+                completed_lease.fencing_token,
+                GraphLogicalTime::new(105),
+                TaskCompletion::new(
+                    TaskCompletionKind::EvidenceAdded,
+                    completed_request.claimant.clone(),
+                    GraphLogicalTime::new(105),
+                    [completed_evidence],
+                    "completed-claim-retry",
+                )
+                .unwrap(),
+            )
+            .expect("complete task");
+        let before_completed_retry = store.snapshot().unwrap();
+        let before_completed_bytes = before_completed_retry.canonical_bytes().unwrap();
+        assert!(matches!(
+            store.claim_task(
+                completed_request,
+                GraphLogicalTime::new(106),
+                10,
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("terminal tasks cannot be claimed")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_completed_bytes
+        );
+
+        let failed_request = request(claimant_seed.saturating_add(1), "failed-claim-retry");
+        let failed_claim = store
+            .claim_task(failed_request.clone(), GraphLogicalTime::new(200), 10)
+            .expect("claim failed task");
+        let failed_lease = failed_claim.task.lease.clone().expect("active lease");
+        store
+            .fail_task(
+                failed_request.task_id.as_str(),
+                failed_claim.task_generation,
+                &failed_lease.lease_id,
+                failed_lease.fencing_token,
+                GraphLogicalTime::new(205),
+                TaskFailure::new(
+                    failed_request.claimant.clone(),
+                    GraphLogicalTime::new(205),
+                    "failed-claim-retry",
+                )
+                .unwrap(),
+            )
+            .expect("fail task");
+        let before_failed_retry = store.snapshot().unwrap();
+        let before_failed_bytes = before_failed_retry.canonical_bytes().unwrap();
+        assert!(matches!(
+            store.claim_task(failed_request, GraphLogicalTime::new(206), 10),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("terminal tasks cannot be claimed")
+        ));
+        let after = store.snapshot().unwrap();
+        assert_eq!(after.canonical_bytes().unwrap(), before_failed_bytes);
+        after
+    }
+
+    #[test]
+    fn terminal_claim_retries_fail_closed_across_memory_and_file_backends() {
+        let memory = MemoryHypothesisGraphStore::new(graph(), signer(127)).unwrap();
+        let memory_after =
+            assert_terminal_claim_retries_are_rejected_without_mutation(&memory, 127);
+        assert_eq!(memory.snapshot().unwrap(), memory_after);
+
+        let path = temp_dir("terminal-claim-retry");
+        let key = signer(129);
+        let file = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
+        let file_after = assert_terminal_claim_retries_are_rejected_without_mutation(&file, 129);
+        let expected_bytes = file_after.canonical_bytes().unwrap();
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer(&path, key).unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().canonical_bytes().unwrap(),
+            expected_bytes
+        );
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn budgeted_reclaim_failed_cas_and_persist_leave_state_unchanged() {
+        let memory = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(118),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(119, "budgeted-reclaim-failure-memory");
+        let migrated = migrate_legacy_expired_with_budget(
+            &memory,
+            descriptor,
+            request.clone(),
+            budget_at(GraphLogicalTime::new(110), 0, 0),
+        );
+        let before = memory.snapshot().unwrap();
+        let stale = GraphStoreRevision::new(
+            migrated.revision.generation.saturating_sub(1),
+            migrated.revision.digest.clone(),
+        );
+        assert!(matches!(
+            memory.reclaim_task_cas_with_budget(
+                &stale,
+                request.task_id.as_str(),
+                request.clone(),
+                GraphLogicalTime::new(111),
+                10,
+                budget_at(GraphLogicalTime::new(111), 0, 1),
+            ),
+            Err(GraphStoreError::StalePredecessor { .. })
+        ));
+        assert_eq!(memory.snapshot().unwrap(), before);
+
+        let path = temp_dir("budgeted-reclaim-persist-failure");
+        let key = signer(120);
+        let file = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let (file_descriptor, file_request) = logical_request(121, "budgeted-reclaim-failure-file");
+        let file_migrated = migrate_legacy_expired_with_budget(
+            &file,
+            file_descriptor,
+            file_request.clone(),
+            budget_at(GraphLogicalTime::new(110), 0, 0),
+        );
+        let file_before = file.snapshot().unwrap();
+        let before_bytes = fs::read(file.state_path()).unwrap();
+        install_test_commit_failure(path.clone(), CommitFailureBoundary::State);
+        assert!(matches!(
+            file.reclaim_task_cas_with_budget(
+                &file_migrated.revision,
+                file_request.task_id.clone().as_str(),
+                file_request,
+                GraphLogicalTime::new(111),
+                10,
+                budget_at(GraphLogicalTime::new(111), 0, 1),
+            ),
+            Err(GraphStoreError::Write { .. })
+        ));
+        assert_eq!(file.snapshot().unwrap(), file_before);
+        assert_eq!(fs::read(file.state_path()).unwrap(), before_bytes);
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            key,
+            budget_policy(),
+        )
+        .unwrap();
+        assert_eq!(reopened.snapshot().unwrap(), file_before);
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn spine_rejects_tampered_intrinsic_witness() {
+        let key = signer(85);
+        let actor = GraphNode::Actor(ActorNode::new("actor:intrinsic", "intrinsic").unwrap());
+        let event = GraphNode::Event(
+            EventNode::new("intrinsic", "source:intrinsic", GraphLogicalTime::new(100)).unwrap(),
+        );
+        let actor_id = actor.id().clone();
+        let event_id = event.id().clone();
+        let mut graph = graph();
+        graph.admit_node(actor).unwrap();
+        graph.admit_node(event).unwrap();
+        let edge = CausalEdge::new(
+            &actor_id,
+            &event_id,
+            CausalRelation::ObservedIn,
+            5_000,
+            [],
+            GraphProducerRole::Hunter,
+            AgentId::from_public_key_hex(&key.public_key().to_hex()),
+            GraphLogicalTime::new(100),
+            EdgeState::Unresolved,
+        )
+        .unwrap()
+        .signed_with(&key, "hunter:intrinsic")
+        .unwrap();
+        let edge_id = edge.edge_id.clone();
+        graph.admit_edge(edge).unwrap();
+        let store = MemoryHypothesisGraphStore::new(graph, signer(86)).unwrap();
+        let before = store.snapshot().unwrap();
+        let mut candidate = before.state.clone();
+        candidate
+            .graph
+            .edges
+            .get_mut(&edge_id)
+            .unwrap()
+            .witness
+            .as_mut()
+            .unwrap()
+            .signature_hex = "00".repeat(64);
+        assert!(store.compare_and_swap(&before.revision, candidate).is_err());
+        assert_eq!(store.snapshot().unwrap(), before);
     }
 
     #[test]
     fn operation_log_is_idempotent_and_fenced_across_reclaim() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(7)).unwrap();
-        let first = store.claim_task(signed_claim_envelope(
-            request(1, "one"),
-            GraphLogicalTime::new(100),
-            10,
-            1,
-            7,
-        ));
+        let first = store.claim_task(request(1, "one"), GraphLogicalTime::new(100), 10);
         let first = first.unwrap();
         let duplicate = store
-            .claim_task(signed_claim_envelope(
-                request(1, "one"),
-                GraphLogicalTime::new(100),
-                10,
-                1,
-                7,
-            ))
+            .claim_task(request(1, "one"), GraphLogicalTime::new(100), 10)
             .unwrap();
         assert!(duplicate.idempotent);
         assert_eq!(first.lease, duplicate.lease);
         let old = first.lease.clone().unwrap();
         let expired = store
-            .expire_task(signed_expiry_envelope(
-                &first.task.request,
-                &old,
-                first.task_generation,
-                GraphLogicalTime::new(110),
-                7,
-            ))
+            .expire_task("task:one", 1, GraphLogicalTime::new(110))
             .unwrap();
         assert_eq!(expired.task.state, TaskState::Expired);
         assert!(
             FencingToken::new(store.snapshot().unwrap().state.fencing_counter) > old.fencing_token
         );
         let reclaimed = store
-            .reclaim_task(signed_reclaim_envelope(
-                &first.task.request,
-                expired.task_generation,
+            .reclaim_task(
+                "task:one",
                 request(2, "one"),
                 GraphLogicalTime::new(111),
                 20,
-                2,
-                7,
-            ))
+            )
             .unwrap();
         assert!(reclaimed.lease.as_ref().unwrap().fencing_token > old.fencing_token);
-        let stale_envelope = signed_terminal_envelope(
-            &first.task.request,
-            &old,
+        let stale = store.complete_task(
+            "task:one",
+            2,
+            &old.lease_id,
+            old.fencing_token,
+            GraphLogicalTime::new(112),
             TaskCompletion::new(
                 TaskCompletionKind::EvidenceAdded,
                 old.holder.clone(),
@@ -8399,41 +12298,29 @@ mod tests {
                 "summary:old",
             )
             .unwrap(),
-            1,
         );
-        let stale_clock =
-            signed_completion_clock(2, GraphLogicalTime::new(112), &stale_envelope, 7);
-        let stale = store.complete_task(2, stale_clock, stale_envelope);
         assert!(matches!(
             stale,
             Err(GraphStoreError::StaleTaskGeneration { .. })
                 | Err(GraphStoreError::StaleLease { .. })
                 | Err(GraphStoreError::StaleFence { .. })
         ));
-        let current = reclaimed.lease.clone().unwrap();
-        let current_envelope = signed_terminal_envelope(
-            &reclaimed.task.request,
-            &current,
-            TaskCompletion::new(
-                TaskCompletionKind::EvidenceAdded,
-                current.holder.clone(),
-                GraphLogicalTime::new(112),
-                [EvidenceId::new("evidence:one")],
-                "summary:new",
-            )
-            .unwrap(),
-            2,
-        );
+        let current = reclaimed.lease.unwrap();
         let done = store
             .complete_task(
+                "task:one",
                 reclaimed.revision.generation,
-                signed_completion_clock(
-                    reclaimed.revision.generation,
+                &current.lease_id,
+                current.fencing_token,
+                GraphLogicalTime::new(112),
+                TaskCompletion::new(
+                    TaskCompletionKind::EvidenceAdded,
+                    current.holder,
                     GraphLogicalTime::new(112),
-                    &current_envelope,
-                    7,
-                ),
-                current_envelope,
+                    [EvidenceId::new("evidence:one")],
+                    "summary:new",
+                )
+                .unwrap(),
             )
             .unwrap();
         assert_eq!(done.task.state, TaskState::Completed);
@@ -8450,22 +12337,14 @@ mod tests {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(13)).unwrap();
         let first_request = request_at(1, "retry", GraphLogicalTime::new(100));
         let first = store
-            .claim_task(signed_claim_envelope(
-                first_request,
-                GraphLogicalTime::new(100),
-                20,
-                1,
-                13,
-            ))
+            .claim_task(first_request, GraphLogicalTime::new(100), 20)
             .unwrap();
         let retry = store
-            .claim_task(signed_claim_envelope(
+            .claim_task(
                 request_at(1, "retry", GraphLogicalTime::new(105)),
                 GraphLogicalTime::new(105),
                 20,
-                1,
-                13,
-            ))
+            )
             .unwrap();
         assert!(retry.idempotent);
         assert_eq!(retry.revision, first.revision);
@@ -8474,122 +12353,28 @@ mod tests {
     }
 
     #[test]
-    fn creation_and_claim_require_configured_scheduler_clock_authority() {
-        let store = MemoryHypothesisGraphStore::new(graph(), signer(40)).unwrap();
-        let creation_request = request(41, "authorized-creation");
-        let creation_capability = capability_for_request(&creation_request, 41);
-        let claimant_only_creation =
-            TaskCreationEnvelope::new(creation_request.clone(), creation_capability).unwrap();
-        let before_creation = store.snapshot().unwrap();
-        assert!(matches!(
-            store.create_task(claimant_only_creation),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before_creation);
-
-        let foreign_creation = signed_creation_envelope(creation_request.clone(), 41, 43);
-        assert!(matches!(
-            store.create_task(foreign_creation),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before_creation);
-
-        let created = store
-            .create_task(signed_creation_envelope(creation_request, 41, 40))
-            .unwrap();
-        assert_eq!(created.task.state, TaskState::Pending);
-        assert_eq!(
-            store.snapshot().unwrap().state.logical_time_high_water,
-            GraphLogicalTime::new(100)
-        );
-
-        let claim_request = request(42, "authorized-claim");
-        let claimant_only =
-            claim_envelope(claim_request.clone(), GraphLogicalTime::new(100), 20, 42);
-        let signed = signed_claim_envelope(
-            claim_request.clone(),
-            GraphLogicalTime::new(100),
-            20,
-            42,
-            40,
-        );
-        let before_claim = store.snapshot().unwrap();
-        assert!(matches!(
-            store.claim_task(claimant_only),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before_claim);
-
-        let foreign = signed_claim_envelope(claim_request, GraphLogicalTime::new(100), 20, 42, 43);
-        assert!(matches!(
-            store.claim_task(foreign),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before_claim);
-
-        let mut poisoned_clock = signed.clone();
-        poisoned_clock.claimed_at = GraphLogicalTime::new(i64::MAX);
-        assert!(matches!(
-            store.claim_task(poisoned_clock),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before_claim);
-
-        let claimed = store.claim_task(signed).unwrap();
-        assert_eq!(claimed.task.state, TaskState::Claimed);
-        assert_eq!(
-            store.snapshot().unwrap().state.logical_time_high_water,
-            GraphLogicalTime::new(100)
-        );
-    }
-
-    #[test]
     fn generic_cas_rejects_stale_terminal_task_resurrection() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(44)).unwrap();
         let claimed = store
-            .claim_task(signed_claim_envelope(
-                request(45, "resurrection"),
-                GraphLogicalTime::new(100),
-                20,
-                45,
-                44,
-            ))
+            .claim_task(request(45, "resurrection"), GraphLogicalTime::new(100), 20)
             .unwrap();
         let stale = store.snapshot().unwrap();
-        let lease = claimed.lease.clone().unwrap();
-        let envelope = signed_terminal_envelope(
-            &claimed.task.request,
-            &lease,
-            TaskCompletion::new(
-                TaskCompletionKind::EvidenceAdded,
-                lease.holder.clone(),
-                GraphLogicalTime::new(110),
-                [EvidenceId::new("evidence:resurrection")],
-                "summary:resurrection",
-            )
-            .unwrap(),
-            45,
-        );
+        let lease = claimed.lease.unwrap();
         store
             .complete_task(
+                "task:resurrection",
                 claimed.task_generation,
-                signed_completion_clock(
-                    claimed.task_generation,
+                &lease.lease_id,
+                lease.fencing_token,
+                GraphLogicalTime::new(110),
+                TaskCompletion::new(
+                    TaskCompletionKind::EvidenceAdded,
+                    lease.holder,
                     GraphLogicalTime::new(110),
-                    &envelope,
-                    44,
-                ),
-                envelope,
+                    [EvidenceId::new("evidence:resurrection")],
+                    "summary:resurrection",
+                )
+                .unwrap(),
             )
             .unwrap();
         let current = store.snapshot().unwrap();
@@ -8597,11 +12382,7 @@ mod tests {
         candidate.generation = current.state.generation;
         candidate.predecessor_digest = current.state.predecessor_digest.clone();
         let error = store
-            .compare_and_swap(signed_graph_cas_envelope(
-                current.revision.clone(),
-                candidate,
-                44,
-            ))
+            .compare_and_swap(&current.revision, candidate)
             .unwrap_err();
         assert!(matches!(error, GraphStoreError::InvalidState { .. }));
         assert_eq!(store.snapshot().unwrap().state.tasks, current.state.tasks);
@@ -8611,13 +12392,11 @@ mod tests {
     fn terminal_transition_barrier_rejects_expired_injected_clock() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(14)).unwrap();
         let claim = store
-            .claim_task(signed_claim_envelope(
+            .claim_task(
                 request(1, "completion-barrier"),
                 GraphLogicalTime::new(100),
                 10,
-                1,
-                14,
-            ))
+            )
             .unwrap();
         let lease = claim.lease.clone().unwrap();
         let before = store.snapshot().unwrap();
@@ -8629,18 +12408,14 @@ mod tests {
             "summary:completion-barrier",
         )
         .unwrap();
-        let completion_envelope =
-            signed_terminal_envelope(&claim.task.request, &lease, completion, 1);
         assert!(matches!(
             store.complete_task(
+                "task:completion-barrier",
                 claim.task_generation,
-                signed_completion_clock(
-                    claim.task_generation,
-                    GraphLogicalTime::new(110),
-                    &completion_envelope,
-                    14,
-                ),
-                completion_envelope,
+                &lease.lease_id,
+                lease.fencing_token,
+                GraphLogicalTime::new(110),
+                completion,
             ),
             Err(GraphStoreError::LeaseExpired { .. })
         ));
@@ -8648,32 +12423,23 @@ mod tests {
 
         let failure_request = request(2, "failure-barrier");
         let failure_claim = store
-            .claim_task(signed_claim_envelope(
-                failure_request.clone(),
-                GraphLogicalTime::new(100),
-                10,
-                2,
-                14,
-            ))
+            .claim_task(failure_request.clone(), GraphLogicalTime::new(100), 10)
             .unwrap();
         let failure_lease = failure_claim.lease.clone().unwrap();
         let before_failure = store.snapshot().unwrap();
-        let failure = signed_failure_envelope(
-            &failure_request,
-            &failure_lease,
+        let failure = TaskFailure::new(
+            failure_request.claimant,
             GraphLogicalTime::new(109),
             "summary:failure-barrier",
-            2,
-        );
+        )
+        .unwrap();
         assert!(matches!(
             store.fail_task(
+                "task:failure-barrier",
                 failure_claim.task_generation,
-                signed_failure_clock(
-                    failure_claim.task_generation,
-                    GraphLogicalTime::new(110),
-                    &failure,
-                    14,
-                ),
+                &failure_lease.lease_id,
+                failure_lease.fencing_token,
+                GraphLogicalTime::new(110),
                 failure,
             ),
             Err(GraphStoreError::LeaseExpired { .. })
@@ -8682,391 +12448,13 @@ mod tests {
     }
 
     #[test]
-    fn terminal_clock_requires_exact_scheduler_authority_and_payload_binding() {
-        let store = MemoryHypothesisGraphStore::new(graph(), signer(31)).unwrap();
-        let claim = store
-            .claim_task(signed_claim_envelope(
-                request(32, "terminal-clock-authority"),
-                GraphLogicalTime::new(100),
-                20,
-                32,
-                31,
-            ))
-            .unwrap();
-        let lease = claim.lease.clone().unwrap();
-        let terminal = signed_terminal_envelope(
-            &claim.task.request,
-            &lease,
-            TaskCompletion::new(
-                TaskCompletionKind::EvidenceAdded,
-                lease.holder.clone(),
-                GraphLogicalTime::new(110),
-                [EvidenceId::new("evidence:terminal-clock-authority")],
-                "summary:terminal-clock-authority",
-            )
-            .unwrap(),
-            32,
-        );
-        let before = store.snapshot().unwrap();
-
-        let unsigned = TaskTerminalClockEnvelope::for_completion(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &terminal,
-        )
-        .unwrap();
-        assert!(matches!(
-            store.complete_task(claim.task_generation, unsigned, terminal.clone()),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let foreign = signed_completion_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &terminal,
-            33,
-        );
-        assert!(matches!(
-            store.complete_task(claim.task_generation, foreign, terminal.clone()),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut tampered_clock = signed_completion_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &terminal,
-            31,
-        );
-        tampered_clock.observed_at = GraphLogicalTime::new(119);
-        assert!(matches!(
-            store.complete_task(claim.task_generation, tampered_clock, terminal.clone()),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut wrong_operation = signed_completion_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &terminal,
-            31,
-        );
-        wrong_operation.operation_kind = TaskTerminalOperationKind::Fail;
-        assert!(matches!(
-            store.complete_task(claim.task_generation, wrong_operation, terminal.clone()),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let failure = signed_failure_envelope(
-            &claim.task.request,
-            &lease,
-            GraphLogicalTime::new(110),
-            "summary:terminal-clock-authority",
-            32,
-        );
-        let completion_only = signed_completion_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &terminal,
-            31,
-        );
-        assert!(matches!(
-            store.fail_task(claim.task_generation, completion_only, failure),
-            Err(GraphStoreError::InvalidTransition { .. })
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let valid = signed_completion_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &terminal,
-            31,
-        );
-        let completed = store
-            .complete_task(claim.task_generation, valid, terminal)
-            .unwrap();
-        assert_eq!(completed.task.state, TaskState::Completed);
-        assert_eq!(
-            store.snapshot().unwrap().state.logical_time_high_water,
-            GraphLogicalTime::new(110)
-        );
-    }
-
-    #[test]
-    fn durable_completion_requires_claimant_signature_and_compatible_kind() {
-        let path = temp_dir("signed-terminal-completion");
-        let store = FileHypothesisGraphStore::new(&path, graph(), signer(20)).unwrap();
-        let claim = store
-            .claim_task(signed_claim_envelope(
-                request(21, "signed-terminal"),
-                GraphLogicalTime::new(100),
-                20,
-                21,
-                20,
-            ))
-            .unwrap();
-        let lease = claim.lease.clone().unwrap();
-        let claimant = signer(21);
-        let capability = TaskCapabilityProof::signed_with(
-            claim.task.request.task_id.clone(),
-            claim.task.request.claimant.clone(),
-            claim.task.request.role,
-            claim.task.request.kind,
-            claim.task.request.canonical_digest().unwrap(),
-            &claimant,
-            "task-capability:signed-terminal",
-        )
-        .unwrap();
-        let completion = TaskCompletion::new(
-            TaskCompletionKind::EvidenceAdded,
-            lease.holder.clone(),
-            GraphLogicalTime::new(110),
-            [EvidenceId::new("evidence:signed-terminal")],
-            "summary:signed-terminal",
-        )
-        .unwrap();
-        let unsigned = TaskTerminalEnvelope::new(
-            claim.task.request.task_id.clone(),
-            claim.task.request.idempotency_key.clone(),
-            lease.lease_id.clone(),
-            lease.fencing_token,
-            completion,
-            None,
-            lease.holder.clone(),
-            capability,
-        )
-        .unwrap();
-        let before = store.snapshot().unwrap();
-        let unsigned_clock = signed_completion_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &unsigned,
-            20,
-        );
-        assert!(matches!(
-            store.complete_task(claim.task_generation, unsigned_clock, unsigned),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut wrong_kind = signed_terminal_envelope(
-            &claim.task.request,
-            &lease,
-            TaskCompletion::new(
-                TaskCompletionKind::EvidenceAdded,
-                lease.holder.clone(),
-                GraphLogicalTime::new(110),
-                [EvidenceId::new("evidence:signed-terminal")],
-                "summary:signed-terminal",
-            )
-            .unwrap(),
-            21,
-        );
-        wrong_kind.completion.kind = TaskCompletionKind::EdgeChallenged;
-        let wrong_kind_clock = signed_completion_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &wrong_kind,
-            20,
-        );
-        assert!(matches!(
-            store.complete_task(claim.task_generation, wrong_kind_clock, wrong_kind),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidTransition { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let valid = signed_terminal_envelope(
-            &claim.task.request,
-            &lease,
-            TaskCompletion::new(
-                TaskCompletionKind::EvidenceAdded,
-                lease.holder.clone(),
-                GraphLogicalTime::new(110),
-                [EvidenceId::new("evidence:signed-terminal")],
-                "summary:signed-terminal",
-            )
-            .unwrap(),
-            21,
-        );
-        let valid_clock = signed_completion_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &valid,
-            20,
-        );
-        assert_eq!(
-            store
-                .complete_task(claim.task_generation, valid_clock, valid)
-                .unwrap()
-                .task
-                .state,
-            TaskState::Completed
-        );
-        drop(store);
-        let _ = fs::remove_dir_all(path);
-    }
-
-    #[test]
-    fn durable_failure_requires_claimant_signature_and_binds_exact_failure() {
-        let path = temp_dir("signed-terminal-failure");
-        let store = FileHypothesisGraphStore::new(&path, graph(), signer(22)).unwrap();
-        let request = request(23, "signed-failure");
-        let claim = store
-            .claim_task(signed_claim_envelope(
-                request.clone(),
-                GraphLogicalTime::new(100),
-                20,
-                23,
-                22,
-            ))
-            .unwrap();
-        let lease = claim.lease.clone().unwrap();
-        let claimant = signer(23);
-        let capability = TaskCapabilityProof::signed_with(
-            request.task_id.clone(),
-            request.claimant.clone(),
-            request.role,
-            request.kind,
-            request.canonical_digest().unwrap(),
-            &claimant,
-            "task-capability:signed-failure",
-        )
-        .unwrap();
-        let unsigned = TaskFailureEnvelope::new(
-            request.task_id.clone(),
-            request.idempotency_key.clone(),
-            lease.lease_id.clone(),
-            lease.fencing_token,
-            TaskFailure::new(
-                request.claimant.clone(),
-                GraphLogicalTime::new(110),
-                "summary:signed-failure",
-            )
-            .unwrap(),
-            capability,
-        )
-        .unwrap();
-        let before = store.snapshot().unwrap();
-        let unsigned_clock = signed_failure_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &unsigned,
-            22,
-        );
-        assert!(matches!(
-            store.fail_task(claim.task_generation, unsigned_clock, unsigned.clone(),),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-        assert!(matches!(
-            unsigned.signed_with(&signer(24), "task-failure:signed-failure"),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-
-        let mut tampered = signed_failure_envelope(
-            &request,
-            &lease,
-            GraphLogicalTime::new(110),
-            "summary:signed-failure",
-            23,
-        );
-        tampered.failure.summary_digest = "summary:attacker-selected".to_string();
-        let tampered_clock = signed_failure_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &tampered,
-            22,
-        );
-        assert!(matches!(
-            store.fail_task(claim.task_generation, tampered_clock, tampered,),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let valid = signed_failure_envelope(
-            &request,
-            &lease,
-            GraphLogicalTime::new(110),
-            "summary:signed-failure",
-            23,
-        );
-        let valid_clock = signed_failure_clock(
-            claim.task_generation,
-            GraphLogicalTime::new(110),
-            &valid,
-            22,
-        );
-        let failed = store
-            .fail_task(claim.task_generation, valid_clock, valid)
-            .unwrap();
-        assert_eq!(failed.task.state, TaskState::Failed);
-        assert_eq!(
-            failed
-                .task
-                .terminal_history
-                .last()
-                .unwrap()
-                .failure_summary_digest,
-            Some("summary:signed-failure".to_string())
-        );
-        drop(store);
-        let reopened = FileHypothesisGraphStore::open_with_signer(&path, signer(22)).unwrap();
-        assert_eq!(
-            reopened.snapshot().unwrap().state.tasks[&TaskId::new("task:signed-failure")]
-                .task
-                .terminal_history
-                .last()
-                .unwrap()
-                .failure_summary_digest,
-            Some("summary:signed-failure".to_string())
-        );
-        drop(reopened);
-        let _ = fs::remove_dir_all(path);
-    }
-
-    #[test]
     fn stale_generation_cas_never_mutates_state() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(8)).unwrap();
         let before = store.snapshot().unwrap();
         let mut changed = before.state.clone();
-        changed
-            .graph
-            .admit_node(GraphNode::Actor(
-                ActorNode::new("actor:cas", "CAS actor").unwrap(),
-            ))
-            .unwrap();
-        let committed = store
-            .compare_and_swap(signed_graph_cas_envelope(
-                before.revision.clone(),
-                changed,
-                8,
-            ))
-            .unwrap();
-        let stale = store.compare_and_swap(signed_graph_cas_envelope(
-            before.revision.clone(),
-            before.state,
-            8,
-        ));
+        changed.graph.version = changed.graph.version.saturating_add(1);
+        let committed = store.compare_and_swap(&before.revision, changed).unwrap();
+        let stale = store.compare_and_swap(&before.revision, before.state);
         assert!(matches!(
             stale,
             Err(GraphStoreError::StalePredecessor { .. })
@@ -9075,452 +12463,47 @@ mod tests {
     }
 
     #[test]
-    fn cas_rejects_store_owned_counter_changes_without_mutation() {
-        fn assert_rejected(store: &dyn HypothesisGraphStore, authority_byte: u8) {
-            store
-                .claim_task(signed_claim_envelope(
-                    request(1, "cas-counters"),
-                    GraphLogicalTime::new(100),
-                    20,
-                    1,
-                    authority_byte,
-                ))
-                .unwrap();
-            let before = store.snapshot().unwrap();
-
-            for fencing_counter in [before.state.fencing_counter.saturating_sub(1), u64::MAX] {
-                let mut candidate = before.state.clone();
-                candidate.graph.version = candidate.graph.version.saturating_add(1);
-                candidate.fencing_counter = fencing_counter;
-                assert!(matches!(
-                    store.compare_and_swap(signed_graph_cas_envelope(
-                        before.revision.clone(),
-                        candidate,
-                        authority_byte,
-                    )),
-                    Err(GraphStoreError::InvalidState { reason })
-                        if reason.contains("store-owned fencing counter")
-                ));
-                assert_eq!(store.snapshot().unwrap(), before);
-            }
-
-            let mut future_clock = before.state.clone();
-            future_clock.graph.version = future_clock.graph.version.saturating_add(1);
-            future_clock.logical_time_high_water = GraphLogicalTime::new(1_000_000);
-            assert!(matches!(
-                store.compare_and_swap(signed_graph_cas_envelope(
-                    before.revision.clone(),
-                    future_clock,
-                    authority_byte,
-                )),
-                Err(GraphStoreError::InvalidState { reason })
-                    if reason.contains("store-owned logical time high-water")
-            ));
-            assert_eq!(store.snapshot().unwrap(), before);
-        }
-
+    fn cas_rejects_fencing_counter_regression_without_mutation() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(18)).unwrap();
-        assert_rejected(&store, 18);
-
-        let path = temp_dir("cas-store-owned-counters");
-        let file = FileHypothesisGraphStore::new(&path, graph(), signer(19)).unwrap();
-        assert_rejected(&file, 19);
-        drop(file);
-        let _ = fs::remove_dir_all(path);
-    }
-
-    #[test]
-    fn generic_cas_still_updates_graph_without_changing_store_owned_counters() {
-        let store = MemoryHypothesisGraphStore::new(graph(), signer(20)).unwrap();
         store
-            .claim_task(signed_claim_envelope(
-                request(1, "cas-graph-only"),
-                GraphLogicalTime::new(100),
-                20,
-                1,
-                20,
-            ))
+            .claim_task(request(1, "cas-fence"), GraphLogicalTime::new(100), 20)
             .unwrap();
         let before = store.snapshot().unwrap();
         let mut candidate = before.state.clone();
-        candidate
-            .graph
-            .admit_node(GraphNode::Actor(
-                ActorNode::new("actor:graph-only", "Graph only actor").unwrap(),
-            ))
-            .unwrap();
-        let committed = store
-            .compare_and_swap(signed_graph_cas_envelope(
-                before.revision.clone(),
-                candidate,
-                20,
-            ))
-            .unwrap();
-        assert_eq!(
-            committed.state.fencing_counter,
-            before.state.fencing_counter
-        );
-        assert_eq!(
-            committed.state.logical_time_high_water,
-            before.state.logical_time_high_water
-        );
-        assert_eq!(
-            committed.state.graph.version,
-            before.state.graph.version.saturating_add(1)
-        );
-    }
-
-    #[test]
-    fn graph_cas_requires_authority_and_rejects_deletion_and_version_injection() {
-        fn assert_rejected(store: &dyn HypothesisGraphStore, authority_byte: u8) {
-            let baseline = store.snapshot().unwrap();
-            let mut addition = baseline.state.clone();
-            addition
-                .graph
-                .admit_node(GraphNode::Actor(
-                    ActorNode::new("actor:cas-guard", "CAS guard actor").unwrap(),
-                ))
-                .unwrap();
-
-            let unsigned =
-                GraphCasEnvelope::new(baseline.revision.clone(), addition.clone()).unwrap();
-            assert!(matches!(
-                store.compare_and_swap(unsigned),
-                Err(GraphStoreError::Admission(
-                    swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-                ))
-            ));
-            assert_eq!(store.snapshot().unwrap(), baseline);
-
-            assert!(matches!(
-                store.compare_and_swap(signed_graph_cas_envelope(
-                    baseline.revision.clone(),
-                    addition.clone(),
-                    authority_byte.saturating_add(1),
-                )),
-                Err(GraphStoreError::Admission(
-                    swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-                ))
-            ));
-            assert_eq!(store.snapshot().unwrap(), baseline);
-
-            let appended = store
-                .compare_and_swap(signed_graph_cas_envelope(
-                    baseline.revision,
-                    addition,
-                    authority_byte,
-                ))
-                .unwrap();
-            assert_eq!(appended.state.graph.nodes.len(), 1);
-
-            let mut deletion = appended.state.clone();
-            deletion.graph = graph();
-            assert!(matches!(
-                store.compare_and_swap(signed_graph_cas_envelope(
-                    appended.revision.clone(),
-                    deletion,
-                    authority_byte,
-                )),
-                Err(GraphStoreError::InvalidState { reason })
-                    if reason.contains("cannot delete or rewrite existing nodes")
-            ));
-            assert_eq!(store.snapshot().unwrap(), appended);
-
-            let mut exhausted = appended.state.clone();
-            exhausted.graph.version = u64::MAX;
-            assert!(matches!(
-                store.compare_and_swap(signed_graph_cas_envelope(
-                    appended.revision.clone(),
-                    exhausted,
-                    authority_byte,
-                )),
-                Err(GraphStoreError::InvalidState { reason })
-                    if reason.contains("version must advance exactly once")
-            ));
-            assert_eq!(store.snapshot().unwrap(), appended);
-        }
-
-        let memory = MemoryHypothesisGraphStore::new(graph(), signer(45)).unwrap();
-        assert_rejected(&memory, 45);
-
-        let path = temp_dir("graph-cas-guard");
-        let file = FileHypothesisGraphStore::new(&path, graph(), signer(46)).unwrap();
-        assert_rejected(&file, 46);
-        drop(file);
-        let _ = fs::remove_dir_all(path);
+        candidate.graph.version = candidate.graph.version.saturating_add(1);
+        candidate.fencing_counter = before.state.fencing_counter.saturating_sub(1);
+        assert!(matches!(
+            store.compare_and_swap(&before.revision, candidate),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("fencing counter regressed")
+        ));
+        assert_eq!(store.snapshot().unwrap(), before);
     }
 
     #[test]
     fn renewal_rejects_backdated_logical_time_without_mutation() {
         let store = MemoryHypothesisGraphStore::new(graph(), signer(19)).unwrap();
         let claim = store
-            .claim_task(signed_claim_envelope(
+            .claim_task(
                 request(1, "renew-backdated"),
                 GraphLogicalTime::new(100),
                 20,
-                1,
-                19,
-            ))
+            )
             .unwrap();
         let lease = claim.lease.unwrap();
         let before = store.snapshot().unwrap();
         assert!(matches!(
-            store.renew_task(signed_renewal_envelope(
-                &claim.task.request,
-                &lease,
+            store.renew_task(
+                "task:renew-backdated",
                 claim.task_generation,
+                &lease.lease_id,
+                lease.fencing_token,
                 GraphLogicalTime::new(99),
                 20,
-                1,
-                19,
-            )),
+            ),
             Err(GraphStoreError::InvalidTransition { .. })
         ));
         assert_eq!(store.snapshot().unwrap(), before);
-    }
-
-    #[test]
-    fn durable_renewal_requires_claimant_and_scheduler_authority_and_binds_clock() {
-        let store = MemoryHypothesisGraphStore::new(graph(), signer(30)).unwrap();
-        let claim = store
-            .claim_task(signed_claim_envelope(
-                request(31, "signed-renewal"),
-                GraphLogicalTime::new(100),
-                20,
-                31,
-                30,
-            ))
-            .unwrap();
-        let lease = claim.lease.clone().unwrap();
-        let signed = signed_renewal_envelope(
-            &claim.task.request,
-            &lease,
-            claim.task_generation,
-            GraphLogicalTime::new(105),
-            20,
-            31,
-            30,
-        );
-        let before = store.snapshot().unwrap();
-
-        let mut claimant_only = signed.clone();
-        claimant_only.authority_witness = None;
-        assert!(matches!(
-            store.renew_task(claimant_only.clone()),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let foreign_authority = claimant_only
-            .authorized_by(&signer(32), "task-renewal-authority:signed-renewal")
-            .unwrap();
-        assert!(matches!(
-            store.renew_task(foreign_authority),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut unsigned = signed.clone();
-        unsigned.renewal_witness = None;
-        assert!(matches!(
-            store.renew_task(unsigned),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut poisoned_clock = signed.clone();
-        poisoned_clock.renewed_at = GraphLogicalTime::new(119);
-        assert!(matches!(
-            store.renew_task(poisoned_clock),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut tampered = signed.clone();
-        tampered.duration_ms = 21;
-        assert!(matches!(
-            store.renew_task(tampered),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut foreign = signed.clone();
-        foreign.renewal_witness = None;
-        assert!(matches!(
-            foreign.signed_with(&signer(32), "task-renewal:signed-renewal"),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let renewed = store.renew_task(signed).unwrap();
-        assert_eq!(renewed.task.state, TaskState::Claimed);
-        assert_eq!(
-            renewed.lease.unwrap().expires_at,
-            GraphLogicalTime::new(125)
-        );
-    }
-
-    #[test]
-    fn durable_expiry_requires_configured_authority_and_binds_observed_time() {
-        let store = MemoryHypothesisGraphStore::new(graph(), signer(33)).unwrap();
-        let claim = store
-            .claim_task(signed_claim_envelope(
-                request(34, "signed-expiry"),
-                GraphLogicalTime::new(100),
-                20,
-                34,
-                33,
-            ))
-            .unwrap();
-        let lease = claim.lease.clone().unwrap();
-        let signed = signed_expiry_envelope(
-            &claim.task.request,
-            &lease,
-            claim.task_generation,
-            GraphLogicalTime::new(120),
-            33,
-        );
-        let before = store.snapshot().unwrap();
-
-        let mut unsigned = signed.clone();
-        unsigned.expiry_witness = None;
-        assert!(matches!(
-            store.expire_task(unsigned),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let foreign = signed_expiry_envelope(
-            &claim.task.request,
-            &lease,
-            claim.task_generation,
-            GraphLogicalTime::new(120),
-            35,
-        );
-        assert!(matches!(
-            store.expire_task(foreign),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut tampered = signed.clone();
-        tampered.observed_at = GraphLogicalTime::new(121);
-        assert!(matches!(
-            store.expire_task(tampered),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let expired = store.expire_task(signed).unwrap();
-        assert_eq!(expired.task.state, TaskState::Expired);
-        assert!(
-            store.snapshot().unwrap().state.logical_time_high_water >= GraphLogicalTime::new(120)
-        );
-    }
-
-    #[test]
-    fn durable_reclaim_requires_claimant_and_configured_authority_signatures() {
-        let store = MemoryHypothesisGraphStore::new(graph(), signer(36)).unwrap();
-        let claim = store
-            .claim_task(signed_claim_envelope(
-                request(37, "signed-reclaim"),
-                GraphLogicalTime::new(100),
-                20,
-                37,
-                36,
-            ))
-            .unwrap();
-        let lease = claim.lease.clone().unwrap();
-        let expired = store
-            .expire_task(signed_expiry_envelope(
-                &claim.task.request,
-                &lease,
-                claim.task_generation,
-                GraphLogicalTime::new(120),
-                36,
-            ))
-            .unwrap();
-        let replacement = request_at(38, "signed-reclaim", GraphLogicalTime::new(121));
-        let claimant_only = reclaim_envelope(
-            &claim.task.request,
-            expired.task_generation,
-            replacement.clone(),
-            GraphLogicalTime::new(121),
-            20,
-            38,
-        );
-        let signed = signed_reclaim_envelope(
-            &claim.task.request,
-            expired.task_generation,
-            replacement,
-            GraphLogicalTime::new(121),
-            20,
-            38,
-            36,
-        );
-        let before = store.snapshot().unwrap();
-
-        assert!(matches!(
-            store.reclaim_task(claimant_only),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let foreign = signed_reclaim_envelope(
-            &claim.task.request,
-            expired.task_generation,
-            request_at(38, "signed-reclaim", GraphLogicalTime::new(121)),
-            GraphLogicalTime::new(121),
-            20,
-            38,
-            39,
-        );
-        assert!(matches!(
-            store.reclaim_task(foreign),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let mut tampered = signed.clone();
-        tampered.duration_ms = 21;
-        assert!(matches!(
-            store.reclaim_task(tampered),
-            Err(GraphStoreError::Admission(
-                swarm_core::hypothesis_graph::GraphAdmissionError::InvalidWitness { .. }
-            ))
-        ));
-        assert_eq!(store.snapshot().unwrap(), before);
-
-        let reclaimed = store.reclaim_task(signed).unwrap();
-        let claimant = AgentId::from_public_key_hex(&signer(38).public_key().to_hex());
-        assert_eq!(reclaimed.task.state, TaskState::Claimed);
-        assert_eq!(reclaimed.task.request.claimant, claimant);
-        assert_eq!(
-            reclaimed.lease.unwrap().holder,
-            reclaimed.task.request.claimant
-        );
     }
 
     #[test]
@@ -9561,13 +12544,7 @@ mod tests {
         let external_anchor_path = store.monotonic_anchor.path().to_path_buf();
         let old_external_anchor = fs::read(&external_anchor_path).unwrap();
 
-        store
-            .create_task(signed_creation_envelope(
-                request(1, "full-root-rollback"),
-                1,
-                25,
-            ))
-            .unwrap();
+        store.create_task(request(1, "full-root-rollback")).unwrap();
         let current_external_anchor = fs::read(&external_anchor_path).unwrap();
         assert_ne!(current_external_anchor, old_external_anchor);
         drop(store);
@@ -9593,22 +12570,10 @@ mod tests {
         let request = request(1, "file");
         let memory = MemoryHypothesisGraphStore::new(graph(), key.clone()).unwrap();
         let file_claim = first
-            .claim_task(signed_claim_envelope(
-                request.clone(),
-                GraphLogicalTime::new(100),
-                20,
-                1,
-                9,
-            ))
+            .claim_task(request.clone(), GraphLogicalTime::new(100), 20)
             .unwrap();
         let memory_claim = memory
-            .claim_task(signed_claim_envelope(
-                request,
-                GraphLogicalTime::new(100),
-                20,
-                1,
-                9,
-            ))
+            .claim_task(request, GraphLogicalTime::new(100), 20)
             .unwrap();
         assert_eq!(
             first.snapshot().unwrap().canonical_bytes().unwrap(),
@@ -9640,40 +12605,32 @@ mod tests {
         );
 
         let claimed_memory = memory
-            .claim_task(signed_claim_envelope(
-                request(1, "vector"),
-                GraphLogicalTime::new(100),
-                20,
-                1,
-                11,
-            ))
+            .claim_task(request(1, "vector"), GraphLogicalTime::new(100), 20)
             .unwrap();
         let claimed_file = file
-            .claim_task(signed_claim_envelope(
-                request(1, "vector"),
-                GraphLogicalTime::new(100),
-                20,
-                1,
-                11,
-            ))
+            .claim_task(request(1, "vector"), GraphLogicalTime::new(100), 20)
             .unwrap();
         assert_eq!(claimed_memory.task, claimed_file.task);
         let lease = claimed_memory.lease.clone().unwrap();
-        let renewal = signed_renewal_envelope(
-            &claimed_memory.task.request,
-            &lease,
-            claimed_memory.task_generation,
-            GraphLogicalTime::new(105),
-            20,
-            1,
-            11,
-        );
-        let renewed_memory = memory.renew_task(renewal.clone()).unwrap();
+        let renewed_memory = memory
+            .renew_task(
+                "task:vector",
+                claimed_memory.task_generation,
+                &lease.lease_id,
+                lease.fencing_token,
+                GraphLogicalTime::new(105),
+                20,
+            )
+            .unwrap();
         let renewed_file = file
-            .renew_task(TaskRenewalEnvelope {
-                expected_generation: claimed_file.task_generation,
-                ..renewal
-            })
+            .renew_task(
+                "task:vector",
+                claimed_file.task_generation,
+                &lease.lease_id,
+                lease.fencing_token,
+                GraphLogicalTime::new(105),
+                20,
+            )
             .unwrap();
         assert_eq!(renewed_memory.task, renewed_file.task);
         let completion = TaskCompletion::new(
@@ -9685,29 +12642,25 @@ mod tests {
         )
         .unwrap();
         let renewed_lease = renewed_memory.lease.clone().unwrap();
-        let envelope =
-            signed_terminal_envelope(&renewed_memory.task.request, &renewed_lease, completion, 1);
-        let memory_clock = signed_completion_clock(
-            renewed_memory.task_generation,
-            GraphLogicalTime::new(110),
-            &envelope,
-            11,
-        );
-        let file_clock = signed_completion_clock(
-            renewed_file.task_generation,
-            GraphLogicalTime::new(110),
-            &envelope,
-            11,
-        );
         let done_memory = memory
             .complete_task(
+                "task:vector",
                 renewed_memory.task_generation,
-                memory_clock,
-                envelope.clone(),
+                &renewed_lease.lease_id,
+                renewed_lease.fencing_token,
+                GraphLogicalTime::new(110),
+                completion.clone(),
             )
             .unwrap();
         let done_file = file
-            .complete_task(renewed_file.task_generation, file_clock, envelope)
+            .complete_task(
+                "task:vector",
+                renewed_file.task_generation,
+                &renewed_lease.lease_id,
+                renewed_lease.fencing_token,
+                GraphLogicalTime::new(110),
+                completion,
+            )
             .unwrap();
         assert_eq!(done_memory.task, done_file.task);
         assert_eq!(
@@ -9746,13 +12699,7 @@ mod tests {
         }
         let reopened = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
         reopened
-            .claim_task(signed_claim_envelope(
-                request(1, "anchor"),
-                GraphLogicalTime::new(100),
-                20,
-                1,
-                12,
-            ))
+            .claim_task(request(1, "anchor"), GraphLogicalTime::new(100), 20)
             .unwrap();
         fs::write(&state_path, initial_state).unwrap();
         drop(reopened);
@@ -9852,11 +12799,7 @@ mod tests {
             Err(GraphStoreError::LockContended { .. })
         ));
         assert!(matches!(
-            store.create_task(signed_creation_envelope(
-                request(1, "lock-replacement"),
-                1,
-                18,
-            )),
+            store.create_task(request(1, "lock-replacement")),
             Err(GraphStoreError::LockBinding { .. })
         ));
         drop(store);
@@ -9968,12 +12911,7 @@ mod tests {
             let file_store = FileHypothesisGraphStore::new(&path, graph(), key).unwrap();
             let baseline = memory_store.snapshot().unwrap();
             let mut candidate_input = baseline.state.clone();
-            candidate_input
-                .graph
-                .admit_node(GraphNode::Actor(
-                    ActorNode::new("actor:oversized", "Oversized envelope actor").unwrap(),
-                ))
-                .unwrap();
+            candidate_input.graph.version = candidate_input.graph.version.saturating_add(1);
             let mut candidate_state = candidate_input.clone();
             candidate_state.generation = baseline.state.generation.checked_add(1).unwrap();
             candidate_state.predecessor_digest = Some(baseline.revision.digest.clone());
@@ -10000,16 +12938,9 @@ mod tests {
                 .collect::<BTreeMap<_, _>>();
             let limit = candidate_bytes.len().checked_sub(1).unwrap() + offset;
             let limit_guard = install_test_persisted_json_limit(limit);
-            let memory_result = memory_store.compare_and_swap(signed_graph_cas_envelope(
-                baseline.revision.clone(),
-                candidate_input.clone(),
-                54,
-            ));
-            let file_result = file_store.compare_and_swap(signed_graph_cas_envelope(
-                baseline.revision.clone(),
-                candidate_input,
-                54,
-            ));
+            let memory_result =
+                memory_store.compare_and_swap(&baseline.revision, candidate_input.clone());
+            let file_result = file_store.compare_and_swap(&baseline.revision, candidate_input);
             if should_reject {
                 let memory_error = match memory_result {
                     Err(GraphStoreError::ResourceLimit { resource, limit }) => (resource, limit),
@@ -10099,11 +13030,7 @@ mod tests {
         let writer = Arc::clone(&store);
         let (result_tx, result_rx) = mpsc::channel();
         let join = std::thread::spawn(move || {
-            let result = writer.create_task(signed_creation_envelope(
-                request(1, "namespace-barrier"),
-                1,
-                21,
-            ));
+            let result = writer.create_task(request(1, "namespace-barrier"));
             let _ = result_tx.send(result);
         });
         let ready = ready_rx.recv_timeout(Duration::from_secs(5));
@@ -10177,11 +13104,7 @@ mod tests {
             let store = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
             install_test_commit_failure(path.clone(), boundary);
             assert!(matches!(
-                store.create_task(signed_creation_envelope(
-                    request(32, &format!("txn-{index}")),
-                    32,
-                    31,
-                )),
+                store.create_task(request(32, &format!("txn-{index}"))),
                 Err(GraphStoreError::Write { .. })
             ));
             drop(store);
@@ -10242,13 +13165,7 @@ mod tests {
         let old_high_water_tail = fs::read(&high_water_tail_path).unwrap();
         let external_path = store.monotonic_anchor.path().to_path_buf();
         let old_external = fs::read(&external_path).unwrap();
-        store
-            .create_task(signed_creation_envelope(
-                request(34, "external-prefix"),
-                34,
-                33,
-            ))
-            .unwrap();
+        store.create_task(request(34, "external-prefix")).unwrap();
         drop(store);
         fs::write(&state_path, old_state).unwrap();
         fs::write(&anchor_path, old_anchor).unwrap();
@@ -10371,11 +13288,7 @@ mod tests {
             let store = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
             install_test_commit_failure(path.clone(), CommitFailureBoundary::State);
             assert!(matches!(
-                store.create_task(signed_creation_envelope(
-                    request(56, &format!("rollback-{index}")),
-                    56,
-                    55,
-                )),
+                store.create_task(request(56, &format!("rollback-{index}"))),
                 Err(GraphStoreError::Write { .. })
             ));
             drop(store);
@@ -10437,22 +13350,13 @@ mod tests {
         install_test_persistence_barrier(store.state_path().to_path_buf(), ready_tx, release_rx);
         let mut guard = PersistenceBarrierGuard::new(store.state_path().to_path_buf(), release_tx);
         let first_store = Arc::clone(&store);
-        let first_thread = std::thread::spawn(move || {
-            first_store.create_task(signed_creation_envelope(
-                request(60, "same-handle-first"),
-                60,
-                59,
-            ))
-        });
+        let first_thread =
+            std::thread::spawn(move || first_store.create_task(request(60, "same-handle-first")));
         ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let second_store = Arc::clone(&store);
         let (second_tx, second_rx) = mpsc::channel();
         let second_thread = std::thread::spawn(move || {
-            let result = second_store.create_task(signed_creation_envelope(
-                request(61, "same-handle-second"),
-                61,
-                59,
-            ));
+            let result = second_store.create_task(request(61, "same-handle-second"));
             let _ = second_tx.send(result);
         });
         assert!(second_rx.recv_timeout(Duration::from_millis(100)).is_err());
@@ -10481,13 +13385,8 @@ mod tests {
         let mut guard =
             PersistenceBarrierGuard::new_pre_rename(store.state_path().to_path_buf(), release_tx);
         let writer = Arc::clone(&store);
-        let writer_thread = std::thread::spawn(move || {
-            writer.create_task(signed_creation_envelope(
-                request(63, "displaced-root"),
-                63,
-                62,
-            ))
-        });
+        let writer_thread =
+            std::thread::spawn(move || writer.create_task(request(63, "displaced-root")));
         ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         fs::rename(&path, &displaced).unwrap();
         guard.release();
@@ -10509,13 +13408,7 @@ mod tests {
         let path = temp_dir("external-rotation-count");
         let key = signer(64);
         let store = FileHypothesisGraphStore::new(&path, graph(), key.clone()).unwrap();
-        store
-            .create_task(signed_creation_envelope(
-                request(65, "before-rotation"),
-                65,
-                64,
-            ))
-            .unwrap();
+        store.create_task(request(65, "before-rotation")).unwrap();
         let external_lock = store.monotonic_anchor.acquire_lock().unwrap();
         let records = store
             .monotonic_anchor
@@ -10537,13 +13430,7 @@ mod tests {
                 .unwrap()
         );
         drop(external_lock);
-        store
-            .create_task(signed_creation_envelope(
-                request(66, "after-rotation"),
-                66,
-                64,
-            ))
-            .unwrap();
+        store.create_task(request(66, "after-rotation")).unwrap();
         drop(store);
         let reopened = FileHypothesisGraphStore::open_with_signer(&path, key).unwrap();
         assert_eq!(reopened.snapshot().unwrap().revision.generation, 2);
@@ -10557,5 +13444,517 @@ mod tests {
         );
         drop(reopened);
         let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn direct_cas_rejects_uncoordinated_hypothesis_insertion() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(140),
+            budget_policy(),
+        )
+        .unwrap();
+        let migrated = migrate_with_budget(
+            &store,
+            budget_at(GraphLogicalTime::new(1), 0, 0),
+            GraphLogicalTime::new(1),
+        );
+        let before_bytes = migrated.canonical_bytes().unwrap();
+        let hypothesis_id = HypothesisId::new("hypothesis:uncoordinated");
+        let mut candidate = migrated.state.clone();
+        candidate.hypotheses.insert(
+            hypothesis_id.clone(),
+            Hypothesis::new(
+                hypothesis_id,
+                ConfidenceDistribution::uniform_two(),
+                [UncertaintyReason::InsufficientEvidence],
+                [],
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, candidate),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("coordinator seed/task lineage")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
+    }
+
+    #[test]
+    fn direct_cas_rejects_initial_decision_history_even_with_task_lineage() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(145),
+            budget_policy(),
+        )
+        .unwrap();
+        let tick = GraphLogicalTime::new(1);
+        let migrated = migrate_with_budget(&store, budget_at(tick, 0, 0), tick);
+        let before_bytes = migrated.canonical_bytes().unwrap();
+        let hypothesis_id = HypothesisId::new("hypothesis:forged-history");
+        let decision_key = signer(146);
+        let producer = AgentId::from_public_key_hex(&decision_key.public_key().to_hex());
+        let decision = swarm_core::hypothesis_graph::DecisionRecord::new(
+            swarm_core::hypothesis_graph::DecisionKind::Support,
+            hypothesis_id.clone(),
+            [],
+            GraphProducerRole::Hunter,
+            producer.clone(),
+            tick,
+            "caller-crafted initial decision",
+        )
+        .unwrap()
+        .signed_with(&decision_key, "hypothesis-coordinator")
+        .unwrap();
+        let hypothesis = Hypothesis::new(
+            hypothesis_id.clone(),
+            ConfidenceDistribution::uniform_two(),
+            [UncertaintyReason::InsufficientEvidence],
+            [],
+        )
+        .unwrap()
+        .append_decision(decision)
+        .unwrap();
+        let target = TaskTarget::Hypothesis {
+            hypothesis_id: hypothesis_id.clone(),
+        };
+        let descriptor = LogicalTaskDescriptor::new(
+            migrated.state().graph_id.clone(),
+            target.clone(),
+            TaskKind::FalsifyHypothesis,
+            "46".repeat(32),
+        )
+        .unwrap();
+        let request = TaskClaimRequest::new(
+            descriptor.task_id.clone(),
+            TaskKind::FalsifyHypothesis,
+            target,
+            GraphProducerRole::Falsifier,
+            producer,
+            EvidenceScope::new(
+                [EvidenceSourceFamily::Process],
+                [EvidenceId::new("evidence:forged-history-scope")],
+                [],
+            )
+            .unwrap(),
+            tick,
+        )
+        .unwrap();
+        let durable = DurableTaskRecord {
+            schema_version: GRAPH_STORE_SCHEMA_VERSION,
+            task: TaskRecord {
+                schema_version: HYPOTHESIS_GRAPH_SCHEMA_VERSION,
+                request,
+                state: TaskState::Pending,
+                generation: 1,
+                attempts: 1,
+                lease: None,
+                completion: None,
+                terminal_history: Vec::new(),
+            },
+            generation: 1,
+            history: Vec::new(),
+        };
+        let mut candidate = migrated.state.clone();
+        candidate.hypotheses.insert(hypothesis_id, hypothesis);
+        candidate.task_tombstones.insert(
+            descriptor.task_id.clone(),
+            TaskMonotonicity::from_record(&durable).unwrap(),
+        );
+        candidate.tasks.insert(descriptor.task_id.clone(), durable);
+        candidate
+            .logical_task_descriptors
+            .insert(descriptor.task_id.clone(), descriptor);
+        candidate.scheduler_budget = Some(budget_at(tick, 1, 0));
+
+        assert!(matches!(
+            store.compare_and_swap(&migrated.revision, candidate.clone()),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("authenticated coordinator seed/task lineage")
+        ));
+        let unrelated = AgentId::from_public_key_hex(&signer(149).public_key().to_hex());
+        assert!(matches!(
+            store.compare_and_swap_coordinator_seed(
+                &migrated.revision,
+                candidate.clone(),
+                &unrelated,
+            ),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("authenticated coordinator seed/task lineage")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
+
+        let coordinator_identity =
+            AgentId::from_public_key_hex(&decision_key.public_key().to_hex());
+        let admitted = store
+            .compare_and_swap_coordinator_seed(&migrated.revision, candidate, &coordinator_identity)
+            .unwrap();
+        let mut raised_state = admitted.state.clone();
+        raised_state.logical_time_high_water = GraphLogicalTime::new(100);
+        let raised = store
+            .compare_and_swap(&admitted.revision, raised_state)
+            .unwrap();
+        let backdated = swarm_core::hypothesis_graph::DecisionRecord::new(
+            swarm_core::hypothesis_graph::DecisionKind::Support,
+            HypothesisId::new("hypothesis:forged-history"),
+            [],
+            GraphProducerRole::Hunter,
+            coordinator_identity,
+            GraphLogicalTime::new(50),
+            "valid signature below the predecessor high-water",
+        )
+        .unwrap()
+        .signed_with(&decision_key, "generic-cas")
+        .unwrap();
+        let mut backdated_candidate = raised.state.clone();
+        let updated = backdated_candidate.hypotheses
+            [&HypothesisId::new("hypothesis:forged-history")]
+            .clone()
+            .append_decision(backdated)
+            .unwrap();
+        backdated_candidate
+            .hypotheses
+            .insert(updated.hypothesis_id.clone(), updated);
+        let raised_bytes = raised.canonical_bytes().unwrap();
+        assert!(matches!(
+            store.compare_and_swap(&raised.revision, backdated_candidate),
+            Err(GraphStoreError::InvalidState { reason })
+                if reason.contains("predecessor logical-time high-water")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            raised_bytes
+        );
+    }
+
+    #[test]
+    fn pending_reasoning_task_binds_the_first_eligible_claimant() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(141),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, original_request) = logical_request(142, "pending-worker-rebind");
+        let migrated = migrate_legacy_pending_with_budget(
+            &store,
+            descriptor,
+            original_request.clone(),
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+        );
+        let claimant_key = signer(143);
+        let claimant = AgentId::from_public_key_hex(&claimant_key.public_key().to_hex());
+        let rebound = TaskClaimRequest::new(
+            original_request.task_id.clone(),
+            original_request.kind,
+            original_request.target.clone(),
+            original_request.role,
+            claimant.clone(),
+            original_request.evidence_scope.clone(),
+            GraphLogicalTime::new(105),
+        )
+        .unwrap();
+        let claimed = store
+            .claim_task_cas_with_budget(
+                &migrated.revision,
+                rebound,
+                GraphLogicalTime::new(105),
+                10,
+                budget_at(GraphLogicalTime::new(105), 0, 1),
+            )
+            .unwrap();
+        assert_eq!(claimed.task.request.claimant, claimant);
+        assert_eq!(
+            claimed.task.request.requested_at,
+            GraphLogicalTime::new(105)
+        );
+        assert_eq!(claimed.task.lease.as_ref().unwrap().holder, claimant);
+
+        let before_steal = store.snapshot().unwrap();
+        let third_key = signer(144);
+        let third_claimant = AgentId::from_public_key_hex(&third_key.public_key().to_hex());
+        let steal = TaskClaimRequest::new(
+            original_request.task_id,
+            original_request.kind,
+            original_request.target,
+            original_request.role,
+            third_claimant,
+            original_request.evidence_scope,
+            GraphLogicalTime::new(106),
+        )
+        .unwrap();
+        assert!(matches!(
+            store.claim_task_cas_with_budget(
+                &before_steal.revision,
+                steal,
+                GraphLogicalTime::new(106),
+                10,
+                before_steal.scheduler_budget().unwrap().clone(),
+            ),
+            Err(GraphStoreError::AlreadyClaimed { .. })
+        ));
+        assert_eq!(store.snapshot().unwrap(), before_steal);
+    }
+
+    #[test]
+    fn reasoning_claim_rejects_time_below_durable_high_water_without_mutation() {
+        let store = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(147),
+            budget_policy(),
+        )
+        .unwrap();
+        let (descriptor, request) = logical_request(148, "retrograde-claim");
+        let high_water = GraphLogicalTime::new(100);
+        let migrated = migrate_legacy_pending_with_budget(
+            &store,
+            descriptor,
+            request.clone(),
+            budget_at(high_water, 0, 0),
+        );
+        let before_bytes = migrated.canonical_bytes().unwrap();
+
+        assert!(matches!(
+            store.claim_task_cas_with_budget(
+                &migrated.revision,
+                request,
+                GraphLogicalTime::new(99),
+                10,
+                budget_at(high_water, 0, 1),
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("claim logical time regressed")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            before_bytes
+        );
+    }
+
+    fn prepare_reasoning_failure(
+        store: &dyn HypothesisGraphStore,
+        claimant_seed: u8,
+    ) -> (TaskClaimResult, TaskFailureOutboxEntry) {
+        let (descriptor, request) = logical_request(claimant_seed, "atomic-reasoning-failure");
+        let claimant_key = signer(claimant_seed);
+        let migrated = migrate_legacy_pending_with_budget(
+            store,
+            descriptor.clone(),
+            request.clone(),
+            budget_at(GraphLogicalTime::new(100), 0, 0),
+        );
+        let claimed = store
+            .claim_task_cas_with_budget(
+                &migrated.revision,
+                request.clone(),
+                GraphLogicalTime::new(100),
+                10,
+                budget_at(GraphLogicalTime::new(100), 0, 1),
+            )
+            .unwrap();
+        let capability = TaskCapabilityProof::new(
+            request.task_id.clone(),
+            request.claimant.clone(),
+            request.role,
+            request.kind,
+            request.canonical_digest().unwrap(),
+            &claimant_key,
+            "atomic-failure-worker",
+        )
+        .unwrap();
+        let failure = TaskFailure::new(
+            request.claimant,
+            GraphLogicalTime::new(105),
+            "digest:atomic-reasoning-failure",
+        )
+        .unwrap();
+        let publication = TaskFailureOutboxEntry::new(
+            &claimed.task,
+            &descriptor,
+            failure,
+            capability,
+            &claimant_key,
+            "atomic-failure-worker",
+        )
+        .unwrap();
+        (claimed, publication)
+    }
+
+    fn assert_reasoning_failure_is_atomic(
+        store: &dyn HypothesisGraphStore,
+        claimant_seed: u8,
+    ) -> GraphStoreSnapshot {
+        let (claimed, publication) = prepare_reasoning_failure(store, claimant_seed);
+        let task_id = publication.task_id.clone();
+        let failed = store
+            .fail_reasoning_task_cas(
+                &claimed.revision,
+                claimed.task_generation,
+                publication.clone(),
+            )
+            .unwrap();
+        assert_eq!(failed.task.state, TaskState::Failed);
+        assert!(failed.task.lease.is_none());
+        assert_eq!(
+            failed
+                .task
+                .terminal_history
+                .last()
+                .unwrap()
+                .failure_summary_digest
+                .as_deref(),
+            Some("digest:atomic-reasoning-failure")
+        );
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(
+            snapshot.task_failure_outbox().get(&task_id),
+            Some(&publication)
+        );
+        assert!(!snapshot.terminal_outbox().contains_key(&task_id));
+        snapshot.state().validate().unwrap();
+        let committed_bytes = snapshot.canonical_bytes().unwrap();
+        for expected in [&claimed.revision, snapshot.revision()] {
+            let replayed = store
+                .fail_reasoning_task_cas(expected, claimed.task_generation, publication.clone())
+                .unwrap();
+            assert!(replayed.idempotent);
+            assert_eq!(replayed.revision, *snapshot.revision());
+            assert_eq!(replayed.task, failed.task);
+        }
+        let mut changed = publication;
+        changed.failure.summary_digest = "digest:changed-reasoning-failure".to_string();
+        assert!(matches!(
+            store.fail_reasoning_task_cas(
+                snapshot.revision(),
+                claimed.task_generation,
+                changed,
+            ),
+            Err(GraphStoreError::InvalidTransition { reason })
+                if reason.contains("differs from the committed task publication")
+        ));
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            committed_bytes
+        );
+        snapshot
+    }
+
+    fn assert_concurrent_reasoning_failure_retry_is_atomic(
+        store: Arc<dyn HypothesisGraphStore>,
+        claimant_seed: u8,
+    ) {
+        let (claimed, publication) = prepare_reasoning_failure(store.as_ref(), claimant_seed);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let mut threads = Vec::new();
+        for _ in 0..2 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            let expected = claimed.revision.clone();
+            let publication = publication.clone();
+            let expected_generation = claimed.task_generation;
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                store.fail_reasoning_task_cas(&expected, expected_generation, publication)
+            }));
+        }
+        barrier.wait();
+        let results = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.idempotent).count(), 1);
+        assert_eq!(
+            results.iter().filter(|result| !result.idempotent).count(),
+            1
+        );
+
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(
+            snapshot.revision.generation,
+            claimed.revision.generation + 1
+        );
+        assert!(
+            results
+                .iter()
+                .all(|result| result.revision == snapshot.revision)
+        );
+        assert_eq!(
+            snapshot.task_failure_outbox().get(&publication.task_id),
+            Some(&publication)
+        );
+        let committed_bytes = snapshot.canonical_bytes().unwrap();
+        assert_eq!(
+            store.snapshot().unwrap().canonical_bytes().unwrap(),
+            committed_bytes
+        );
+    }
+
+    #[test]
+    fn concurrent_reasoning_failure_retries_are_atomic_for_memory_and_file() {
+        let memory: Arc<dyn HypothesisGraphStore> = Arc::new(
+            MemoryHypothesisGraphStore::new_with_scheduler_policy(
+                graph(),
+                signer(151),
+                budget_policy(),
+            )
+            .unwrap(),
+        );
+        assert_concurrent_reasoning_failure_retry_is_atomic(memory, 152);
+
+        let path = temp_dir("concurrent-reasoning-failure-retry");
+        let file: Arc<dyn HypothesisGraphStore> = Arc::new(
+            FileHypothesisGraphStore::new_with_scheduler_policy(
+                &path,
+                graph(),
+                signer(153),
+                budget_policy(),
+            )
+            .unwrap(),
+        );
+        assert_concurrent_reasoning_failure_retry_is_atomic(file, 154);
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn reasoning_failure_outbox_is_atomic_across_memory_and_file_restart() {
+        let memory = MemoryHypothesisGraphStore::new_with_scheduler_policy(
+            graph(),
+            signer(145),
+            budget_policy(),
+        )
+        .unwrap();
+        let memory_after = assert_reasoning_failure_is_atomic(&memory, 146);
+        assert_eq!(memory.snapshot().unwrap(), memory_after);
+
+        let path = temp_dir("atomic-reasoning-failure");
+        let store_key = signer(147);
+        let file = FileHypothesisGraphStore::new_with_scheduler_policy(
+            &path,
+            graph(),
+            store_key.clone(),
+            budget_policy(),
+        )
+        .unwrap();
+        let file_after = assert_reasoning_failure_is_atomic(&file, 148);
+        let expected_bytes = file_after.canonical_bytes().unwrap();
+        drop(file);
+        let reopened = FileHypothesisGraphStore::open_with_signer_and_scheduler_policy(
+            &path,
+            store_key,
+            budget_policy(),
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.snapshot().unwrap().canonical_bytes().unwrap(),
+            expected_bytes
+        );
+        drop(reopened);
+        fs::remove_dir_all(path).unwrap();
     }
 }

@@ -12,6 +12,7 @@ use crate::anti_tamper::AntiTamperReport;
 use crate::bridge_runtime::SharedBridgeHealth;
 use crate::control::CURRENT_OPERATOR_API_SCHEMA_VERSION;
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
 use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
@@ -24,11 +25,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
+use swarm_agents::tom_agent::{GovernanceDecision, GovernancePolicy, GovernancePolicyConfig};
 use swarm_core::BridgeStatusSnapshot;
 use swarm_core::ThreatClass;
 use swarm_core::agent::AgentHealthEntry;
-use swarm_core::agent::{AgentHealth, AgentRole, SwarmMode, SwarmModeState};
+use swarm_core::agent::{
+    AgentHealth, AgentRole, SwarmAgent, SwarmEnvironment, SwarmError, SwarmMode, SwarmModeState,
+};
 use swarm_core::config::{
     AuditConfig, BundleStoreConfig, CanaryConfig, CircuitBreakerConfig, CorrelationConfig,
     DetectionConfig, DetectorProfilesConfig, HttpEdrConfig, InvestigationConfig,
@@ -44,7 +47,7 @@ use swarm_core::types::{
     AgentId, HuntId, ProvidenceIncidentReconciliation, ProvidenceIncidentStatus,
     ProvidenceReconciliationOutcome, ResponseAction, ResponseBlastRadiusImpact,
     ResponseBlastRadiusPreview, ResponseRehearsalPreview, ResponseRehearsalScopeKind,
-    ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity,
+    ResponseRollbackPreview, ResponseRollbackStep, ResponseRollbackStepKind, Severity, SwarmAction,
 };
 use swarm_crypto::Ed25519Signer;
 use swarm_pheromone::PheromoneSubstrate;
@@ -52,6 +55,7 @@ use swarm_response::SwarmFindingEnvelope;
 use swarm_runtime::StrategyProposalRouteError;
 use swarm_runtime::approval::DefaultApprovalHarness;
 use swarm_runtime::config::{CURRENT_SCHEMA_VERSION, write_debug_test_config_signature};
+use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::drafting::{DefaultEvolutionDraftingHarness, EvolutionDraftCreateRequest};
 use swarm_runtime::evasion_coverage::EvasionCoverageSnapshot;
 use swarm_runtime::evolution::DefaultEvolutionProofHarness;
@@ -699,6 +703,420 @@ fn test_ingest_state() -> IngestState {
     IngestState::from_config(temp_path("inline"), test_config("suspicious_process_tree")).unwrap()
 }
 
+struct IngestOneShotGovernedRequestAgent {
+    id: AgentId,
+    verifying_key: ed25519_dalek::VerifyingKey,
+    actions: Option<Vec<SwarmAction>>,
+}
+
+impl IngestOneShotGovernedRequestAgent {
+    fn new(id: AgentId, actions: Vec<SwarmAction>) -> Self {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[79; 32]);
+        Self {
+            id,
+            verifying_key: signing_key.verifying_key(),
+            actions: Some(actions),
+        }
+    }
+}
+
+#[async_trait]
+impl SwarmAgent for IngestOneShotGovernedRequestAgent {
+    fn identity(&self) -> &ed25519_dalek::VerifyingKey {
+        &self.verifying_key
+    }
+
+    fn id(&self) -> &AgentId {
+        &self.id
+    }
+
+    fn role(&self) -> AgentRole {
+        AgentRole::Pouncer
+    }
+
+    async fn tick(&mut self, _env: &SwarmEnvironment) -> Result<Vec<SwarmAction>, SwarmError> {
+        Ok(self.actions.take().unwrap_or_default())
+    }
+
+    fn health(&self) -> AgentHealth {
+        AgentHealth::Healthy
+    }
+}
+
+fn governed_request_action(governance: &GovernancePolicy, suffix: &str) -> (AgentId, SwarmAction) {
+    let pounce_id = AgentId::new("pounce", suffix);
+    let hunt_id = HuntId(format!("hunt-governed-voter-{suffix}"));
+    let action = ResponseAction::BlockEgress {
+        target: format!("203.0.113.{}", suffix.len() + 10),
+    };
+    let mut evidence = json!({
+        "lineage": {
+            "hunt_id": hunt_id.0.clone(),
+            "event_id": format!("event-governed-voter-{suffix}"),
+        },
+        "escalation": {
+            "threat_class": ThreatClass::Execution,
+            "severity": Severity::Critical,
+            "confidence": 0.99,
+        },
+    });
+    let request = swarm_policy::ActionRequest {
+        hunt_id: hunt_id.clone(),
+        requested_by: pounce_id.clone(),
+        action: action.clone(),
+        severity: Severity::Critical,
+        evidence: evidence.clone(),
+    };
+    let GovernanceDecision::Authorize { receipt, .. } = governance.can_act(&request) else {
+        panic!("healthy configured governance must authorize the exact request");
+    };
+    evidence["governance_receipt"] = serde_json::to_value(receipt).unwrap();
+    (
+        pounce_id,
+        SwarmAction::RequestResponse {
+            hunt_id,
+            action,
+            evidence,
+        },
+    )
+}
+
+#[test]
+fn configured_approval_voters_use_effective_approve_principals_in_deterministic_order() {
+    let legacy_signer = Ed25519Signer::from_secret_material("legacy-voter-must-not-widen");
+    let first_signer = Ed25519Signer::from_secret_material("multi-principal-voter-first");
+    let second_signer = Ed25519Signer::from_secret_material("multi-principal-voter-second");
+    let legacy_id = format!("swarm:ed25519:{}", legacy_signer.public_key_hex());
+    let first_id = format!("swarm:ed25519:{}", first_signer.public_key_hex());
+    let second_id = format!("swarm:ed25519:{}", second_signer.public_key_hex());
+
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.operator_id = legacy_id.clone();
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: second_id.clone(),
+            token_env: "SWARM_APPROVAL_SECOND".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: "read-only-principal".to_string(),
+            token_env: "SWARM_APPROVAL_READ_ONLY".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read],
+        },
+        OperatorPrincipalConfig {
+            operator_id: first_id.clone(),
+            token_env: "SWARM_APPROVAL_FIRST".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+    ];
+
+    let mut expected = vec![first_id, second_id];
+    expected.sort();
+    assert_eq!(
+        super::configured_approval_voters(&config).unwrap(),
+        expected
+    );
+    assert!(
+        !super::configured_approval_voters(&config)
+            .unwrap()
+            .contains(&legacy_id)
+    );
+}
+
+#[test]
+fn configured_approval_voters_fail_closed_for_legacy_or_malformed_approvers() {
+    let mut config = test_config("suspicious_process_tree");
+    let legacy_signer = Ed25519Signer::from_secret_material("legacy-auth-id");
+    let malformed_public_key_hex = "02".repeat(32);
+    assert!(swarm_crypto::PublicKey::from_hex(&malformed_public_key_hex).is_err());
+    config.operator.auth.operator_id = format!("swarm:ed25519:{}", legacy_signer.public_key_hex());
+    config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: "operator-legacy-approver".to_string(),
+            token_env: "SWARM_APPROVAL_LEGACY".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: format!("swarm:ed25519:{malformed_public_key_hex}"),
+            token_env: "SWARM_APPROVAL_MALFORMED".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+    ];
+
+    assert!(matches!(
+        super::configured_approval_voters(&config),
+        Err(super::ApprovalVoterConfigError::NoEligibleApprover)
+    ));
+}
+
+#[test]
+fn configured_approval_voters_keep_canonical_legacy_fallback_when_principals_are_empty() {
+    let signer = Ed25519Signer::from_secret_material("canonical-legacy-voter");
+    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.operator_id = voter_id.clone();
+    config.operator.auth.principals.clear();
+
+    assert_eq!(
+        super::configured_approval_voters(&config).unwrap(),
+        vec![voter_id]
+    );
+}
+
+#[tokio::test]
+async fn governed_router_uses_effective_voters_across_reload_and_fails_closed_without_one() {
+    let root = temp_dir("governed-voter-router-reload");
+    let config_path = root.join("swarm.yaml");
+    let harness = DefaultApprovalHarness::from_path(
+        &config_path,
+        root.join("verdicts"),
+        root.join("receipt-packs"),
+        root.join("sets"),
+        root.join("ledgers"),
+    )
+    .unwrap();
+    let governance = Arc::new(
+        GovernancePolicy::initialize_persistence(
+            GovernancePolicyConfig::default(),
+            root.join("governance.json"),
+            AgentId::new("tom", "governed-voter-router"),
+            ed25519_dalek::SigningKey::from_bytes(&[91; 32]),
+        )
+        .unwrap(),
+    );
+    let governance_authority = governance
+        .authority()
+        .expect("healthy persisted governance should mint an authority");
+
+    let legacy_signer = Ed25519Signer::from_secret_material("governed-voter-legacy");
+    let first_signer = Ed25519Signer::from_secret_material("governed-voter-first");
+    let second_signer = Ed25519Signer::from_secret_material("governed-voter-second");
+    let first_id = format!("swarm:ed25519:{}", first_signer.public_key_hex());
+    let second_id = format!("swarm:ed25519:{}", second_signer.public_key_hex());
+    let legacy_id = format!("swarm:ed25519:{}", legacy_signer.public_key_hex());
+    let mut initial_config = test_config("suspicious_process_tree");
+    initial_config.runtime.mode = RuntimeMode::LiveResponse;
+    initial_config.operator.auth.operator_id = legacy_id;
+    initial_config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: second_id.clone(),
+            token_env: "SWARM_GOVERNED_VOTER_SECOND".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: "reader-only".to_string(),
+            token_env: "SWARM_GOVERNED_VOTER_READER".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read],
+        },
+        OperatorPrincipalConfig {
+            operator_id: first_id.clone(),
+            token_env: "SWARM_GOVERNED_VOTER_FIRST".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+    ];
+    let state = IngestState::from_config(&config_path, initial_config.clone())
+        .unwrap()
+        .with_approval_harness(harness.clone())
+        .with_governance_authority(governance_authority.clone());
+    let router = state.current_request_response_router();
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut dispatcher = AgentDispatcher::new(
+        AgentDispatcherConfig::default(),
+        shutdown_rx,
+        state.current_substrate(),
+        Arc::new(ArcSwap::from_pointee(Vec::<AgentHealthEntry>::new())),
+    )
+    .with_request_response_router(router)
+    .with_governance_authority(governance_authority.clone());
+
+    let (first_agent_id, first_action) = governed_request_action(&governance, "initial");
+    dispatcher
+        .register(Box::new(IngestOneShotGovernedRequestAgent::new(
+            first_agent_id,
+            vec![first_action],
+        )))
+        .unwrap();
+    dispatcher.tick_once().await;
+
+    let mut expected_initial = vec![first_id.clone(), second_id.clone()];
+    expected_initial.sort();
+    let initial_sets = harness.list_approval_sets().unwrap();
+    assert_eq!(initial_sets.sets.len(), 1);
+    let initial_report = harness
+        .load_approval_set(&initial_sets.sets[0].set_id)
+        .unwrap()
+        .unwrap()
+        .report;
+    assert_eq!(initial_report.eligible_voters, expected_initial);
+    assert_eq!(harness.list_ledgers(None).unwrap().total_count, 1);
+
+    let rotated_signer = Ed25519Signer::from_secret_material("governed-voter-rotated");
+    let rotated_id = format!("swarm:ed25519:{}", rotated_signer.public_key_hex());
+    let rotated_legacy_signer =
+        Ed25519Signer::from_secret_material("governed-voter-rotated-legacy");
+    let mut rotated_config = initial_config;
+    rotated_config.operator.auth.operator_id =
+        format!("swarm:ed25519:{}", rotated_legacy_signer.public_key_hex());
+    rotated_config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: rotated_id.clone(),
+        token_env: "SWARM_GOVERNED_VOTER_ROTATED".to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+    state.reload(rotated_config.clone()).unwrap();
+
+    let (rotated_agent_id, rotated_action) = governed_request_action(&governance, "rotated");
+    dispatcher
+        .register(Box::new(IngestOneShotGovernedRequestAgent::new(
+            rotated_agent_id,
+            vec![rotated_action],
+        )))
+        .unwrap();
+    dispatcher.tick_once().await;
+
+    let rotated_sets = harness.list_approval_sets().unwrap();
+    assert_eq!(rotated_sets.sets.len(), 2);
+    let rotated_reports = rotated_sets
+        .sets
+        .iter()
+        .map(|record| {
+            harness
+                .load_approval_set(&record.set_id)
+                .unwrap()
+                .unwrap()
+                .report
+                .eligible_voters
+        })
+        .collect::<Vec<_>>();
+    assert!(rotated_reports.contains(&expected_initial));
+    assert!(rotated_reports.contains(&vec![rotated_id]));
+    assert_eq!(harness.list_ledgers(None).unwrap().total_count, 2);
+
+    let mut no_approver_config = rotated_config;
+    no_approver_config.operator.auth.operator_id =
+        format!("swarm:ed25519:{}", legacy_signer.public_key_hex());
+    no_approver_config.operator.auth.principals = vec![
+        OperatorPrincipalConfig {
+            operator_id: "legacy-approver-without-key".to_string(),
+            token_env: "SWARM_GOVERNED_VOTER_INVALID_LEGACY".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+        OperatorPrincipalConfig {
+            operator_id: format!("swarm:ed25519:{}", "02".repeat(32)),
+            token_env: "SWARM_GOVERNED_VOTER_INVALID_KEY".to_string(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Approve],
+        },
+    ];
+    state.reload(no_approver_config).unwrap();
+    let (invalid_agent_id, invalid_action) = governed_request_action(&governance, "invalid");
+    dispatcher
+        .register(Box::new(IngestOneShotGovernedRequestAgent::new(
+            invalid_agent_id,
+            vec![invalid_action],
+        )))
+        .unwrap();
+    dispatcher.tick_once().await;
+    assert_eq!(harness.list_approval_sets().unwrap().sets.len(), 2);
+    assert_eq!(harness.list_ledgers(None).unwrap().total_count, 2);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn configured_approval_voters_reject_noncanonical_public_key_identity() {
+    let signer = Ed25519Signer::from_secret_material("uppercase-voter-id");
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: format!(
+            "swarm:ed25519:{}",
+            signer.public_key_hex().to_ascii_uppercase()
+        ),
+        token_env: "SWARM_APPROVAL_UPPERCASE".to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Approve],
+    }];
+
+    assert!(matches!(
+        super::configured_approval_voters(&config),
+        Err(super::ApprovalVoterConfigError::NoEligibleApprover)
+    ));
+}
+
+#[test]
+fn demo_approval_keeps_legacy_operator_id_compatibility() {
+    let mut config = test_config("suspicious_process_tree");
+    config.runtime.demo_mode = true;
+    config.operator.auth.operator_id = "demo-legacy-operator".to_string();
+    let root = temp_dir("demo-legacy-approval-voter");
+    let config_path = root.join("swarm.yaml");
+    let harness = DefaultApprovalHarness::from_path(
+        &config_path,
+        root.join("verdicts"),
+        root.join("receipt-packs"),
+        root.join("sets"),
+        root.join("ledgers"),
+    )
+    .unwrap();
+    let state = IngestState::from_config(config_path, config)
+        .unwrap()
+        .with_approval_harness(harness.clone());
+    state.begin_demo_run("demo-legacy-run", "demo", "inline", "operator", 0, 1);
+
+    let finding = swarm_whisker::DetectionFinding {
+        finding_id: "finding-demo-legacy".to_string(),
+        event_id: "event-demo-legacy".to_string(),
+        threat_class: ThreatClass::Execution,
+        severity: Severity::High,
+        confidence: 0.99,
+        evidence: json!({"fixture": "demo-legacy-approval"}),
+        strategy_id: "suspicious_process_tree".to_string(),
+    };
+    let request = swarm_policy::ActionRequest {
+        hunt_id: HuntId("hunt-demo-legacy".to_string()),
+        requested_by: AgentId::new("demo", "operator"),
+        action: ResponseAction::IsolateHost {
+            host_id: "host-demo-legacy".to_string(),
+        },
+        severity: Severity::High,
+        evidence: json!({"fixture": "demo-legacy-approval"}),
+    };
+    let audit = swarm_spine::AuditTrail {
+        trail_id: "trail-demo-legacy".to_string(),
+        hunt_id: request.hunt_id.0.clone(),
+        related_receipt_ids: Vec::new(),
+        detection: finding,
+        policy: swarm_spine::PolicyRecord {
+            verdict: swarm_policy::PolicyVerdict::RequireHuman,
+            rule_name: "demo.test.human".to_string(),
+            reason: "demo compatibility fixture".to_string(),
+            lease: None,
+        },
+        response: swarm_spine::AuditResponseRecord::Skipped {
+            reason: "demo compatibility fixture".to_string(),
+        },
+        created_at_ms: 1_700_000_000_000,
+    };
+
+    state
+        .register_pending_demo_approval("demo-legacy-run", 0, &request, &audit)
+        .unwrap();
+    let set_id = harness.list_approval_sets().unwrap().sets[0].set_id.clone();
+    let set = harness.load_approval_set(&set_id).unwrap().unwrap().report;
+    assert_eq!(set.eligible_voters, vec!["demo-legacy-operator"]);
+
+    let _ = fs::remove_dir_all(root);
+}
+
 fn failed_startup_attestation_report() -> StartupAttestationReport {
     StartupAttestationReport {
         ready: false,
@@ -1047,76 +1465,6 @@ fn bridge_queue_proposal(
         .load(&proposal_id)
         .unwrap()
         .map(|lookup| lookup.report)
-}
-
-#[test]
-fn configured_approval_voters_use_effective_approve_principals_in_deterministic_order() {
-    let legacy = Ed25519Signer::from_secret_material("legacy-voter-must-not-widen");
-    let first = Ed25519Signer::from_secret_material("multi-principal-voter-first");
-    let second = Ed25519Signer::from_secret_material("multi-principal-voter-second");
-    let legacy_id = format!("swarm:ed25519:{}", legacy.public_key_hex());
-    let first_id = format!("swarm:ed25519:{}", first.public_key_hex());
-    let second_id = format!("swarm:ed25519:{}", second.public_key_hex());
-    let mut config = test_config("suspicious_process_tree");
-    config.operator.auth.operator_id = legacy_id.clone();
-    config.operator.auth.principals = vec![
-        OperatorPrincipalConfig {
-            operator_id: second_id.clone(),
-            token_env: "SWARM_APPROVAL_SECOND".to_string(),
-            token_expires_at_ms: None,
-            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
-        },
-        OperatorPrincipalConfig {
-            operator_id: "read-only-principal".to_string(),
-            token_env: "SWARM_APPROVAL_READ_ONLY".to_string(),
-            token_expires_at_ms: None,
-            scopes: vec![OperatorScope::Read],
-        },
-        OperatorPrincipalConfig {
-            operator_id: first_id.clone(),
-            token_env: "SWARM_APPROVAL_FIRST".to_string(),
-            token_expires_at_ms: None,
-            scopes: vec![OperatorScope::Approve],
-        },
-    ];
-
-    let mut expected = vec![first_id, second_id];
-    expected.sort();
-    let voters = super::configured_approval_voters(&config).unwrap();
-    assert_eq!(voters, expected);
-    assert!(!voters.contains(&legacy_id));
-}
-
-#[test]
-fn configured_approval_voters_fail_closed_for_malformed_explicit_approvers() {
-    let mut config = test_config("suspicious_process_tree");
-    let legacy = Ed25519Signer::from_secret_material("legacy-auth-id");
-    config.operator.auth.operator_id = format!("swarm:ed25519:{}", legacy.public_key_hex());
-    config.operator.auth.principals = vec![OperatorPrincipalConfig {
-        operator_id: "operator-legacy-approver".to_string(),
-        token_env: "SWARM_APPROVAL_LEGACY".to_string(),
-        token_expires_at_ms: None,
-        scopes: vec![OperatorScope::Approve],
-    }];
-
-    assert!(matches!(
-        super::configured_approval_voters(&config),
-        Err(super::ApprovalVoterConfigError::NoEligibleApprover)
-    ));
-}
-
-#[test]
-fn configured_approval_voters_keep_canonical_legacy_fallback() {
-    let signer = Ed25519Signer::from_secret_material("canonical-legacy-voter");
-    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
-    let mut config = test_config("suspicious_process_tree");
-    config.operator.auth.operator_id = voter_id.clone();
-    config.operator.auth.principals.clear();
-
-    assert_eq!(
-        super::configured_approval_voters(&config).unwrap(),
-        vec![voter_id]
-    );
 }
 
 #[tokio::test]

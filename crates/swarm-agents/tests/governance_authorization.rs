@@ -252,11 +252,16 @@ fn trusted_key_receipt_not_issued_by_policy_is_refused() {
 }
 
 fn persistence_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
+    let directory = std::env::temp_dir().join(format!(
         "swarm-governance-authorization-{label}-{}-{}",
         std::process::id(),
-        now_ms()
-    ))
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time is after the unix epoch")
+            .as_nanos()
+    ));
+    fs::create_dir(&directory).unwrap();
+    directory.join("state.json")
 }
 
 fn initialize_persisted_policy(path: &PathBuf) -> GovernancePolicy {
@@ -291,9 +296,8 @@ fn block_next_state_write(path: &Path) -> PathBuf {
     temp_path
 }
 
-fn cleanup_persistence(path: &PathBuf) {
-    let _ = fs::remove_file(path);
-    let _ = fs::remove_file(GovernancePolicy::persistence_sequence_path(path));
+fn cleanup_persistence(path: &Path) {
+    fs::remove_dir_all(path.parent().expect("test state has an isolated parent")).unwrap();
 }
 
 #[test]
@@ -315,6 +319,7 @@ fn consumed_authorization_stays_consumed_after_restart() {
         .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 2)
         .expect_err("restart must not make a consumed receipt replayable");
     assert!(error.contains("already consumed"));
+    drop(reloaded);
     cleanup_persistence(&path);
 }
 
@@ -348,6 +353,7 @@ fn issuance_and_consumption_refuse_persistence_failures() {
     policy
         .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 2)
         .expect("failed persistence must roll the pending entry back in memory");
+    drop(policy);
     cleanup_persistence(&path);
 }
 
@@ -378,6 +384,7 @@ fn state_committed_before_checkpoint_failure_recovers_conservatively_on_restart(
         .verify_and_consume_action_authorization(&request, &receipt, issued_at_ms + 3)
         .expect_err("the signed state written before the crash window stays consumed");
     assert!(error.contains("already consumed"));
+    drop(reloaded);
     cleanup_persistence(&path);
 }
 
@@ -437,5 +444,6 @@ fn human_hold_binding_and_consumption_refuse_persistence_failures() {
             issued_at_ms + 4,
         )
         .expect("failed persistence must roll both approvals back in memory");
+    drop(policy);
     cleanup_persistence(&path);
 }

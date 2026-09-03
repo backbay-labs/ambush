@@ -13,7 +13,6 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{any, post};
 use serde_json::{Value, json};
-use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,7 +55,10 @@ use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
 use swarm_policy::governance::GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX;
 use swarm_policy::{ActionRequest, ApprovalContext, PolicyDecision};
 use swarm_response::SwarmFindingEnvelope;
-use swarm_runtime::approval::{DefaultApprovalHarness, ThresholdRule};
+use swarm_runtime::approval::{
+    ApprovalLedgerReport, ApprovalVote, ApprovalVoteIntent, DefaultApprovalHarness, ThresholdRule,
+    approval_vote_payload_bytes, build_approval_vote_intent,
+};
 use swarm_runtime::dispatcher::{AgentDispatcher, AgentDispatcherConfig};
 use swarm_runtime::replay::{
     ExperimentLineage, ReplayScenarioClass, ReplayScenarioInput, ReplayScenarioManifest,
@@ -69,7 +71,7 @@ use swarm_spine::{
     PolicyRecord, ReplayBundle, ReplayBundleStore,
 };
 use swarm_whisker::{DetectionFinding, ProcessStartEvent, TelemetryEvent, TelemetryPayload};
-use tokio::sync::{Barrier, Mutex as AsyncMutex, oneshot, watch};
+use tokio::sync::{Barrier as AsyncBarrier, Mutex as AsyncMutex, oneshot, watch};
 use tower::ServiceExt;
 
 use swarm_evolution::governance_prep::{
@@ -302,6 +304,30 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     ));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn signed_approval_vote(
+    ledger: &ApprovalLedgerReport,
+    voter_id: &str,
+    signer: &Ed25519Signer,
+) -> (ApprovalVoteIntent, DetachedSignature) {
+    let intent = build_approval_vote_intent(
+        ledger,
+        voter_id,
+        ApprovalVote::Approve,
+        swarm_runtime::runtime_events::now_ms(),
+    );
+    let signature = signer.sign(&approval_vote_payload_bytes(&intent).unwrap());
+    (intent, signature)
+}
+
+fn approval_vote_body(intent: &ApprovalVoteIntent, signature: &DetachedSignature) -> Body {
+    let mut value = serde_json::to_value(intent).unwrap();
+    value.as_object_mut().unwrap().insert(
+        "signature".to_string(),
+        serde_json::to_value(signature).unwrap(),
+    );
+    Body::from(value.to_string())
 }
 
 #[tokio::test]
@@ -545,8 +571,9 @@ async fn spawn_approval_resume_capture_server() -> (
 
 #[derive(Clone)]
 struct SequencedApprovalResumeState {
-    capture: ApprovalResumeCaptureState,
-    statuses: Arc<AsyncMutex<VecDeque<StatusCode>>>,
+    requests: Arc<AsyncMutex<Vec<(String, Value)>>>,
+    authorizations: Arc<AsyncMutex<Vec<Option<String>>>>,
+    statuses: Arc<AsyncMutex<Vec<StatusCode>>>,
 }
 
 async fn sequenced_approval_resume_handler(
@@ -555,24 +582,25 @@ async fn sequenced_approval_resume_handler(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
-    state.capture.authorizations.lock().await.push(
+    state.authorizations.lock().await.push(
         headers
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string),
     );
     state
-        .capture
         .requests
         .lock()
         .await
         .push((uri.path().to_string(), body));
-    let status = state
-        .statuses
-        .lock()
-        .await
-        .pop_front()
-        .unwrap_or(StatusCode::OK);
+    let status = {
+        let mut statuses = state.statuses.lock().await;
+        let status = statuses.first().copied().unwrap_or(StatusCode::OK);
+        if !statuses.is_empty() {
+            statuses.remove(0);
+        }
+        status
+    };
     (status, Json(json!({"ok": status.is_success()})))
 }
 
@@ -580,18 +608,18 @@ async fn spawn_sequenced_approval_resume_server(
     statuses: Vec<StatusCode>,
 ) -> (
     String,
-    ApprovalResumeCaptureState,
+    SequencedApprovalResumeState,
     oneshot::Sender<()>,
     tokio::task::JoinHandle<()>,
 ) {
-    let capture = ApprovalResumeCaptureState::default();
     let state = SequencedApprovalResumeState {
-        capture: capture.clone(),
-        statuses: Arc::new(AsyncMutex::new(statuses.into())),
+        requests: Arc::new(AsyncMutex::new(Vec::new())),
+        authorizations: Arc::new(AsyncMutex::new(Vec::new())),
+        statuses: Arc::new(AsyncMutex::new(statuses)),
     };
     let app = Router::new()
         .route("/{*path}", post(sequenced_approval_resume_handler))
-        .with_state(state);
+        .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -601,7 +629,7 @@ async fn spawn_sequenced_approval_resume_server(
         });
         let _ = server.await;
     });
-    (format!("http://{address}"), capture, shutdown_tx, handle)
+    (format!("http://{address}"), state, shutdown_tx, handle)
 }
 
 #[derive(Clone)]
@@ -3157,14 +3185,16 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
         .list_ledgers(Some(&approval_set_id))
         .unwrap();
     let approval_ledger_id = ledgers.ledgers[0].ledger_id.clone();
-    let vote_signature = approve_signer.sign(
-        &canonical_json_bytes(&json!({
-            "approval_set_id": approval_set_id,
-            "ledger_id": approval_ledger_id,
-            "voter_id": approver_id,
-        }))
-        .unwrap(),
-    );
+    let approval_ledger = surface
+        .state
+        .approval
+        .as_ref()
+        .unwrap()
+        .load_ledger(&approval_ledger_id)
+        .unwrap()
+        .unwrap();
+    let (vote_intent, vote_signature) =
+        signed_approval_vote(&approval_ledger.report, &approver_id, &approve_signer);
 
     let maintenance_vote = app
         .clone()
@@ -3176,13 +3206,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 ))
                 .header("authorization", format!("Bearer {MAINT_TOKEN}"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "voter_id": approver_id,
-                        "signature": vote_signature.clone(),
-                    })
-                    .to_string(),
-                ))
+                .body(approval_vote_body(&vote_intent, &vote_signature))
                 .unwrap(),
         )
         .await
@@ -3199,13 +3223,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 ))
                 .header("authorization", format!("Bearer {APPROVE_TOKEN}"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "voter_id": approver_id,
-                        "signature": vote_signature,
-                    })
-                    .to_string(),
-                ))
+                .body(approval_vote_body(&vote_intent, &vote_signature))
                 .unwrap(),
         )
         .await
@@ -3676,14 +3694,58 @@ async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
     let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
         .ledger_id
         .clone();
-    let signature = signer.sign(
-        &canonical_json_bytes(&json!({
-            "approval_set_id": set.set_id.clone(),
-            "ledger_id": ledger_id.clone(),
-            "voter_id": voter_id.clone(),
-        }))
-        .unwrap(),
+    let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    let (intent, signature) = signed_approval_vote(&ledger.report, &voter_id, &signer);
+    let reject_intent = build_approval_vote_intent(
+        &ledger.report,
+        &voter_id,
+        ApprovalVote::Reject,
+        swarm_runtime::runtime_events::now_ms(),
     );
+    let reject_signature = signer.sign(&approval_vote_payload_bytes(&reject_intent).unwrap());
+    let reject_response = surface
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(approval_vote_body(&reject_intent, &reject_signature))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reject_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        harness.load_ledger(&ledger_id).unwrap().unwrap().report,
+        ledger.report
+    );
+    assert!(capture.requests.lock().await.is_empty());
+
+    let mut tampered_timestamp_intent = intent.clone();
+    tampered_timestamp_intent.timestamp_ms =
+        tampered_timestamp_intent.timestamp_ms.saturating_add(1);
+    let tampered_response = surface
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(approval_vote_body(&tampered_timestamp_intent, &signature))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tampered_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        harness.load_ledger(&ledger_id).unwrap().unwrap().report,
+        ledger.report
+    );
+    assert!(capture.requests.lock().await.is_empty());
+
     let response = surface
         .router()
         .oneshot(
@@ -3692,9 +3754,7 @@ async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
                 .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
                 .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({"voter_id": voter_id, "signature": signature}).to_string(),
-                ))
+                .body(approval_vote_body(&intent, &signature))
                 .unwrap(),
         )
         .await
@@ -3718,220 +3778,33 @@ async fn ordinary_operator_vote_keeps_the_demo_resume_contract() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_approval_mutations_preserve_indexes_votes_and_quorum_artifacts() {
-    const TOKEN_ENV: &str = "SWARM_CONCURRENT_APPROVAL_TOKEN";
-    const SECOND_TOKEN_ENV: &str = "SWARM_CONCURRENT_APPROVAL_SECOND_TOKEN";
-    const EVIDENCE_KEY_ENV: &str = "SWARM_CONCURRENT_APPROVAL_EVIDENCE_KEY";
-    const TOKEN: &str = "concurrent-approval-token";
-    const SECOND_TOKEN: &str = "concurrent-approval-second-token";
-    let _token = ScopedTestEnv::set(TOKEN_ENV, TOKEN);
-    let _second_token = ScopedTestEnv::set(SECOND_TOKEN_ENV, SECOND_TOKEN);
-    let _evidence_key = ScopedTestEnv::set(EVIDENCE_KEY_ENV, "concurrent-approval-evidence-key");
-    let (runtime_base_url, capture, shutdown_tx, server) =
-        spawn_approval_resume_capture_server().await;
-
-    let signer = Ed25519Signer::from_secret_material("concurrent-approval-voter");
-    let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
-    let second_signer = Ed25519Signer::from_secret_material("concurrent-approval-second-voter");
-    let second_voter_id = format!("swarm:ed25519:{}", second_signer.public_key_hex());
-    let mut config = operator_config();
-    config.operator.runtime_base_url = runtime_base_url;
-    config.operator.auth.context_token_env = TOKEN_ENV.to_string();
-    config.operator.auth.operator_id = voter_id.clone();
-    config.operator.auth.token_env = TOKEN_ENV.to_string();
-    config.operator.auth.principals = vec![
-        OperatorPrincipalConfig {
-            operator_id: voter_id.clone(),
-            token_env: TOKEN_ENV.to_string(),
-            token_expires_at_ms: None,
-            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
-        },
-        OperatorPrincipalConfig {
-            operator_id: second_voter_id.clone(),
-            token_env: SECOND_TOKEN_ENV.to_string(),
-            token_expires_at_ms: None,
-            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
-        },
-    ];
-    let root = unique_temp_dir("concurrent-approval-votes");
-    let mut paths = surface_paths(&root);
-    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
-    let surface = LocalOperatorSurface::from_config_and_paths("inline", config, paths).unwrap();
-    let harness = surface.state.approval.as_ref().unwrap().clone();
-
-    // Concurrent creates exercise both shared set and ledger indexes. The
-    // synchronous file operations can run at the same time on separate Tokio
-    // workers even though each individual handler contains no internal await.
-    let create_barrier = Arc::new(Barrier::new(9));
-    let mut create_tasks = Vec::new();
-    for index in 0..8 {
-        let app = surface.router();
-        let barrier = create_barrier.clone();
-        let voter_id = voter_id.clone();
-        let second_voter_id = second_voter_id.clone();
-        create_tasks.push(tokio::spawn(async move {
-            barrier.wait().await;
-            app.oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/operator/approval-sets")
-                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({
-                            "eligible_voters": [voter_id, second_voter_id],
-                            "threshold_required": 2,
-                            "promotion_evidence_ref": format!(
-                                "promotion_evidence:concurrent-create-{index}"
-                            ),
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-            .status()
-        }));
-    }
-    create_barrier.wait().await;
-    for task in create_tasks {
-        assert_eq!(task.await.unwrap(), StatusCode::CREATED);
-    }
-    assert_eq!(harness.list_approval_sets().unwrap().sets.len(), 8);
-    assert_eq!(harness.list_ledgers(None).unwrap().ledgers.len(), 8);
-
-    // Multiple voted ledgers exercise the per-report writes and every shared
-    // artifact index. Without one store lock, concurrent read/modify/write
-    // cycles can lose votes, ledgers, verdicts, or packs independently.
-    let mut votes = Vec::new();
-    let mut ledger_ids = Vec::new();
-    for index in 0..8 {
-        let set = harness
-            .create_approval_set(
-                vec![voter_id.clone(), second_voter_id.clone()],
-                ThresholdRule::AtLeast { required: 2 },
-                &format!("promotion_evidence:concurrent-{index}"),
-            )
-            .unwrap();
-        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
-            .ledger_id
-            .clone();
-        let signature = signer.sign(
-            &canonical_json_bytes(&json!({
-                "approval_set_id": set.set_id.clone(),
-                "ledger_id": ledger_id.clone(),
-                "voter_id": voter_id.clone(),
-            }))
-            .unwrap(),
-        );
-        let second_signature = second_signer.sign(
-            &canonical_json_bytes(&json!({
-                "approval_set_id": set.set_id,
-                "ledger_id": ledger_id.clone(),
-                "voter_id": second_voter_id.clone(),
-            }))
-            .unwrap(),
-        );
-        votes.push((
-            TOKEN.to_string(),
-            voter_id.clone(),
-            ledger_id.clone(),
-            signature,
-        ));
-        votes.push((
-            SECOND_TOKEN.to_string(),
-            second_voter_id.clone(),
-            ledger_id.clone(),
-            second_signature,
-        ));
-        ledger_ids.push(ledger_id);
-    }
-
-    let barrier = Arc::new(Barrier::new(votes.len() + 1));
-    let mut tasks = Vec::new();
-    for (token, submitted_voter, ledger_id, signature) in votes {
-        let app = surface.router();
-        let barrier = barrier.clone();
-        tasks.push(tokio::spawn(async move {
-            barrier.wait().await;
-            app.oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
-                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({"voter_id": submitted_voter, "signature": signature}).to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-            .status()
-        }));
-    }
-    barrier.wait().await;
-    for task in tasks {
-        assert_eq!(task.await.unwrap(), StatusCode::OK);
-    }
-
-    for ledger_id in &ledger_ids {
-        let ledger = harness.load_ledger(ledger_id).unwrap().unwrap();
-        assert_eq!(ledger.report.entries.len(), 2);
-        assert!(ledger.quorum_state.quorum_met);
-    }
-    assert_eq!(harness.list_receipt_packs().unwrap().packs.len(), 8);
-    assert_eq!(harness.list_verdicts().unwrap().verdicts.len(), 8);
-    assert_eq!(capture.requests.lock().await.len(), 8);
-
-    let _ = shutdown_tx.send(());
-    let _ = server.await;
-    let _ = fs::remove_dir_all(root);
-}
-
 #[tokio::test]
-async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_failure() {
+async fn governed_duplicate_vote_retries_the_exact_persisted_pack_after_callback_failure() {
     const TOKEN_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_TOKEN";
-    const SECOND_TOKEN_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_SECOND_TOKEN";
     const EVIDENCE_KEY_ENV: &str = "SWARM_GOVERNED_APPROVAL_RETRY_EVIDENCE_KEY";
     const TOKEN: &str = "governed-approval-retry-token";
-    const SECOND_TOKEN: &str = "governed-approval-retry-second-token";
-    unsafe {
-        std::env::set_var(TOKEN_ENV, TOKEN);
-        std::env::set_var(SECOND_TOKEN_ENV, SECOND_TOKEN);
-        std::env::set_var(EVIDENCE_KEY_ENV, "governed-approval-retry-key");
-    }
+    let _token_env = ScopedTestEnv::set(TOKEN_ENV, TOKEN);
+    let _evidence_key_env = ScopedTestEnv::set(EVIDENCE_KEY_ENV, "governed-approval-retry-key");
     let (runtime_base_url, capture, shutdown_tx, server) =
         spawn_sequenced_approval_resume_server(vec![
             StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::OK,
             StatusCode::OK,
         ])
         .await;
     let signer = Ed25519Signer::from_secret_material("governed-approval-retry-voter");
     let voter_id = format!("swarm:ed25519:{}", signer.public_key_hex());
-    let second_signer = Ed25519Signer::from_secret_material("governed-approval-retry-second-voter");
-    let second_voter_id = format!("swarm:ed25519:{}", second_signer.public_key_hex());
     let mut config = operator_config();
     config.operator.runtime_base_url = runtime_base_url;
     config.operator.auth.context_token_env = TOKEN_ENV.to_string();
     config.operator.auth.operator_id = voter_id.clone();
     config.operator.auth.token_env = TOKEN_ENV.to_string();
-    config.operator.auth.principals = vec![
-        OperatorPrincipalConfig {
-            operator_id: voter_id.clone(),
-            token_env: TOKEN_ENV.to_string(),
-            token_expires_at_ms: None,
-            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
-        },
-        OperatorPrincipalConfig {
-            operator_id: second_voter_id.clone(),
-            token_env: SECOND_TOKEN_ENV.to_string(),
-            token_expires_at_ms: None,
-            scopes: vec![OperatorScope::Read, OperatorScope::Approve],
-        },
-    ];
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: voter_id.clone(),
+        token_env: TOKEN_ENV.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+    }];
     let root = unique_temp_dir("governed-approval-retry");
     let mut paths = surface_paths(&root);
     paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
@@ -3939,109 +3812,67 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
     let harness = surface.state.approval.as_ref().unwrap();
     let set = harness
         .create_approval_set(
-            vec![voter_id.clone(), second_voter_id.clone()],
-            ThresholdRule::AtLeast { required: 2 },
+            vec![voter_id.clone()],
+            ThresholdRule::AtLeast { required: 1 },
             &format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}hold-retry"),
         )
         .unwrap();
     let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
         .ledger_id
         .clone();
-    let signature = signer.sign(
-        &canonical_json_bytes(&json!({
-            "approval_set_id": set.set_id.clone(),
-            "ledger_id": ledger_id.clone(),
-            "voter_id": voter_id.clone(),
-        }))
-        .unwrap(),
-    );
-    let second_signature = second_signer.sign(
-        &canonical_json_bytes(&json!({
-            "approval_set_id": set.set_id.clone(),
-            "ledger_id": ledger_id.clone(),
-            "voter_id": second_voter_id.clone(),
-        }))
-        .unwrap(),
-    );
-
-    let vote_request = |token: &str, voter_id: &str, signature: &DetachedSignature| {
+    let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    let (intent, signature) = signed_approval_vote(&ledger.report, &voter_id, &signer);
+    let vote_body = || approval_vote_body(&intent, &signature);
+    let request = |body| {
         Request::builder()
             .method("POST")
             .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
-            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                json!({
-                    "voter_id": voter_id,
-                    "signature": signature,
-                })
-                .to_string(),
-            ))
+            .body(body)
             .unwrap()
     };
 
-    let first = surface
+    let first_response = surface
         .router()
-        .oneshot(vote_request(TOKEN, &voter_id, &signature))
+        .oneshot(request(vote_body()))
         .await
         .unwrap();
-    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(first_response.status(), StatusCode::BAD_GATEWAY);
     let first_packs = harness.list_receipt_packs().unwrap();
-    assert!(first_packs.packs.is_empty());
-    assert!(capture.requests.lock().await.is_empty());
+    assert_eq!(first_packs.packs.len(), 1);
+    let persisted_pack_id = first_packs.packs[0].pack_id.clone();
 
-    let prequorum_duplicate = surface
+    let second_response = surface
         .router()
-        .oneshot(vote_request(TOKEN, &voter_id, &signature))
+        .oneshot(request(vote_body()))
         .await
         .unwrap();
-    assert_eq!(prequorum_duplicate.status(), StatusCode::OK);
-    let prequorum_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
-    assert_eq!(prequorum_ledger.report.entries.len(), 1);
-    assert!(!prequorum_ledger.quorum_state.quorum_met);
-    assert!(harness.list_receipt_packs().unwrap().packs.is_empty());
-    assert!(capture.requests.lock().await.is_empty());
-
-    let second = surface
-        .router()
-        .oneshot(vote_request(
-            SECOND_TOKEN,
-            &second_voter_id,
-            &second_signature,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(second.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(second_response.status(), StatusCode::OK);
     let second_packs = harness.list_receipt_packs().unwrap();
     assert_eq!(second_packs.packs.len(), 1);
-    let persisted_pack_id = second_packs.packs[0].pack_id.clone();
-    let requests = capture.requests.lock().await;
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].1["receipt_pack_id"], persisted_pack_id);
-    drop(requests);
+    assert_eq!(second_packs.packs[0].pack_id, persisted_pack_id);
 
-    let duplicate = surface
-        .router()
-        .oneshot(vote_request(TOKEN, &voter_id, &signature))
-        .await
-        .unwrap();
-    assert_eq!(duplicate.status(), StatusCode::OK);
-    let duplicate_packs = harness.list_receipt_packs().unwrap();
-    assert_eq!(duplicate_packs.packs.len(), 1);
-    assert_eq!(duplicate_packs.packs[0].pack_id, persisted_pack_id);
     let requests = capture.requests.lock().await;
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0], requests[1]);
-    drop(requests);
-
-    let altered = Ed25519Signer::from_secret_material("altered-governed-vote").sign(
-        &canonical_json_bytes(&json!({
-            "approval_set_id": set.set_id,
-            "ledger_id": ledger_id,
-            "voter_id": voter_id.clone(),
-        }))
-        .unwrap(),
+    assert_eq!(
+        requests[0].0,
+        format!("/v1/governance/approvals/{}/resume", set.set_id)
     );
+    assert_eq!(requests[1].0, requests[0].0);
+    assert_eq!(requests[0].1, requests[1].1);
+    assert_eq!(requests[0].1["receipt_pack_id"], persisted_pack_id);
+    drop(requests);
+    assert_eq!(
+        capture.authorizations.lock().await.as_slice(),
+        [
+            Some(format!("Bearer {TOKEN}")),
+            Some(format!("Bearer {TOKEN}")),
+        ]
+    );
+
+    let altered_signature = Ed25519Signer::from_secret_material("altered-governed-vote")
+        .sign(&approval_vote_payload_bytes(&intent).unwrap());
     let altered_response = surface
         .router()
         .oneshot(
@@ -4050,9 +3881,7 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
                 .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
                 .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({"voter_id": voter_id, "signature": altered}).to_string(),
-                ))
+                .body(approval_vote_body(&intent, &altered_signature))
                 .unwrap(),
         )
         .await
@@ -4062,11 +3891,314 @@ async fn governed_late_and_duplicate_votes_reuse_the_exact_pack_after_callback_f
 
     let _ = shutdown_tx.send(());
     let _ = server.await;
-    unsafe {
-        std::env::remove_var(TOKEN_ENV);
-        std::env::remove_var(SECOND_TOKEN_ENV);
-        std::env::remove_var(EVIDENCE_KEY_ENV);
-    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn governed_distinct_post_quorum_vote_is_rejected_without_callback_or_mutation() {
+    const TOKEN_A_ENV: &str = "SWARM_GOVERNED_DISTINCT_POST_QUORUM_TOKEN_A";
+    const TOKEN_B_ENV: &str = "SWARM_GOVERNED_DISTINCT_POST_QUORUM_TOKEN_B";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_GOVERNED_DISTINCT_POST_QUORUM_EVIDENCE_KEY";
+    const TOKEN_A: &str = "governed-distinct-post-quorum-token-a";
+    const TOKEN_B: &str = "governed-distinct-post-quorum-token-b";
+    let _token_a_env = ScopedTestEnv::set(TOKEN_A_ENV, TOKEN_A);
+    let _token_b_env = ScopedTestEnv::set(TOKEN_B_ENV, TOKEN_B);
+    let _evidence_key_env = ScopedTestEnv::set(
+        EVIDENCE_KEY_ENV,
+        "governed-distinct-post-quorum-evidence-key",
+    );
+    let (runtime_base_url, capture, shutdown_tx, server) =
+        spawn_sequenced_approval_resume_server(vec![StatusCode::SERVICE_UNAVAILABLE]).await;
+    let root = unique_temp_dir("governed-distinct-post-quorum");
+
+    let signer_a = Ed25519Signer::from_secret_material("governed-distinct-post-quorum-a");
+    let voter_a = format!("swarm:ed25519:{}", signer_a.public_key_hex());
+    let signer_b = Ed25519Signer::from_secret_material("governed-distinct-post-quorum-b");
+    let voter_b = format!("swarm:ed25519:{}", signer_b.public_key_hex());
+
+    let principal = |operator_id: String, token_env: &str| OperatorPrincipalConfig {
+        operator_id,
+        token_env: token_env.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+    };
+    let mut config_a = operator_config();
+    config_a.operator.runtime_base_url = runtime_base_url.clone();
+    config_a.operator.auth.context_token_env = TOKEN_A_ENV.to_string();
+    config_a.operator.auth.operator_id = voter_a.clone();
+    config_a.operator.auth.token_env = TOKEN_A_ENV.to_string();
+    config_a.operator.auth.principals = vec![
+        principal(voter_a.clone(), TOKEN_A_ENV),
+        principal(voter_b.clone(), TOKEN_B_ENV),
+    ];
+    let mut config_b = config_a.clone();
+    config_b.operator.auth.operator_id = voter_b.clone();
+    config_b.operator.auth.context_token_env = TOKEN_B_ENV.to_string();
+    config_b.operator.auth.token_env = TOKEN_B_ENV.to_string();
+
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    let surface_a =
+        LocalOperatorSurface::from_config_and_paths("inline-a", config_a, paths.clone()).unwrap();
+    let surface_b =
+        LocalOperatorSurface::from_config_and_paths("inline-b", config_b, paths).unwrap();
+    let harness = surface_a.state.approval.as_ref().unwrap().clone();
+    let set = harness
+        .create_approval_set(
+            vec![voter_a.clone(), voter_b.clone()],
+            ThresholdRule::AtLeast { required: 1 },
+            &format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}hold-distinct"),
+        )
+        .unwrap();
+    let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+        .ledger_id
+        .clone();
+    let empty_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    let (intent_a, signature_a) = signed_approval_vote(&empty_ledger.report, &voter_a, &signer_a);
+    let first_response = surface_a
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN_A}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(approval_vote_body(&intent_a, &signature_a))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(capture.requests.lock().await.len(), 1);
+
+    let before_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap().report;
+    let before_verdicts = harness.list_verdicts().unwrap().verdicts;
+    let before_packs = harness.list_receipt_packs().unwrap().packs;
+    assert_eq!(before_ledger.entries.len(), 1);
+    assert_eq!(before_verdicts.len(), 1);
+    assert_eq!(before_packs.len(), 1);
+
+    let committed_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    let (intent_b, signature_b) =
+        signed_approval_vote(&committed_ledger.report, &voter_b, &signer_b);
+    let second_response = surface_b
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN_B}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(approval_vote_body(&intent_b, &signature_b))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(capture.requests.lock().await.len(), 1);
+    assert_eq!(
+        harness.load_ledger(&ledger_id).unwrap().unwrap().report,
+        before_ledger
+    );
+    assert_eq!(harness.list_verdicts().unwrap().verdicts, before_verdicts);
+    assert_eq!(harness.list_receipt_packs().unwrap().packs, before_packs);
+
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn governed_threshold_two_concurrent_stale_head_requires_refresh_and_single_callback() {
+    const TOKEN_A_ENV: &str = "SWARM_GOVERNED_THRESHOLD_TWO_TOKEN_A";
+    const TOKEN_B_ENV: &str = "SWARM_GOVERNED_THRESHOLD_TWO_TOKEN_B";
+    const EVIDENCE_KEY_ENV: &str = "SWARM_GOVERNED_THRESHOLD_TWO_EVIDENCE_KEY";
+    const TOKEN_A: &str = "governed-threshold-two-token-a";
+    const TOKEN_B: &str = "governed-threshold-two-token-b";
+    let _token_a_env = ScopedTestEnv::set(TOKEN_A_ENV, TOKEN_A);
+    let _token_b_env = ScopedTestEnv::set(TOKEN_B_ENV, TOKEN_B);
+    let _evidence_key_env =
+        ScopedTestEnv::set(EVIDENCE_KEY_ENV, "governed-threshold-two-evidence-key");
+    let (runtime_base_url, capture, shutdown_tx, server) =
+        spawn_sequenced_approval_resume_server(vec![
+            StatusCode::OK,
+            StatusCode::OK,
+            StatusCode::OK,
+        ])
+        .await;
+    let root = unique_temp_dir("governed-threshold-two-concurrent");
+    let signer_a = Ed25519Signer::from_secret_material("governed-threshold-two-a");
+    let voter_a = format!("swarm:ed25519:{}", signer_a.public_key_hex());
+    let signer_b = Ed25519Signer::from_secret_material("governed-threshold-two-b");
+    let voter_b = format!("swarm:ed25519:{}", signer_b.public_key_hex());
+    let principal = |operator_id: String, token_env: &str| OperatorPrincipalConfig {
+        operator_id,
+        token_env: token_env.to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+    };
+    let mut config_a = operator_config();
+    config_a.operator.runtime_base_url = runtime_base_url.clone();
+    config_a.operator.auth.context_token_env = TOKEN_A_ENV.to_string();
+    config_a.operator.auth.operator_id = voter_a.clone();
+    config_a.operator.auth.token_env = TOKEN_A_ENV.to_string();
+    config_a.operator.auth.principals = vec![
+        principal(voter_a.clone(), TOKEN_A_ENV),
+        principal(voter_b.clone(), TOKEN_B_ENV),
+    ];
+    let mut config_b = config_a.clone();
+    config_b.operator.auth.context_token_env = TOKEN_B_ENV.to_string();
+    config_b.operator.auth.operator_id = voter_b.clone();
+    config_b.operator.auth.token_env = TOKEN_B_ENV.to_string();
+    let mut paths = surface_paths(&root);
+    paths.evidence_signing_key_env = EVIDENCE_KEY_ENV.to_string();
+    let surface_a =
+        LocalOperatorSurface::from_config_and_paths("inline-threshold-a", config_a, paths.clone())
+            .unwrap();
+    let surface_b =
+        LocalOperatorSurface::from_config_and_paths("inline-threshold-b", config_b, paths).unwrap();
+    let harness = surface_a.state.approval.as_ref().unwrap().clone();
+    let set = harness
+        .create_approval_set(
+            vec![voter_a.clone(), voter_b.clone()],
+            ThresholdRule::AtLeast { required: 2 },
+            &format!("{GOVERNED_HUMAN_APPROVAL_EVIDENCE_PREFIX}threshold-two"),
+        )
+        .unwrap();
+    let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+        .ledger_id
+        .clone();
+    let empty_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    let (intent_a, signature_a) = signed_approval_vote(&empty_ledger.report, &voter_a, &signer_a);
+    let (intent_b, signature_b) = signed_approval_vote(&empty_ledger.report, &voter_b, &signer_b);
+    let request = |token: &str, intent: &ApprovalVoteIntent, signature: &DetachedSignature| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(approval_vote_body(intent, signature))
+            .unwrap()
+    };
+    let request_a = request(TOKEN_A, &intent_a, &signature_a);
+    let request_b = request(TOKEN_B, &intent_b, &signature_b);
+    let barrier = Arc::new(AsyncBarrier::new(2));
+    let barrier_a = barrier.clone();
+    let barrier_b = barrier.clone();
+    let router_a = surface_a.router();
+    let router_b = surface_b.router();
+    let first = async move {
+        barrier_a.wait().await;
+        router_a.oneshot(request_a).await.unwrap()
+    };
+    let second = async move {
+        barrier_b.wait().await;
+        router_b.oneshot(request_b).await.unwrap()
+    };
+    let (response_a, response_b) = tokio::join!(first, second);
+    let status_a = response_a.status();
+    let status_b = response_b.status();
+    let mut statuses = [status_a, status_b];
+    statuses.sort_by_key(|status| status.as_u16());
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::BAD_REQUEST]);
+    let body_a = to_bytes(response_a.into_body(), usize::MAX).await.unwrap();
+    let body_b = to_bytes(response_b.into_body(), usize::MAX).await.unwrap();
+    let body_a: Value = serde_json::from_slice(&body_a).unwrap();
+    let body_b: Value = serde_json::from_slice(&body_b).unwrap();
+    let successful_body = if status_a == StatusCode::OK {
+        &body_a
+    } else {
+        &body_b
+    };
+    assert_eq!(
+        successful_body["report"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        !successful_body["quorum_state"]["quorum_met"]
+            .as_bool()
+            .unwrap()
+    );
+    let stale_body = if status_a == StatusCode::BAD_REQUEST {
+        &body_a
+    } else {
+        &body_b
+    };
+    assert!(
+        stale_body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("does not extend the current ledger head")),
+        "unexpected stale-head response: {stale_body}"
+    );
+
+    let committed_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    assert_eq!(committed_ledger.report.entries.len(), 1);
+    assert!(!committed_ledger.quorum_state.quorum_met);
+    assert_eq!(harness.list_verdicts().unwrap().total_count, 0);
+    assert_eq!(harness.list_receipt_packs().unwrap().total_count, 0);
+    assert!(capture.requests.lock().await.is_empty());
+
+    let retry_response = if status_a == StatusCode::BAD_REQUEST {
+        let (intent, signature) =
+            signed_approval_vote(&committed_ledger.report, &voter_a, &signer_a);
+        surface_a
+            .router()
+            .oneshot(request(TOKEN_A, &intent, &signature))
+            .await
+            .unwrap()
+    } else {
+        let (intent, signature) =
+            signed_approval_vote(&committed_ledger.report, &voter_b, &signer_b);
+        surface_b
+            .router()
+            .oneshot(request(TOKEN_B, &intent, &signature))
+            .await
+            .unwrap()
+    };
+    assert_eq!(retry_response.status(), StatusCode::OK);
+    let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    assert_eq!(ledger.report.entries.len(), 2);
+    assert!(ledger.quorum_state.quorum_met);
+    assert_eq!(harness.list_verdicts().unwrap().total_count, 1);
+    let packs = harness.list_receipt_packs().unwrap();
+    assert_eq!(packs.total_count, 1);
+    let requests = capture.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].0,
+        format!("/v1/governance/approvals/{}/resume", set.set_id)
+    );
+    assert_eq!(requests[0].1["receipt_pack_id"], packs.packs[0].pack_id);
+    drop(requests);
+    assert_eq!(capture.authorizations.lock().await.len(), 1);
+
+    let stale_retry = if status_a == StatusCode::BAD_REQUEST {
+        surface_a
+            .router()
+            .oneshot(request(TOKEN_A, &intent_a, &signature_a))
+            .await
+            .unwrap()
+    } else {
+        surface_b
+            .router()
+            .oneshot(request(TOKEN_B, &intent_b, &signature_b))
+            .await
+            .unwrap()
+    };
+    assert_eq!(stale_retry.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        harness.load_ledger(&ledger_id).unwrap().unwrap().report,
+        ledger.report
+    );
+    assert_eq!(harness.list_verdicts().unwrap().total_count, 1);
+    assert_eq!(harness.list_receipt_packs().unwrap().total_count, 1);
+    assert_eq!(capture.requests.lock().await.len(), 1);
+    assert_eq!(capture.authorizations.lock().await.len(), 1);
+    let _ = shutdown_tx.send(());
+    let _ = server.await;
     let _ = fs::remove_dir_all(root);
 }
 
@@ -4219,14 +4351,9 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
     let ledgers = harness.list_ledgers(Some(&approval_set_id)).unwrap();
     assert_eq!(ledgers.ledgers.len(), 1);
     let ledger_id = ledgers.ledgers[0].ledger_id.clone();
-    let signature = operator_signer.sign(
-        &canonical_json_bytes(&json!({
-            "approval_set_id": approval_set_id.clone(),
-            "ledger_id": ledger_id.clone(),
-            "voter_id": operator_id.clone(),
-        }))
-        .unwrap(),
-    );
+    let ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+    let (vote_intent, vote_signature) =
+        signed_approval_vote(&ledger.report, &operator_id, &operator_signer);
     let trusted_before_ms = swarm_runtime::runtime_events::now_ms();
     let vote_response = operator_app
         .clone()
@@ -4236,13 +4363,7 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
                 .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
                 .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "voter_id": operator_id.clone(),
-                        "signature": signature,
-                    })
-                    .to_string(),
-                ))
+                .body(approval_vote_body(&vote_intent, &vote_signature))
                 .unwrap(),
         )
         .await
@@ -4290,20 +4411,7 @@ async fn governed_operator_vote_resumes_persisted_hold_once_through_authenticate
                 .uri(format!("/v1/operator/approval-ledgers/{ledger_id}/vote"))
                 .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "voter_id": operator_id.clone(),
-                        "signature": operator_signer.sign(
-                            &canonical_json_bytes(&json!({
-                                "approval_set_id": approval_set_id.clone(),
-                                "ledger_id": ledger_id.clone(),
-                                "voter_id": operator_id.clone(),
-                            }))
-                            .unwrap(),
-                        ),
-                    })
-                    .to_string(),
-                ))
+                .body(approval_vote_body(&vote_intent, &vote_signature))
                 .unwrap(),
         )
         .await

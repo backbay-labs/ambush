@@ -2052,7 +2052,9 @@ async fn failed_router_burns_owned_human_and_governance_admission() -> Result<()
 #[tokio::test]
 async fn governed_human_hold_and_consumption_survive_governance_restarts()
 -> Result<(), Box<dyn Error>> {
-    let persistence_path = temp_jsonl_path("governed-human-restart");
+    let persistence_root = PathBuf::from(temp_jsonl_path("governed-human-restart"));
+    std::fs::create_dir(&persistence_root)?;
+    let persistence_path = persistence_root.join("state.json");
     let governance = Arc::new(GovernancePolicy::initialize_persistence(
         GovernancePolicyConfig::default(),
         &persistence_path,
@@ -2148,11 +2150,7 @@ async fn governed_human_hold_and_consumption_survive_governance_restarts()
     assert_eq!(issue_lease_calls.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
     drop(consumed_reload);
-    let _ = std::fs::remove_file(&persistence_path);
-    let _ = std::fs::remove_file(GovernancePolicy::persistence_sequence_path(
-        &persistence_path,
-    ));
-    let _ = std::fs::remove_file(GovernancePolicy::persistence_lock_path(&persistence_path));
+    std::fs::remove_dir_all(persistence_root)?;
     Ok(())
 }
 

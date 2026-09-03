@@ -120,7 +120,7 @@ def parse_matrix(text: str) -> dict[str, tuple[str, ...]]:
         if match is None:
             continue
         task_id = match.group(1)
-        cells = tuple(cell.strip() for cell in match.group(2).split("|"))
+        cells = tuple(cell.strip() for cell in split_markdown_cells(match.group(2)))
         if len(cells) != len(REQUIRED_HEADERS) - 1:
             raise MatrixError(f"{task_id}: expected {len(REQUIRED_HEADERS)} columns")
         if task_id in rows:
@@ -129,6 +129,30 @@ def parse_matrix(text: str) -> dict[str, tuple[str, ...]]:
             raise MatrixError(f"{task_id}: empty validation cell")
         rows[task_id] = cells
     return rows
+
+
+def split_markdown_cells(row: str) -> list[str]:
+    """Split a table row while preserving escaped pipes inside code spans."""
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for character in row:
+        if escaped:
+            if character != "|":
+                current.append("\\")
+            current.append(character)
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "|":
+            cells.append("".join(current))
+            current = []
+        else:
+            current.append(character)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current))
+    return cells
 
 
 def parse_evidence_ledger(text: str) -> dict[str, EvidenceEntry]:
