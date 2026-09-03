@@ -21,6 +21,7 @@ require_literal "    name: Admin Dashboard"
 require_literal "needs.changes.outputs.admin == 'true'"
 require_literal "        run: just admin-check"
 require_literal "        run: scripts/test-workspace-ci-contract.sh"
+require_literal '          CHECK_FILE_SIZES_BASE: ${{ github.event.pull_request.head.sha || github.sha }}'
 require_literal "needs.changes.outputs.desktop-rust == 'true'"
 require_literal "              - 'workspace/scripts/check-desktop-vulnerabilities.sh'"
 require_literal "      - name: Install cargo-audit"
