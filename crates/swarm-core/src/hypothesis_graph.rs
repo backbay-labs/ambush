@@ -3746,6 +3746,14 @@ fn validate_task_target_scope(
     target: &TaskTarget,
     evidence_scope: &EvidenceScope,
 ) -> Result<(), GraphAdmissionError> {
+    if matches!(kind, TaskKind::ChallengeEdge | TaskKind::FalsifyHypothesis)
+        && evidence_scope.evidence_ids.is_empty()
+    {
+        return Err(GraphAdmissionError::InvalidField {
+            field: "task.evidence_scope.evidence_ids".to_string(),
+            reason: "decision tasks require explicit evidence IDs".to_string(),
+        });
+    }
     if let (TaskKind::AcquireEvidence, TaskTarget::Evidence { evidence_id }) = (kind, target)
         && !evidence_scope.evidence_ids.contains(evidence_id)
     {
@@ -4935,45 +4943,7 @@ impl TaskTerminalOutboxEntry {
         limits: &GraphResourceLimits,
         logical_time_high_water: GraphLogicalTime,
     ) -> Result<(), GraphAdmissionError> {
-        self.validate_for_task_at_inner(task, descriptor, limits, logical_time_high_water, false)
-    }
-
-    /// Validate a terminal retry against the durable hypothesis histories.
-    /// An exact previously sequenced decision may predate the current graph
-    /// high-water because the retry does not append it again; all new
-    /// decisions and every other terminal timestamp retain the strict bound.
-    pub fn validate_for_task_at_with_history(
-        &self,
-        task: &TaskRecord,
-        descriptor: &LogicalTaskDescriptor,
-        limits: &GraphResourceLimits,
-        logical_time_high_water: GraphLogicalTime,
-        hypotheses: &BTreeMap<HypothesisId, Hypothesis>,
-    ) -> Result<(), GraphAdmissionError> {
-        let decision_already_admitted = self.decision.as_ref().is_some_and(|incoming| {
-            hypotheses
-                .get(&incoming.hypothesis_id)
-                .and_then(|hypothesis| {
-                    hypothesis
-                        .decision_history
-                        .iter()
-                        .find(|existing| existing.decision_id == incoming.decision_id)
-                })
-                .is_some_and(|existing| {
-                    let mut normalized_existing = existing.clone();
-                    normalized_existing.sequence = 0;
-                    let mut normalized_incoming = incoming.clone();
-                    normalized_incoming.sequence = 0;
-                    normalized_existing == normalized_incoming
-                })
-        });
-        self.validate_for_task_at_inner(
-            task,
-            descriptor,
-            limits,
-            logical_time_high_water,
-            decision_already_admitted,
-        )
+        self.validate_for_task_at_inner(task, descriptor, limits, logical_time_high_water)
     }
 
     fn validate_for_task_at_inner(
@@ -4982,7 +4952,6 @@ impl TaskTerminalOutboxEntry {
         descriptor: &LogicalTaskDescriptor,
         limits: &GraphResourceLimits,
         logical_time_high_water: GraphLogicalTime,
-        decision_already_admitted: bool,
     ) -> Result<(), GraphAdmissionError> {
         limits.validate()?;
         descriptor.validate()?;
@@ -4996,20 +4965,11 @@ impl TaskTerminalOutboxEntry {
             });
         }
         let evidence_ids = self.validate_for_task_fields(task, limits)?;
-        if decision_already_admitted {
-            if let Some(decision) = self.decision.as_ref() {
-                validate_terminal_decision_upper_bound(
-                    decision,
-                    self.envelope.completion.completed_at,
-                )?;
-            }
-        } else {
-            validate_terminal_decision_time(
-                self.decision.as_ref(),
-                logical_time_high_water,
-                self.envelope.completion.completed_at,
-            )?;
-        }
+        validate_terminal_decision_time(
+            self.decision.as_ref(),
+            logical_time_high_water,
+            self.envelope.completion.completed_at,
+        )?;
         self.validate_memory_lineage_for_transition(
             descriptor,
             &evidence_ids,
@@ -10053,6 +10013,50 @@ mod tests {
         .unwrap();
         forged_scope.witness.scoped_agent_id = "scope-b".to_string();
         assert!(forged_scope.validate().is_err());
+    }
+
+    #[test]
+    fn decision_task_claims_require_explicit_evidence_ids() {
+        let claimant = signer_identity();
+        let scope_without_evidence = EvidenceScope::new(
+            [EvidenceSourceFamily::Process],
+            [],
+            [GraphNodeId::new("node:decision-scope")],
+        )
+        .expect("non-empty acquisition dimensions form a general evidence scope");
+        let cases = [
+            (
+                TaskKind::ChallengeEdge,
+                TaskTarget::Edge {
+                    edge_id: EdgeId::new("edge:decision-scope"),
+                },
+                GraphProducerRole::Challenger,
+            ),
+            (
+                TaskKind::FalsifyHypothesis,
+                TaskTarget::Hypothesis {
+                    hypothesis_id: HypothesisId::new("hypothesis:decision-scope"),
+                },
+                GraphProducerRole::Falsifier,
+            ),
+        ];
+
+        for (kind, target, role) in cases {
+            assert!(matches!(
+                TaskClaimRequest::new(
+                    TaskId::new(format!("task:decision-scope:{kind:?}")),
+                    kind,
+                    target,
+                    role,
+                    claimant.clone(),
+                    scope_without_evidence.clone(),
+                    GraphLogicalTime::new(10),
+                ),
+                Err(GraphAdmissionError::InvalidField { field, reason })
+                    if field == "task.evidence_scope.evidence_ids"
+                        && reason.contains("explicit evidence IDs")
+            ));
+        }
     }
 
     #[test]

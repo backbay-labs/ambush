@@ -4229,7 +4229,7 @@ fn challenge_completion_rejects_an_unrelated_hypothesis() {
 }
 
 #[test]
-fn duplicate_terminal_decision_reuses_its_original_sequence() {
+fn decision_admitted_by_another_task_cannot_complete_the_claimed_task() {
     let mut fixture = decision_task_fixture(TaskKind::ChallengeEdge, GraphProducerRole::Challenger);
     let claim = claim_decision_task(&mut fixture);
     let duplicate = DecisionRecord::new(
@@ -4272,10 +4272,10 @@ fn duplicate_terminal_decision_reuses_its_original_sequence() {
         .store
         .compare_and_swap(claimed.revision(), reconciled)
         .unwrap();
+    let before = reconciled.canonical_bytes().unwrap();
     let envelope = envelope_for_decision(&fixture, &claim, &duplicate, GraphLogicalTime::new(200));
-    let completed = fixture
-        .ledger
-        .complete_task(
+    assert!(matches!(
+        fixture.ledger.complete_task(
             &fixture.store,
             reconciled.revision(),
             &claim,
@@ -4284,16 +4284,19 @@ fn duplicate_terminal_decision_reuses_its_original_sequence() {
             Some(duplicate.clone()),
             None,
             None,
-        )
-        .unwrap();
-    let outbox_decision = completed.terminal_outbox()[&claim.task_id]
-        .decision
-        .as_ref()
-        .unwrap();
-    assert_eq!(outbox_decision.decision_id, duplicate.decision_id);
-    assert_eq!(outbox_decision.sequence, 1);
+        ),
+        Err(GraphStoreError::Admission(GraphAdmissionError::InvalidTransition { reason }))
+            if reason.contains("back-dated before the logical-time high-water")
+    ));
+    let after = fixture.store.snapshot().unwrap();
+    assert_eq!(after.canonical_bytes().unwrap(), before);
     assert_eq!(
-        completed.hypotheses()[&fixture.hypothesis_id]
+        after.state().tasks[&claim.task_id].task.state,
+        TaskState::Claimed
+    );
+    assert!(!after.terminal_outbox().contains_key(&claim.task_id));
+    assert_eq!(
+        after.hypotheses()[&fixture.hypothesis_id]
             .decision_history
             .len(),
         2

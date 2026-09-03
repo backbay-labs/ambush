@@ -426,6 +426,9 @@ pub enum ApprovalLedgerStoreError {
 /// Errors raised by the persisted approval-verdict store.
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalVerdictStoreError {
+    #[error("refusing to persist nonterminal approval verdict `{verdict_id}`")]
+    NonTerminalVerdict { verdict_id: String },
+
     #[error("failed to read approval verdict store file `{path}`: {source}")]
     Read {
         path: PathBuf,
@@ -1880,6 +1883,14 @@ impl FileApprovalVerdictStore {
         &self,
         report: &ApprovalVerdictReport,
     ) -> Result<ApprovalVerdictRecord, ApprovalVerdictStoreError> {
+        // A not-approved evaluation is a view of a mutable ledger, not a
+        // durable terminal artifact. Persisting it would make its counts and
+        // missing-voter set unverifiable after the next valid vote.
+        if report.status != ApprovalVerdictStatus::Approved {
+            return Err(ApprovalVerdictStoreError::NonTerminalVerdict {
+                verdict_id: report.verdict_id.clone(),
+            });
+        }
         let path = self.report_path(&report.verdict_id);
         write_pretty_json(
             &path,
@@ -2923,6 +2934,13 @@ impl DefaultApprovalHarness {
             return Ok(lookup);
         }
         let report = evaluate_verdict(&set.report, &ledger.report, now_ms())?;
+        if report.status != ApprovalVerdictStatus::Approved {
+            return Err(ApprovalError::InvalidVerdictRequest {
+                reason: format!(
+                    "approval ledger `{ledger_id}` has not reached an approved terminal verdict"
+                ),
+            });
+        }
         let record = verdict_store.persist(&report)?;
         Ok(ApprovalVerdictLookup { record, report })
     }
@@ -6642,5 +6660,62 @@ mod tests {
         assert_eq!(verdict.report.status, ApprovalVerdictStatus::Approved);
         let list = harness.list_verdicts().unwrap();
         assert_eq!(list.total_count, 1);
+    }
+
+    #[test]
+    fn harness_persists_only_terminal_verdicts_across_later_votes() {
+        let dir = TestDir::new("approval-harness-terminal-verdicts");
+        let verdict_root = dir.child("approval-verdicts");
+        let harness = DefaultApprovalHarness::from_path(
+            dir.child("config-placeholder"),
+            &verdict_root,
+            dir.child("approval-receipt-packs"),
+            dir.child("approval-sets"),
+            dir.child("approval-ledgers"),
+        )
+        .unwrap();
+        let (voter_a, signer_a) = voter("terminal-alpha");
+        let (voter_b, signer_b) = voter("terminal-bravo");
+        let set = harness
+            .create_approval_set(
+                vec![voter_a.clone(), voter_b.clone()],
+                ThresholdRule::AtLeast { required: 2 },
+                "promotion-evidence:terminal-only",
+            )
+            .unwrap();
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        harness
+            .append_vote(&set.set_id, &voter_a, &signer_a)
+            .unwrap();
+        let before = capture_store_tree(&verdict_root);
+        let pending_ledger = harness.load_ledger(&ledger_id).unwrap().unwrap();
+        let approval_set = harness.load_approval_set(&set.set_id).unwrap().unwrap();
+        let pending =
+            evaluate_verdict(&approval_set.report, &pending_ledger.report, now_ms()).unwrap();
+        let verdict_store = FileApprovalVerdictStore::open(&verdict_root).unwrap();
+
+        assert!(matches!(
+            verdict_store.persist(&pending),
+            Err(ApprovalVerdictStoreError::NonTerminalVerdict { verdict_id })
+                if verdict_id == pending.verdict_id
+        ));
+        assert_eq!(capture_store_tree(&verdict_root), before);
+
+        assert!(matches!(
+            harness.create_verdict(&set.set_id, &ledger_id),
+            Err(ApprovalError::InvalidVerdictRequest { reason })
+                if reason.contains("has not reached an approved terminal verdict")
+        ));
+        assert_eq!(capture_store_tree(&verdict_root), before);
+        assert_eq!(harness.list_verdicts().unwrap().total_count, 0);
+
+        harness
+            .append_vote(&set.set_id, &voter_b, &signer_b)
+            .unwrap();
+        let approved = harness.create_verdict(&set.set_id, &ledger_id).unwrap();
+        assert_eq!(approved.report.status, ApprovalVerdictStatus::Approved);
+        assert_eq!(harness.list_verdicts().unwrap().total_count, 1);
     }
 }

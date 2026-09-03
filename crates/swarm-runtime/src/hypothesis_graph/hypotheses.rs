@@ -293,9 +293,10 @@ pub fn unresolved_task_targets(
 /// Deterministic target expansion used by the durable coordinator.  The
 /// legacy [`unresolved_task_targets`] helper remains the narrow evidence-only
 /// projection used by callers that do not own a graph; this operation also
-/// emits challenge work for every already-admitted edge and a falsification
-/// task for each unresolved/contradictory alternative.  No edge ID is ever
-/// synthesized from telemetry or a hypothesis label.
+/// emits challenge work for already-admitted edges claimed by an eligible
+/// alternative and a falsification task for each unresolved/contradictory
+/// alternative. No edge ID is ever synthesized from telemetry or a
+/// hypothesis label.
 pub(crate) fn coordination_task_targets(
     seed: &HypothesisSeedInput,
     edge_ids: &BTreeSet<EdgeId>,
@@ -331,13 +332,18 @@ pub(crate) fn coordination_task_targets(
                     },
                 ));
             }
-            for edge_id in edge_ids {
-                targets.insert((
-                    TaskKind::ChallengeEdge,
-                    TaskTarget::Edge {
-                        edge_id: edge_id.clone(),
-                    },
-                ));
+            if !matches!(
+                hypothesis.status,
+                HypothesisStatus::Retired | HypothesisStatus::Falsified
+            ) {
+                for edge_id in edge_ids.intersection(&hypothesis.claims) {
+                    targets.insert((
+                        TaskKind::ChallengeEdge,
+                        TaskTarget::Edge {
+                            edge_id: edge_id.clone(),
+                        },
+                    ));
+                }
             }
         }
     }
@@ -508,13 +514,20 @@ mod tests {
     }
 
     #[test]
-    fn durable_target_expansion_contains_every_open_operation_kind() {
+    fn durable_target_expansion_only_challenges_edges_claimed_by_eligible_hypotheses() {
         let seed = seed();
-        let hypotheses = competing_hypotheses(&seed, &GraphResourceLimits::default())
+        let mut hypotheses = competing_hypotheses(&seed, &GraphResourceLimits::default())
             .expect("bounded seed must admit competing alternatives");
+        let claimed_edge = EdgeId::new("edge:claimed");
+        let unclaimed_edge = EdgeId::new("edge:unclaimed");
+        hypotheses
+            .get_mut(&seed.candidate_hypothesis_ids[0])
+            .expect("seed candidate must exist")
+            .claims
+            .insert(claimed_edge.clone());
         let targets = coordination_task_targets(
             &seed,
-            &BTreeSet::from([EdgeId::new("edge:admitted")]),
+            &BTreeSet::from([claimed_edge.clone(), unclaimed_edge.clone()]),
             &hypotheses,
         )
         .expect("neutral seed targets must validate");
@@ -526,8 +539,19 @@ mod tests {
         assert!(
             targets
                 .iter()
-                .any(|(kind, _)| *kind == TaskKind::ChallengeEdge)
+                .any(|(kind, target)| *kind == TaskKind::ChallengeEdge
+                    && target
+                        == &TaskTarget::Edge {
+                            edge_id: claimed_edge.clone(),
+                        })
         );
+        assert!(!targets.iter().any(|(kind, target)| {
+            *kind == TaskKind::ChallengeEdge
+                && target
+                    == &TaskTarget::Edge {
+                        edge_id: unclaimed_edge.clone(),
+                    }
+        }));
         assert!(
             targets
                 .iter()
