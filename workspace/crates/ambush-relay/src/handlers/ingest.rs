@@ -32,9 +32,9 @@ use ambush_core::kind::{
     KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
     KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
     KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM,
-    KIND_TEAM_CATALOG, KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
-    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
-    RELAY_ADMIN_SET_WORKSPACE_PROFILE,
+    KIND_TEAM_CATALOG, KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
+    RELAY_ADMIN_REMOVE_MEMBER, RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
 use ambush_core::tenant::TenantContext;
 use ambush_core::verification::verify_event;
@@ -542,6 +542,10 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         KIND_DM_OPEN | KIND_DM_ADD_MEMBER | KIND_DM_HIDE => Ok(Scope::MessagesWrite),
         KIND_WORKFLOW_DEF | KIND_WORKFLOW_TRIGGER => Ok(Scope::MessagesWrite),
         KIND_APPROVAL_GRANT | KIND_APPROVAL_DENY => Ok(Scope::MessagesWrite),
+        // A workflow step waiting on a human. Publishing one is an ordinary
+        // member write into the channel the decision belongs to; the decision
+        // itself is authorized elsewhere, never by this event's presence.
+        KIND_WORKFLOW_APPROVAL_REQUESTED => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -729,6 +733,9 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
             | KIND_HUDDLE_PARTICIPANT_LEFT
             | KIND_HUDDLE_ENDED
             | KIND_HUDDLE_GUIDELINES
+            // A pending approval names the channel it belongs to. Scoping it
+            // keeps it inside that channel's membership and fan-out compartment.
+            | KIND_WORKFLOW_APPROVAL_REQUESTED
     )
 }
 
@@ -3851,6 +3858,86 @@ mod tests {
     #[test]
     fn ephemeral_kinds_not_in_scope_allowlist() {
         assert!(required_scope_for_kind(KIND_PRESENCE_UPDATE, &make_dummy_event()).is_err());
+    }
+
+    // ---- kind:46010, workflow approval requested -------------------------
+    //
+    // 46010 is declared in `ambush_core::kind`, listed in `ALL_KINDS`, queried by
+    // `query_needs_action` and subscribed to by the ACP harness's default
+    // mention rule -- but before this change `required_scope_for_kind` had no
+    // arm for it, so `ingest_event` rejected every submission with
+    // "restricted: unknown event kind" and no producer could exist.
+
+    #[test]
+    fn workflow_approval_requested_is_in_scope_allowlist() {
+        let dummy = make_dummy_event();
+        assert!(
+            required_scope_for_kind(KIND_WORKFLOW_APPROVAL_REQUESTED, &dummy).is_ok(),
+            "kind:46010 must be publishable -- the DB, the feed query and the \
+             ACP harness all already reference it"
+        );
+    }
+
+    #[test]
+    fn workflow_approval_requested_requires_messages_write_scope() {
+        let dummy = make_dummy_event();
+        assert_eq!(
+            required_scope_for_kind(KIND_WORKFLOW_APPROVAL_REQUESTED, &dummy).unwrap(),
+            Scope::MessagesWrite,
+            "publishing a pending approval is an ordinary member write; the \
+             decision it describes is authorized elsewhere"
+        );
+    }
+
+    #[test]
+    fn workflow_approval_requested_requires_h_tag() {
+        // An approval belongs to the channel whose members can act on it.
+        // Without this, an h-less 46010 would store with channel_id = NULL and
+        // fan out to every global subscriber in the community.
+        assert!(requires_h_channel_scope(KIND_WORKFLOW_APPROVAL_REQUESTED));
+    }
+
+    #[test]
+    fn workflow_approval_requested_is_not_global_only() {
+        // Guards `global_only_and_channel_scoped_are_disjoint`: adding 46010 to
+        // both sets would trip that sweep and silently defeat channel scoping.
+        assert!(!is_global_only_kind(KIND_WORKFLOW_APPROVAL_REQUESTED));
+    }
+
+    #[test]
+    fn workflow_approval_requested_is_not_a_command_kind() {
+        // 46010 falls through `ingest_event`'s `is_command_kind` branch to
+        // ordinary storage. If it were a command kind, `command_executor`
+        // would demand a matching `workflow_approvals` row and reject it.
+        assert!(!ambush_core::kind::is_command_kind(
+            KIND_WORKFLOW_APPROVAL_REQUESTED
+        ));
+    }
+
+    #[test]
+    fn workflow_approval_granted_and_denied_stay_unpublishable() {
+        // Deliberately narrow: 46011 and 46012 have no producer and no reader
+        // contract, so they keep the default rejection. Widening the change to
+        // them needs its own argument.
+        let dummy = make_dummy_event();
+        assert!(
+            required_scope_for_kind(ambush_core::kind::KIND_WORKFLOW_APPROVAL_GRANTED, &dummy)
+                .is_err()
+        );
+        assert!(
+            required_scope_for_kind(ambush_core::kind::KIND_WORKFLOW_APPROVAL_DENIED, &dummy)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn workflow_approval_kinds_are_the_wire_values() {
+        // The Desktop home feed hard-codes [46010, 46011, 46012] as JSON
+        // integers and the feed SQL interpolates the constant into a string, so
+        // the numbers are a wire contract that no type checker guards.
+        assert_eq!(KIND_WORKFLOW_APPROVAL_REQUESTED, 46010);
+        assert_eq!(ambush_core::kind::KIND_WORKFLOW_APPROVAL_GRANTED, 46011);
+        assert_eq!(ambush_core::kind::KIND_WORKFLOW_APPROVAL_DENIED, 46012);
     }
 
     #[test]

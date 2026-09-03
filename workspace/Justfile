@@ -383,6 +383,16 @@ test-unit:
         # disabled_mode_still_requires_the_correct_host / _a_matching_origin.
         cargo nextest run -p ambush-relay --lib \
             -E 'test(/^api::admin::/) - test(=api::admin::tests::disabled_mode_allows_unauthenticated_requests_on_the_admin_host) - test(=api::admin::tests::nip98_mode_unrostered_signer_does_not_consume_a_replay_slot)'
+        # handlers::ingest::tests joins the unit job for the same reason: its
+        # tests are pure functions over a kind integer (scope allowlist, h-scope
+        # set, global-only set, command routing, the kind:46010 workflow-approval
+        # admission) with no Postgres and no relay process -- the one
+        # Postgres-backed test in the module is #[ignore]d, so the default
+        # selection stays infra-free. Until it was named here `ambush-relay
+        # --lib` outside api::admin ran in no CI job at all: clippy
+        # --all-targets compiles handlers::ingest's test module but never
+        # executes it.
+        cargo nextest run -p ambush-relay --lib -E 'test(handlers::ingest::tests)'
     else
         ./scripts/run-tests.sh unit
     fi
