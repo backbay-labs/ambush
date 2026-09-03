@@ -497,11 +497,12 @@ paths:
         and returns 400 rather than minting a degraded incident.
 
 
-        IDEMPOTENT ON `case_id`: `incident_id` is
-        `incident:perch-case:{case_id}`, which cannot collide with the correlation
-        engine's `incident:{hunt_id}:{created_at_ms}`
-        (crates/swarm-runtime/src/correlation.rs:211). A second call with the same
-        `case_id` returns 200 with `created: false`.
+        IDEMPOTENT ON `finding_id`: a second mint for a finding this route already
+        promoted returns 200 with `created: false` and the original `case_id`.
+        `incident_id` is `incident:perch-case:{case_id}`, which cannot collide with
+        the correlation engine's `incident:{hunt_id}:{created_at_ms}`
+        (crates/swarm-runtime/src/correlation.rs:211); the daemon mints `case_id`
+        (00-DECISIONS W3-14) and the console never supplies one.
       parameters:
         - $ref: '#/components/parameters/SchemaVersionHeader'
       requestBody:
@@ -522,8 +523,10 @@ paths:
         '400':
           description: >-
             `error: "bad_request"`. The minting contract was not satisfied:
-            `trigger_strategy_id` empty, no `host:` key in `correlation_keys` or
-            `shared_keys`, or `included_members` does not contain `finding_id`.
+            `strategy_id`, `finding_id`, `hunt_id` or `event_id` empty, or a
+            `case_id` supplied in the body (the daemon mints it, W3-14). A missing
+            `host_id` is NOT a 400 — it is a 200 with `degraded:
+            ["host_exclusion_unreachable"]`, per §9.3 of 12-BACKEND-BILL-API.md.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1876,26 +1879,12 @@ components:
 
     IncidentMintRequest:
       type: object
-      required: [case_id, finding_id, hunt_id, event_id, strategy_id, threat_class, severity, created_at_ms, summary]
+      description: >-
+        Carries no `case_id`: the daemon mints it and returns it on
+        `IncidentMintResponse` (00-DECISIONS W3-14); a body that supplies one is
+        rejected by `additionalProperties: false`.
+      required: [finding_id, hunt_id, event_id, strategy_id, threat_class, severity, created_at_ms, summary]
       properties:
-        case_id:
-          type: string
-          description: >-
-            The Perch case's channel UUID. The case id IS the channel UUID; it is
-            not a `CorrelatedIncident`, which is a recomputed Ambush artifact.
-
-
-            THIS ROUTE DOES NOT CREATE THE CHANNEL AND CANNOT. It mints an incident
-            record in the daemon's incident store and nothing else; the daemon has no
-            relay client. Who creates the channel on the manual-promotion path — the
-            only promotion clause ADR 0018 enables first — is an OPEN CROSS-ARTIFACT
-            QUESTION recorded in 12-BACKEND-BILL-API.md §9.5, not a decision this
-            document makes: 11-BRIDGE-CRATE.md §9.1 scopes the bridge's channel
-            creation to `RuntimeEvent::ResponseHeld`, which a manual promotion does
-            not raise. This route is deliberately indifferent to the answer — it
-            validates `case_id` as a UUID and does not check that any channel exists,
-            so it does not have to be re-specified when the question is settled.
-          format: uuid
         finding_id: { type: string }
         hunt_id: { type: string }
         event_id: { type: string }
@@ -1928,13 +1917,19 @@ components:
 
     IncidentMintResponse:
       type: object
-      required: [schema_version, incident_id, created, degraded]
+      required: [schema_version, incident_id, case_id, created, degraded]
       properties:
         schema_version: { type: integer, minimum: 1, default: 1 }
         incident_id: { type: string }
+        case_id:
+          type: string
+          format: uuid
+          description: >-
+            Minted by the daemon (00-DECISIONS W3-14). The case channel's UUID;
+            the bridge creates the channel from `RuntimeEvent::CasePromoted`.
         created:
           type: boolean
-          description: False when an incident for this `case_id` already existed.
+          description: False when an incident for this `finding_id` already existed.
         degraded:
           type: array
           description: >-

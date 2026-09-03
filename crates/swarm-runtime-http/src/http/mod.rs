@@ -8,6 +8,7 @@ pub mod evolution;
 pub mod helpers;
 pub mod maintenance;
 mod pages;
+pub mod perch;
 pub mod render;
 pub mod review;
 pub mod state;
@@ -19,4 +20,5 @@ pub use containment::{
     ContainmentLeaseListQuery, ContainmentLeaseListResponse, ContainmentLeaseView,
     ContainmentReleaseRequest, ContainmentReleaseResponse, containment_operator_router,
 };
+pub use perch::{PERCH_ROUTER_PATHS, perch_operator_router};
 pub use state::{LocalOperatorSurface, OperatorHttpError};

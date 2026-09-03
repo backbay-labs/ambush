@@ -92,7 +92,7 @@ fn permissive_policy_rules() -> Vec<PolicyRuleConfig> {
     }]
 }
 
-fn operator_config() -> SwarmConfig {
+pub(super) fn operator_config() -> SwarmConfig {
     SwarmConfig {
         schema_version: 1,
         name: "operator-http".to_string(),

@@ -1,5 +1,6 @@
 mod demo;
 mod health;
+pub mod perch_ops;
 mod platform_api;
 mod providence_handlers;
 mod soar_verdict_handlers;
@@ -553,7 +554,7 @@ impl IngestRuntimeStrategyProposalRouter {
 
 // --- Shared helpers used by multiple sub-modules ---
 
-fn sanitize_id(raw: &str) -> String {
+pub(crate) fn sanitize_id(raw: &str) -> String {
     raw.chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
@@ -763,9 +764,12 @@ fn runtime_event_matches_scope(event: &RuntimeEvent, scope: &ProvidenceContextSc
             .hunt_id
             .as_deref()
             .is_none_or(|value| event_id == value),
+        // A promotion never reaches the unauthenticated Providence context
+        // stream: it names a case channel and an operator's act.
         RuntimeEvent::EvolutionStatus { .. }
         | RuntimeEvent::AgentHealth { .. }
-        | RuntimeEvent::TamperAlert { .. } => false,
+        | RuntimeEvent::TamperAlert { .. }
+        | RuntimeEvent::CasePromoted { .. } => false,
     }
 }
 

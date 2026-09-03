@@ -134,3 +134,8 @@ pub mod anti_tamper;
 pub mod bridge_runtime;
 pub mod control;
 pub mod ingest;
+
+/// The first-card engine operations (B3r, B3i, B3), re-exported so the
+/// walking-skeleton test and the HTTP crate name them as
+/// `swarm_ingest_runtime::perch_ops::…` (12-PLAN-FIRST-CARD.md Tasks 10–12).
+pub use ingest::perch_ops;

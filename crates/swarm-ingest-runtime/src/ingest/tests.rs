@@ -107,7 +107,7 @@ fn test_config_store_root() -> PathBuf {
     ))
 }
 
-fn test_config(strategy: &str) -> SwarmConfig {
+pub(crate) fn test_config(strategy: &str) -> SwarmConfig {
     let mut config = SwarmConfig {
         schema_version: 1,
         name: "ingest-test".to_string(),

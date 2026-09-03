@@ -1141,6 +1141,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "no containment sweep; containment release routes not mounted"
             ),
         }
+        // The perch operator routes (B3r, B3i, B3) ride on the same listener for
+        // the same reason: they read and write the daemon's live incident store
+        // and publish on its runtime-event broadcaster. Independent of the
+        // containment sweep -- a daemon with no sweep still promotes and
+        // records verdicts. `docs/PERCH-DEV.md` greps for the mounted line.
+        if config.operator.enabled {
+            match swarm_runtime_http::http::perch_operator_router(&config, state.clone()) {
+                Ok(perch_router) => {
+                    tracing::info!(module = module_path!(), "perch operator routes mounted");
+                    router = router.merge(perch_router);
+                }
+                Err(error) => tracing::error!(
+                    module = module_path!(),
+                    reason = %error,
+                    "perch operator routes NOT mounted; promotion and finding \
+                     verdicts are unavailable on this daemon"
+                ),
+            }
+        } else {
+            tracing::warn!(
+                module = module_path!(),
+                "operator surface disabled in config; perch operator routes not mounted"
+            );
+        }
         let server = serve_with_listener(
             listener,
             router,
