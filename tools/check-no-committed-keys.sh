@@ -30,6 +30,19 @@ KEY_EXT = {".ed25519", ".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"}
 HEADERS = (b"-----BEGIN", b"ssh-rsa ", b"ssh-ed25519 ", b"PuTTY-User-Key-File")
 # Bytes that are plausibly a raw seed / expanded key.
 RAW_KEY_SIZES = {32, 64}
+# Test material the Ambush workspace (workspace/, merged 2026-09-02) commits on
+# purpose: the push gateway's APNS and App Attest fixtures. They are throwaway
+# test identities exercised by that crate's own tests, they were reviewed under
+# the workspace's security-review gate, and they are allowlisted by EXACT path
+# so a seventh file in that directory still fails here.
+ALLOWED_TEST_FIXTURES = {
+    "workspace/crates/ambush-push-gateway/tests/fixtures/apns-test-cert-only.pem",
+    "workspace/crates/ambush-push-gateway/tests/fixtures/apns-test-encrypted-identity.pem",
+    "workspace/crates/ambush-push-gateway/tests/fixtures/apns-test-identity.pem",
+    "workspace/crates/ambush-push-gateway/tests/fixtures/apns-test-key-only.pem",
+    "workspace/crates/ambush-push-gateway/tests/fixtures/apns-test-mismatched-identity.pem",
+    "workspace/crates/ambush-push-gateway/tests/fixtures/apple-app-attestation-root.pem",
+}
 
 def entropy(b: bytes) -> float:
     if not b:
@@ -51,6 +64,8 @@ for raw in tracked:
     rel = raw.decode("utf-8", "surrogateescape")
     path = pathlib.Path(rel)
     if not path.is_file():
+        continue
+    if rel in ALLOWED_TEST_FIXTURES:
         continue
 
     if path.suffix.lower() in KEY_EXT:

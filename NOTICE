@@ -13,3 +13,8 @@ package distributions.
 The `vendor/reference/` tree contains source copied from other Backbay Labs
 projects for adaptation and provenance. See docs/VENDOR-REFERENCES.md for the
 per-tree origin and commit record.
+
+The workspace/ directory contains the Ambush workspace (relay, desktop, web and
+mobile clients), merged on 2026-09-02 from a fork of block/buzz at commit
+eed74bde2 with its history preserved. It is licensed under the Apache License,
+Version 2.0; see workspace/LICENSE.

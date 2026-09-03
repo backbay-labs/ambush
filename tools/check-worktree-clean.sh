@@ -82,12 +82,16 @@ echo "== untracked and ignored residue outside target/ =="
 # `--ignored=matching -uall` is required: the default `--ignored`
 # collapses to the ignored DIRECTORY and omits empty ones entirely.
 # Restricted to `??`/`!!` so it reports residue only; modified tracked
-# files are the first check's business.
+# files are the first check's business. `workspace/` (the Ambush workspace,
+# merged 2026-09-02) is excluded from RESIDUE counting only: its build output
+# is governed by workspace/.gitignore and its own `just ci`; a modified
+# tracked file under it still fails the first check above.
 tree_residue="$(
   git status --porcelain --ignored=matching -uall \
     | grep -E '^(\?\?|!!) ' \
     | grep -v '^!! target/' \
-    | grep -v '^!! \.claude/' || true
+    | grep -v '^!! \.claude/' \
+    | grep -v '^!! workspace/' || true
 )"
 if [ -n "$tree_residue" ]; then
   echo "::error::${LABEL} left files in the working tree"
@@ -114,9 +118,13 @@ echo "== stray empty directories anywhere in the tree =="
 # test run caused. A gate that cries wolf locally gets ignored locally, which
 # costs exactly the CI-only coverage this script was lifted out of ci.yml to
 # escape. CI is unaffected either way: a fresh checkout has no `.claude/`.
+# `workspace/` (the Ambush workspace, merged 2026-09-02) is excluded for the
+# same reason as the residue scan above: its Hermit cache and build trees are
+# that subtree's business and are governed by its own gates.
 empty_dirs="$(
   find . -type d -empty \
     -not -path './.git/*' -not -path './target/*' -not -path './.claude/*' \
+    -not -path './workspace/*' \
     -print | sort
 )"
 if [ -n "$empty_dirs" ]; then
