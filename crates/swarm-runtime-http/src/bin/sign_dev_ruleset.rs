@@ -8,7 +8,7 @@
 //! run for the same reason rather than pretending to sign.
 //!
 //! ```text
-//! cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets/perch-dev.yaml
+//! cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets-dev/perch-dev.yaml
 //! ```
 
 const USAGE: &str = "usage: sign_dev_ruleset <ruleset.yaml>";

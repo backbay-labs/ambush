@@ -266,14 +266,14 @@ by `46010`, `40100` and `39005` so perch events get the lossless reconnect backf
 
 | # | Item | Invariant | Milestone |
 |---|---|---|---|
-| H1 | Delete animated-avatar capture and its remote script host; pin `security.csp` as a literal string with no bare `https:`/`wss:` in `connect-src` and no remote `script-src` | INV-30 | Ground |
+| H1 | Delete animated-avatar capture and its remote script host; pin `security.csp` as a literal string asserted by a test, with no remote `script-src` host. `connect-src` keeps `https: http: wss: ws:` under D3 (W3-23): narrowing it to named relay origins needs a Tauri-side proxy for the invite, join-policy and moderation fetches and is a follow-up; the pin makes any widening a reviewed edit | INV-30 as narrowed by W3-23 | Ground |
 | H2 | `perch_sign_gate` at every signing boundary, with the inventory test | INV-29 | Ground |
 | H3 | `resetCommunityState` → typed exhaustive registry | INV-23 | Ground |
 | H4 | `tools/check-perch-write-allowlist.sh`: the console tree's daemon-bound non-GETs are exactly five | INV-01 | First card |
 | H5 | Admitted-issuer gate on every marker parse and every `26xxx` frame | INV-15 | First card |
 | H6 | The six `shared/ui` components that render adversary-controlled remote content (link previews, attachments) are not mounted inside a perch surface; card bodies are `AdversaryText` end to end | INV-14 | First card |
 | H7 | Fix the four panic sites in `workspace/crates/ambush-ws-client/src/connection.rs` in place and bring that crate under `tools/check-runtime-panic-contract.sh` | ADR 0015 C6 as amended (W3-6) | Ground |
-| H8 | `tools/check-copy-banned-terms.sh` + the `.mjs` half over perch roots, with `Perch` added to the ban list | INV-31, W3-8 | Ground |
+| H8 | `tools/check-copy-banned-terms.sh` + the `.mjs` half over perch roots, with `Perch` added to the ban list; lands with its first real subject, and the `docs/assets` scope is marked `deferred` until Operator-complete (W3-24) | INV-31, W3-8, W3-24 | First card |
 
 Everything else the deletion programme removed stays.
 
