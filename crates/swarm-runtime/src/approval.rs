@@ -2053,6 +2053,19 @@ fn validate_ledger_report(
         created_at_ms: report.created_at_ms,
     };
     for entry in &report.entries {
+        // The durable vote writer currently exposes only an approve operation,
+        // and the legacy voter signature payload does not include `vote`.
+        // Consequently, any other persisted value is unauthenticated and must
+        // fail closed. Pure verdict evaluation still accepts reject entries so
+        // threshold semantics can be evaluated independently of persistence.
+        if entry.vote != ApprovalVote::Approve {
+            return Err(ApprovalError::InvalidLedgerRequest {
+                reason: format!(
+                    "approval ledger `{}` contains an unsupported persisted vote",
+                    report.ledger_id
+                ),
+            });
+        }
         if entry.timestamp_ms < report.created_at_ms
             || replayed
                 .entries
@@ -2743,7 +2756,12 @@ impl DefaultApprovalHarness {
         if let Some(lookup) = existing.into_iter().next() {
             return Ok(lookup);
         }
-        let report = evaluate_verdict(&set.report, &ledger.report, now_ms())?;
+        let evaluated_at_ms = ledger
+            .report
+            .entries
+            .iter()
+            .fold(now_ms(), |latest, entry| latest.max(entry.timestamp_ms));
+        let report = evaluate_verdict(&set.report, &ledger.report, evaluated_at_ms)?;
         if report.status != ApprovalVerdictStatus::Approved {
             return Err(ApprovalError::InvalidVerdictRequest {
                 reason: format!(
@@ -3213,6 +3231,19 @@ pub fn evaluate_verdict(
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
+    if evaluated_at_ms < approval_set.created_at_ms
+        || evaluated_at_ms < ledger.created_at_ms
+        || ledger.entries.iter().any(|entry| {
+            eligible.contains(entry.voter_id.as_str()) && entry.timestamp_ms > evaluated_at_ms
+        })
+    {
+        return Err(ApprovalError::InvalidVerdictRequest {
+            reason: format!(
+                "verdict evaluation for ledger `{}` predates its lineage or a counted vote",
+                ledger.ledger_id
+            ),
+        });
+    }
     let approve_count = ledger
         .entries
         .iter()
@@ -3350,6 +3381,11 @@ pub fn verify_receipt_pack(pack: &ApprovalReceiptPackReport) -> Result<(), Appro
             .entries
             .iter()
             .any(|entry| entry.timestamp_ms < pack.ledger.created_at_ms)
+        || pack
+            .ledger
+            .entries
+            .iter()
+            .any(|entry| entry.timestamp_ms > pack.verdict.evaluated_at_ms)
         || pack.verdict.evaluated_at_ms < pack.ledger.created_at_ms
         || pack.created_at_ms < pack.verdict.evaluated_at_ms
     {
@@ -5422,6 +5458,74 @@ mod tests {
     }
 
     #[test]
+    fn tampered_persisted_reject_vote_fails_closed_without_derivatives() {
+        let dir = TestDir::new("tampered-persisted-reject-vote");
+        let set_root = dir.child("approval-sets");
+        let ledger_root = dir.child("approval-ledgers");
+        let verdict_root = dir.child("approval-verdicts");
+        let pack_root = dir.child("approval-receipt-packs");
+        let harness = DefaultApprovalHarness::from_path(
+            dir.child("config-placeholder"),
+            &verdict_root,
+            &pack_root,
+            &set_root,
+            &ledger_root,
+        )
+        .unwrap();
+        let (voter_id, signer) = voter("tampered-persisted-reject-voter");
+        let set = harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                "promotion-evidence:tampered-persisted-reject",
+            )
+            .unwrap();
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        let signature =
+            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
+        harness
+            .append_signed_vote(&ledger_id, &voter_id, &signature)
+            .unwrap();
+
+        let ledger_path = harness.ledger_store.report_path(&ledger_id);
+        let mut report: ApprovalLedgerReport =
+            serde_json::from_slice(&fs::read(&ledger_path).unwrap()).unwrap();
+        report.entries[0].vote = ApprovalVote::Reject;
+        fs::write(&ledger_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        let expected_sets = capture_store_tree(&set_root);
+        let expected_ledgers = capture_store_tree(&ledger_root);
+        let expected_verdicts = capture_store_tree(&verdict_root);
+        let expected_packs = capture_store_tree(&pack_root);
+
+        drop(harness);
+        let reopened = DefaultApprovalHarness::from_path(
+            dir.child("config-placeholder"),
+            &verdict_root,
+            &pack_root,
+            &set_root,
+            &ledger_root,
+        )
+        .unwrap();
+        for result in [
+            reopened.load_ledger(&ledger_id).map(|_| ()),
+            reopened.list_ledgers(Some(&set.set_id)).map(|_| ()),
+            reopened.create_verdict(&set.set_id, &ledger_id).map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ApprovalError::InvalidLedgerRequest { reason })
+                    if reason.contains("unsupported persisted vote")
+            ));
+        }
+        assert_eq!(capture_store_tree(&set_root), expected_sets);
+        assert_eq!(capture_store_tree(&ledger_root), expected_ledgers);
+        assert_eq!(capture_store_tree(&verdict_root), expected_verdicts);
+        assert_eq!(capture_store_tree(&pack_root), expected_packs);
+    }
+
+    #[test]
     fn tampered_approval_set_authority_fails_closed_before_derivatives() {
         let dir = TestDir::new("tampered-approval-set-authority");
         let signing_key_env = format!(
@@ -6167,6 +6271,40 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_verdict_rejects_evaluation_before_a_counted_vote() {
+        let (voter_a, signer_a) = voter("chronology-alpha");
+        let (voter_b, signer_b) = voter("chronology-bravo");
+        let set = sample_set(vec![voter_a.clone(), voter_b.clone()], 2);
+        let mut ledger = sample_ledger(&set.set_id);
+        ledger.entries.push(signed_entry(
+            &ledger.ledger_id,
+            &set.set_id,
+            &voter_a,
+            &signer_a,
+            0,
+        ));
+        ledger.entries.push(signed_entry(
+            &ledger.ledger_id,
+            &set.set_id,
+            &voter_b,
+            &signer_b,
+            1,
+        ));
+
+        let error = evaluate_verdict(
+            &set,
+            &ledger,
+            ledger.entries[1].timestamp_ms.saturating_sub(1),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ApprovalError::InvalidVerdictRequest { reason }
+                if reason.contains("predates its lineage or a counted vote")
+        ));
+    }
+
+    #[test]
     fn receipt_pack_verification_detects_tamper() {
         let (voter_a, signer_a) = voter("alpha");
         let (voter_b, signer_b) = voter("bravo");
@@ -6206,6 +6344,25 @@ mod tests {
         assert!(matches!(
             verify_receipt_pack(&tampered),
             Err(ApprovalError::InvalidReceiptPack { .. })
+        ));
+
+        let mut predating_verdict = verdict;
+        predating_verdict.evaluated_at_ms = ledger.entries[1].timestamp_ms.saturating_sub(1);
+        predating_verdict.verdict_id = canonical_approval_verdict_id(&predating_verdict).unwrap();
+        let predating_pack = build_receipt_pack(
+            &set,
+            &ledger,
+            &predating_verdict,
+            vec!["audit:chronology".to_string()],
+            &signer,
+            "local-approval-signer",
+            1_700_000_000_601,
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_receipt_pack(&predating_pack),
+            Err(ApprovalError::InvalidReceiptPack { reason })
+                if reason.contains("lineage or timestamps are inconsistent")
         ));
     }
 
@@ -6298,6 +6455,56 @@ mod tests {
         assert_eq!(verdict.report.status, ApprovalVerdictStatus::Approved);
         let list = harness.list_verdicts().unwrap();
         assert_eq!(list.total_count, 1);
+    }
+
+    #[test]
+    fn harness_verdict_time_never_predates_latest_persisted_vote() {
+        let dir = TestDir::new("approval-harness-backward-clock");
+        let harness = DefaultApprovalHarness::from_path(
+            dir.child("config-placeholder"),
+            dir.child("approval-verdicts"),
+            dir.child("approval-receipt-packs"),
+            dir.child("approval-sets"),
+            dir.child("approval-ledgers"),
+        )
+        .unwrap();
+        let (voter_id, signer) = voter("backward-clock-voter");
+        let set = harness
+            .create_approval_set(
+                vec![voter_id.clone()],
+                ThresholdRule::AtLeast { required: 1 },
+                "promotion-evidence:backward-clock",
+            )
+            .unwrap();
+        let ledger_id = harness.list_ledgers(Some(&set.set_id)).unwrap().ledgers[0]
+            .ledger_id
+            .clone();
+        let signature =
+            signer.sign(&vote_payload_bytes(&set.set_id, &ledger_id, &voter_id).unwrap());
+        harness
+            .append_signed_vote(&ledger_id, &voter_id, &signature)
+            .unwrap();
+
+        let ledger_path = harness.ledger_store.report_path(&ledger_id);
+        let mut report: ApprovalLedgerReport =
+            serde_json::from_slice(&fs::read(&ledger_path).unwrap()).unwrap();
+        let mut entry = report.entries.remove(0);
+        let future_vote_ms = now_ms().saturating_add(3_600_000);
+        entry.timestamp_ms = future_vote_ms;
+        entry.envelope_hash = build_vote_envelope_hash(
+            &report,
+            &entry.entry_id,
+            &entry.voter_id,
+            &entry.signature,
+            entry.timestamp_ms,
+        )
+        .unwrap();
+        report.entries.push(entry);
+        fs::write(&ledger_path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+
+        let verdict = harness.create_verdict(&set.set_id, &ledger_id).unwrap();
+        assert_eq!(verdict.report.evaluated_at_ms, future_vote_ms);
+        assert_eq!(verdict.report.status, ApprovalVerdictStatus::Approved);
     }
 
     #[test]
