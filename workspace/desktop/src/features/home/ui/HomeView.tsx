@@ -4,8 +4,6 @@ import { RefreshCcw } from "lucide-react";
 import { useAppShell } from "@/app/AppShellContext";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
 import { useChannelsQuery } from "@/features/channels/hooks";
-import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
-import { ChannelManagementSheet } from "@/features/channels/ui/ChannelManagementSheet";
 import {
   type InboxFilter,
   type InboxReply,
@@ -27,20 +25,12 @@ import { useHomePersonalInbox } from "@/features/home/useHomePersonalInbox";
 import { useInboxThreadContext } from "@/features/home/useInboxThreadContext";
 import { useHiddenDmInboxNavigation } from "@/features/home/useHiddenDmInboxNavigation";
 import {
-  type ProfilePanelTab,
-  type ProfilePanelView,
-  UserProfilePanel,
-} from "@/features/profile/ui/UserProfilePanel";
-import {
-  profilePanelTabFromSearch,
-  profilePanelViewFromSearch,
-} from "@/features/profile/ui/UserProfilePanelUtils";
-import {
   INBOX_SINGLE_COLUMN_BREAKPOINT_PX,
   useResizableInboxListWidth,
 } from "@/features/home/useResizableInboxListWidth";
 import { getHomePaneLayout } from "@/features/home/lib/homePaneLayout";
 import { HomeLoadingState } from "@/features/home/ui/HomeLoadingState";
+import { HomeInboxAuxiliaryPane } from "@/features/home/ui/HomeInboxAuxiliaryPane";
 import { HomeMessagesDetail } from "@/features/home/ui/HomeMessagesDetail";
 import { InboxListPane } from "@/features/home/ui/InboxListPane";
 import { HomePersonalInboxDetail } from "@/features/home/ui/HomePersonalInboxDetail";
@@ -140,12 +130,6 @@ export function HomeView({
   // `?item=` unconsumed and does not snap back to a feed-item detail view.
   const urlSelectedItemId = isMessagesMode ? inboxSearchValues.item : null;
   const profilePanelPubkey = inboxSearchValues.profile;
-  const profilePanelTab = profilePanelTabFromSearch(
-    inboxSearchValues.profileTab,
-  );
-  const profilePanelView = profilePanelViewFromSearch(
-    inboxSearchValues.profileView,
-  );
   // Explicit selection is URL-owned; automatic desktop selection stays local.
   const [autoSelectedEventId, setAutoSelectedEventId] = React.useState<
     string | null
@@ -186,22 +170,6 @@ export function HomeView({
       profileView: null,
     });
   }, [applyInboxSearchPatch]);
-  const handleProfilePanelViewChange = React.useCallback(
-    (view: ProfilePanelView, options?: { replace?: boolean }) =>
-      applyInboxSearchPatch(
-        { profileView: view === "summary" ? null : view },
-        options,
-      ),
-    [applyInboxSearchPatch],
-  );
-  const handleProfilePanelTabChange = React.useCallback(
-    (tab: ProfilePanelTab, options?: { replace?: boolean }) =>
-      applyInboxSearchPatch(
-        { profileTab: tab === "info" ? null : tab },
-        options,
-      ),
-    [applyInboxSearchPatch],
-  );
   const [isDeletingMessage, setIsDeletingMessage] = React.useState(false);
   const [emptyDeleteId, setEmptyDeleteId] = React.useState<string | null>(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
@@ -787,55 +755,25 @@ export function HomeView({
               reminder={selectedReminder}
             />
           ) : null}
-          {profilePanelPubkey ? (
-            <RightAuxiliaryPane
-              canResetWidth={canResetThreadPanelWidth}
-              constrainToAvailableSpace={false}
-              onResetWidth={handleThreadPanelWidthReset}
-              onResizeStart={handleThreadPanelResizeStart}
-              testId="home-user-profile-panel"
-              widthPx={auxiliaryPaneWidthPx}
-            >
-              <UserProfilePanel
-                currentPubkey={currentPubkey}
-                isSinglePanelView={isSinglePanelAuxiliaryView}
-                layout="split"
-                onClose={handleCloseProfilePanel}
-                onOpenDm={handleOpenDm}
-                onOpenProfile={handleOpenProfilePanel}
-                onTabChange={handleProfilePanelTabChange}
-                onViewChange={handleProfilePanelViewChange}
-                pubkey={profilePanelPubkey}
-                splitPaneClamp
-                tab={profilePanelTab}
-                transparentChrome
-                view={profilePanelView}
-                widthPx={auxiliaryPaneWidthPx}
-              />
-            </RightAuxiliaryPane>
-          ) : isChannelManagementOpen ? (
-            <RightAuxiliaryPane
-              canResetWidth={canResetThreadPanelWidth}
-              constrainToAvailableSpace={false}
-              onResetWidth={handleThreadPanelWidthReset}
-              onResizeStart={handleThreadPanelResizeStart}
-              testId="home-channel-management-auxiliary-pane"
-              widthPx={auxiliaryPaneWidthPx}
-            >
-              <ChannelManagementSheet
-                channel={managedChannel}
-                currentPubkey={currentPubkey}
-                layout="split"
-                onOpenMembers={() => setMembersChannel(managedChannel)}
-                onOpenChange={(nextOpen) => {
-                  if (!nextOpen) {
-                    setManagedChannelId(null);
-                  }
-                }}
-                open={true}
-              />
-            </RightAuxiliaryPane>
-          ) : null}
+          <HomeInboxAuxiliaryPane
+            applyInboxSearchPatch={applyInboxSearchPatch}
+            canResetWidth={canResetThreadPanelWidth}
+            currentPubkey={currentPubkey}
+            isChannelManagementOpen={isChannelManagementOpen}
+            isSinglePanelView={isSinglePanelAuxiliaryView}
+            managedChannel={managedChannel}
+            onCloseProfilePanel={handleCloseProfilePanel}
+            onOpenDm={handleOpenDm}
+            onOpenProfilePanel={handleOpenProfilePanel}
+            onResetWidth={handleThreadPanelWidthReset}
+            onResizeStart={handleThreadPanelResizeStart}
+            profilePanelPubkey={profilePanelPubkey}
+            profilePanelTabSearch={inboxSearchValues.profileTab}
+            profilePanelViewSearch={inboxSearchValues.profileView}
+            setManagedChannelId={setManagedChannelId}
+            setMembersChannel={setMembersChannel}
+            widthPx={auxiliaryPaneWidthPx}
+          />
         </div>
       </div>
       <HomeMembersSidebarOverlay
