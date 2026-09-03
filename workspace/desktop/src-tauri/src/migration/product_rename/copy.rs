@@ -304,7 +304,12 @@ fn backup_sqlite_no_clobber(src: &Path, dst: &Path) -> Result<(), String> {
         .close()
         .map_err(|(_, error)| format!("close SQLite backup {}: {error}", dst.display()))?;
     drop(source);
-    File::open(&temporary_path)
+    // Windows refuses `FlushFileBuffers` on a read-only handle (os error 5),
+    // so the durable flush opens the backup for write; the temporary file is
+    // owner-only and nothing else holds it once both connections are closed.
+    OpenOptions::new()
+        .write(true)
+        .open(&temporary_path)
         .and_then(|file| file.sync_all())
         .map_err(|error| format!("sync SQLite backup {}: {error}", dst.display()))?;
     match temporary_path.persist_noclobber(dst) {
