@@ -78,6 +78,13 @@ data/evolution-portfolios/
 data/evolution-governance-review-packets/
 data/evolution-packet-sets/
 data/evolution-portfolio-history/
+# correlation.incident_store for rulesets-dev/perch-dev.yaml (local_files, cwd-relative).
+data/incidents/
+# Runtime state the daemon writes beside a config that is not under rulesets/
+# (rulesets-dev/perch-dev.yaml): the identity registry and the partition
+# governance state. Agent keys under it are covered by **/data/agent-keys/.
+rulesets-dev/data/agent-identity/
+rulesets-dev/governance-partition-state.json
 
 # Agent signing keys. rulesets/data/agent-keys/sphinx-primary.ed25519 was committed
 # from 69814a4 until the repo went public, so FileAgentKeyStore::load_or_create
