@@ -3930,6 +3930,64 @@ mod tests {
         );
     }
 
+    // ---- RF-D1: kind:46010 and the `e` tag -------------------------------
+    //
+    // `docs/plans/ambush-ui/integration/00-DECISIONS.md` (RF-D1) and
+    // `11-PLAN-GROUND.md` both require that a kind:46010 hold notice **never**
+    // carries an `e` tag: `requires_h_channel_scope` double-duties as the
+    // NIP-10 thread gate, so an e-tagged 46010 becomes a threaded reply,
+    // mutates `reply_count`/`descendant_count` on its root inside the insert
+    // transaction, and makes the relay emit a signed kind:39005 summary.
+    //
+    // CHARACTERIZATION, NOT ENFORCEMENT. The relay does not implement that
+    // rule today: nothing on the admission path inspects a 46010's `e` tag.
+    // This test pins the behaviour that actually exists so the gap is visible
+    // in the test output rather than only in a plan document. Producers hold
+    // the line instead (`perch-wire`'s tag builder refuses an `e` on 46010).
+    //
+    // When the relay does enforce RF-D1, this test SHOULD fail -- replace it
+    // with the refusal assertion rather than widening it.
+    #[test]
+    fn workflow_approval_e_tag_is_admitted_today_rf_d1_gap() {
+        let channel = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+        let parent = "a".repeat(64);
+
+        // A NIP-10 marked `e` tag: read as a thread link, so the hold notice
+        // would be threaded onto whatever event it names.
+        let marked = make_event_with_tags(
+            KIND_WORKFLOW_APPROVAL_REQUESTED,
+            "hold notice",
+            &[&["h", channel], &["e", parent.as_str(), "", "reply"]],
+        );
+        assert!(
+            required_scope_for_kind(KIND_WORKFLOW_APPROVAL_REQUESTED, &marked).is_ok(),
+            "RF-D1 is unenforced on the admission path: an e-tagged 46010 is              admitted. If this now fails, the relay grew the refusal -- assert              the refusal here instead of relaxing this test."
+        );
+        assert!(
+            requires_h_channel_scope(KIND_WORKFLOW_APPROVAL_REQUESTED),
+            "the NIP-10 thread gate is armed for 46010, which is why an e tag              on one is load-bearing rather than inert"
+        );
+        assert!(
+            ambush_core::nip10::parse_thread_markers(&marked.tags)
+                .resolve()
+                .is_some(),
+            "a marked e tag on a 46010 resolves to a thread parent, so              resolve_nip10_thread_meta would thread the hold notice"
+        );
+
+        // An unmarked `e` tag is not a thread link, but `e` is single-letter
+        // and therefore indexed on insert -- still outside RF-D1's `{h, p}`
+        // budget, and still admitted.
+        let bare = make_event_with_tags(
+            KIND_WORKFLOW_APPROVAL_REQUESTED,
+            "hold notice",
+            &[&["h", channel], &["e", parent.as_str()]],
+        );
+        assert!(required_scope_for_kind(KIND_WORKFLOW_APPROVAL_REQUESTED, &bare).is_ok());
+        assert!(ambush_core::nip10::parse_thread_markers(&bare.tags)
+            .resolve()
+            .is_none());
+    }
+
     #[test]
     fn workflow_approval_kinds_are_the_wire_values() {
         // The Desktop home feed hard-codes [46010, 46011, 46012] as JSON

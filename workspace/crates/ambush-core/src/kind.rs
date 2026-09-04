@@ -480,10 +480,16 @@ pub const KIND_HUDDLE_REACTION: u32 = 24810;
 ///
 /// The relay neither emits nor interprets this kind; it reserves the number and
 /// enforces its read rule. A frame carries one `p` tag per principal expected to
-/// act on it, so it is listed in [`P_GATED_KINDS`] and a global REQ that can
-/// match it is closed unless the filter's `#p` values equal the reader's own
-/// pubkey. Being ephemeral (20000-29999) it is never stored, so the filter layer
-/// is the whole defense -- there is no row on which to null a `search_tsv`.
+/// act on it, so it is listed in [`P_GATED_KINDS`] and a global REQ that names
+/// this kind is closed unless the filter's `#p` values equal the reader's own
+/// pubkey. That holds even when the filter also carries `ids`: the relay's
+/// "knowing the id implies authorization" exemption does not apply to this kind
+/// (`p_gated_filters_authorized` in `ambush-relay`'s REQ handler names it
+/// alongside the DM-visibility and turn-metric kinds). A *kindless* `ids`
+/// lookup still passes that gate, as for every p-gated kind, and returns
+/// nothing here: being ephemeral (20000-29999) a frame is never stored. The
+/// filter layer is the whole defense -- there is no row on which to null a
+/// `search_tsv`.
 ///
 /// A producer that also sets an `h` tag gets the ordinary ephemeral channel
 /// path instead (publisher membership plus channel-scoped fan-out, the same
