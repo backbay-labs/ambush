@@ -1,4 +1,20 @@
 use super::*;
+// The suite covers both halves of the split; the hold commands live next door.
+use crate::commands::perch_verdict_hold::*;
+
+/// Both halves of the operator's leg-1 surface, concatenated.
+///
+/// `perch_verdict.rs` was split at the 1000-line ceiling and the hold commands
+/// moved to `perch_verdict_hold.rs`. Every source-scanning rule below reads
+/// BOTH, because a rule that scanned one file could be satisfied by moving the
+/// violation into the other — which is the opposite of what the split is for.
+fn verdict_sources() -> String {
+    format!(
+        "{}\n{}",
+        include_str!("perch_verdict.rs"),
+        include_str!("perch_verdict_hold.rs")
+    )
+}
 
 /// The console half of the relay-publish invariant. The operator's own key
 /// publishes exactly one kind and exactly one marker; widening either needs an
@@ -637,7 +653,7 @@ fn both_verdict_subjects_agree_on_the_key_id_rule() {
 /// reading it two ways.
 #[test]
 fn the_operator_key_has_exactly_one_loader() {
-    let source = include_str!("perch_verdict.rs");
+    let source = verdict_sources();
     assert_eq!(
         source.matches("store.load(OPERATOR_ED25519_SECRET_KEY)").count(),
         1,
@@ -674,12 +690,12 @@ fn the_operator_key_gains_a_second_publisher_and_no_second_marker() {
 }
 
 #[test]
-fn every_publishing_command_named_in_the_set_exists_in_this_file() {
-    let source = include_str!("perch_verdict.rs");
+fn every_publishing_command_named_in_the_set_exists_in_these_files() {
+    let source = verdict_sources();
     for command in PERCH_RELAY_PUBLISHING_COMMANDS {
         assert!(
             source.contains(&format!("pub async fn {command}(")),
-            "{command} is in the publisher set and is not defined here"
+            "{command} is in the publisher set and is defined in neither verdict file"
         );
     }
     // The inverse: every `#[tauri::command]` in this file is accounted for as
@@ -697,11 +713,17 @@ fn every_publishing_command_named_in_the_set_exists_in_this_file() {
             "{command} is named as a non-publisher and is not defined here"
         );
     }
-    let declared = source.matches("#[tauri::command]").count();
+    // Anchored to the start of a line: a doc comment that MENTIONS
+    // `#[tauri::command]` in prose is not a declaration, and counting raw
+    // substrings made this rule fail on its own documentation.
+    let declared = source
+        .lines()
+        .filter(|line| line.trim_end() == "#[tauri::command]")
+        .count();
     let accounted = PERCH_RELAY_PUBLISHING_COMMANDS.len() + PERCH_NON_PUBLISHING_COMMANDS.len();
     assert_eq!(
         declared, accounted,
-        "this file declares {declared} commands and the two lists account for {accounted}"
+        "the two verdict files declare {declared} commands and the two lists account for {accounted}"
     );
 }
 
@@ -711,7 +733,7 @@ fn the_update_never_re_signs_the_decision_preimage() {
     // `decision` and `signature` verbatim; a second `key.sign(` inside the
     // update path would mint a second signature for one decision, and two
     // signatures over one act is how a case timeline stops being a record.
-    let source = include_str!("perch_verdict.rs");
+    let source = verdict_sources();
     let update = source
         .split("pub async fn perch_publish_verdict_update(")
         .nth(1)
@@ -728,7 +750,7 @@ fn the_update_never_re_signs_the_decision_preimage() {
 
 #[test]
 fn the_update_reads_its_own_card_and_takes_no_channel_from_the_renderer() {
-    let source = include_str!("perch_verdict.rs");
+    let source = verdict_sources();
     // The input shape is the assertion: a `case_channel` field would be a
     // channel the webview chose, and an `e` tag into a channel the webview
     // chose is a reply that mutates a foreign thread's counters.
