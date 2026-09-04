@@ -23,6 +23,13 @@ export type CaseTerminalScope = {
  * The slug reaches a shell's environment, so a slug that is not shell-safe is
  * REPLACED by the case id rather than escaped. Escaping is a claim about every
  * consumer downstream; substitution is a claim about one value here.
+ *
+ * THIS VALUE NEVER REACHES A PROCESS. The Tauri command takes only the case id
+ * and slug and recomputes the cwd and environment in Rust, with
+ * PLATFORM-NATIVE separators — a shell needs the separator its OS uses, and
+ * this module always joins with `/`. What the two sides share, and what their
+ * common test table pins, is the shape (`<root>/cases/<id>`), the three
+ * variable names, and the slug rule. Not the byte string.
  */
 export function caseTerminalScope(
   caseId: string,

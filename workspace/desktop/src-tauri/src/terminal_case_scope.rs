@@ -50,6 +50,14 @@ fn slug_is_safe(slug: &str) -> bool {
 /// swarmctl's `--*-results-dir` flags default to RELATIVE `data/…` paths, so
 /// pinning the working directory scopes every default at once without
 /// injecting flags, and every artifact is attributable to the case by path.
+///
+/// SEPARATORS ARE PLATFORM-NATIVE HERE, and POSIX in the TypeScript mirror.
+/// That is not a drift: this side is the one that sets a real cwd and a real
+/// environment variable, and a shell needs the separator its OS uses. The
+/// mirror never reaches a process — the Tauri command takes only the case id
+/// and slug and recomputes everything here — so what the two sides share, and
+/// what their common test table pins, is the SHAPE (`<root>/cases/<id>`), the
+/// three variable names, and the slug rule. Not the byte string.
 pub(crate) fn case_terminal_scope(
     state_root: &Path,
     case_id: &str,
@@ -86,10 +94,13 @@ mod tests {
             CASE_ID,
             Some("case-0042"),
         );
-        assert_eq!(
-            scope.cwd,
-            PathBuf::from("/var/lib/ambush/perch/cases/27799e23-ab25-4659-b381-3de47ea7ca4d")
-        );
+        // Composed, not spelled: `Path::join` is platform-native, so a
+        // hardcoded POSIX literal here asserts the separator rather than the
+        // shape and fails on Windows for a reason that is not a bug.
+        let expected = Path::new("/var/lib/ambush/perch")
+            .join("cases")
+            .join(CASE_ID);
+        assert_eq!(scope.cwd, expected);
         assert_eq!(
             scope.env,
             [
@@ -97,10 +108,21 @@ mod tests {
                 ("AMBUSH_CASE", "case-0042".to_string()),
                 (
                     "SWARM_RESULTS_ROOT",
-                    "/var/lib/ambush/perch/cases/27799e23-ab25-4659-b381-3de47ea7ca4d".to_string()
+                    expected.to_string_lossy().into_owned()
                 ),
             ]
         );
+        // The SHAPE is what the TypeScript mirror shares: a `cases` directory
+        // under the state root, then the case id. Asserted component-wise so
+        // it holds on both platforms.
+        let tail: Vec<_> = scope
+            .cwd
+            .components()
+            .rev()
+            .take(2)
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(tail, vec![CASE_ID.to_string(), "cases".to_string()]);
     }
 
     #[test]

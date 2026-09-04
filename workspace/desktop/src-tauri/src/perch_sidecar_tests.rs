@@ -1,5 +1,9 @@
 use super::*;
 
+// Spawns `sh` and asserts POSIX process-group reaping. On Windows it would
+// depend on Git-for-Windows being on PATH and would assert semantics the
+// platform does not have, so it is a unix test rather than a flaky one.
+#[cfg(unix)]
 #[test]
 fn a_sidecar_that_is_stopped_reports_stopped_and_its_group_is_reaped() {
     // `sh -c 'sleep 30'` stands in for swarm_detect: same spawn path, same
@@ -60,6 +64,10 @@ fn never_started_is_not_stopped() {
     assert!(!sidecar.is_running());
 }
 
+// Spawns `sh` and asserts POSIX process-group reaping. On Windows it would
+// depend on Git-for-Windows being on PATH and would assert semantics the
+// platform does not have, so it is a unix test rather than a flaky one.
+#[cfg(unix)]
 #[test]
 fn stopping_twice_is_not_an_error() {
     let sidecar = PerchSidecar::new();
@@ -74,6 +82,10 @@ fn stopping_twice_is_not_an_error() {
     );
 }
 
+// Spawns `sh` and asserts POSIX process-group reaping. On Windows it would
+// depend on Git-for-Windows being on PATH and would assert semantics the
+// platform does not have, so it is a unix test rather than a flaky one.
+#[cfg(unix)]
 #[test]
 fn a_late_health_poll_cannot_resurrect_a_stopped_sidecar() {
     let sidecar = PerchSidecar::new();
@@ -90,6 +102,10 @@ fn a_late_health_poll_cannot_resurrect_a_stopped_sidecar() {
     );
 }
 
+// Spawns `sh` and asserts POSIX process-group reaping. On Windows it would
+// depend on Git-for-Windows being on PATH and would assert semantics the
+// platform does not have, so it is a unix test rather than a flaky one.
+#[cfg(unix)]
 #[test]
 fn a_second_start_is_refused_rather_than_orphaning_the_first() {
     let sidecar = PerchSidecar::new();
