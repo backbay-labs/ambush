@@ -132,8 +132,8 @@ impl HoldSweep {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::held_action::tests::{T0, fixture_hold};
     use crate::held_action::{HoldDecision, HoldState, MemoryHeldActionStore};
+    use crate::held_action_fixtures::{T0, fixture_hold};
     use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
     use swarm_core::types::ResponseAction;
 

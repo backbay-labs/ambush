@@ -16,6 +16,7 @@
 //! asserts its exact length after every change; no future path is predeclared.
 
 mod feedback;
+pub mod holds;
 mod incidents;
 mod reviewed;
 #[cfg(test)]
@@ -43,7 +44,9 @@ pub(super) struct PerchHttpState {
 
 /// The paths this router declares — mounted routes only — for the disjointness
 /// test against the other operator router.
-pub const PERCH_ROUTER_PATHS: [&str; 3] = [
+pub const PERCH_ROUTER_PATHS: [&str; 5] = [
+    "/v1/response/holds",
+    "/v1/response/holds/{hold_id}",
     "/v1/operator/findings/reviewed",
     "/v1/operator/findings/{finding_id}/feedback",
     "/v1/operator/incidents",
@@ -80,16 +83,18 @@ fn perch_operator_router_with_auth(
 ) -> Router {
     let rate_limiter = HttpRateLimiter::new("operator-perch", config.operator.rate_limit.clone());
     Router::new()
+        .route(PERCH_ROUTER_PATHS[0], get(holds::hold_list_handler))
+        .route(PERCH_ROUTER_PATHS[1], get(holds::hold_detail_handler))
         .route(
-            PERCH_ROUTER_PATHS[0],
+            PERCH_ROUTER_PATHS[2],
             get(reviewed::reviewed_findings_handler),
         )
         .route(
-            PERCH_ROUTER_PATHS[1],
+            PERCH_ROUTER_PATHS[3],
             post(feedback::finding_feedback_handler),
         )
         .route(
-            PERCH_ROUTER_PATHS[2],
+            PERCH_ROUTER_PATHS[4],
             post(incidents::mint_incident_handler),
         )
         .with_state(PerchHttpState { ingest })

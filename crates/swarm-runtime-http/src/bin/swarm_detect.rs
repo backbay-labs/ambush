@@ -1236,6 +1236,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // containment sweep -- a daemon with no sweep still promotes and
         // records verdicts. `docs/PERCH-DEV.md` greps for the mounted line.
         if config.operator.enabled {
+            // The hold reads check `read`, not `approve`: they are the
+            // reconciliation authority and every operator has to see the queue.
+            // A principal that can decide but cannot look at what it is deciding
+            // gets a 403 on every read, which reads to the operator as an empty
+            // queue rather than as a misconfiguration. Say so at boot.
+            for principal in config.operator.auth.effective_principals() {
+                if principal
+                    .scopes
+                    .contains(&swarm_core::config::OperatorScope::Approve)
+                    && !principal
+                        .scopes
+                        .contains(&swarm_core::config::OperatorScope::Read)
+                {
+                    tracing::warn!(
+                        module = module_path!(),
+                        operator_id = %principal.operator_id,
+                        "principal holds `approve` without `read`; the hold reads will answer 403 for it"
+                    );
+                }
+            }
             match swarm_runtime_http::http::perch_operator_router(&config, state.clone()) {
                 Ok(perch_router) => {
                     tracing::info!(module = module_path!(), "perch operator routes mounted");

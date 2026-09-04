@@ -1,40 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
-use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
-use swarm_policy::{ActionRequest, PolicyDecision, PolicyVerdict};
+use swarm_core::types::ResponseAction;
 
-pub(crate) const T0: i64 = 1_773_739_200_000;
-
-pub(crate) fn fixture_request(action: ResponseAction) -> ActionRequest {
-    ActionRequest {
-        hunt_id: HuntId("hunt-evt-1".to_string()),
-        requested_by: AgentId::from_public_key_hex(&"18".repeat(32)),
-        action,
-        severity: Severity::Critical,
-        evidence: serde_json::json!({
-            "escalation": { "threat_class": "execution", "level": "alert" }
-        }),
-    }
-}
-
-pub(crate) fn fixture_hold(action: ResponseAction, held_at_ms: i64) -> HeldAction {
-    let request = fixture_request(action);
-    let detection = crate::detection::routed_detection_for_test(&request);
-    HeldAction::new(
-        mint_hold_id(),
-        request,
-        detection,
-        PolicyDecision {
-            verdict: PolicyVerdict::RequireHuman,
-            rule_name: "static.human_gate".to_string(),
-            reason: "authorized but held for human approval".to_string(),
-        },
-        None,
-        held_at_ms,
-        held_at_ms + 3_600_000,
-        Some("trail-1".to_string()),
-    )
-}
+// The fixtures live in `held_action_fixtures` so `swarm-runtime-http` and
+// `swarm-ingest-runtime` can build the same records across the crate line; a
+// `#[cfg(test)]` module here would be invisible to them.
+pub(crate) use crate::held_action_fixtures::{T0, fixture_hold};
 
 /// The top-level object keys of one JSON document, in emitted order.
 ///

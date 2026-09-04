@@ -469,9 +469,15 @@ async fn feedback_requires_the_approve_scope() {
 
 #[test]
 fn perch_paths_are_disjoint_from_the_containment_router() {
-    assert_eq!(PERCH_ROUTER_PATHS.len(), 3);
+    assert_eq!(PERCH_ROUTER_PATHS.len(), 5);
     for path in PERCH_ROUTER_PATHS {
-        assert!(path.starts_with("/v1/operator/"), "{path}");
+        // Two prefixes now: the operator surface, and the hold reads B2r
+        // mounts under `/v1/response/` because they are the daemon's answer
+        // about a RESPONSE, not about the operator's own workspace.
+        assert!(
+            path.starts_with("/v1/operator/") || path.starts_with("/v1/response/"),
+            "{path}"
+        );
         assert!(!path.starts_with("/v1/operator/containment"), "{path}");
     }
 }
@@ -499,4 +505,352 @@ fn the_path_inventory_matches_the_mounted_routes() {
     sorted.dedup();
     assert_eq!(mounted.len(), PERCH_ROUTER_PATHS.len());
     assert_eq!(sorted, (0..PERCH_ROUTER_PATHS.len()).collect::<Vec<_>>());
+}
+
+// ── B2r: the two hold reads ────────────────────────────────────────────────
+
+const HOLD_T0: i64 = 1_773_739_200_000;
+
+/// The perch app plus a seeded in-memory hold store attached to the same
+/// `IngestState` the routes read.
+fn app_with_holds(
+    scopes: Vec<OperatorScope>,
+    token: &str,
+    holds: &[(swarm_runtime::held_action::HoldState, i64, &str)],
+) -> Router {
+    use swarm_runtime::held_action::{HeldActionStore, MemoryHeldActionStore};
+    let (config, root) = perch_config();
+    let state = IngestState::from_config(root.join("inline"), config.clone()).unwrap();
+    let store = std::sync::Arc::new(MemoryHeldActionStore::default());
+    for (hold_state, held_at, id) in holds {
+        let mut hold = swarm_runtime::held_action_fixtures::fixture_hold(
+            swarm_core::types::ResponseAction::IsolateHost {
+                host_id: "host-ops-1".into(),
+            },
+            *held_at,
+        );
+        hold.hold_id = (*id).to_string();
+        hold.state = *hold_state;
+        store.create(hold).unwrap();
+    }
+    let state = state.with_hold_store(store);
+    let auth = OperatorAuthState::for_test("local-operator", scopes, token);
+    perch_operator_router_for_test(&config, state, auth)
+}
+
+fn get_request(uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header("x-swarm-schema-version", "1")
+        .body(Body::empty())
+        .unwrap()
+}
+
+async fn get(app: Router, uri: &str, token: &str) -> (StatusCode, serde_json::Value) {
+    let response = app.oneshot(get_request(uri, token)).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value = if bytes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, value)
+}
+
+#[tokio::test]
+async fn the_list_is_sorted_by_expiry_then_id_and_carries_the_honesty_fields() {
+    use swarm_runtime::held_action::HoldState;
+    let app = app_with_holds(
+        vec![OperatorScope::Read, OperatorScope::Approve],
+        "secret-token",
+        &[
+            (
+                HoldState::Notified,
+                HOLD_T0 + 5,
+                "hold_zzzzzzzz-0000-4000-8000-000000000000",
+            ),
+            (
+                HoldState::Created,
+                HOLD_T0,
+                "hold_aaaaaaaa-0000-4000-8000-000000000000",
+            ),
+            (
+                HoldState::Refused,
+                HOLD_T0,
+                "hold_bbbbbbbb-0000-4000-8000-000000000000",
+            ),
+        ],
+    );
+    let (status, body) = get(
+        app,
+        &format!("/v1/response/holds?now_ms={}", HOLD_T0 + 1),
+        "secret-token",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["schema_version"], 1);
+    assert_eq!(body["observed_at_ms"], HOLD_T0 + 1);
+    assert_eq!(body["store_durable"], false);
+    assert_eq!(body["open_count"], 2);
+    assert_eq!(body["deciding_stalled_count"], 0);
+    assert_eq!(body["truncated"], false);
+    let ids: Vec<&str> = body["holds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hold| hold["hold_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "hold_aaaaaaaa-0000-4000-8000-000000000000",
+            "hold_zzzzzzzz-0000-4000-8000-000000000000"
+        ]
+    );
+    assert_eq!(body["holds"][0]["remaining_ms"], 3_600_000 - 1);
+    assert_eq!(body["holds"][0]["expired"], false);
+    assert_eq!(body["holds"][0]["leases_a_containment"], true);
+    assert_eq!(body["holds"][0]["case_channel"], serde_json::Value::Null);
+    assert_eq!(body["holds"][0]["action_kind"], "isolate_host");
+}
+
+/// `include_terminal=true` adds the decided rows, and `limit` reports the
+/// truncation rather than silently shortening the queue.
+#[tokio::test]
+async fn the_list_reports_truncation_and_can_include_terminal_rows() {
+    use swarm_runtime::held_action::HoldState;
+    let app = app_with_holds(
+        vec![OperatorScope::Read],
+        "secret-token",
+        &[
+            (
+                HoldState::Notified,
+                HOLD_T0 + 5,
+                "hold_zzzzzzzz-0000-4000-8000-000000000000",
+            ),
+            (
+                HoldState::Created,
+                HOLD_T0,
+                "hold_aaaaaaaa-0000-4000-8000-000000000000",
+            ),
+            (
+                HoldState::Refused,
+                HOLD_T0,
+                "hold_bbbbbbbb-0000-4000-8000-000000000000",
+            ),
+        ],
+    );
+    let (status, body) = get(
+        app.clone(),
+        "/v1/response/holds?include_terminal=true",
+        "secret-token",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["holds"].as_array().unwrap().len(), 3);
+    assert_eq!(body["open_count"], 2);
+    assert_eq!(body["truncated"], false);
+
+    let (status, body) = get(app, "/v1/response/holds?limit=1", "secret-token").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["holds"].as_array().unwrap().len(), 1);
+    assert_eq!(body["truncated"], true, "a shortened queue must say so");
+}
+
+#[tokio::test]
+async fn detail_derives_two_clock_facts_and_the_inverse_resolution() {
+    use swarm_runtime::held_action::HoldState;
+    let app = app_with_holds(
+        vec![OperatorScope::Read, OperatorScope::Approve],
+        "secret-token",
+        &[(
+            HoldState::Notified,
+            HOLD_T0,
+            "hold_aaaaaaaa-0000-4000-8000-000000000000",
+        )],
+    );
+    let (status, body) = get(
+        app,
+        &format!(
+            "/v1/response/holds/hold_aaaaaaaa-0000-4000-8000-000000000000?now_ms={}",
+            HOLD_T0 + 3_600_000 + 1
+        ),
+        "secret-token",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["schema_version"], 1);
+    assert_eq!(body["hold"]["remaining_ms"], 0);
+    assert_eq!(body["hold"]["expired"], true);
+    assert_eq!(
+        body["hold"]["state"], "notified",
+        "expired is a CLOCK fact; the stored state is a separate one"
+    );
+    // Derived, not served: the resolution names the function.
+    assert!(body["hold"]["inverse_resolution"].is_array());
+}
+
+/// The inverse resolution is derived from the rehearsal, and each entry names
+/// the function that produced it (render law 4).
+#[tokio::test]
+async fn the_inverse_resolution_is_derived_per_rollback_step_and_names_its_source() {
+    use swarm_core::types::{
+        ResponseBlastRadiusImpact, ResponseBlastRadiusPreview, ResponseRehearsalPreview,
+        ResponseRehearsalScopeKind, ResponseRollbackPreview, ResponseRollbackStep,
+        ResponseRollbackStepKind,
+    };
+    use swarm_runtime::held_action::{HeldActionStore, HoldState, MemoryHeldActionStore};
+
+    let (config, root) = perch_config();
+    let state = IngestState::from_config(root.join("inline"), config.clone()).unwrap();
+    let store = std::sync::Arc::new(MemoryHeldActionStore::default());
+    let mut hold = swarm_runtime::held_action_fixtures::fixture_hold(
+        swarm_core::types::ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        HOLD_T0,
+    );
+    hold.hold_id = "hold_aaaaaaaa-0000-4000-8000-000000000000".into();
+    hold.state = HoldState::Notified;
+    hold.rehearsal = Some(ResponseRehearsalPreview {
+        rehearsal_id: "rehearsal-1".into(),
+        source_bundle_id: "hold:hunt-evt-1".into(),
+        prepared_at_ms: HOLD_T0,
+        simulated_only: true,
+        blast_radius: ResponseBlastRadiusPreview {
+            scope_kind: ResponseRehearsalScopeKind::Host,
+            scope_value: "host-ops-1".into(),
+            impact: ResponseBlastRadiusImpact::HostConnectivityIsolated,
+            max_affected_scopes: 1,
+            affected_capabilities: vec!["network".into()],
+            summary: "one host".into(),
+        },
+        rollback: ResponseRollbackPreview {
+            required: true,
+            summary: "restore connectivity".into(),
+            steps: vec![
+                ResponseRollbackStep {
+                    kind: ResponseRollbackStepKind::RestoreHostConnectivity,
+                    summary: "re-permit the host".into(),
+                },
+                ResponseRollbackStep {
+                    kind: ResponseRollbackStepKind::WithdrawDecoy,
+                    summary: "not an inverse of isolation".into(),
+                },
+            ],
+        },
+    });
+    store.create(hold).unwrap();
+    let state = state.with_hold_store(store);
+    let auth = OperatorAuthState::for_test("local-operator", vec![OperatorScope::Read], "tok");
+    let app = perch_operator_router_for_test(&config, state, auth);
+
+    let (status, body) = get(
+        app,
+        "/v1/response/holds/hold_aaaaaaaa-0000-4000-8000-000000000000",
+        "tok",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let resolutions = body["hold"]["inverse_resolution"].as_array().unwrap();
+    assert_eq!(resolutions.len(), 2);
+    assert_eq!(resolutions[0]["verdict"], "executable");
+    assert_eq!(
+        resolutions[0]["derived_by"],
+        "swarm_response::rollback::resolve_inverse"
+    );
+    assert_eq!(resolutions[1]["verdict"], "unmapped");
+    assert_eq!(
+        resolutions[1]["derived_by"],
+        "swarm_response::rollback::resolve_inverse"
+    );
+}
+
+#[tokio::test]
+async fn reads_require_the_read_scope_and_an_unknown_id_is_404() {
+    let app = app_with_holds(vec![OperatorScope::Approve], "approve-only-token", &[]);
+    let (status, body) = get(app, "/v1/response/holds", "approve-only-token").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let app = app_with_holds(
+        vec![OperatorScope::Approve],
+        "approve-only-token",
+        &[(
+            swarm_runtime::held_action::HoldState::Notified,
+            HOLD_T0,
+            "hold_aaaaaaaa-0000-4000-8000-000000000000",
+        )],
+    );
+    let (status, body) = get(
+        app,
+        "/v1/response/holds/hold_aaaaaaaa-0000-4000-8000-000000000000",
+        "approve-only-token",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+
+    let app = app_with_holds(
+        vec![OperatorScope::Read, OperatorScope::Approve],
+        "secret-token",
+        &[],
+    );
+    let (status, body) = get(
+        app,
+        "/v1/response/holds/hold_neverexisted-0000-4000-8000-000000000000",
+        "secret-token",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "not_found");
+}
+
+/// The reads are the reconciliation authority, so "no store" must never look
+/// like "no holds": a console that read an empty list would silently drop
+/// every queued destructive action.
+#[tokio::test]
+async fn no_hold_store_is_503_never_an_empty_list() {
+    let (config, root) = perch_config();
+    let state = IngestState::from_config(root.join("inline"), config.clone()).unwrap();
+    let auth = OperatorAuthState::for_test(
+        "local-operator",
+        vec![OperatorScope::Read, OperatorScope::Approve],
+        "secret-token",
+    );
+    let app = perch_operator_router_for_test(&config, state, auth);
+    let (status, body) = get(app.clone(), "/v1/response/holds", "secret-token").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"], "internal_error");
+    assert!(body["message"].as_str().unwrap().contains("hold store"));
+
+    let (status, body) = get(
+        app,
+        "/v1/response/holds/hold_aaaaaaaa-0000-4000-8000-000000000000",
+        "secret-token",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a missing store must not read as a missing hold"
+    );
+    assert!(body["message"].as_str().unwrap().contains("hold store"));
+}
+
+#[test]
+fn perch_router_paths_are_disjoint_from_the_local_operator_surface() {
+    let perch: std::collections::BTreeSet<&str> = PERCH_ROUTER_PATHS.into_iter().collect();
+    let local: std::collections::BTreeSet<&str> = crate::http::state::LOCAL_OPERATOR_SURFACE_PATHS
+        .into_iter()
+        .collect();
+    assert!(
+        !perch.is_empty() && !local.is_empty(),
+        "empty path set: the collector is broken"
+    );
+    let overlap: Vec<_> = perch.intersection(&local).collect();
+    assert!(overlap.is_empty(), "same path on two ports: {overlap:?}");
+    assert_eq!(perch.len(), 5);
 }

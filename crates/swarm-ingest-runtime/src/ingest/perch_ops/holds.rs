@@ -11,7 +11,10 @@ use std::sync::Arc;
 use swarm_core::config::ResponseHoldSettings;
 use swarm_core::types::ResponseRehearsalPreview;
 use swarm_policy::{ActionRequest, PolicyDecision, PolicyVerdict};
-use swarm_runtime::held_action::{HeldAction, HeldActionStore, HoldState, mint_hold_id};
+use swarm_runtime::held_action::{
+    HeldAction, HeldActionStore, HeldActionStoreError, HeldActionStoreHealth, HoldState,
+    mint_hold_id,
+};
 use swarm_runtime::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
 use swarm_spine::{AuditResponseRecord, AuditTrail};
 use swarm_whisker::DetectionFinding;
@@ -119,6 +122,70 @@ impl HoldCapture {
             });
         }
     }
+}
+
+/// Why a hold read failed.
+#[derive(Debug, thiserror::Error)]
+pub enum HoldReadError {
+    /// The daemon has no hold store: the feature is not configured. NEVER an
+    /// empty list — a console that read "no holds" would silently drop every
+    /// queued destructive action.
+    #[error("no hold store is attached to this daemon")]
+    NoHoldStore,
+    /// The store itself failed.
+    #[error(transparent)]
+    Store(#[from] HeldActionStoreError),
+}
+
+/// A page of holds plus the facts the list response must carry.
+pub struct HoldListing {
+    /// The page, sorted `(expires_at_ms, hold_id)` ascending.
+    pub holds: Vec<HeldAction>,
+    /// Open holds across the WHOLE store, not just this page.
+    pub open_count: usize,
+    /// Whether `limit` cut the page short.
+    pub truncated: bool,
+    /// What the backend says about itself.
+    pub health: HeldActionStoreHealth,
+}
+
+/// `GET /v1/response/holds`'s engine half. Sorted `(expires_at_ms, hold_id)`.
+pub fn list_holds(
+    state: &crate::ingest::IngestState,
+    include_terminal: bool,
+    limit: usize,
+    now_ms: i64,
+) -> Result<HoldListing, HoldReadError> {
+    let capture = state
+        .current_hold_capture()
+        .ok_or(HoldReadError::NoHoldStore)?;
+    let store = capture.store();
+    // Read the whole set first: `open_count` and `truncated` are facts about
+    // the store, not about the page, and a store-side limit would make both
+    // of them lies whenever the page was short.
+    let all = store.list(include_terminal, usize::MAX)?;
+    let open_count = all.iter().filter(|hold| hold.is_open()).count();
+    let truncated = all.len() > limit;
+    let mut holds = all;
+    holds.truncate(limit);
+    let health = store.health(now_ms, capture.settings().decide_stall_ms)?;
+    Ok(HoldListing {
+        holds,
+        open_count,
+        truncated,
+        health,
+    })
+}
+
+/// `GET /v1/response/holds/{hold_id}`'s engine half.
+pub fn get_hold(
+    state: &crate::ingest::IngestState,
+    hold_id: &str,
+) -> Result<Option<HeldAction>, HoldReadError> {
+    let capture = state
+        .current_hold_capture()
+        .ok_or(HoldReadError::NoHoldStore)?;
+    Ok(capture.store().get(hold_id)?)
 }
 
 #[cfg(test)]

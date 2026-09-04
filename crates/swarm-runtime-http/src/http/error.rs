@@ -87,6 +87,18 @@ impl OperatorApiError {
         }
     }
 
+    /// 503 with the `internal_error` slug: the daemon is up and the feature is
+    /// not configured. Never "no holds" — an empty success body is a claim
+    /// about the world that an unconfigured daemon cannot make.
+    pub(super) fn service_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            error: "internal_error",
+            message: message.into(),
+            retry_after_seconds: None,
+        }
+    }
+
     fn too_many_requests(message: impl Into<String>, retry_after_seconds: u64) -> Self {
         Self {
             status: StatusCode::TOO_MANY_REQUESTS,

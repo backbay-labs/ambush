@@ -132,6 +132,7 @@ pub mod evasion_coverage;
 pub mod evolution;
 pub mod evolution_status;
 pub mod held_action;
+pub mod held_action_fixtures;
 pub mod hold_sweep;
 pub mod http;
 pub mod investigation;
