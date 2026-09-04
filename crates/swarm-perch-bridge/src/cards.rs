@@ -372,6 +372,48 @@ pub fn hold_view_from_record(hold: &HeldAction) -> Result<WireHeldAction, Bridge
     })
 }
 
+/// The ONE human line for a hold, without sealing an envelope.
+///
+/// The `46010` notice carries the card's line verbatim, and it must not pay for that by
+/// advancing the issuer's envelope chain: a chain that advances for a card nobody published
+/// claims a continuity it does not have. The line is a pure function of the record, so both
+/// callers derive it and neither holds the other's string.
+///
+/// # Errors
+///
+/// [`BridgeError::Encode`] from the record projection.
+pub fn hold_human_line(hold: &HeldAction, case_channel: Uuid) -> Result<String, BridgeError> {
+    Ok(hold_card_fact(hold, case_channel, None)?.human_line())
+}
+
+/// The typed `swarm:hold:v1` fact, before it is sealed into an envelope.
+fn hold_card_fact(
+    hold: &HeldAction,
+    case_channel: Uuid,
+    finding_card_id: Option<&str>,
+) -> Result<HoldCard, BridgeError> {
+    Ok(HoldCard {
+        // The FACT issuer is the agent that requested the destructive action; the ENVELOPE
+        // issuer is the bridge's own spine identity. They are different parties and the card
+        // says so, because "who asked for this" is the first question the verdict pane answers.
+        // `nostr_pubkey` is `None`: a requesting agent has no relay identity, and putting the
+        // bridge's own here would attribute the request to the publisher.
+        issuer: FactIssuer {
+            swarm_agent_id: hold.action_request.requested_by.0.clone(),
+            role: role_from_agent_id(&hold.action_request.requested_by.0),
+            nostr_pubkey: None,
+        },
+        emitted_at_ms: hold.held_at_ms,
+        locator: HoldLocator {
+            hold_id: hold.hold_id.clone(),
+            case_channel: case_channel.to_string(),
+            hunt_id: hold.action_request.hunt_id.0.clone(),
+            finding_card_id: finding_card_id.map(str::to_string),
+        },
+        hold: hold_view_from_record(hold)?,
+    })
+}
+
 /// Builds the `swarm:hold:v1` card body for one held action.
 ///
 /// Three parts in the ruled order (00-DECISIONS W3-21): the marker line, ONE human line, a blank
@@ -402,27 +444,7 @@ pub fn hold_card(
     covers: (IssuerIdx, Seq),
     now_ms: i64,
 ) -> Result<CardBody, BridgeError> {
-    let card = HoldCard {
-        // The FACT issuer is the agent that requested the destructive action; the ENVELOPE
-        // issuer below is the bridge's own spine identity. They are different parties and the
-        // card says so, because "who asked for this" is the first question the verdict pane
-        // answers. `nostr_pubkey` is `None`: a requesting agent has no relay identity, and
-        // inventing the bridge's own here would attribute the request to the publisher.
-        issuer: FactIssuer {
-            swarm_agent_id: hold.action_request.requested_by.0.clone(),
-            role: role_from_agent_id(&hold.action_request.requested_by.0),
-            nostr_pubkey: None,
-        },
-        emitted_at_ms: hold.held_at_ms,
-        locator: HoldLocator {
-            hold_id: hold.hold_id.clone(),
-            case_channel: case_channel.to_string(),
-            hunt_id: hold.action_request.hunt_id.0.clone(),
-            finding_card_id: finding_card_id.map(str::to_string),
-        },
-        hold: hold_view_from_record(hold)?,
-    };
-
+    let card = hold_card_fact(hold, case_channel, finding_card_id)?;
     let human = card.human_line();
     let spine_issuer = format!("swarm:ed25519:{}", issuer.keys.public_key().to_hex());
     let fact = serde_json::to_value(Card::Hold(Box::new(card)))
@@ -504,6 +526,44 @@ pub fn hold_alarm_payload(hold: &HeldAction, case_channel: Uuid) -> WireHoldAlar
         case_channel: case_channel.to_string(),
         expires_at_ms: hold.expires_at_ms,
     }
+}
+
+/// The `26006` body: the five-key frame header plus the five payload keys, ten in all.
+///
+/// Built from [`swarm_perch_wire::Frame`], not from a `serde_json::json!` literal, so no
+/// `RuntimeEvent` field can leak onto the widest-audience event in the registry through a
+/// derive, and an upstream rename is a compile error here.
+///
+/// `hunt_id` is deliberately absent: it is the telemetry event id, a join key into detection
+/// data, and this frame reaches every member of the community.
+///
+/// # Errors
+///
+/// [`BridgeError::Encode`] when the frame does not serialize to a JSON object.
+pub fn hold_alarm_frame(
+    hold: &HeldAction,
+    case_channel: Uuid,
+    issuer: &str,
+    seq: u64,
+    emitted_at_ms: i64,
+) -> Result<serde_json::Value, BridgeError> {
+    let frame = swarm_perch_wire::Frame::HoldAlarm(swarm_perch_wire::FrameBody {
+        header: swarm_perch_wire::FrameHeader {
+            kind: swarm_perch_wire::KIND_HOLD_ALARM,
+            issuer: issuer.to_string(),
+            emitted_at_ms,
+            seq,
+        },
+        body: hold_alarm_payload(hold, case_channel),
+    });
+    let value =
+        serde_json::to_value(&frame).map_err(|error| BridgeError::Encode(error.to_string()))?;
+    if !value.is_object() {
+        return Err(BridgeError::Encode(
+            "the hold alarm frame did not serialize to a JSON object".to_string(),
+        ));
+    }
+    Ok(value)
 }
 
 /// The `kind:46010` content: the card's human line, VERBATIM.

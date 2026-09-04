@@ -67,6 +67,7 @@ pub mod alarm;
 pub mod cards;
 pub mod channels;
 pub mod error;
+pub mod holds;
 pub mod identity;
 pub mod metrics;
 pub mod pacer;
@@ -86,7 +87,9 @@ use swarm_runtime::containment::ContainmentSweep;
 use swarm_runtime::runtime_events::RuntimeEvent;
 use tokio::sync::{broadcast, watch};
 
+use crate::alarm::FALLBACK_CASE_TTL_SECONDS;
 use crate::channels::CaseRouting;
+use crate::holds::HoldPublisher;
 use crate::identity::{IdentityTable, approve_scoped_operator_pubkeys, seed_from_env};
 use crate::metrics::BridgeMetrics;
 use crate::pacer::Pacer;
@@ -310,9 +313,7 @@ impl PerchBridge {
             stall,
             events,
             containment: _containment,
-            // Task 16 hands this to the hold publisher; until then the accessor is its only
-            // reader and the composition root is already wired.
-            hold_store: _hold_store,
+            hold_store,
             shutdown,
         } = self;
 
@@ -370,16 +371,30 @@ impl PerchBridge {
         );
         let mut pacer_task = tokio::spawn(pacer.run(shutdown.clone()));
 
-        let mut alarm_task = Some(tokio::spawn(alarm::run(
-            Arc::clone(&spools),
-            Arc::clone(&identities),
-            config.clone(),
-            operators,
+        // The hold publisher owns the routing sidecar: the hold path writes card ids into it
+        // and the promotion path writes case channels, and one file gets one writer.
+        let holds = HoldPublisher::new(
             routing,
-            ConnectionSupervisor::new(config.relay_url.clone(), alarm_identity),
+            hold_store,
+            operators,
+            config
+                .case_ttl_seconds
+                .get("default")
+                .copied()
+                .unwrap_or(FALLBACK_CASE_TTL_SECONDS),
+            alarm_identity.clone(),
+            alarm_idx,
+            metrics.clone(),
+        );
+        let mut alarm_task = Some(tokio::spawn(alarm::run(alarm::AlarmDrainer {
+            spools: Arc::clone(&spools),
+            identities: Arc::clone(&identities),
+            config: config.clone(),
+            holds,
+            publisher: ConnectionSupervisor::new(config.relay_url.clone(), alarm_identity),
             metrics,
-            shutdown.clone(),
-        )));
+            shutdown: shutdown.clone(),
+        })));
 
         let mut shutdown = shutdown;
         loop {

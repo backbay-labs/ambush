@@ -279,6 +279,8 @@ struct RoutingState {
     created: BTreeSet<String>,
     #[serde(default)]
     hold_cards: BTreeMap<String, HoldCardLedger>,
+    #[serde(default)]
+    created_channels: BTreeSet<String>,
 }
 
 /// What has already been published for one hold, keyed by `hold_id`.
@@ -464,6 +466,30 @@ impl CaseRouting {
     pub fn case_for_receipt(&self, receipt_id: &str) -> Option<Uuid> {
         let hunt_id = self.state.receipts.get(receipt_id)?.clone();
         self.case_for_hunt(&hunt_id)
+    }
+
+    /// Whether the relay has ACCEPTED the `kind:9007` for `channel`.
+    ///
+    /// [`CaseRouting::ensure_case_channel`] writes its routing entry before anything is
+    /// published and returns no steps on a second call, so a refused `9007` would otherwise
+    /// never be retried: the hunt is routed, the create is never re-planned, and the next step
+    /// publishes a card into a channel that does not exist. This set is the separate question
+    /// "did the create land", and only an `OK` writes it.
+    pub fn channel_is_created(&self, channel: Uuid) -> bool {
+        self.state.created_channels.contains(&channel.to_string())
+    }
+
+    /// Records a `kind:9007` the relay accepted. `duplicate: channel already exists` is an
+    /// acceptance (F14), so a channel another daemon created is recorded here too.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::SpoolIo`] when the sidecar write fails.
+    pub fn record_channel_created(&mut self, channel: Uuid) -> Result<(), BridgeError> {
+        if !self.state.created_channels.insert(channel.to_string()) {
+            return Ok(());
+        }
+        self.persist()
     }
 
     /// The OPEN `swarm:hold:v1` card's event id, when the relay has already accepted one.
