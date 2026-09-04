@@ -269,6 +269,14 @@ struct RoutingState {
     receipts: BTreeMap<String, String>,
     #[serde(default)]
     hold_cards: BTreeMap<String, HoldCardLedger>,
+    /// `lease_id -> the accepted `swarm:lease:v1` card's event id`.
+    ///
+    /// The rollback card replies to the lease card, so without this the `e` tag
+    /// has no parent and the two cards are two unrelated rows on a timeline.
+    /// Written only on acknowledgement: a card the relay did not take must not
+    /// leave a route behind pointing at it.
+    #[serde(default)]
+    lease_cards: BTreeMap<String, String>,
     /// Channels whose `CreateChannel` step the relay ACCEPTED.
     ///
     /// Distinct from `hunts`, which records only that a channel id was chosen. A hunt is routed
@@ -449,6 +457,42 @@ impl CaseRouting {
         self.state
             .receipts
             .insert(receipt_id.to_string(), hunt_id.to_string());
+        self.persist()
+    }
+
+    /// The accepted `swarm:lease:v1` card for `lease_id`, if one was published.
+    ///
+    /// `None` means the rollback card has no parent to reply to, which the
+    /// caller renders as an untagged card rather than as a guessed link.
+    #[must_use]
+    pub fn lease_card_for(&self, lease_id: &str) -> Option<&str> {
+        self.lease_cards_map().get(lease_id).map(String::as_str)
+    }
+
+    fn lease_cards_map(&self) -> &BTreeMap<String, String> {
+        &self.state.lease_cards
+    }
+
+    /// Records the lease card the relay accepted. Idempotent: the first id
+    /// wins, because a second call can only be a replay of a card the relay
+    /// deduplicated.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::SpoolIo`] when the sidecar write fails. The caller must
+    /// treat that as a publish failure: an unrecorded card id is the one that
+    /// produces a duplicate on restart.
+    pub fn record_lease_card(
+        &mut self,
+        lease_id: &str,
+        event_id: &str,
+    ) -> Result<(), BridgeError> {
+        if self.state.lease_cards.contains_key(lease_id) {
+            return Ok(());
+        }
+        self.state
+            .lease_cards
+            .insert(lease_id.to_string(), event_id.to_string());
         self.persist()
     }
 
@@ -1212,5 +1256,28 @@ mod tests {
         ] {
             assert_eq!(PromotionClause::from(clause).as_str(), clause.as_str());
         }
+    }
+
+    /// The rollback card replies to the lease card, so the index is what gives
+    /// its `e` tag a parent. Written on ACK only, and idempotent: a second call
+    /// can only be a replay of a card the relay deduplicated.
+    #[test]
+    fn the_lease_card_index_survives_reopen_and_keeps_the_first_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routing.json");
+        {
+            let mut routing = CaseRouting::open(&path).unwrap();
+            assert_eq!(routing.lease_card_for("cl_a"), None);
+            routing.record_lease_card("cl_a", "0xfirst").unwrap();
+            routing.record_lease_card("cl_a", "0xsecond").unwrap();
+            assert_eq!(routing.lease_card_for("cl_a"), Some("0xfirst"));
+        }
+        let routing = CaseRouting::open(&path).unwrap();
+        assert_eq!(routing.lease_card_for("cl_a"), Some("0xfirst"));
+        assert_eq!(
+            routing.lease_card_for("cl_b"),
+            None,
+            "an unknown lease has no parent, and the caller must not invent one"
+        );
     }
 }
