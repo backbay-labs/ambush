@@ -131,6 +131,7 @@ pub mod escalation;
 pub mod evasion_coverage;
 pub mod evolution;
 pub mod evolution_status;
+pub mod governance_gate;
 pub mod held_action;
 pub mod held_action_fixtures;
 pub mod hold_sweep;

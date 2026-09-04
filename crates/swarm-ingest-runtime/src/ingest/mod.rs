@@ -1934,6 +1934,16 @@ impl IngestState {
             .unwrap_or_default()
     }
 
+    /// The governance authority the dispatcher holds, for the decide path's
+    /// partition re-evaluation (B2g).
+    ///
+    /// The SAME authority, not a second one built from config: a contingency
+    /// lease staged in one instance is invisible to another, so a decide path
+    /// on its own copy would refuse acts the dispatcher would have admitted.
+    pub fn current_governance_authority(&self) -> Option<Arc<dyn GovernanceAuthority>> {
+        self.governance_policy.clone()
+    }
+
     pub fn current_governance_status(&self) -> Option<Value> {
         self.governance_policy.as_ref().map(|policy| {
             let report = policy.status_report();

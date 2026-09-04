@@ -1,4 +1,8 @@
+// B2g: the gate is one module now, so the autonomous path here and the
+// human decide path cannot drift. Moved verbatim; this task changes no
+// dispatcher semantics.
 use crate::detection::metrics::CriticalPathMetrics;
+use crate::governance_gate::missing_governance_receipt_reason;
 use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster, now_ms};
 use crate::{
     RuntimeError, StrategyProposalRouteError, agent_tick_error_boundary, agent_tick_panic_error,
@@ -11,12 +15,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use swarm_consensus::ConsensusGovernanceReceipt;
 use swarm_core::agent::{
     AgentFinding, AgentHealth, AgentHealthEntry, AgentRole, SwarmAgent, SwarmEnvironment,
     SwarmEvent, SwarmModeState,
 };
-use swarm_core::types::{AgentId, ResponseAction, Severity, SwarmAction};
+use swarm_core::types::{AgentId, Severity, SwarmAction};
 use swarm_pheromone::{ConfiguredPheromoneSubstrate, PheromoneSubstrate};
 use swarm_policy::ActionRequest;
 use swarm_policy::governance::GovernanceAuthority;
@@ -1271,42 +1274,6 @@ fn governance_action_requires_admission(action: &SwarmAction) -> bool {
             | SwarmAction::GovernanceVeto { .. }
             | SwarmAction::ProposeStrategy { .. }
     )
-}
-
-fn response_action_requires_governance_receipt(action: &ResponseAction) -> bool {
-    matches!(
-        action,
-        ResponseAction::BlockEgress { .. }
-            | ResponseAction::IsolateHost { .. }
-            | ResponseAction::RevokeCredential { .. }
-            | ResponseAction::SinkholeDns { .. }
-            | ResponseAction::TerminateUserSession { .. }
-            | ResponseAction::InjectFirewallRule { .. }
-            | ResponseAction::QuarantineFile { .. }
-            | ResponseAction::KillProcess { .. }
-            | ResponseAction::SuspendProcess { .. }
-            | ResponseAction::DisableUserAccount { .. }
-            | ResponseAction::ForcePasswordReset { .. }
-            | ResponseAction::RemoveScheduledTask { .. }
-    )
-}
-
-fn missing_governance_receipt_reason(request: &ActionRequest) -> Option<String> {
-    if !response_action_requires_governance_receipt(&request.action) {
-        return None;
-    }
-    let Some(receipt_value) = request.evidence.get("governance_receipt").cloned() else {
-        return Some("missing governance receipt".to_string());
-    };
-    let receipt: ConsensusGovernanceReceipt = match serde_json::from_value(receipt_value) {
-        Ok(receipt) => receipt,
-        Err(error) => return Some(format!("invalid governance receipt: {error}")),
-    };
-    receipt
-        .verify()
-        .map(|_| ())
-        .map_err(|error| format!("invalid governance receipt signature: {error}"))
-        .err()
 }
 
 fn swarm_action_hunt_id(action: &SwarmAction) -> Option<&swarm_core::types::HuntId> {
