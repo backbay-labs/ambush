@@ -945,6 +945,205 @@ mod tests {
         assert_eq!(engine, wire);
     }
 
+    /// A store that records every call, so a test can assert the ORDER of
+    /// operations and not merely the final state.
+    ///
+    /// The final state is not enough: `DecisionClaim`'s `Drop` guard abandons a
+    /// claim on any early return, so a decide path that compare-and-set FIRST
+    /// and verified the signature afterwards leaves the record byte-identical
+    /// and every state assertion still passes. That reordering was measured to
+    /// pass the whole suite before this store existed. It is not harmless: it
+    /// lets anyone holding a bearer but no valid key take and release the claim
+    /// repeatedly, blocking the operator who can actually decide, and it writes
+    /// a forged intent id into the durable record on the way past.
+    #[derive(Debug)]
+    struct RecordingHeldActionStore {
+        inner: MemoryHeldActionStore,
+        calls: std::sync::Mutex<Vec<&'static str>>,
+    }
+
+    impl RecordingHeldActionStore {
+        fn new() -> Self {
+            Self {
+                inner: MemoryHeldActionStore::default(),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn record(&self, name: &'static str) {
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(name);
+        }
+
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
+
+    impl HeldActionStore for RecordingHeldActionStore {
+        fn create(&self, hold: HeldAction) -> Result<(), HeldActionStoreError> {
+            self.record("create");
+            self.inner.create(hold)
+        }
+        fn get(&self, hold_id: &str) -> Result<Option<HeldAction>, HeldActionStoreError> {
+            self.record("get");
+            self.inner.get(hold_id)
+        }
+        fn list(
+            &self,
+            include_terminal: bool,
+            limit: usize,
+        ) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+            self.record("list");
+            self.inner.list(include_terminal, limit)
+        }
+        fn mark_case_channel(
+            &self,
+            hold_id: &str,
+            case_channel: &str,
+        ) -> Result<(), HeldActionStoreError> {
+            self.record("mark_case_channel");
+            self.inner.mark_case_channel(hold_id, case_channel)
+        }
+        fn mark_notified(
+            &self,
+            hold_id: &str,
+            at_ms: i64,
+            notice_event_id: &str,
+            card_event_id: Option<&str>,
+        ) -> Result<(), HeldActionStoreError> {
+            self.record("mark_notified");
+            self.inner
+                .mark_notified(hold_id, at_ms, notice_event_id, card_event_id)
+        }
+        fn mark_armed(&self, hold_id: &str, at_ms: i64) -> Result<(), HeldActionStoreError> {
+            self.record("mark_armed");
+            self.inner.mark_armed(hold_id, at_ms)
+        }
+        fn begin_decision(
+            &self,
+            hold_id: &str,
+            intent_event_id: &str,
+            cas_instant_ms: i64,
+        ) -> Result<HeldAction, HeldActionStoreError> {
+            self.record("begin_decision");
+            self.inner
+                .begin_decision(hold_id, intent_event_id, cas_instant_ms)
+        }
+        fn abandon_decision(
+            &self,
+            hold_id: &str,
+            intent_event_id: &str,
+        ) -> Result<(), HeldActionStoreError> {
+            self.record("abandon_decision");
+            self.inner.abandon_decision(hold_id, intent_event_id)
+        }
+        fn complete_decision(
+            &self,
+            hold_id: &str,
+            decision: HoldDecisionRecord,
+            state: HoldState,
+        ) -> Result<(), HeldActionStoreError> {
+            self.record("complete_decision");
+            self.inner.complete_decision(hold_id, decision, state)
+        }
+        fn expire_due(&self, now_ms: i64) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+            self.record("expire_due");
+            self.inner.expire_due(now_ms)
+        }
+        fn fail_stalled_decisions(
+            &self,
+            now_ms: i64,
+            stall_ms: u64,
+        ) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+            self.record("fail_stalled_decisions");
+            self.inner.fail_stalled_decisions(now_ms, stall_ms)
+        }
+        fn health(
+            &self,
+            now_ms: i64,
+            stall_ms: u64,
+        ) -> Result<swarm_runtime::held_action::HeldActionStoreHealth, HeldActionStoreError>
+        {
+            self.record("health");
+            self.inner.health(now_ms, stall_ms)
+        }
+    }
+
+    fn recording_state(
+        bind_operator: bool,
+    ) -> (
+        crate::ingest::IngestState,
+        String,
+        Arc<RecordingHeldActionStore>,
+    ) {
+        let store = Arc::new(RecordingHeldActionStore::new());
+        let mut hold = swarm_runtime::held_action_fixtures::fixture_hold(
+            ResponseAction::IsolateHost {
+                host_id: "host-ops-1".into(),
+            },
+            T0,
+        );
+        hold.state = HoldState::Notified;
+        let id = hold.hold_id.clone();
+        store.create(hold).unwrap();
+        store
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        let state = crate::ingest::tests::test_ingest_state_live_response()
+            .with_hold_store(Arc::clone(&store) as Arc<dyn HeldActionStore>);
+        let state = if bind_operator {
+            state.with_verdict_key_for_test("perch-dev-operator", signer().public_key_hex())
+        } else {
+            state
+        };
+        (state, id, store)
+    }
+
+    /// The ordering itself, observed rather than inferred: a rejected decision
+    /// issues NO mutating store call. Only `get`.
+    #[tokio::test]
+    async fn a_rejected_decision_never_reaches_the_store_at_all() {
+        // A forged signature.
+        let (state, id, store) = recording_state(true);
+        let mut bad = input(HoldDecision::Grant, &id, None, &"aa".repeat(32));
+        bad.signature.signature_hex = "00".repeat(64);
+        let error = decide_hold(&state, &id, "perch-dev-operator", bad, T0 + 100)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, HoldDecisionError::InvalidSignature(_)));
+        assert_eq!(
+            store.calls(),
+            vec!["get"],
+            "a forged decision touched the store beyond the read"
+        );
+
+        // A voter the config does not bind.
+        let (state, id, store) = recording_state(false);
+        let error = decide_hold(
+            &state,
+            &id,
+            "perch-dev-operator",
+            input(HoldDecision::Grant, &id, None, &"aa".repeat(32)),
+            T0 + 100,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, HoldDecisionError::VoterMismatch { .. }));
+        assert_eq!(
+            store.calls(),
+            vec!["get"],
+            "an unbound voter took the claim before it was refused"
+        );
+    }
+
     #[tokio::test]
     async fn a_bad_signature_is_refused_and_writes_nothing() {
         let (state, id) = state_with_hold(HoldState::Notified);
