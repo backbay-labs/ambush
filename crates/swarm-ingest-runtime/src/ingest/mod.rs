@@ -697,6 +697,16 @@ fn filter_escalations_for_scope(
 }
 
 fn runtime_event_matches_scope(event: &RuntimeEvent, scope: &ProvidenceContextScope) -> bool {
+    // These two never reach the stream, scoped or not. Checked BEFORE the
+    // empty-scope short-circuit on purpose: an empty scope is an ANONYMOUS
+    // reader until B5 makes the token mandatory, and the short-circuit below
+    // would otherwise hand it every hold and every promotion.
+    if matches!(
+        event,
+        RuntimeEvent::ResponseHeld { .. } | RuntimeEvent::CasePromoted { .. }
+    ) {
+        return false;
+    }
     if scope.is_empty() {
         return true;
     }
@@ -769,7 +779,13 @@ fn runtime_event_matches_scope(event: &RuntimeEvent, scope: &ProvidenceContextSc
         RuntimeEvent::EvolutionStatus { .. }
         | RuntimeEvent::AgentHealth { .. }
         | RuntimeEvent::TamperAlert { .. }
-        | RuntimeEvent::CasePromoted { .. } => false,
+        | RuntimeEvent::CasePromoted { .. }
+        // B1. Grouped with TamperAlert deliberately: a hold names a destructive
+        // action pending against a named host. Unreachable in practice -- the
+        // guard at the top of this function already returned -- and kept
+        // because this match has no `_` arm, so the compiler, not review, is
+        // what notices a new variant.
+        | RuntimeEvent::ResponseHeld { .. } => false,
     }
 }
 

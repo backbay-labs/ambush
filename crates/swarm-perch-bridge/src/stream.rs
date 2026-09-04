@@ -88,6 +88,10 @@ pub fn classify(event: &RuntimeEvent) -> Stream {
         // a held action and must not alarm the shift -- so it costs one `kind:9007` and one
         // `kind:9000` per operator.
         RuntimeEvent::CasePromoted { .. } => Stream::Alarm,
+        // `ResponseHeld` is Alarm and bypasses the pacer: a held destructive
+        // action is exactly the event an operator is waiting on, and the
+        // 26006 frame it drives must never be coalesced or shed (R-1).
+        RuntimeEvent::ResponseHeld { .. } => Stream::Alarm,
         RuntimeEvent::ModeTransition { .. } => Stream::Alarm,
         RuntimeEvent::TamperAlert { .. } => Stream::Alarm,
 

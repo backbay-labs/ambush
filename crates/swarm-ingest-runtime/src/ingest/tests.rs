@@ -6202,3 +6202,57 @@ fn response_adapter_kind_maps_variants() {
         "webhook"
     );
 }
+
+#[test]
+fn a_hold_alarm_never_matches_any_stream_scope_including_the_anonymous_empty_one() {
+    use swarm_runtime::providence::ProvidenceContextScope;
+    use swarm_runtime::runtime_events::RuntimeEvent;
+
+    let held = RuntimeEvent::ResponseHeld {
+        emitted_at_ms: 1,
+        hold_id: "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13".into(),
+        hunt_id: "hunt-evt-1".into(),
+        action_kind: "isolate_host".into(),
+        severity: Severity::Critical,
+        expires_at_ms: 2,
+        state: swarm_runtime::held_action::HoldState::Created,
+    };
+    // The empty scope is what an anonymous reader gets until B5 lands; it
+    // short-circuits `true` for every other variant.
+    assert!(!super::runtime_event_matches_scope(
+        &held,
+        &ProvidenceContextScope::default()
+    ));
+    let scoped = ProvidenceContextScope {
+        hunt_id: Some("hunt-evt-1".into()),
+        ..ProvidenceContextScope::default()
+    };
+    assert!(!super::runtime_event_matches_scope(&held, &scoped));
+    // And the filter that wraps it drops the event outright.
+    assert!(
+        super::filter_runtime_event_for_scope(held, &ProvidenceContextScope::default()).is_none()
+    );
+}
+
+/// The empty-scope short-circuit still admits an ordinary event, so the test
+/// above is proving a fence and not just an always-false function.
+#[test]
+fn an_empty_scope_still_admits_an_ordinary_finding_event() {
+    use swarm_runtime::providence::ProvidenceContextScope;
+    use swarm_runtime::runtime_events::RuntimeEvent;
+
+    let escalation = RuntimeEvent::Escalation {
+        emitted_at_ms: 1,
+        threat_class: ThreatClass::Execution,
+        level: swarm_runtime::runtime_events::EscalationLevel::Alert,
+        total_strength: 1.0,
+        distinct_sources: 2,
+        peak_confidence: 0.9,
+        mode_changed: false,
+        current_mode: SwarmMode::Alert,
+    };
+    assert!(super::runtime_event_matches_scope(
+        &escalation,
+        &ProvidenceContextScope::default()
+    ));
+}
