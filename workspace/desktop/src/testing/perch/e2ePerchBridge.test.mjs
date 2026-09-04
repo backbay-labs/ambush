@@ -292,3 +292,33 @@ test("the command log records order, which is the two-leg proof", () => {
   resetPerchMock();
   assert.deepEqual(perchMockLog(), []);
 });
+
+test("leg 2 can be made to refuse with an exact message", () => {
+  // The console classifies on the prefix and renders the message, so a spec
+  // needs to control it verbatim — including a message that quotes a wire
+  // identifier carrying a bidi override.
+  const message = "daemon answered 422: unknown finding ‮f2c9a1b4";
+  seedPerchFixture({ feedbackFailureMessage: message });
+  assert.throws(
+    () =>
+      handlePerchMockCommand("perch_finding_feedback", {
+        findingId: PERCH_FINDING_ID,
+        incidentId: PERCH_INCIDENT_ID,
+        action: "dismiss",
+        verdictEventId: "f".repeat(64),
+        reason: null,
+      }),
+    (error) => error.message === message,
+  );
+  seedPerchFixture({ feedbackFailureMessage: null });
+  assert.equal(
+    handlePerchMockCommand("perch_finding_feedback", {
+      findingId: PERCH_FINDING_ID,
+      incidentId: PERCH_INCIDENT_ID,
+      action: "dismiss",
+      verdictEventId: "f".repeat(64),
+      reason: null,
+    }).replayed,
+    false,
+  );
+});

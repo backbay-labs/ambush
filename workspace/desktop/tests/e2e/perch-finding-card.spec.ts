@@ -196,6 +196,70 @@ test.describe("the finding card", () => {
 });
 
 test.describe("the finding verdict", () => {
+  test("a daemon refusal is railed like every other untrusted string", async ({
+    page,
+  }) => {
+    // The daemon's words are its own, but the identifiers it quotes come off
+    // the wire. React escapes markup and does nothing about a bidi override,
+    // which would reorder the sentence around it on screen.
+    const refusal = `daemon answered 422: unknown finding ${RLO}f2c9a1b4${ZWSP}`;
+    const card = await openLaneWithFinding(page, undefined, {
+      feedbackFailureMessage: refusal,
+    });
+    const actions = card.getByTestId("perch-finding-actions");
+    await actions.getByTestId("perch-finding-action-promote").focus();
+    await page.keyboard.press("e");
+    await expect(page).toHaveURL(new RegExp(`/cases/${PERCH_CASE_CHANNEL}$`));
+    await page.getByTestId(`channel-${PERCH_LANE_CHANNEL_NAME}`).click();
+
+    const back = page
+      .locator(`[data-message-id="${PERCH_FINDING_CARD_EVENT_ID}"]`)
+      .getByTestId("perch-finding-actions");
+    await expect(
+      back.getByTestId("perch-finding-action-dismiss"),
+    ).toBeEnabled();
+    await back.getByTestId("perch-finding-action-dismiss").focus();
+    await page.keyboard.press("d");
+    await page.keyboard.press("d");
+
+    const state = page.getByTestId("perch-write-state");
+    await expect(state).toHaveAttribute("data-perch-phase", "failed");
+
+    // The Ambush record still stands, and only the daemon leg failed.
+    await expect(state.getByTestId("perch-write-state-ambush")).toContainText(
+      "recorded on Ambush",
+    );
+    await expect(state.getByTestId("perch-write-state-daemon")).toContainText(
+      "failed",
+    );
+
+    // The refusal's own words are rendered, through the rail.
+    const reason = state.getByTestId("perch-write-state-reason");
+    await expect(reason).toContainText("daemon answered 422");
+    await expect(
+      reason.locator('[aria-label="refusal, adversary-controlled value"]'),
+    ).toHaveCount(1);
+    await expect(reason).toContainText(
+      "ADVERSARY-CONTROLLED · CONTAINS ESCAPED CHARACTERS",
+    );
+
+    const escaped = reason.getByTestId("perch-escaped-codepoint");
+    await expect(escaped).toHaveCount(2);
+    await expect(escaped.nth(0)).toHaveAttribute(
+      "title",
+      "U+202E RIGHT-TO-LEFT OVERRIDE",
+    );
+    await expect(escaped.nth(1)).toHaveAttribute(
+      "title",
+      "U+200B ZERO WIDTH SPACE",
+    );
+
+    // The raw code points never reach the document text.
+    const reasonText = (await reason.textContent()) ?? "";
+    expect(reasonText.includes(RLO)).toBe(false);
+    expect(reasonText.includes(ZWSP)).toBe(false);
+  });
+
   test("E promotes exactly once and opens the case the daemon minted", async ({
     page,
   }) => {

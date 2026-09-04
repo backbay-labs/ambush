@@ -3,7 +3,11 @@ import { type AnyRouter, useRouter } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 
 import type { PerchFindingAction } from "@/shared/api/tauriPerch";
-import { WriteStateRow } from "@/shared/ui/perch/WriteStateRow";
+import { AdversaryString } from "@/shared/ui/perch/AdversaryString";
+import {
+  PERCH_REASON_CAP,
+  WriteStateRow,
+} from "@/shared/ui/perch/WriteStateRow";
 
 import {
   type FindingCardSubject,
@@ -229,12 +233,21 @@ export function FindingCardActions({ card }: { card: FindingCardSubject }) {
         ))}
       </div>
       {promoteError === null ? null : (
+        // The sentence is ours; the message inside it is the daemon's and
+        // quotes wire identifiers, so it is railed like every other untrusted
+        // string on this card rather than trusted because React escapes HTML.
         <p
           data-testid="perch-finding-promote-error"
           role="status"
-          className="text-2xs text-[hsl(var(--perch-foreground))]"
+          className="flex flex-wrap items-baseline gap-1 text-2xs text-[hsl(var(--perch-foreground))]"
         >
-          The daemon did not open a case: {promoteError}
+          The daemon did not open a case:{" "}
+          <AdversaryString
+            field="daemon message"
+            value={promoteError}
+            cap={PERCH_REASON_CAP}
+            layout="inline"
+          />
         </p>
       )}
       {caseRef ? null : (

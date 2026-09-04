@@ -149,6 +149,13 @@ export type PerchMockFixture = {
    */
   feedbackNotCorrelated?: boolean;
   /**
+   * Make leg 2 refuse with exactly this message. The console classifies a
+   * leg-2 outcome by the message's prefix, and renders the message itself, so
+   * a spec uses this to drive both — including a daemon message that quotes a
+   * wire identifier carrying a bidi override.
+   */
+  feedbackFailureMessage?: string;
+  /**
    * Hold leg 1 open for this long. A spec that must see `sending` needs the
    * relay write to take measurable time; the real one takes a round trip.
    */
@@ -172,6 +179,7 @@ type MockState = {
   findings: Record<string, string>;
   daemonReachable: boolean;
   feedbackNotCorrelated: boolean;
+  feedbackFailureMessage: string | null;
   verdictDelayMs: number;
   feedbackDelayMs: number;
   /** `finding_id` to the ids the daemon minted for it. */
@@ -196,6 +204,7 @@ function defaults(): MockState {
     findings: { [PERCH_FINDING_CARD_EVENT_ID]: PERCH_FINDING_ID },
     daemonReachable: true,
     feedbackNotCorrelated: false,
+    feedbackFailureMessage: null,
     verdictDelayMs: 0,
     feedbackDelayMs: 0,
     minted: new Map(),
@@ -251,6 +260,9 @@ function applyFixture(target: MockState, fixture: PerchMockFixture): void {
   }
   if (fixture.feedbackNotCorrelated !== undefined) {
     target.feedbackNotCorrelated = fixture.feedbackNotCorrelated;
+  }
+  if (fixture.feedbackFailureMessage !== undefined) {
+    target.feedbackFailureMessage = fixture.feedbackFailureMessage;
   }
   if (fixture.verdictDelayMs !== undefined) {
     target.verdictDelayMs = fixture.verdictDelayMs;
@@ -492,6 +504,9 @@ function findingFeedback(payload: unknown): PerchFindingFeedbackResponse {
     throw new Error(
       "daemon answered 400: findingId and verdictEventId are required",
     );
+  }
+  if (s.feedbackFailureMessage) {
+    throw new Error(s.feedbackFailureMessage);
   }
   if (s.feedbackNotCorrelated) {
     // The Rust command maps B3's 404 onto this exact prefix, and the console

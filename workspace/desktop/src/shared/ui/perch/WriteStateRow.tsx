@@ -5,6 +5,7 @@ import {
   verdictLegLabels,
   type VerdictWriteState,
 } from "@/features/perch-evidence/lib/verdictWriteState";
+import { AdversaryString } from "@/shared/ui/perch/AdversaryString";
 
 /**
  * Where a two-legged governance write actually is, rendered as two legs.
@@ -56,25 +57,29 @@ function Leg({
   );
 }
 
-/** How much of a refusal's own words this row shows before cutting it off. */
-const REASON_MAX = 200;
+/**
+ * How many graphemes of a refusal's own words this row shows before offering
+ * an expand control. `<AdversaryString>` caps rather than truncates, so the
+ * whole message stays reachable instead of being silently cut.
+ */
+export const PERCH_REASON_CAP = 200;
 
 /**
  * The refusal's own words, when it has any.
  *
- * "failed" on its own tells an operator nothing they can act on. The text
- * comes from the relay or from the daemon rather than from telemetry, and it
- * is rendered as a plain text node and capped, never parsed as markup.
+ * "failed" on its own tells an operator nothing they can act on. The words
+ * come from the relay or from the daemon, not from telemetry — but the
+ * identifiers they quote come from the wire, and a daemon message echoing a
+ * finding id with a bidi override in it would visually reorder the sentence
+ * around it. React escapes markup and does not touch that, so the value goes
+ * through the same rail as every other untrusted string on these cards.
  */
 function reasonOf(state: VerdictWriteState): string | null {
   if (state.phase !== "daemon-unreachable" && state.phase !== "failed") {
     return null;
   }
   const reason = state.reason.trim();
-  if (!reason) return null;
-  return reason.length > REASON_MAX
-    ? `${reason.slice(0, REASON_MAX)}…`
-    : reason;
+  return reason ? reason : null;
 }
 
 export function WriteStateRow({
@@ -112,11 +117,13 @@ export function WriteStateRow({
         />
       )}
       {reason === null ? null : (
-        <span
-          data-testid="perch-write-state-reason"
-          className="text-2xs text-[hsl(var(--perch-foreground-muted))]"
-        >
-          {reason}
+        <span data-testid="perch-write-state-reason">
+          <AdversaryString
+            field="refusal"
+            value={reason}
+            cap={PERCH_REASON_CAP}
+            layout="inline"
+          />
         </span>
       )}
       {retryable ? (
