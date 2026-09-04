@@ -102,6 +102,66 @@ pub enum OperatorHttpError {
     Serve(#[from] ServeError),
 }
 
+/// Every path [`LocalOperatorSurface::router`] mounts, verbatim and in order.
+///
+/// Published for the same reason `perch::PERCH_ROUTER_PATHS` is: the two
+/// routers run on different listeners in different processes, and the same
+/// path on both is a route an operator would reach or not reach depending on
+/// which port they hit. The perch disjointness test compares the two sets, and
+/// a test in this module re-extracts the paths from `router()`'s own body, so
+/// the array cannot drift away from the router it describes.
+pub const LOCAL_OPERATOR_SURFACE_PATHS: [&str; 49] = [
+    "/v1/operator/status",
+    "/v1/operator/pheromone/threat-class-configs",
+    "/v1/operator/threat-intel/entries",
+    "/v1/notifications/dead-letter/{channel}",
+    "/v1/operator/replay",
+    "/v1/operator/investigation",
+    "/v1/operator/incident",
+    "/v1/operator/review",
+    "/v1/operator/review/rehearsals/{bundle_id}/export",
+    "/v1/operator/review/sessions",
+    "/v1/operator/review/sessions/{session_id}",
+    "/v1/operator/review/sessions/{session_id}/export",
+    "/v1/operator/review/sessions/{session_id}/capsules",
+    "/v1/operator/review/sessions/{session_id}/promotion-readiness",
+    "/v1/operator/review/sessions/{session_id}/handoffs/reverify",
+    "/v1/operator/review/exports/{export_id}",
+    "/v1/operator/review/capsules/{capsule_id}",
+    "/v1/operator/review/capsules/{capsule_id}/delegations",
+    "/v1/operator/review/capsule-imports",
+    "/v1/operator/review/capsule-imports/{import_id}",
+    "/v1/operator/review/capsule-imports/{import_id}/delegations",
+    "/v1/operator/review/delegations/{delegation_id}",
+    "/v1/operator/review/promotion-readiness/{readiness_id}",
+    "/v1/operator/review/promotion-readiness/{readiness_id}/capsules",
+    "/v1/operator/review/handoffs/{handoff_id}",
+    "/v1/operator/review/evidence",
+    "/v1/operator/review/evidence/{bundle_id}",
+    "/v1/operator/review/verifications/{verification_id}",
+    "/v1/operator/review/promotion-packets",
+    "/v1/operator/review/promotion-packets/{packet_id}",
+    "/v1/operator/evidence/bundles",
+    "/v1/operator/evidence/bundles/{bundle_id}",
+    "/v1/operator/evidence/verifications/{verification_id}",
+    "/v1/operator/evidence/promotion-packets/{packet_id}",
+    "/v1/operator/approval-sets",
+    "/v1/operator/approval-sets/{set_id}",
+    "/v1/operator/approval-ledgers",
+    "/v1/operator/approval-ledgers/{ledger_id}",
+    "/v1/operator/approval-ledgers/{ledger_id}/vote",
+    "/v1/operator/evolution/portfolios",
+    "/v1/operator/evolution/portfolios/{portfolio_id}",
+    "/v1/operator/evolution/governance-packets/{packet_id}",
+    "/v1/operator/evolution/packet-sets",
+    "/v1/operator/evolution/packet-sets/{packet_set_id}",
+    "/v1/operator/evolution/portfolio-histories",
+    "/v1/operator/evolution/portfolio-histories/{history_id}",
+    "/v1/operator/maintenance/actions",
+    "/v1/operator/maintenance/actions/{action_id}",
+    "/metrics",
+];
+
 #[derive(Clone)]
 pub struct LocalOperatorSurface {
     bind_addr: SocketAddr,
@@ -503,5 +563,44 @@ impl LocalOperatorSurface {
         )
         .await
         .map_err(OperatorHttpError::Serve)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::LOCAL_OPERATOR_SURFACE_PATHS;
+
+    /// The inventory IS the router, in order, and drift in either direction
+    /// fails: a route added without an entry, an entry whose path no longer
+    /// appears, and a reordering all change the extracted list.
+    ///
+    /// The scan is bounded to `router()`'s own body so a path mentioned in a
+    /// doc comment or a test message cannot be counted as a mounted route --
+    /// counting prose as behaviour is how an inventory test goes vacuous.
+    #[test]
+    fn local_operator_surface_paths_match_the_mounted_routes() {
+        let source = include_str!("state.rs");
+        let body_start = source
+            .find("pub fn router(&self) -> Router {")
+            .expect("router() is where the routes are mounted");
+        let body_end = source[body_start..]
+            .find("#[cfg(test)]")
+            .map(|offset| body_start + offset)
+            .unwrap_or(source.len());
+        let body = &source[body_start..body_end];
+
+        let mut mounted = Vec::new();
+        for (offset, _) in body.match_indices(".route(") {
+            let rest = &body[offset + ".route(".len()..];
+            let open = rest.find('"').expect("a route path is a string literal");
+            let close = open + 1 + rest[open + 1..].find('"').expect("unterminated path");
+            mounted.push(&rest[open + 1..close]);
+        }
+        assert_eq!(
+            mounted.as_slice(),
+            LOCAL_OPERATOR_SURFACE_PATHS.as_slice(),
+            "the inventory has drifted from router()"
+        );
     }
 }

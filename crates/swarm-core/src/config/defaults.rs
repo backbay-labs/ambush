@@ -30,6 +30,27 @@ pub(super) const fn default_containment_sweep_interval_ms() -> u64 {
     30_000
 }
 
+/// APPENDIX-NORMATIVE.md §6: PERCH_HOLD_TTL_MS, sixty minutes.
+pub(super) const fn default_hold_ttl_ms() -> u64 {
+    3_600_000
+}
+
+/// Same cadence as the containment sweep spawned in `swarm_detect`.
+pub(super) const fn default_hold_sweep_interval_ms() -> u64 {
+    5_000
+}
+
+/// Equals `policy.lease_ttl_ms`: past this instant the capability lease a
+/// stalled decision would have carried is dead anyway.
+pub(super) const fn default_decide_stall_ms() -> u64 {
+    60_000
+}
+
+/// One day. The upper bound (`issued_at_ms <= held_at_ms`) is the load-bearing half.
+pub(super) const fn default_governance_receipt_max_age_ms() -> u64 {
+    86_400_000
+}
+
 pub(super) const fn default_drain_timeout_ms() -> u64 {
     30_000
 }
@@ -237,7 +258,13 @@ pub(super) fn default_operator_token_env() -> String {
 }
 
 pub(super) fn default_operator_context_token_env() -> String {
-    default_operator_token_env()
+    // B5: this used to resolve to `default_operator_token_env()`, so a
+    // deployment that set only `SWARM_OPERATOR_TOKEN` signed read-only
+    // Providence context tokens with the same secret as the mutable operator
+    // bearer. The two secrets are now separate by default; a deployment that
+    // relied on the old behaviour sets
+    // `operator_surface.auth.context_token_env: SWARM_OPERATOR_TOKEN`.
+    "SWARM_OPERATOR_CONTEXT_TOKEN".to_string()
 }
 
 pub(super) const fn default_http_rate_limit_burst_max_requests() -> usize {

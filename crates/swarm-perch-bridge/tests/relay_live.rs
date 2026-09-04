@@ -178,6 +178,282 @@ async fn a_case_channel_is_created_and_the_operator_is_a_member() {
     );
 }
 
+/// The whole hold sequence, built by the real publisher, admitted by a real relay.
+///
+/// This is the proof no unit test can give. Four of the five events are shapes the relay itself
+/// judges: `9007` bootstraps the bridge as the channel's owner, `9000` makes the operator a
+/// member, `kind:9` is refused from a non-member of a private channel, and `46010` is on
+/// neither the six-kind `skip_membership` list nor any scope allow-list unless the relay fork is
+/// applied. The fifth, `26006`, is ephemeral and p-gated, so it is asserted through a live
+/// subscription rather than a read-back.
+///
+/// It also proves the negative that RF-D1 exists for: the notice carries no `e` tag, so the
+/// relay's `resolve_nip10_thread_meta` never runs on it and no `kind:39005` thread summary is
+/// emitted for the case.
+#[tokio::test]
+#[ignore = "needs PERCH_TEST_RELAY_URL and a live relay"]
+async fn the_hold_sequence_is_admitted_by_a_live_relay() {
+    use std::sync::Arc;
+
+    use swarm_perch_bridge::channels::CaseRouting;
+    use swarm_perch_bridge::holds::{HoldPlan, HoldPublisher};
+    use swarm_perch_bridge::metrics::BridgeMetrics;
+    use swarm_runtime::held_action::{HeldActionStore, HoldState, MemoryHeldActionStore};
+    use swarm_runtime::runtime_events::RuntimeEvent;
+
+    let url = relay_url();
+    let table = table();
+    let alarm = table.get(table.alarm()).unwrap().clone();
+    let alarm_idx = table.alarm();
+    let operator = nostr::Keys::generate();
+    let operator_hex = operator.public_key().to_hex();
+
+    let store = Arc::new(MemoryHeldActionStore::default());
+    let hold = swarm_runtime::held_action_fixtures::fixture_hold(
+        swarm_core::types::ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        chrono::Utc::now().timestamp_millis(),
+    );
+    let hunt_id = format!("hunt-live-{}", uuid::Uuid::new_v4());
+    let mut hold = hold;
+    hold.action_request.hunt_id = swarm_core::types::HuntId(hunt_id.clone());
+    store.create(hold.clone()).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let (metrics, _registry) = BridgeMetrics::new();
+    let mut publisher = HoldPublisher::new(
+        CaseRouting::open(&dir.path().join("routing.json")).unwrap(),
+        Some(Arc::clone(&store) as Arc<dyn HeldActionStore>),
+        vec![operator_hex.clone()],
+        3600,
+        alarm.clone(),
+        alarm_idx,
+        metrics,
+    );
+
+    let event = RuntimeEvent::ResponseHeld {
+        emitted_at_ms: hold.held_at_ms,
+        hold_id: hold.hold_id.clone(),
+        hunt_id: hunt_id.clone(),
+        action_kind: hold.action_request.action.kind().to_string(),
+        severity: hold.action_request.severity,
+        expires_at_ms: hold.expires_at_ms,
+        state: HoldState::Created,
+    };
+    let HoldPlan::Steps(steps) = publisher.plan(&event).unwrap() else {
+        panic!("the fixture hold must be deliverable")
+    };
+    assert_eq!(
+        steps.len(),
+        5,
+        "{:?}",
+        steps.iter().map(PublishStep::label).collect::<Vec<_>>()
+    );
+    let case = steps[0].channel().unwrap();
+
+    // The operator subscribes to the p-gated global alarm BEFORE anything is published: 26006 is
+    // ephemeral, so a read-back afterwards would find nothing.
+    let mut watcher = NostrWsConnection::connect_authenticated(&url, &operator, None)
+        .await
+        .unwrap();
+    watcher
+        .send_raw(&serde_json::json!([
+            "REQ",
+            "hold-alarm",
+            {"kinds": [26006], "#p": [operator_hex.clone()]}
+        ]))
+        .await
+        .unwrap();
+
+    let mut conn = NostrWsConnection::connect_authenticated(&url, &alarm.keys, None)
+        .await
+        .unwrap();
+    let mut published: Vec<(u16, String)> = Vec::new();
+    for step in &steps {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let signed = match publisher.build(step, 1, now_ms).unwrap() {
+            Some(body) => {
+                let tags = body
+                    .tags
+                    .iter()
+                    .map(|tag| nostr::Tag::parse(tag.clone()).unwrap())
+                    .collect::<Vec<_>>();
+                nostr::EventBuilder::new(nostr::Kind::Custom(body.kind), body.content)
+                    .tags(tags)
+                    .custom_created_at(nostr::Timestamp::from(now_secs()))
+                    .sign_with_keys(&alarm.keys)
+                    .unwrap()
+            }
+            None => step_to_event(step, &alarm.keys, now_secs()).unwrap(),
+        };
+        let kind = signed.kind.as_u16();
+        let event_id = signed.id.to_hex();
+        let ok = conn.send_event(signed).await.unwrap();
+        println!(
+            "hold step={} kind={kind} event_id={event_id} accepted={} message={}",
+            step.label(),
+            ok.accepted,
+            ok.message
+        );
+        assert!(
+            ok.accepted || ok.message.starts_with("duplicate: channel already exists"),
+            "step {} was refused: {}",
+            step.label(),
+            ok.message
+        );
+        publisher.on_ok(step, &event_id, now_ms).unwrap();
+        published.push((kind, event_id));
+    }
+    let kinds: Vec<u16> = published.iter().map(|(kind, _)| *kind).collect();
+    assert_eq!(kinds, vec![9007, 9000, 9, 46010, 26006]);
+    println!(
+        "case_channel={case} hold_id={} card={} notice={}",
+        hold.hold_id, published[2].1, published[3].1
+    );
+
+    // The p-gated ephemeral reached the operator it named.
+    let mut saw_alarm = false;
+    for _ in 0..20 {
+        match watcher.next_event(Duration::from_secs(5)).await.unwrap() {
+            RelayMessage::Event { event, .. } if event.kind.as_u16() == 26006 => {
+                let frame: serde_json::Value = serde_json::from_str(&event.content).unwrap();
+                assert_eq!(frame["schema"], "swarm.perch.frame.hold_alarm.v1");
+                assert_eq!(frame["hold_id"], hold.hold_id);
+                assert!(frame.get("hunt_id").is_none());
+                let names: Vec<String> = event
+                    .tags
+                    .iter()
+                    .filter_map(|tag| tag.clone().to_vec().first().cloned())
+                    .collect();
+                assert_eq!(names, vec!["p"], "26006 is global and carries p only");
+                println!("alarm frame reached the operator: {}", event.id.to_hex());
+                saw_alarm = true;
+                break;
+            }
+            RelayMessage::Closed { message, .. } => panic!("the p-gated REQ was closed: {message}"),
+            _ => {}
+        }
+    }
+    assert!(
+        saw_alarm,
+        "the 26006 never reached the operator it p-tagged"
+    );
+
+    // The stored 46010 reads back with exactly the four tag names and no `e`.
+    let mut reader = NostrWsConnection::connect_authenticated(&url, &operator, None)
+        .await
+        .unwrap();
+    reader
+        .send_raw(&serde_json::json!([
+            "REQ",
+            "hold-notice",
+            {"kinds": [46010], "#p": [operator_hex.clone()], "limit": 10}
+        ]))
+        .await
+        .unwrap();
+    let mut saw_notice = false;
+    for _ in 0..20 {
+        match reader.next_event(Duration::from_secs(5)).await.unwrap() {
+            RelayMessage::Event { event, .. } if event.kind.as_u16() == 46010 => {
+                let tags: Vec<Vec<String>> =
+                    event.tags.iter().map(|tag| tag.clone().to_vec()).collect();
+                let names: Vec<&str> = tags
+                    .iter()
+                    .filter_map(|t| t.first().map(String::as_str))
+                    .collect();
+                assert_eq!(names, vec!["h", "p", "hold", "card"], "{tags:?}");
+                assert!(!names.contains(&"e"), "RF-D1: a 46010 is never threaded");
+                assert!(tags.contains(&vec!["h".to_string(), case.to_string()]));
+                assert!(tags.contains(&vec!["hold".to_string(), hold.hold_id.clone()]));
+                assert!(tags.contains(&vec!["card".to_string(), published[2].1.clone()]));
+                assert!(!event.content.contains("<!--"), "no marker on a notice");
+                println!("notice read back: {}", event.id.to_hex());
+                saw_notice = true;
+                break;
+            }
+            RelayMessage::Eose { .. } if saw_notice => break,
+            RelayMessage::Closed { message, .. } => panic!("the notice read was closed: {message}"),
+            _ => {}
+        }
+    }
+    assert!(
+        saw_notice,
+        "the 46010 never reached the operator's needs-action query"
+    );
+
+    // And the daemon record learned both callbacks from the relay's own OKs.
+    let after = store.get(&hold.hold_id).unwrap().unwrap();
+    assert_eq!(after.state, HoldState::Notified);
+    assert_eq!(
+        after.case_channel.as_deref(),
+        Some(case.to_string().as_str())
+    );
+    assert_eq!(
+        after.card_event_id.as_deref(),
+        Some(published[2].1.as_str())
+    );
+    assert_eq!(
+        after.notice_event_id.as_deref(),
+        Some(published[3].1.as_str())
+    );
+}
+
+/// A global `REQ {"kinds":[26006]}` with no `#p` is refused by the relay's p-gate.
+///
+/// R-1's whole compartment. Without `KIND_OPERATOR_ALARM_FRAME` in `P_GATED_KINDS` any
+/// authenticated community member could enumerate every hold alarm in the colony.
+#[tokio::test]
+#[ignore = "needs PERCH_TEST_RELAY_URL and a live relay"]
+async fn an_ungated_alarm_subscription_is_closed_by_the_relay() {
+    let url = relay_url();
+    let snoop = nostr::Keys::generate();
+    let mut conn = NostrWsConnection::connect_authenticated(&url, &snoop, None)
+        .await
+        .unwrap();
+    conn.send_raw(&serde_json::json!(["REQ", "snoop", {"kinds": [26006]}]))
+        .await
+        .unwrap();
+    let mut closed = None;
+    for _ in 0..10 {
+        match conn.next_event(Duration::from_secs(5)).await.unwrap() {
+            RelayMessage::Closed { message, .. } => {
+                closed = Some(message);
+                break;
+            }
+            RelayMessage::Eose { .. } => break,
+            _ => {}
+        }
+    }
+    let message = closed.expect("a 26006 REQ with no #p must be CLOSED, not answered");
+    println!("ungated 26006 REQ closed: {message}");
+
+    // The same filter naming SOMEONE ELSE is closed too.
+    let mut conn = NostrWsConnection::connect_authenticated(&url, &snoop, None)
+        .await
+        .unwrap();
+    conn.send_raw(&serde_json::json!([
+        "REQ", "snoop-other", {"kinds": [26006], "#p": ["68".repeat(32)]}
+    ]))
+    .await
+    .unwrap();
+    let mut other_closed = false;
+    for _ in 0..10 {
+        match conn.next_event(Duration::from_secs(5)).await.unwrap() {
+            RelayMessage::Closed { .. } => {
+                other_closed = true;
+                break;
+            }
+            RelayMessage::Eose { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(
+        other_closed,
+        "a 26006 REQ naming another operator's pubkey must be CLOSED"
+    );
+}
+
 /// The lane channel `PERCH_TEST_LANE_CHANNEL` carries at least one finding card written by
 /// `PERCH_TEST_EXPECT_AUTHOR`.
 ///

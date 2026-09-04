@@ -67,6 +67,7 @@ pub mod alarm;
 pub mod cards;
 pub mod channels;
 pub mod error;
+pub mod holds;
 pub mod identity;
 pub mod metrics;
 pub mod pacer;
@@ -86,7 +87,9 @@ use swarm_runtime::containment::ContainmentSweep;
 use swarm_runtime::runtime_events::RuntimeEvent;
 use tokio::sync::{broadcast, watch};
 
+use crate::alarm::FALLBACK_CASE_TTL_SECONDS;
 use crate::channels::CaseRouting;
+use crate::holds::HoldPublisher;
 use crate::identity::{IdentityTable, approve_scoped_operator_pubkeys, seed_from_env};
 use crate::metrics::BridgeMetrics;
 use crate::pacer::Pacer;
@@ -121,6 +124,25 @@ pub struct BridgeBuildInput {
     pub operator_principals: Vec<OperatorPrincipalConfig>,
     /// The process's one sweep, or `None` on the shipped default.
     pub containment: Option<Arc<ContainmentSweep>>,
+    /// The daemon's ONE hold store.
+    ///
+    /// Read only in the PUBLISH task, never in [`receive`], to build the `swarm:hold:v1` card
+    /// body from the record a `RuntimeEvent::ResponseHeld` announces, and written back through
+    /// `mark_case_channel` / `mark_notified` once the relay OKs the `9007` and the `46010`.
+    ///
+    /// `None` on a daemon that never called `with_hold_store`. The bridge then refuses every
+    /// `ResponseHeld` by name (`hold_undeliverable{reason="no_hold_store"}`) rather than
+    /// publishing a card it would have to invent.
+    ///
+    /// # Why the Approve set is NOT a sibling field
+    ///
+    /// The set is `approve_scoped_operator_pubkeys(&operator_principals)` — derivable from the
+    /// field directly above it, and derived exactly once inside [`PerchBridge::build`], where
+    /// the `HoldUndeliverable` case is already turned into a warning and an empty set. A second
+    /// input carrying the same list is a second source that can disagree with the first, and the
+    /// disagreement would be invisible: case channels provisioned for one set of operators and
+    /// notices `p`-tagged to another. [`PerchBridge::approve_pubkeys`] exposes the one answer.
+    pub hold_store: Option<Arc<dyn swarm_runtime::held_action::HeldActionStore>>,
     /// The process-wide shutdown watch.
     pub shutdown: watch::Receiver<bool>,
 }
@@ -138,6 +160,7 @@ pub struct PerchBridge {
     stall: Arc<AtomicU64>,
     events: broadcast::Receiver<RuntimeEvent>,
     containment: Option<Arc<ContainmentSweep>>,
+    hold_store: Option<Arc<dyn swarm_runtime::held_action::HeldActionStore>>,
     shutdown: watch::Receiver<bool>,
 }
 
@@ -164,6 +187,7 @@ impl PerchBridge {
             ingest_identity,
             operator_principals,
             containment,
+            hold_store,
             shutdown,
         } = input;
 
@@ -203,7 +227,7 @@ impl PerchBridge {
         let operators = match approve_scoped_operator_pubkeys(&operator_principals) {
             Ok(operators) => operators,
             Err(BridgeError::HoldUndeliverable) => {
-                metrics.hold_undeliverable();
+                metrics.hold_undeliverable("no_operator_pubkey");
                 tracing::warn!(
                     module = module_path!(),
                     "no Approve principal carries a nostr_pubkey; case channels will be created \
@@ -226,6 +250,7 @@ impl PerchBridge {
             stall: Arc::new(AtomicU64::new(0)),
             events,
             containment,
+            hold_store,
             shutdown,
         }))
     }
@@ -254,6 +279,23 @@ impl PerchBridge {
         &self.identities
     }
 
+    /// The lowercase 64-hex Nostr pubkeys of every principal holding `OperatorScope::Approve`
+    /// and carrying a `nostr_pubkey`.
+    ///
+    /// THE one answer, derived once in [`PerchBridge::build`]. It is the membership list of
+    /// every case channel the bridge creates AND the `p` set of every `46010` and `26006` it
+    /// publishes, and those three must be the same list or a hold is delivered to a channel one
+    /// operator can read and mentioned to a different one. Empty means no hold is deliverable
+    /// and the bridge says so per hold (failure mode F18).
+    pub fn approve_pubkeys(&self) -> &[String] {
+        &self.operators
+    }
+
+    /// The daemon's hold store, when the composition root gave the bridge one.
+    pub fn hold_store(&self) -> Option<&Arc<dyn swarm_runtime::held_action::HeldActionStore>> {
+        self.hold_store.as_ref()
+    }
+
     /// Runs until the shutdown watch flips or the broadcast closes.
     ///
     /// Three tasks: the receive loop, the evidence pacer, and the alarm drainer. Each holds the
@@ -271,6 +313,7 @@ impl PerchBridge {
             stall,
             events,
             containment: _containment,
+            hold_store,
             shutdown,
         } = self;
 
@@ -328,16 +371,31 @@ impl PerchBridge {
         );
         let mut pacer_task = tokio::spawn(pacer.run(shutdown.clone()));
 
-        let mut alarm_task = Some(tokio::spawn(alarm::run(
-            Arc::clone(&spools),
-            Arc::clone(&identities),
-            config.clone(),
-            operators,
+        // The hold publisher owns the routing sidecar: the hold path writes card ids into it
+        // and the promotion path writes case channels, and one file gets one writer.
+        let holds = HoldPublisher::new(
             routing,
-            ConnectionSupervisor::new(config.relay_url.clone(), alarm_identity),
+            hold_store,
+            operators,
+            config
+                .case_ttl_seconds
+                .get("default")
+                .copied()
+                .unwrap_or(FALLBACK_CASE_TTL_SECONDS),
+            alarm_identity.clone(),
+            alarm_idx,
+            metrics.clone(),
+        );
+        let mut alarm_task = Some(tokio::spawn(alarm::run(alarm::AlarmDrainer {
+            spools: Arc::clone(&spools),
+            identities: Arc::clone(&identities),
+            config: config.clone(),
+            holds,
+            publisher: ConnectionSupervisor::new(config.relay_url.clone(), alarm_identity)
+                .with_alarm_burst(config.alarm_burst_per_min),
             metrics,
-            shutdown.clone(),
-        )));
+            shutdown: shutdown.clone(),
+        })));
 
         let mut shutdown = shutdown;
         loop {

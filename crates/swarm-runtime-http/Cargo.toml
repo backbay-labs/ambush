@@ -55,6 +55,16 @@ async-trait.workspace = true
 rcgen = "0.13"
 serde_yaml.workspace = true
 swarm-consensus.workspace = true
+# Dev-only: the decide route tests build the same signed preimage the console
+# would, through the wire crate rather than a hand-rolled copy.
+swarm-perch-wire.workspace = true
+# `with_verdict_key_for_test`, for the decide route tests. Dev-only.
+swarm-ingest-runtime = { workspace = true, features = ["test-fixtures"] }
+# The `test-fixtures` feature carries `held_action_fixtures`, so the hold route
+# tests build the same HeldAction the daemon does instead of a hand-rolled
+# lookalike. Dev-only: the feature is off for the normal build, so nothing in
+# the daemon links a fixture.
+swarm-runtime = { workspace = true, features = ["test-fixtures"] }
 swarm-whisker.workspace = true
 
 [lints]

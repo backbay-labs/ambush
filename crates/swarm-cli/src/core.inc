@@ -5662,6 +5662,7 @@ mod tests {
             token_expires_at_ms: None,
             scopes,
             nostr_pubkey: None,
+            verdict_public_key_hex: None,
         }
     }
 

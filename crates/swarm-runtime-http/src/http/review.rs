@@ -202,9 +202,13 @@ pub(super) async fn review_session_list_handler(
 }
 
 pub(super) async fn review_session_create_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
     State(state): State<OperatorHttpState>,
     Form(form): Form<ReviewSessionCreateForm>,
 ) -> Result<Redirect, OperatorReviewError> {
+    // B5: opening a review session is a governance write. It was authenticated
+    // but unscoped, so a `read`-only principal could open one.
+    require_operator_review_scope(&principal, OperatorScope::Approve, "approve")?;
     let service = review_workbench_service(&state)?;
     let artifact_refs = parse_review_artifact_refs_text(&form.artifact_refs)?;
     let lookup = service

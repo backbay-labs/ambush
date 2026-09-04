@@ -131,6 +131,10 @@ pub mod escalation;
 pub mod evasion_coverage;
 pub mod evolution;
 pub mod evolution_status;
+pub mod governance_gate;
+pub mod held_action;
+pub mod held_action_fixtures;
+pub mod hold_sweep;
 pub mod http;
 pub mod investigation;
 pub mod kitten_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
@@ -628,6 +632,15 @@ impl<P, E> SwarmRuntime<P, E> {
         self.mode
     }
 
+    /// The approval gate this runtime authorizes through.
+    ///
+    /// The decide path needs it to mint the capability lease from the SAME
+    /// gate the execution ran under; a second gate built from config would be
+    /// a different rate-limit window and a different clock.
+    pub fn policy(&self) -> &P {
+        &self.policy
+    }
+
     /// Attach a guard pipeline that evaluates actions before execution.
     pub fn with_guard_pipeline(mut self, pipeline: GuardPipeline) -> Self {
         self.guard_pipeline = Some(pipeline);
@@ -1059,7 +1072,7 @@ where
         context: &ApprovalContext,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         self.audit_authorize_and_execute_instrumented_internal(
-            detection, request, context, false, None,
+            detection, request, context, false, None, None,
         )
         .await
     }
@@ -1077,23 +1090,35 @@ where
             context,
             true,
             Some(ExecutionMode::DryRun),
+            None,
         )
         .await
     }
 
     /// Execute a previously human-approved request through the normal runtime lane.
+    ///
+    /// `approved_by` is threaded onto the receipt (B2o) so a granted
+    /// destructive action is distinguishable in the chain from an autonomous
+    /// one. `None` records nothing rather than an empty attribution.
     pub async fn audit_authorize_and_execute_human_approved_instrumented(
         &self,
         detection: &DetectionFinding,
         request: &ActionRequest,
         context: &ApprovalContext,
+        approved_by: Option<swarm_core::types::OperatorApproval>,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         self.audit_authorize_and_execute_instrumented_internal(
-            detection, request, context, true, None,
+            detection,
+            request,
+            context,
+            true,
+            None,
+            approved_by,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn audit_authorize_and_execute_instrumented_internal(
         &self,
         detection: &DetectionFinding,
@@ -1101,6 +1126,7 @@ where
         context: &ApprovalContext,
         allow_human_approved_execution: bool,
         execution_mode_override: Option<ExecutionMode>,
+        approved_by: Option<swarm_core::types::OperatorApproval>,
     ) -> Result<RuntimeExecutionReport, RuntimeError> {
         let policy_started = Instant::now();
         let decision = self.policy.evaluate(request, context)?;
@@ -1205,12 +1231,19 @@ where
                                         .await
                                     {
                                         Ok(receipt) if receipt.status.indicates_success() => {
+                                            let receipt = receipt.with_policy_audit(
+                                                decision.verdict,
+                                                decision.rule_name.clone(),
+                                                decision.reason.clone(),
+                                            );
+                                            let receipt = match approved_by.clone() {
+                                                Some(approval) => {
+                                                    receipt.with_operator_approval(approval)
+                                                }
+                                                None => receipt,
+                                            };
                                             let receipt = Self::decorate_receipt_with_governance(
-                                                receipt.with_policy_audit(
-                                                    decision.verdict,
-                                                    decision.rule_name.clone(),
-                                                    decision.reason.clone(),
-                                                ),
+                                                receipt,
                                                 request,
                                                 "consensus approved response action",
                                             );
@@ -1249,18 +1282,31 @@ where
                                                 _ => AuditResponseRecord::Success(receipt),
                                             }
                                         }
-                                        Ok(receipt) => AuditResponseRecord::Failure(
-                                            Self::decorate_receipt_with_governance(
-                                                receipt.with_policy_audit(
-                                                    decision.verdict,
-                                                    decision.rule_name.clone(),
-                                                    decision.reason.clone(),
-                                                ),
-                                                request,
-                                                "consensus approved response action",
+                                        Ok(receipt) => {
+                                            // A FAILED grant names its operator
+                                            // too: "who authorized the attempt"
+                                            // is the same question whether or
+                                            // not the attempt worked.
+                                            let receipt = receipt.with_policy_audit(
+                                                decision.verdict,
+                                                decision.rule_name.clone(),
+                                                decision.reason.clone(),
+                                            );
+                                            let receipt = match approved_by.clone() {
+                                                Some(approval) => {
+                                                    receipt.with_operator_approval(approval)
+                                                }
+                                                None => receipt,
+                                            };
+                                            AuditResponseRecord::Failure(
+                                                Self::decorate_receipt_with_governance(
+                                                    receipt,
+                                                    request,
+                                                    "consensus approved response action",
+                                                )
+                                                .into_failure(),
                                             )
-                                            .into_failure(),
-                                        ),
+                                        }
                                         Err(error) => AuditResponseRecord::Failure(error.failure),
                                     };
                                     let response_elapsed_us =
@@ -1720,6 +1766,7 @@ mod tests {
                 &detection,
                 &request,
                 &sample_context(),
+                None,
             )
             .await
             .unwrap();
@@ -1735,6 +1782,145 @@ mod tests {
                 let leases = store.open_leases().unwrap();
                 assert_eq!(leases.len(), 1);
                 assert_eq!(leases[0].origin_receipt_id(), receipt.receipt_id);
+            }
+            other => panic!("expected success response, got {other:?}"),
+        }
+    }
+
+    /// B2o. A granted destructive action has to be distinguishable in the chain
+    /// from an autonomous one, and the distinguishing fact is WHICH KEY signed
+    /// the grant -- `voter_id`, not the operator's display name.
+    #[tokio::test]
+    async fn human_approved_execution_records_the_operator_on_the_receipt() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(swarm_response::containment::MemoryContainmentLeaseStore::new());
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            RecordingExecutor {
+                calls: Arc::clone(&calls),
+            },
+        )
+        .with_containment_store(
+            store.clone(),
+            swarm_response::containment::ContainmentTtl::from_config_ms(900_000).unwrap(),
+        );
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-approved".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::IsolateHost {
+                host_id: "host-1".to_string(),
+            },
+            severity: Severity::Critical,
+            evidence: serde_json::json!({"signal": "active-exploit"}),
+        };
+        let detection = swarm_whisker::DetectionFinding {
+            finding_id: "finding-approved".to_string(),
+            event_id: "evt-approved".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::Critical,
+            confidence: 0.99,
+            evidence: request.evidence.clone(),
+            strategy_id: "test".to_string(),
+        };
+        let approval = swarm_core::types::OperatorApproval {
+            operator_id: "perch-dev-operator".to_string(),
+            voter_id: format!("swarm:ed25519:{}", "ab".repeat(32)),
+            hold_id: "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13".to_string(),
+            decided_at_ms: 1_773_739_200_100,
+            signature: swarm_crypto::DetachedSignature {
+                algorithm: "ed25519".to_string(),
+                key_id: "operator".to_string(),
+                public_key_hex: "ab".repeat(32),
+                signature_hex: "cd".repeat(64),
+            },
+            rationale: Some("two detectors agree".to_string()),
+            rationale_sha256: Some("ef".repeat(32)),
+            nostr_intent_event_id: Some("01".repeat(32)),
+        };
+
+        let report = runtime
+            .audit_authorize_and_execute_human_approved_instrumented(
+                &detection,
+                &request,
+                &sample_context(),
+                Some(approval.clone()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        match report.audit.response {
+            AuditResponseRecord::Success(receipt) => {
+                let recorded = receipt
+                    .audit
+                    .approved_by
+                    .expect("a granted action names its operator");
+                assert_eq!(
+                    recorded.hold_id,
+                    "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13"
+                );
+                assert_eq!(recorded.voter_id, approval.voter_id);
+                assert_eq!(recorded.operator_id, "perch-dev-operator");
+                assert_eq!(recorded.decided_at_ms, 1_773_739_200_100);
+                assert_eq!(recorded.signature.public_key_hex, "ab".repeat(32));
+                // The policy attribution is still there: B2o adds a fact, it
+                // does not replace one.
+                assert!(receipt.audit.policy.is_some());
+            }
+            other => panic!("expected success response, got {other:?}"),
+        }
+    }
+
+    /// The autonomous lane records no operator, so a reader cannot mistake a
+    /// machine decision for a human one.
+    #[tokio::test]
+    async fn an_autonomous_execution_records_no_operator() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let store = Arc::new(swarm_response::containment::MemoryContainmentLeaseStore::new());
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            RecordingExecutor {
+                calls: Arc::clone(&calls),
+            },
+        )
+        .with_containment_store(
+            store.clone(),
+            swarm_response::containment::ContainmentTtl::from_config_ms(900_000).unwrap(),
+        );
+        let request = ActionRequest {
+            hunt_id: HuntId("hunt-autonomous".to_string()),
+            requested_by: AgentId("whisker-a".to_string()),
+            action: ResponseAction::IsolateHost {
+                host_id: "host-1".to_string(),
+            },
+            severity: Severity::Critical,
+            evidence: serde_json::json!({"signal": "active-exploit"}),
+        };
+        let detection = swarm_whisker::DetectionFinding {
+            finding_id: "finding-autonomous".to_string(),
+            event_id: "evt-autonomous".to_string(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::Critical,
+            confidence: 0.99,
+            evidence: request.evidence.clone(),
+            strategy_id: "test".to_string(),
+        };
+
+        let report = runtime
+            .audit_authorize_and_execute_human_approved_instrumented(
+                &detection,
+                &request,
+                &sample_context(),
+                None,
+            )
+            .await
+            .unwrap();
+
+        match report.audit.response {
+            AuditResponseRecord::Success(receipt) => {
+                assert!(receipt.audit.approved_by.is_none());
             }
             other => panic!("expected success response, got {other:?}"),
         }

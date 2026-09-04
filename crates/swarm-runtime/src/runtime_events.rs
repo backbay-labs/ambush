@@ -139,6 +139,8 @@ pub enum RuntimeEventKind {
     ModeTransition,
     /// A finding was promoted to a case (12-PLAN-FIRST-CARD.md Task 11, B1d).
     CasePromoted,
+    /// A destructive action was held for a human decision (13-PLAN-THE-HOLD.md, B1).
+    ResponseHeld,
 }
 
 impl RuntimeEventKind {
@@ -156,6 +158,7 @@ impl RuntimeEventKind {
             Self::Escalation => "escalation",
             Self::ModeTransition => "mode_transition",
             Self::CasePromoted => "case_promoted",
+            Self::ResponseHeld => "response_held",
         }
     }
 
@@ -173,6 +176,7 @@ impl RuntimeEventKind {
             "escalation" => Some(Self::Escalation),
             "mode_transition" => Some(Self::ModeTransition),
             "case_promoted" => Some(Self::CasePromoted),
+            "response_held" => Some(Self::ResponseHeld),
             _ => None,
         }
     }
@@ -357,6 +361,25 @@ pub enum RuntimeEvent {
         /// The one-line summary the case channel is named after.
         summary: String,
     },
+    /// A destructive action held for a human (bill item B1). Seven fields and
+    /// no more: the bridge maps this onto the community-global `26006` frame
+    /// and drops `hunt_id`, which is a join key into detection data.
+    ResponseHeld {
+        /// When the transition was published (unix ms).
+        emitted_at_ms: i64,
+        /// The hold's opaque id.
+        hold_id: String,
+        /// The hunt the held action belongs to. Daemon-side consumers only.
+        hunt_id: String,
+        /// `ResponseAction::kind()` for the held action.
+        action_kind: String,
+        /// The severity the requesting agent claimed.
+        severity: Severity,
+        /// When the hold stops being decidable (unix ms).
+        expires_at_ms: i64,
+        /// The state this event announces.
+        state: crate::held_action::HoldState,
+    },
 }
 
 impl RuntimeEvent {
@@ -373,7 +396,8 @@ impl RuntimeEvent {
             | Self::ConcentrationSnapshot { emitted_at_ms, .. }
             | Self::Escalation { emitted_at_ms, .. }
             | Self::ModeTransition { emitted_at_ms, .. }
-            | Self::CasePromoted { emitted_at_ms, .. } => *emitted_at_ms,
+            | Self::CasePromoted { emitted_at_ms, .. }
+            | Self::ResponseHeld { emitted_at_ms, .. } => *emitted_at_ms,
         }
     }
 
@@ -391,6 +415,7 @@ impl RuntimeEvent {
             Self::Escalation { .. } => RuntimeEventKind::Escalation,
             Self::ModeTransition { .. } => RuntimeEventKind::ModeTransition,
             Self::CasePromoted { .. } => RuntimeEventKind::CasePromoted,
+            Self::ResponseHeld { .. } => RuntimeEventKind::ResponseHeld,
         }
     }
 }
@@ -493,5 +518,58 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(filter.contains(&RuntimeEventKind::EvolutionStatus));
+    }
+
+    #[test]
+    fn response_held_round_trips_through_kind_parse_and_serde() {
+        assert_eq!(
+            RuntimeEventKind::parse("response_held"),
+            Some(RuntimeEventKind::ResponseHeld)
+        );
+        assert_eq!(RuntimeEventKind::ResponseHeld.as_str(), "response_held");
+        let event = RuntimeEvent::ResponseHeld {
+            emitted_at_ms: 1_773_739_200_000,
+            hold_id: "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13".to_string(),
+            hunt_id: "hunt-evt-1".to_string(),
+            action_kind: "isolate_host".to_string(),
+            severity: Severity::Critical,
+            expires_at_ms: 1_773_742_800_000,
+            state: crate::held_action::HoldState::Created,
+        };
+        assert_eq!(event.kind(), RuntimeEventKind::ResponseHeld);
+        assert_eq!(event.emitted_at_ms(), 1_773_739_200_000);
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["event_type"], "response_held");
+        assert_eq!(value["state"], "created");
+        assert_eq!(
+            value.as_object().unwrap().len(),
+            8,
+            "seven fields plus the tag, and no more"
+        );
+        let back: RuntimeEvent = serde_json::from_value(value).unwrap();
+        assert_eq!(back.kind(), RuntimeEventKind::ResponseHeld);
+    }
+
+    #[test]
+    fn response_held_is_the_thirteenth_kind_and_every_kind_round_trips_its_name() {
+        let kinds = [
+            RuntimeEventKind::Ingest,
+            RuntimeEventKind::Finding,
+            RuntimeEventKind::Replay,
+            RuntimeEventKind::AgentAction,
+            RuntimeEventKind::TamperAlert,
+            RuntimeEventKind::EvolutionStatus,
+            RuntimeEventKind::ResponseExecution,
+            RuntimeEventKind::AgentHealth,
+            RuntimeEventKind::ConcentrationSnapshot,
+            RuntimeEventKind::Escalation,
+            RuntimeEventKind::ModeTransition,
+            RuntimeEventKind::CasePromoted,
+            RuntimeEventKind::ResponseHeld,
+        ];
+        assert_eq!(kinds.len(), 13);
+        for kind in kinds {
+            assert_eq!(RuntimeEventKind::parse(kind.as_str()), Some(kind));
+        }
     }
 }

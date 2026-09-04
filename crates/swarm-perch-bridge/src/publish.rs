@@ -9,11 +9,96 @@ use crate::identity::Identity;
 use crate::pacer::{Frame, FramePublisher, PERCH_PUBLISH_WINDOW_MARGIN_SECS};
 
 /// The alarm stream may exceed one frame per second when a case is provisioned, so this bounds
-/// it. A hold costs at most four frames (`9007` + P x `9000` + `46010` + `26006`, P = 1 in
-/// the shipped default), so 40/min is ten new cases per minute -- an order of magnitude above
-/// anything a single-analyst deployment produces -- and it leaves 80/min of the alarm identity's
-/// 120/min quota unspent. PROPOSED.
+/// it. A hold costs at most five frames (`9007` + P x `9000` + kind:9 + `46010` + `26006`,
+/// P = 1 in the shipped default), so 40/min is eight new cases per minute -- well above anything
+/// a single-analyst deployment produces -- and it leaves 80/min of the alarm identity's 120/min
+/// quota unspent. PROPOSED. Overridable by `perch.alarm_burst_per_min`.
 pub const PERCH_ALARM_BURST_PER_MIN: u32 = 40;
+
+/// The burst window the cap is measured over: one minute, sliding.
+pub const PERCH_ALARM_BURST_WINDOW_MS: i64 = 60_000;
+
+/// A sliding one-minute admission window for `kind:26006`.
+///
+/// # Why the alarm needs a cap at all when it also bypasses the pacer
+///
+/// The pacer's one-frame-per-tick shape is the structural answer to the relay's 120/min quota,
+/// and the alarm deliberately steps outside it: the <= 400 ms end-to-end budget rides the
+/// `26006`, and a frame that waits for a tick has already spent 1000 ms of it. But "outside the
+/// pacer" with no bound is an unbounded firehose. `enforce_ws_admission` charges EVERY inbound
+/// frame against 50 per rolling 5 seconds per pubkey with no agent exemption, so a burst of
+/// alarms does not merely delay itself -- it rate-limits the `9007`, the card and the notice
+/// behind it, and the durable record an operator is being paged about never arrives.
+///
+/// Past the cap an alarm is DEFERRED, never dropped: the spool record stays at its head, the
+/// routing ledger still has no alarm entry for that hold, and the next tick re-plans it.
+#[derive(Debug, Clone)]
+pub struct AlarmBurst {
+    per_min: u32,
+    admitted: std::collections::VecDeque<i64>,
+}
+
+impl AlarmBurst {
+    /// A window admitting `per_min` frames per rolling minute.
+    ///
+    /// `per_min == 0` admits nothing, which is what a deployment that set it to zero asked for;
+    /// the deferral counter makes that visible rather than silent.
+    #[must_use]
+    pub fn new(per_min: u32) -> Self {
+        Self {
+            per_min,
+            admitted: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// Admits one frame at `now_ms`, or refuses it because the window is full.
+    ///
+    /// Refusing records nothing, so a deferred alarm does not consume the slot it was refused.
+    pub fn try_admit(&mut self, now_ms: i64) -> bool {
+        self.expire(now_ms);
+        if self.admitted.len() >= self.per_min as usize {
+            return false;
+        }
+        self.admitted.push_back(now_ms);
+        true
+    }
+
+    /// How many frames the window currently holds.
+    pub fn in_window(&mut self, now_ms: i64) -> usize {
+        self.expire(now_ms);
+        self.admitted.len()
+    }
+
+    /// The cap this window enforces.
+    #[must_use]
+    pub const fn per_min(&self) -> u32 {
+        self.per_min
+    }
+
+    /// Drops every admission older than the window. A clock that went backwards keeps its
+    /// entries rather than clearing the window, because clearing it would turn a clock jump into
+    /// an unbounded burst.
+    fn expire(&mut self, now_ms: i64) {
+        let floor = now_ms.saturating_sub(PERCH_ALARM_BURST_WINDOW_MS);
+        while self
+            .admitted
+            .front()
+            .is_some_and(|admitted| *admitted <= floor)
+        {
+            self.admitted.pop_front();
+        }
+    }
+}
+
+/// What one alarm submission did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AlarmAdmission {
+    /// The frame went to the socket outside the tick, with the relay's answer.
+    Sent(OkOutcome),
+    /// The burst window is full. Nothing was sent, the frame is unchanged, and the caller keeps
+    /// its spool record for a later tick. DEFERRED, NEVER DROPPED.
+    Deferred,
+}
 
 /// The relay's `MAX_TIMESTAMP_DRIFT_SECS`. A frame whose `created_at` is further than this from
 /// the relay's clock is rejected, and `created_at` is inside the Nostr signature.
@@ -37,6 +122,7 @@ pub struct ConnectionSupervisor {
     identity: Identity,
     conn: Option<NostrWsConnection>,
     attempt: u32,
+    alarm_burst: AlarmBurst,
 }
 
 impl ConnectionSupervisor {
@@ -47,7 +133,15 @@ impl ConnectionSupervisor {
             identity,
             conn: None,
             attempt: 0,
+            alarm_burst: AlarmBurst::new(PERCH_ALARM_BURST_PER_MIN),
         }
+    }
+
+    /// Overrides the alarm burst cap from `perch.alarm_burst_per_min`.
+    #[must_use]
+    pub fn with_alarm_burst(mut self, per_min: u32) -> Self {
+        self.alarm_burst = AlarmBurst::new(per_min);
+        self
     }
 
     /// The slot this supervisor signs for.
@@ -161,6 +255,20 @@ impl ConnectionSupervisor {
 }
 
 impl FramePublisher for ConnectionSupervisor {
+    async fn submit_alarm(
+        &mut self,
+        frame: &Frame,
+        now_ms: i64,
+    ) -> Result<AlarmAdmission, BridgeError> {
+        if !self.alarm_burst.try_admit(now_ms) {
+            return Ok(AlarmAdmission::Deferred);
+        }
+        // No tick wait: the frame goes straight to this identity's socket. That is the whole
+        // point of the alarm lane, and `publish` is already a direct write -- what the pacer
+        // adds is the once-per-tick cadence the drainer's loop imposes on the steps around it.
+        self.publish(frame).await.map(AlarmAdmission::Sent)
+    }
+
     async fn publish(&mut self, frame: &Frame) -> Result<OkOutcome, BridgeError> {
         self.connect().await?;
         let Some(conn) = self.conn.as_mut() else {
@@ -472,6 +580,65 @@ mod tests {
                 .len(),
             reasons.len()
         );
+    }
+
+    #[test]
+    fn the_alarm_burst_admits_exactly_the_cap_per_rolling_minute() {
+        // The cap is PROVED, not trusted to the constant: the window admits `per_min` and
+        // refuses the next, and refusing consumes no slot -- otherwise a burst of refusals
+        // would push admissions out of the window and let a later flood through.
+        const START: i64 = 1_773_738_882_600;
+        let mut burst = AlarmBurst::new(PERCH_ALARM_BURST_PER_MIN);
+        for index in 0..PERCH_ALARM_BURST_PER_MIN {
+            assert!(
+                burst.try_admit(START + i64::from(index)),
+                "frame {index} inside the cap must be admitted"
+            );
+        }
+        assert_eq!(burst.in_window(START + 100), 40);
+        for _ in 0..500 {
+            assert!(
+                !burst.try_admit(START + 100),
+                "past the cap the window refuses"
+            );
+        }
+        assert_eq!(
+            burst.in_window(START + 100),
+            40,
+            "a refusal consumes no slot"
+        );
+        // The window is SLIDING, not a fixed bucket: the first admission ages out one minute
+        // after it was made and exactly one slot reopens.
+        assert!(burst.try_admit(START + PERCH_ALARM_BURST_WINDOW_MS));
+        assert!(!burst.try_admit(START + PERCH_ALARM_BURST_WINDOW_MS));
+        // Once the whole window has passed, the full cap is available again.
+        let far = START + PERCH_ALARM_BURST_WINDOW_MS * 4;
+        assert_eq!(burst.in_window(far), 0);
+        for _ in 0..PERCH_ALARM_BURST_PER_MIN {
+            assert!(burst.try_admit(far));
+        }
+        assert!(!burst.try_admit(far));
+    }
+
+    #[test]
+    fn a_backwards_clock_does_not_reopen_the_burst_window() {
+        // Clearing the window on a backwards clock would turn an NTP step into an unbounded
+        // burst on the one frame that bypasses the pacer.
+        const START: i64 = 1_773_738_882_600;
+        let mut burst = AlarmBurst::new(3);
+        for offset in 0..3 {
+            assert!(burst.try_admit(START + offset));
+        }
+        assert!(!burst.try_admit(START - 3_600_000));
+        assert_eq!(burst.in_window(START - 3_600_000), 3);
+    }
+
+    #[test]
+    fn a_zero_cap_defers_everything_rather_than_dropping_it() {
+        let mut burst = AlarmBurst::new(0);
+        assert_eq!(burst.per_min(), 0);
+        assert!(!burst.try_admit(1));
+        assert_eq!(burst.in_window(1), 0);
     }
 
     #[test]

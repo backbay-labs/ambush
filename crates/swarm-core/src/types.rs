@@ -555,6 +555,39 @@ pub struct ResponseRehearsalPreview {
     pub rollback: ResponseRollbackPreview,
 }
 
+/// Who decided, on the Ed25519 chain. Attached to
+/// `ResponseReceiptAudit.approved_by` (bill item B2o).
+///
+/// Lives in `swarm-core` because `swarm-response` is trust-sensitive and
+/// `swarm-core` is already inside its allowed dependency closure; putting it
+/// in `swarm-runtime` would invert the layering.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OperatorApproval {
+    /// The authenticated principal's id. A display fact, not a proof.
+    pub operator_id: String,
+    /// `swarm:ed25519:{public_key_hex}` — derived from the signature and bound
+    /// to the authenticated principal. This, not `operator_id`, says a key
+    /// signed: an id is whatever the config called someone.
+    pub voter_id: String,
+    /// The hold this decision granted.
+    pub hold_id: String,
+    /// The compare-and-set instant the decision was minted from.
+    pub decided_at_ms: i64,
+    /// The operator's detached signature over the four-member preimage.
+    pub signature: swarm_crypto::DetachedSignature,
+    /// The operator's free-text rationale, when they wrote one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    /// SHA-256 of `rationale`'s UTF-8 bytes; a member of the signature preimage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale_sha256: Option<String>,
+    /// A secp256k1 Nostr event id, OUTSIDE the Ed25519 preimage by
+    /// construction. Recorded for cross-chain reconstruction only; never
+    /// rendered as verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nostr_intent_event_id: Option<String>,
+}
+
 impl ResponseAction {
     pub fn kind(&self) -> &'static str {
         match self {

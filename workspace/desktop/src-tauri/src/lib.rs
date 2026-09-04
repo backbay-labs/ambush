@@ -892,9 +892,16 @@ pub fn run() {
             tray_menu::update_tray_agent_activity,
             perch_reviewed_findings,
             perch_admitted_issuers,
+            perch_decide_hold,
+            perch_list_holds,
+            perch_get_hold,
+            perch_configure_daemon,
             perch_finding_feedback,
             perch_mint_incident,
             perch_record_verdict,
+            perch_record_hold_verdict,
+            perch_operator_identity,
+            perch_publish_verdict_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

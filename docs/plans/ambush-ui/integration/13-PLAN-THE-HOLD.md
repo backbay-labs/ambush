@@ -7849,6 +7849,29 @@ Each is observable, not a task; each is demonstrated once on the dev stack by Ta
 12. No rendered string in the perch roots contains `Perch`, `Approve`, `Approved`, a bare `lease` label or a reassurance phrase; no verdict binding uses `a`/`A`; `pnpm check:px-text` and the file-size gate pass; every engine and workspace gate in Task 28 Step 2 exits 0.
 13. With the `perch` flag off, Home, the inbox and every pre-existing smoke spec behave exactly as before; with it on (the default after Task 28), `/` is The Watch.
 
+### Status at the integration exit — 2026-09-04
+
+Branch `codex/ambush-hold-watch`, built by merging the four tracks onto the First card head.
+Full record in `evidence/the-hold.md`. **The milestone is not claimed as accepted**: the
+daemon-and-relay half ran live, the CONSOLE half did not, and the roadmap's stop condition
+says a mock-only demonstration is not an exit.
+
+| # | Status |
+|---|---|
+| 1 | **partly live.** `GET /v1/response/holds` listed the hold with `store_durable: true`, `state: notified`, `action_kind: isolate_host`. The same list read through `swarmctl` and through The Watch was **not** checked |
+| 2 | **live, except membership and the two-second bound.** The case channel exists, one `swarm:hold:v1` card is stored, and every `46010` carries exactly `card`, `h`, `hold`, `p` and **no `e`** — RF-D1 held by the producer, on five notices. One `26006` reached the operator's own REQ and, in the bridge's live suite, no other subscriber. `notified_at_ms` and `case_channel` are populated. Channel MEMBERSHIP of the bridge and operator was not read back, and the two-second bound was not timed |
+| 3 | **daemon half live.** The decide route answered `state: refused`, `outcome: refused_by_operator`, operator `console`, no receipt and no lease. The signed card, the `signature_hex` equality between card and record, and the console's `sending → recorded → acknowledged` rendering were **not** exercised live |
+| 4 | **daemon half live, criterion corrected.** A grant returned `state: executed`, `outcome: granted_executed`, a receipt, an `audit_trail_id` and a capability lease expiring exactly 60 000 ms after the daemon's decision instant. The lease has no `issued_at_ms` (**W3-34**). The dwell gate, `approved_by.hold_id` and `governance_clearance` were **not** exercised live |
+| 5 | **not reproduced.** With `runtime.containment` removed entirely and the ruleset re-signed, a granted `isolate_host` still executed with a lease (**W3-35**). The code path is unit-covered; no live recipe for it exists |
+| 6 | **not run.** The expiry sweep was not driven to `expired` on the live stack |
+| 7 | **not run.** The daemon was not killed between the compare-and-set and the outcome write |
+| 8 | **replay half live.** The same body twice answered 200 `replayed: true` with the state unchanged, and a different decision on a decided hold answered 409 `hold_already_decided`, "re-read the hold". The 422 malformed-signature and 403 missing-`Approve` cases were **not** run live |
+| 9 | **not run.** An unreconciled `46010` and an unadmitted frame are console behaviours |
+| 10 | **conflict half live** (the 409 above). The `superseded` update card and the two-screen rendering were not exercised live |
+| 11 | **unit and mock-bridge only.** The fifteen-variant snapshot and the Playwright DOM-order test pass |
+| 12 | **live.** Every engine and workspace gate exits 0; the copy gate is clean over 51 perch files |
+| 13 | **mock-bridge only.** A spec asserts Home still renders with the flag off. The flag stays **off** by default: flipping it is Task 28's own step and belongs with a console pass that has actually run |
+
 ## Sizing
 
 Engineer-days (1 engineer-week = 5 days). Rust tasks serialize through the one Rust engineer unless noted; desktop tasks run on the frontend track in parallel from Task 19 onward once Task 10's DTOs are fixed.

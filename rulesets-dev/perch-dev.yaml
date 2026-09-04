@@ -40,6 +40,11 @@ runtime:
   partition_contingency_blast_radius_cap: 1
   # Set secret_dir when using @secret:file-name adapter references.
   secret_dir:
+  # B1. Holds are durable on this profile: without a path a restart forgets
+  # every open hold, so a destructive action nobody decided disappears from the
+  # operator's queue with no record. The directory is relative to this file.
+  response:
+    hold_store_path: data/perch-dev/holds
 
 detection:
   # Supported strategies: suspicious_process_tree, dns_exfiltration,
@@ -350,6 +355,12 @@ operator_surface:
   max_list_results: 50
   widget_token_ttl_secs: 900
   auth:
+    # B5 (13-PLAN-THE-HOLD.md Task 14): this defaults to
+    # SWARM_OPERATOR_CONTEXT_TOKEN and is now a DIFFERENT secret from the
+    # bearer above. It signs the read-only Providence context tokens that
+    # `/v1/events/stream`, `/v1/demo/dashboard` and `/v1/demo/widget` demand.
+    # Named explicitly so the dev loop does not silently depend on a default.
+    context_token_env: SWARM_OPERATOR_CONTEXT_TOKEN
     principals:
       - operator_id: console
         token_env: SWARM_OPERATOR_TOKEN

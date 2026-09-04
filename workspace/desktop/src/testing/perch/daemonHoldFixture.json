@@ -1,0 +1,172 @@
+{
+  "list": {
+    "deciding_stalled_count": 0,
+    "holds": [
+      {
+        "action_kind": "isolate_host",
+        "action_request": {
+          "action": {
+            "host_id": "host-ops-1",
+            "type": "isolate_host"
+          },
+          "evidence": {
+            "escalation": {
+              "level": "alert",
+              "threat_class": "execution"
+            }
+          },
+          "hunt_id": "hunt-evt-1",
+          "requested_by": "swarm:ed25519:1818181818181818181818181818181818181818181818181818181818181818",
+          "severity": "CRITICAL"
+        },
+        "card_event_id": null,
+        "case_channel": null,
+        "deciding_intent_event_id": null,
+        "decision": null,
+        "expired": false,
+        "expires_at_ms": 1773742800000,
+        "held_at_ms": 1773739200000,
+        "hold_id": "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13",
+        "inverse_resolution": [],
+        "leases_a_containment": true,
+        "notice_event_id": null,
+        "notified_at_ms": null,
+        "policy_decision": {
+          "reason": "authorized but held for human approval",
+          "rule_name": "static.human_gate",
+          "verdict": "require_human"
+        },
+        "rationale": {
+          "concentration_at_hold": null,
+          "escalation_level": "alert",
+          "governance_receipt_present": false,
+          "reason": "authorized but held for human approval",
+          "request_carried_fields": ["severity", "threat_class"],
+          "rule_name": "static.human_gate",
+          "severity": "CRITICAL",
+          "threat_class": "execution"
+        },
+        "rehearsal": null,
+        "remaining_ms": 3599500,
+        "severity": "CRITICAL",
+        "state": "notified"
+      }
+    ],
+    "observed_at_ms": 1773739200500,
+    "open_count": 1,
+    "schema_version": 1,
+    "store_durable": false,
+    "truncated": false
+  },
+  "decided_hold": {
+    "hold_id": "hold_9c1d0e21-6b4a-4f2c-93a7-52cd8e1b7f40",
+    "state": "executed",
+    "notified_at_ms": 1773739200040,
+    "deciding_intent_event_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+    "notice_event_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "card_event_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "action_kind": "isolate_host",
+    "severity": "CRITICAL",
+    "held_at_ms": 1773739200000,
+    "expires_at_ms": 1773742800000,
+    "remaining_ms": 3599000,
+    "expired": false,
+    "action_request": {
+      "hunt_id": "hunt-evt-1",
+      "requested_by": "swarm:ed25519:1818181818181818181818181818181818181818181818181818181818181818",
+      "action": {
+        "type": "isolate_host",
+        "host_id": "host-ops-1"
+      },
+      "severity": "CRITICAL",
+      "evidence": {
+        "escalation": {
+          "level": "alert",
+          "threat_class": "execution"
+        }
+      }
+    },
+    "policy_decision": {
+      "verdict": "require_human",
+      "rule_name": "static.human_gate",
+      "reason": "authorized but held for human approval"
+    },
+    "rationale": {
+      "rule_name": "static.human_gate",
+      "reason": "authorized but held for human approval",
+      "threat_class": "execution",
+      "severity": "CRITICAL",
+      "request_carried_fields": ["severity", "threat_class"],
+      "concentration_at_hold": null,
+      "escalation_level": "alert",
+      "governance_receipt_present": false
+    },
+    "leases_a_containment": true,
+    "rehearsal": {
+      "rehearsal_id": "rehearsal-1",
+      "source_bundle_id": "bundle-1",
+      "prepared_at_ms": 1773739199990,
+      "simulated_only": true,
+      "blast_radius": {
+        "scope_kind": "host",
+        "scope_value": "host-ops-1",
+        "impact": "host_connectivity_isolated",
+        "max_affected_scopes": 1,
+        "affected_capabilities": ["network.egress"],
+        "summary": "one host loses network"
+      },
+      "rollback": {
+        "required": true,
+        "summary": "restore connectivity",
+        "steps": [
+          {
+            "kind": "restore_host_connectivity",
+            "summary": "re-enable the host NIC"
+          },
+          {
+            "kind": "restart_process",
+            "summary": "restart the agent"
+          }
+        ]
+      }
+    },
+    "inverse_resolution": [
+      {
+        "step_kind": "RestoreHostConnectivity",
+        "verdict": "executable",
+        "derived_by": "swarm_response::rollback::resolve_inverse"
+      },
+      {
+        "step_kind": "RestartProcess",
+        "verdict": "unmapped",
+        "derived_by": "swarm_response::rollback::resolve_inverse"
+      }
+    ],
+    "decision": {
+      "decision": "grant",
+      "operator_id": "local-operator",
+      "voter_id": "swarm:ed25519:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "rationale_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "hold_notice_published": true,
+      "governance_clearance": "not_required",
+      "decided_at_ms": 1773739200900,
+      "nostr_intent_event_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "signature": {
+        "algorithm": "ed25519",
+        "key_id": "operator-1",
+        "public_key_hex": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "signature_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "rationale": "contained, blast radius understood",
+      "outcome": "granted_executed",
+      "dispatched": true,
+      "receipt_id": "receipt-1",
+      "audit_trail_id": "trail-1",
+      "refusal": {
+        "rule": "static.lease_expired",
+        "reason": "the capability lease had closed"
+      }
+    }
+  }
+}

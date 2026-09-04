@@ -8,6 +8,10 @@ license.workspace = true
 [features]
 default = []
 z3 = ["dep:z3"]
+# Hold fixtures for tests in crates that cannot see this crate's `#[cfg(test)]`
+# modules (`swarm-runtime-http`, `swarm-ingest-runtime`). Dev-dependency only:
+# a normal dependency on it would ship the fixtures in the daemon.
+test-fixtures = []
 
 [dependencies]
 async-trait.workspace = true

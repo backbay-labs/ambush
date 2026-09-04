@@ -47,10 +47,14 @@ test("the perch singletons are registered", () => {
   assert.ok(
     [
       "perchSubscriptions",
+      "perchEphemeralStore",
       "perchSeqTracking",
       "perchAdmittedIssuers",
       "perchWriteStates",
       "perchCaseIndex",
+      "perchReconcileCounters",
+      "perchKeymapArming",
+      "perchVerdictSpool",
     ].every((k) => COMMUNITY_SCOPED_SINGLETONS.includes(k)),
   );
 });

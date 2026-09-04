@@ -123,7 +123,42 @@ const PERCH_OPERATOR_PUBLIC_KEY =
  * point after it. Every field is optional; the defaults are an honest daemon
  * with one admitted bridge and an empty review window.
  */
+/** What the mock daemon answers to `perch_decide_hold`. */
+export type MockDecideOutcome = Record<string, unknown> & { outcome: string };
+
+/** One leg-1 hold card this mock console "published". */
+export type MockRecordedVerdict = {
+  holdId: string;
+  decision: string;
+  nostrIntentEventId: string;
+  supersededBy?: string;
+};
+
+/** One hold as the daemon's list route reports it. */
+export type MockPerchHold = Record<string, unknown> & { hold_id: string };
+
 export type PerchMockFixture = {
+  /** The holds `perch_list_holds` reports, newest-first as the daemon sends. */
+  holds?: readonly MockPerchHold[];
+  /**
+   * The STORE's open-hold depth. Defaults to the number of open holds in
+   * `holds`, which is the honest shape: `open_count` counts the store and not
+   * the page, so a spec wanting the queue-depth alarm states the depth
+   * directly rather than seeding twelve fixtures.
+   */
+  openCount?: number;
+  /**
+   * Fail every daemon read with exactly this message. `daemonReachable: false`
+   * is the transport-level refusal with the Rust prefix; this is the
+   * message-carrying variant, for a daemon that answered with its own words.
+   */
+  daemonError?: string | null;
+  /** The leg-2 outcome `perch_decide_hold` answers with. */
+  decide?: MockDecideOutcome | null;
+  /** Hold leg 2 open this long, so `sending` is observable as its own state. */
+  decideDelayMs?: number;
+  /** Make hold leg 1 fail, proving no leg-2 outcome is reportable without it. */
+  legOneError?: string | null;
   /** The admitted bridge identities (INV-15). `[]` admits nobody. */
   issuers?: readonly string[];
   /** Threat-class slug to lane channel id. */
@@ -178,6 +213,13 @@ type MockState = {
   nowMs: number;
   findings: Record<string, string>;
   daemonReachable: boolean;
+  holds: MockPerchHold[];
+  openCount: number | null;
+  daemonError: string | null;
+  decide: MockDecideOutcome | null;
+  decideDelayMs: number;
+  legOneError: string | null;
+  recorded: MockRecordedVerdict[];
   feedbackNotCorrelated: boolean;
   feedbackFailureMessage: string | null;
   verdictDelayMs: number;
@@ -203,6 +245,13 @@ function defaults(): MockState {
     nowMs: PERCH_NOW_MS,
     findings: { [PERCH_FINDING_CARD_EVENT_ID]: PERCH_FINDING_ID },
     daemonReachable: true,
+    holds: [],
+    openCount: null,
+    daemonError: null,
+    decide: null,
+    decideDelayMs: 0,
+    legOneError: null,
+    recorded: [],
     feedbackNotCorrelated: false,
     feedbackFailureMessage: null,
     verdictDelayMs: 0,
@@ -227,6 +276,19 @@ declare global {
     __AMBUSH_E2E_PERCH_LOG__?: () => string[];
     __AMBUSH_E2E_PERCH_RESET__?: () => void;
     __AMBUSH_E2E_PERCH_COUNTER__?: (name: PerchCounterName) => number;
+    /** Every leg-1 hold card the mock console published, in order. */
+    __AMBUSH_E2E_PERCH_RECORDED__?: () => readonly MockRecordedVerdict[];
+    __AMBUSH_E2E_PERCH_CONTROL__?: {
+      setHolds: (
+        holds: readonly MockPerchHold[],
+        options?: { storeDurable?: boolean; openCount?: number },
+      ) => void;
+      setIssuers: (issuers: readonly string[]) => void;
+      setDaemonError: (message: string | null) => void;
+      setDecide: (outcome: MockDecideOutcome | null, delayMs?: number) => void;
+      setLegOneError: (message: string | null) => void;
+      reset: () => void;
+    };
   }
 }
 
@@ -257,6 +319,18 @@ function applyFixture(target: MockState, fixture: PerchMockFixture): void {
   }
   if (fixture.daemonReachable !== undefined) {
     target.daemonReachable = fixture.daemonReachable;
+  }
+  if (fixture.holds) target.holds = fixture.holds.map((hold) => ({ ...hold }));
+  if (fixture.openCount !== undefined) target.openCount = fixture.openCount;
+  if (fixture.daemonError !== undefined) {
+    target.daemonError = fixture.daemonError;
+  }
+  if (fixture.decide !== undefined) target.decide = fixture.decide;
+  if (fixture.decideDelayMs !== undefined) {
+    target.decideDelayMs = fixture.decideDelayMs;
+  }
+  if (fixture.legOneError !== undefined) {
+    target.legOneError = fixture.legOneError;
   }
   if (fixture.feedbackNotCorrelated !== undefined) {
     target.feedbackNotCorrelated = fixture.feedbackNotCorrelated;
@@ -381,6 +455,12 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_record_verdict",
   "perch_finding_feedback",
   "perch_mint_incident",
+  "perch_list_holds",
+  "perch_get_hold",
+  "perch_configure_daemon",
+  "perch_record_hold_verdict",
+  "perch_decide_hold",
+  "perch_publish_verdict_update",
 ]);
 
 /**
@@ -424,6 +504,141 @@ function unreachable(): never {
   throw new Error(
     `${PERCH_DAEMON_UNREACHABLE_PREFIX} error sending request for url (http://127.0.0.1:9090)`,
   );
+}
+
+/**
+ * The commands that talk to the DAEMON. Everything else in this module either
+ * publishes to the relay or touches the keyring, and the two backends fail
+ * independently — a `daemonError` that also broke leg 1 would make the state
+ * this console exists to render honestly untestable: a decision recorded on
+ * the case that the daemon has not heard about.
+ */
+const DAEMON_BOUND_COMMANDS: ReadonlySet<string> = new Set([
+  "perch_list_holds",
+  "perch_get_hold",
+  "perch_reviewed_findings",
+  "perch_admitted_issuers",
+  "perch_decide_hold",
+  "perch_finding_feedback",
+  "perch_mint_incident",
+]);
+
+/** A deterministic 64-hex id from a seed string. Not a hash; a fixture. */
+function mockEventId(seed: string): string {
+  let acc = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    acc = (acc * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return acc.toString(16).padStart(8, "0").repeat(8);
+}
+
+/**
+ * The leg-2 answer, optionally delayed so a spec can observe
+ * `sending -> recorded -> acknowledged` as three states rather than one.
+ */
+async function decideAfterDelay(): Promise<unknown> {
+  const s = current();
+  if (s.decideDelayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, s.decideDelayMs));
+  }
+  return {
+    outcome: "dispatched",
+    rule: null,
+    reason: null,
+    receipt_id: null,
+    decided_at_ms: Date.now(),
+    superseded_by: null,
+    winning_decision: null,
+    replayed: false,
+    ...(s.decide ?? {}),
+  };
+}
+
+/** Leg 1 of a HOLD decision, published to the relay rather than the daemon. */
+function recordHoldVerdict(payload: unknown): unknown {
+  const s = current();
+  if (s.legOneError !== null) throw new Error(s.legOneError);
+  const input = (payload as { input?: Record<string, unknown> } | null)?.input;
+  const holdId = String(input?.holdId ?? "");
+  const decision = String(input?.decision ?? "");
+  const nostrIntentEventId = mockEventId(
+    `${holdId}:${decision}:${s.recorded.length}`,
+  );
+  s.recorded.push({ holdId, decision, nostrIntentEventId });
+  return {
+    nostr_intent_event_id: nostrIntentEventId,
+    decided_at_ms: Date.now(),
+    signature: {
+      algorithm: "ed25519",
+      key_id: "mock-operator",
+      public_key_hex: "dd".repeat(32),
+      signature_hex: mockEventId(`sig:${nostrIntentEventId}`).repeat(2),
+    },
+    hold_id: holdId,
+  };
+}
+
+/** The supersession update, which restates an existing decision. */
+function publishVerdictUpdate(payload: unknown): unknown {
+  const s = current();
+  const input = (payload as { input?: Record<string, unknown> } | null)?.input;
+  const own = String(input?.ownIntentEventId ?? "");
+  const entry = s.recorded.find(
+    (candidate) => candidate.nostrIntentEventId === own,
+  );
+  if (!entry) {
+    throw new Error("the leg-1 verdict card was not found on the relay");
+  }
+  entry.supersededBy = String(input?.supersededBy ?? "");
+  return { nostr_intent_event_id: mockEventId(`update:${own}`) };
+}
+
+/** Every leg-1 hold card this mock published, in order. A seam, not a store. */
+export function mockPerchRecordedVerdicts(): readonly MockRecordedVerdict[] {
+  return [...current().recorded];
+}
+
+/** The open states `open_count` counts, mirroring `HoldState::is_open`. */
+const MOCK_OPEN_STATES = new Set(["created", "notified", "armed", "deciding"]);
+
+/**
+ * Refuse a daemon read the way the fixture asked.
+ *
+ * Two refusals, deliberately distinct: `daemonReachable: false` is a transport
+ * failure carrying the Rust client's own prefix, and `daemonError` is a daemon
+ * that answered in its own words. The queue must render either as unreachable
+ * and NEVER as an empty list, which is the whole point of the seam.
+ */
+function refuseIfAsked(s: MockState): void {
+  if (s.daemonError !== null) throw new Error(s.daemonError);
+  if (!s.daemonReachable) unreachable();
+}
+
+function listHolds(): unknown {
+  const s = current();
+  refuseIfAsked(s);
+  return {
+    schema_version: 1,
+    observed_at_ms: Date.now(),
+    holds: s.holds.map((hold) => ({ ...hold })),
+    open_count:
+      s.openCount ??
+      s.holds.filter((hold) => MOCK_OPEN_STATES.has(String(hold.state))).length,
+    truncated: false,
+    deciding_stalled_count: 0,
+    store_durable: s.storeDurable,
+  };
+}
+
+function getHold(payload: unknown): unknown {
+  const s = current();
+  refuseIfAsked(s);
+  const holdId = (payload as { holdId?: string } | null)?.holdId;
+  const hold = s.holds.find((entry) => entry.hold_id === holdId);
+  if (!hold) {
+    throw new Error(`daemon answered 404 not_found: no hold \`${holdId}\``);
+  }
+  return { schema_version: 1, observed_at_ms: Date.now(), hold: { ...hold } };
 }
 
 function admittedIssuers(): PerchAdmittedIssuers {
@@ -575,6 +790,9 @@ export function handlePerchMockCommand(
   payload: unknown,
 ): unknown {
   const s = current();
+  if (s.daemonError !== null && DAEMON_BOUND_COMMANDS.has(command)) {
+    throw new Error(s.daemonError);
+  }
   switch (command) {
     case "perch_admitted_issuers":
       s.log.push(command);
@@ -585,6 +803,24 @@ export function handlePerchMockCommand(
     case "perch_mint_incident":
       s.log.push(command);
       return mintIncident(payload);
+    case "perch_list_holds":
+      s.log.push(command);
+      return listHolds();
+    case "perch_get_hold":
+      s.log.push(command);
+      return getHold(payload);
+    case "perch_configure_daemon":
+      s.log.push(command);
+      return null;
+    case "perch_record_hold_verdict":
+      s.log.push(command);
+      return recordHoldVerdict(payload);
+    case "perch_decide_hold":
+      s.log.push(command);
+      return decideAfterDelay();
+    case "perch_publish_verdict_update":
+      s.log.push(command);
+      return publishVerdictUpdate(payload);
     case "perch_record_verdict":
       s.log.push(command);
       return after(s.verdictDelayMs, () => recordVerdict(payload));
@@ -609,6 +845,33 @@ export function installPerchControlSeams(target: Window): void {
   // the number INV-15 requires a refused marker to be counted in, and a spec
   // that asserted only "the notice rendered" would not be asserting it.
   target.__AMBUSH_E2E_PERCH_COUNTER__ = readPerchCounter;
+  // Mid-spec control. Seeding through the fixture covers the load-time state;
+  // this is for the transitions a spec has to drive AFTER mount, such as a
+  // daemon that goes away between two reconciliations.
+  target.__AMBUSH_E2E_PERCH_RECORDED__ = mockPerchRecordedVerdicts;
+  target.__AMBUSH_E2E_PERCH_CONTROL__ = {
+    setHolds: (holds, options) => {
+      const s = current();
+      s.holds = holds.map((hold) => ({ ...hold }));
+      s.storeDurable = options?.storeDurable ?? s.storeDurable;
+      s.openCount = options?.openCount ?? null;
+    },
+    setIssuers: (issuers) => {
+      current().issuers = [...issuers];
+    },
+    setDaemonError: (message) => {
+      current().daemonError = message;
+    },
+    setDecide: (outcome, delayMs) => {
+      const st = current();
+      st.decide = outcome;
+      st.decideDelayMs = delayMs ?? 0;
+    },
+    setLegOneError: (message) => {
+      current().legOneError = message;
+    },
+    reset: () => resetPerchMock(),
+  };
 }
 
 if (typeof window !== "undefined") {

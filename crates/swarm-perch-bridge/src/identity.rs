@@ -462,14 +462,17 @@ mod tests {
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Approve],
             nostr_pubkey: Some("C0FFEE".repeat(10) + "c0ff"),
+            verdict_public_key_hex: None,
         };
         let read_only = OperatorPrincipalConfig {
             scopes: vec![OperatorScope::Read],
             nostr_pubkey: Some("a".repeat(64)),
+            verdict_public_key_hex: None,
             ..with.clone()
         };
         let keyless = OperatorPrincipalConfig {
             nostr_pubkey: None,
+            verdict_public_key_hex: None,
             ..with.clone()
         };
         let keys = approve_scoped_operator_pubkeys(&[with.clone(), read_only, keyless]).unwrap();
@@ -485,6 +488,7 @@ mod tests {
 
         let malformed = OperatorPrincipalConfig {
             nostr_pubkey: Some("not-a-key".into()),
+            verdict_public_key_hex: None,
             ..with
         };
         assert!(matches!(

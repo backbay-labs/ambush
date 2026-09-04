@@ -55,6 +55,9 @@ pub struct DaemonResponse {
     pub status: u16,
     /// The parsed JSON body, or `Null`.
     pub body: serde_json::Value,
+    /// `Retry-After`, in seconds, when the daemon sent one. The decide route
+    /// returns it on a 409 whose conflict resolves itself.
+    pub retry_after_seconds: Option<u64>,
 }
 
 /// Percent-encode `value` over the RFC 3986 unreserved set. Everything else is
@@ -92,6 +95,122 @@ pub fn route(template: &'static str, params: &[(&str, &str)]) -> Result<DaemonRo
         return Err(format!("route `{template}` has an unsubstituted parameter"));
     }
     Ok(DaemonRoute { template, path })
+}
+
+/// The daemon's page-size floor and ceiling, mirrored from
+/// `crates/swarm-runtime-http/src/http/perch/holds.rs` (`1..=1000`).
+///
+/// Clamped HERE and not left to the daemon: a console that sends a value the
+/// daemon has to reinterpret is a console whose displayed page size is a guess.
+const HOLD_LIMIT_RANGE: std::ops::RangeInclusive<usize> = 1..=1_000;
+
+/// The query string for `GET /v1/response/holds`, built from typed values.
+///
+/// The route template stays exactly `/v1/response/holds` so the INV-01 table
+/// is compared against an unchanging string; the query is appended to the
+/// concrete path, never to the base URL, and every value here is a `bool`, a
+/// clamped `usize` or an `i64`, so nothing the renderer supplies can shape a
+/// path, a second query parameter or a fragment.
+pub fn hold_list_query(
+    include_terminal: bool,
+    limit: Option<usize>,
+    now_ms: Option<i64>,
+) -> String {
+    let mut query = format!("?include_terminal={include_terminal}");
+    if let Some(limit) = limit {
+        let limit = limit.clamp(*HOLD_LIMIT_RANGE.start(), *HOLD_LIMIT_RANGE.end());
+        query.push_str(&format!("&limit={limit}"));
+    }
+    if let Some(now_ms) = now_ms {
+        query.push_str(&format!("&now_ms={now_ms}"));
+    }
+    query
+}
+
+/// The marker every redaction leaves behind.
+const REDACTED: &str = "[redacted]";
+
+/// Prefixes after which the next run of non-delimiter characters is a secret.
+///
+/// Matched case-insensitively. `presented` is the daemon's own field for the
+/// credential it was HANDED, which on a misconfigured console is a token this
+/// process never held — shape, not ownership, is what makes a string unsafe.
+const SECRET_PREFIXES: [&str; 6] = [
+    "bearer ",
+    "basic ",
+    "token=",
+    "access_token=",
+    "presented=",
+    "\"presented\":",
+];
+
+/// Shortest token worth substring-replacing. A one- or two-character "secret"
+/// would redact half of every message and hide the error instead of the token.
+const MIN_REPLACEABLE_TOKEN: usize = 8;
+
+/// Strip anything bearer-shaped from a string before it crosses IPC (INV-22).
+///
+/// Two passes: the exact `token` this process holds, and then any value that
+/// FOLLOWS a credential-shaped prefix, whoever it belongs to. Redaction is
+/// idempotent and never panics on multi-byte text.
+pub fn redact_for_ipc(message: &str, token: &str) -> String {
+    let mut out = if token.len() >= MIN_REPLACEABLE_TOKEN {
+        message.replace(token, REDACTED)
+    } else {
+        message.to_string()
+    };
+    for prefix in SECRET_PREFIXES {
+        out = redact_after_prefix(&out, prefix);
+    }
+    out
+}
+
+/// Characters that end a secret. A value that reaches one of these has ended,
+/// whether it was quoted, parenthesised or the tail of a JSON object.
+fn is_secret_terminator(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '\'' | ')' | '}' | ',' | ';' | '&')
+}
+
+/// Replace the run of characters following each (case-insensitive) `prefix`
+/// with [`REDACTED`], stopping at the first [`is_secret_terminator`].
+///
+/// One optional opening quote directly after the prefix is stepped over, so
+/// `presented="abc"` and `presented=abc` both redact `abc` and neither leaves
+/// the quote inside the marker.
+fn redact_after_prefix(haystack: &str, prefix: &str) -> String {
+    // `to_ascii_lowercase` preserves byte length and char boundaries, so an
+    // index found in the lowered copy is valid in the original.
+    let lowered = haystack.to_ascii_lowercase();
+    let needle = prefix.to_ascii_lowercase();
+    let mut out = String::with_capacity(haystack.len());
+    let mut cursor = 0usize;
+    while let Some(found) = lowered[cursor..].find(&needle) {
+        let mut value_start = cursor + found + prefix.len();
+        if haystack[value_start..].starts_with(['"', '\'']) {
+            value_start += 1;
+        }
+        out.push_str(&haystack[cursor..value_start]);
+        let value_end = haystack[value_start..]
+            .find(is_secret_terminator)
+            .map_or(haystack.len(), |offset| value_start + offset);
+        if value_end > value_start {
+            out.push_str(REDACTED);
+        }
+        cursor = value_end;
+    }
+    out.push_str(&haystack[cursor..]);
+    out
+}
+
+/// A non-2xx daemon answer as one redacted line for the webview.
+///
+/// Keeps the daemon's `error` slug verbatim — it is the taxonomy the console
+/// branches on (W3-17: a `409` is resolved by RE-READING the hold, and the
+/// slug says which 409 it was) — and redacts only the free-text `message`.
+pub fn daemon_status_error(status: u16, body: &serde_json::Value, token: &str) -> String {
+    let error = body["error"].as_str().unwrap_or("unknown");
+    let message = redact_for_ipc(body["message"].as_str().unwrap_or(""), token);
+    format!("daemon answered {status} {error}: {message}")
 }
 
 /// Whether `(method, template)` is one of the five INV-01 writes.
@@ -142,24 +261,39 @@ async fn perch_daemon_request(
         ));
     }
     let url = format!("{}{}", daemon_url(state)?.trim_end_matches('/'), route.path);
+    let token = daemon_bearer()?;
     let mut request = state
         .http_client
         .request(method, &url)
-        .bearer_auth(daemon_bearer()?)
+        .bearer_auth(&token)
         .header(SCHEMA_VERSION_HEADER.0, SCHEMA_VERSION_HEADER.1);
     if let Some(body) = body {
         request = request.json(&body);
     }
+    // A transport error carries the request URL and, through a proxy, whatever
+    // the proxy chose to say. Both the URL and the bearer are redacted before
+    // this can become a `Result::Err` a command hands to the webview (INV-22).
     let response = request
         .send()
         .await
-        .map_err(|e| format!("daemon unreachable: {e}"))?;
+        .map_err(|e| transport_error_message(&e.to_string(), &url, &token))?;
     let status = response.status().as_u16();
+    // Read before the body is consumed. W3-17: a 409 whose conflict resolves
+    // itself carries this, and the console waits rather than re-reading at once.
+    let retry_after_seconds = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
     let body = response
         .json::<serde_json::Value>()
         .await
         .unwrap_or(serde_json::Value::Null);
-    Ok(DaemonResponse { status, body })
+    Ok(DaemonResponse {
+        status,
+        body,
+        retry_after_seconds,
+    })
 }
 
 /// Read a daemon route. GETs are not on the write table and are not checked
@@ -172,6 +306,16 @@ pub async fn perch_daemon_get(state: &AppState, route: &DaemonRoute) -> Result<D
 /// before any socket is opened.
 #[rustfmt::skip]
 pub async fn perch_daemon_post(state: &AppState, route: &DaemonRoute, body: serde_json::Value) -> Result<DaemonResponse, String> { perch_daemon_request(state, reqwest::Method::POST, route, Some(body)).await }
+
+/// A non-2xx [`DaemonResponse`] as one redacted line for the webview.
+///
+/// Reads this process's own bearer for the substring pass so that no command
+/// module ever names the keyring: a command that could read the token is a
+/// command one careless `format!` away from returning it.
+pub fn daemon_response_error(response: &DaemonResponse) -> String {
+    let token = daemon_bearer().unwrap_or_default();
+    daemon_status_error(response.status, &response.body, &token)
+}
 
 /// The admitted-issuer set, as the daemon publishes it.
 ///
@@ -268,3 +412,20 @@ pub fn seed_daemon_settings_from_env_in_debug() {
 #[cfg(test)]
 #[path = "daemon_client_tests.rs"]
 mod tests;
+
+// ── Carried from the hold-daemon branch: Tasks 20/21 call this ────────────
+
+/// Build the message for a transport failure with the daemon URL and the
+/// bearer removed.
+///
+/// A `reqwest::Error`'s `Display` names the URL it was dialling, and both the
+/// URL and the token are keyring values this process is supposed to keep. The
+/// redaction happens HERE, at the one place a transport error becomes a
+/// string, rather than at each call site, because a call site can forget.
+pub fn transport_error_message(error: &str, url: &str, bearer: &str) -> String {
+    // Both the URL and the bearer are keyring values, and this module's
+    // redactor takes one secret at a time, so pass each through in turn. The
+    // origin goes too: host and port alone disclose where the daemon lives.
+    let once = redact_for_ipc(error, bearer);
+    format!("daemon unreachable: {}", redact_for_ipc(&once, url))
+}

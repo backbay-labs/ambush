@@ -119,6 +119,7 @@ pub(super) fn operator_config() -> SwarmConfig {
             partition_contingency_blast_radius_cap: 1,
             max_dead_letter_bytes: None,
             containment: Default::default(),
+            response: Default::default(),
         },
         detection: DetectionConfig {
             strategy: "suspicious_process_tree".to_string(),
@@ -2377,6 +2378,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Read],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
             OperatorPrincipalConfig {
                 operator_id: "rehearser-1".to_string(),
@@ -2384,6 +2386,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Rehearse],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
             OperatorPrincipalConfig {
                 operator_id: approver_id.clone(),
@@ -2391,6 +2394,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Approve],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
             OperatorPrincipalConfig {
                 operator_id: second_approver_id.clone(),
@@ -2398,6 +2402,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Approve],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
             OperatorPrincipalConfig {
                 operator_id: maintainer_id.clone(),
@@ -2405,12 +2410,14 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Maintenance],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
         ],
     );
 
     let root = unique_temp_dir("scoped-operator-principals");
     seed_evolution_artifacts(&root);
+    seed_evidence_artifacts(&root);
     let surface =
         LocalOperatorSurface::from_config_and_paths("inline", config, surface_paths(&root))
             .unwrap();
@@ -2485,6 +2492,53 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
             .await
             .unwrap();
     assert_eq!(rehearse_export.status(), StatusCode::SEE_OTHER);
+
+    // B5: creating a review session is a governance write, not a read. It was
+    // authenticated but unscoped, so a `read`-only principal could open one.
+    let review_session_form = "title=scope+gate&notes=&artifact_refs=promotion_review%3Areview%3Ared%0Acanary_run%3Acanary%3Ared%0Aproduction_promotion%3Apromotion%3Ared";
+    let read_review_session = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/operator/review/sessions")
+                .header("authorization", format!("Bearer {READ_TOKEN}"))
+                .header(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .body(Body::from(review_session_form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read_review_session.status(), StatusCode::FORBIDDEN);
+    assert!(
+        read_review_session
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/html")),
+        "the refusal renders in the review layout, not as JSON"
+    );
+
+    let approve_review_session = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/operator/review/sessions")
+                .header("authorization", format!("Bearer {APPROVE_TOKEN}"))
+                .header(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .body(Body::from(review_session_form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approve_review_session.status(), StatusCode::SEE_OTHER);
 
     let invalid_set_response = app
         .clone()
@@ -3545,6 +3599,7 @@ mod qrt_04 {
                         OperatorScope::Approve,
                     ],
                     nostr_pubkey: None,
+                    verdict_public_key_hex: None,
                 }],
             ),
             Arc::clone(&harness.sweep),

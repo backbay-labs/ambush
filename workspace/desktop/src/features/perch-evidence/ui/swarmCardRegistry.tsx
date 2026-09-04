@@ -7,6 +7,8 @@ import type {
   SwarmMarkerParse,
 } from "../lib/markerTypes";
 import { findingCardEntry } from "./cards/FindingCard";
+import { holdCardEntry } from "./cards/HoldCard";
+import { verdictCardEntry } from "./cards/VerdictCard";
 import { NotYetRenderedCard } from "./NotYetRenderedCard";
 import {
   MisplacedCard,
@@ -19,8 +21,8 @@ export { defineSwarmCard } from "./defineSwarmCard";
 /**
  * The seven-entry registry (17-COMPONENT-SPECS.md §3.5). `satisfies
  * Record<SwarmMarkerKind, SwarmCardEntry>` is the exhaustiveness gate: a
- * union member without an entry fails `tsc --noEmit`. Six kinds render an
- * honest "not yet" this milestone rather than an empty presenter.
+ * union member without an entry fails `tsc --noEmit`. The four kinds The hold
+ * does not produce render an honest "not yet" rather than an empty presenter.
  */
 
 function notYetRendered(
@@ -38,8 +40,8 @@ function notYetRendered(
 export const SWARM_CARD_REGISTRY = {
   finding: findingCardEntry,
   escalation: notYetRendered("escalation", "authority", ["case", "lane"]),
-  hold: notYetRendered("hold", "authority", ["case"]),
-  verdict: notYetRendered("verdict", "authority", ["case"]),
+  hold: holdCardEntry,
+  verdict: verdictCardEntry,
   receipt: notYetRendered("receipt", "evidence", ["case"]),
   lease: notYetRendered("lease", "evidence", ["case"]),
   rollback: notYetRendered("rollback", "evidence", ["case"]),

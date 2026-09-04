@@ -138,6 +138,9 @@ export function perchAdmittedIssuers() {
 export const PERCH_READ_COMMANDS = [
   "perch_reviewed_findings",
   "perch_admitted_issuers",
+  "perch_list_holds",
+  "perch_get_hold",
+  "perch_configure_daemon",
 ] as const;
 
 // ===========================================================================
@@ -178,8 +181,21 @@ export function perchRecordVerdict(input: {
   }>("perch_record_verdict", { input });
 }
 
-/** The relay-published set: one command, one kind, one marker. */
-export const PERCH_RELAY_WRITE_COMMANDS = ["perch_record_verdict"] as const;
+/**
+ * The relay-published set: three commands, one kind, one marker.
+ *
+ * All three publish the SAME marker — a `swarm:verdict:v1` card. Leg 1 of a
+ * FINDING verdict and leg 1 of a HOLD decision are separate commands because
+ * they take different inputs and read different daemon records, and
+ * `perch_publish_verdict_update` replies to its own leg-1 card. The set of
+ * commands grew; the set of markers the operator's key can publish did not,
+ * and a Rust test asserts that.
+ */
+export const PERCH_RELAY_WRITE_COMMANDS = [
+  "perch_record_verdict",
+  "perch_record_hold_verdict",
+  "perch_publish_verdict_update",
+] as const;
 
 // ===========================================================================
 // DAEMON WRITES. INV-01 asserts the set is closed at five; First card
@@ -219,6 +235,7 @@ export function perchMintIncident(input: PerchMintIncidentInput) {
 export const PERCH_DAEMON_WRITE_COMMANDS = [
   "perch_finding_feedback",
   "perch_mint_incident",
+  "perch_decide_hold",
 ] as const;
 
 /**
@@ -230,3 +247,429 @@ export const PERCH_TAURI_COMMANDS = [
   ...PERCH_RELAY_WRITE_COMMANDS,
   ...PERCH_DAEMON_WRITE_COMMANDS,
 ] as const;
+
+// ===========================================================================
+// B2r — THE HOLD READS. The reconciliation authority.
+//
+// Every type below was measured against the daemon's own serialiser, not
+// transcribed from a plan: `src/testing/perch/daemonHoldFixture.json` holds
+// the bytes `HoldListResponse` and `HeldActionView` actually produce
+// (`crates/swarm-runtime-http/src/http/perch/holds.rs`), and
+// `tauriPerch.test.mjs` fails if a field appears on one side and not the
+// other. Four fields the wave-2 drafts did not have are real and load-bearing:
+// `notice_event_id` (W3-26), `schema_version` and `truncated` on the envelope,
+// and `policy_decision.verdict`.
+// ===========================================================================
+
+/** `LOW | MEDIUM | HIGH | CRITICAL`. SCREAMING_SNAKE on the wire. */
+export type PerchSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+/**
+ * The hold state machine. `expired` is a SEPARATE fact from `state`: one is a
+ * stored transition and the other is a reading of the clock, and a view that
+ * collapsed them would hide which claim the daemon is making.
+ */
+export type PerchHoldState =
+  | "created"
+  | "notified"
+  | "armed"
+  | "deciding"
+  | "granted"
+  | "refused"
+  | "expired"
+  | "executed"
+  | "failed";
+
+/** `grant | refuse`. Never `deny`: `refuse` is the operator's word. */
+export type PerchHoldDecision = "grant" | "refuse";
+
+/**
+ * A standard taxonomy slug, or `{ custom: "…" }` for one outside it. The
+ * externally-tagged Rust enum serialises the custom arm as an object, so a
+ * consumer that assumed `string` would render `[object Object]` on exactly
+ * the threat class nobody has seen before.
+ */
+export type PerchThreatClass = string | { readonly custom: string };
+
+/** The ACTION, verbatim, as the requesting agent asked for it. */
+export type PerchActionRequest = {
+  readonly hunt_id: string;
+  readonly requested_by: string;
+  readonly action: Readonly<Record<string, unknown>> & {
+    readonly type: string;
+  };
+  readonly severity: PerchSeverity;
+  readonly evidence: Readonly<Record<string, unknown>>;
+};
+
+/** The verdict that held the action. `verdict` is `require_human` for a hold. */
+export type PerchPolicyDecision = {
+  readonly verdict: string;
+  readonly rule_name: string;
+  readonly reason: string;
+};
+
+/** WHY WE ARE ASKING — the context `policy_decision` alone cannot give. */
+export type PerchHoldRationale = {
+  readonly rule_name: string;
+  readonly reason: string;
+  readonly threat_class: PerchThreatClass;
+  readonly severity: PerchSeverity;
+  readonly request_carried_fields: readonly string[];
+  readonly concentration_at_hold: Readonly<Record<string, unknown>> | null;
+  readonly escalation_level: string | null;
+  /** Whether a receipt was PRESENT at hold time. Not a verification result. */
+  readonly governance_receipt_present: boolean;
+};
+
+/** BLAST RADIUS: what granting would reach. */
+export type PerchBlastRadiusPreview = {
+  readonly scope_kind: string;
+  readonly scope_value: string;
+  readonly impact: string;
+  readonly max_affected_scopes: number;
+  readonly affected_capabilities: readonly string[];
+  readonly summary: string;
+};
+
+/** The rollback the response planned, before anyone asked whether it works. */
+export type PerchRollbackPreview = {
+  readonly required: boolean;
+  readonly summary: string;
+  readonly steps: ReadonlyArray<{
+    readonly kind: string;
+    readonly summary: string;
+  }>;
+};
+
+/** The rehearsal, when one could be built. */
+export type PerchRehearsalPreview = {
+  readonly rehearsal_id: string;
+  readonly source_bundle_id: string;
+  readonly prepared_at_ms: number;
+  readonly simulated_only: boolean;
+  readonly blast_radius: PerchBlastRadiusPreview;
+  readonly rollback: PerchRollbackPreview;
+};
+
+/**
+ * IF YOU UNDO: per planned rollback step, what `resolve_inverse` said.
+ *
+ * `step_kind` is the Rust variant's `Debug` name (`RestoreHostConnectivity`),
+ * NOT the snake_case the same enum uses inside `rehearsal.rollback.steps[].kind`
+ * — the daemon builds it with `format!("{:?}")`. Joining the two lists on this
+ * string without normalising is the obvious bug, so neither is derived from
+ * the other here.
+ *
+ * `reason` is ABSENT rather than null when the refusing layer had no words.
+ */
+export type PerchInverseResolution = {
+  readonly step_kind: string;
+  readonly verdict: "executable" | "irreversible" | "unmapped";
+  readonly reason?: string;
+  /** Render law 4: the console names the function that produced the verdict. */
+  readonly derived_by: string;
+};
+
+/** Why a grant did not become an action. */
+export type PerchHoldRefusal = {
+  readonly rule: string;
+  readonly reason: string;
+};
+
+/**
+ * The authoritative decision record. `nostr_intent_event_id` is what makes
+ * one leg-1 card THE decision: a verdict card whose id this record does not
+ * name is not the decision, whatever it claims about itself.
+ */
+export type PerchHoldDecisionRecord = {
+  readonly decision: PerchHoldDecision;
+  readonly operator_id: string;
+  readonly voter_id: string;
+  readonly rationale_sha256: string | null;
+  readonly hold_notice_published: boolean;
+  readonly governance_clearance:
+    | "not_required"
+    | "partition_authorized"
+    | "receipt_signature_ok"
+    | "receipt_subject_bound";
+  readonly decided_at_ms: number;
+  readonly nostr_intent_event_id: string;
+  readonly signature: PerchDetachedSignature | null;
+  readonly rationale: string | null;
+  readonly outcome:
+    | "granted_executed"
+    | "granted_simulated"
+    | "granted_failed"
+    | "refused_by_operator"
+    | "refused_late"
+    | "guard_rejected";
+  /** Whether the runtime ATTEMPTED the response. Not whether it succeeded. */
+  readonly dispatched: boolean;
+  readonly receipt_id: string | null;
+  readonly audit_trail_id: string | null;
+  readonly refusal: PerchHoldRefusal | null;
+};
+
+/** One hold as an operator reads it. */
+export type PerchHeldActionView = {
+  readonly hold_id: string;
+  readonly state: PerchHoldState;
+  readonly notified_at_ms: number | null;
+  readonly deciding_intent_event_id: string | null;
+  readonly case_channel: string | null;
+  readonly notice_event_id: string | null;
+  readonly card_event_id: string | null;
+  readonly action_kind: string;
+  readonly severity: PerchSeverity;
+  readonly held_at_ms: number;
+  readonly expires_at_ms: number;
+  /** Saturates at zero. A clock reading, not a decision about it. */
+  readonly remaining_ms: number;
+  /** The decision about that reading. Kept apart on purpose. */
+  readonly expired: boolean;
+  readonly action_request: PerchActionRequest;
+  readonly policy_decision: PerchPolicyDecision;
+  readonly rationale: PerchHoldRationale;
+  readonly leases_a_containment: boolean;
+  readonly rehearsal: PerchRehearsalPreview | null;
+  readonly inverse_resolution: readonly PerchInverseResolution[];
+  readonly decision: PerchHoldDecisionRecord | null;
+};
+
+/**
+ * `GET /v1/response/holds`.
+ *
+ * `store_durable: false` means a restart forgot every open hold, and the queue
+ * renders it: the difference between "no holds" and "no memory of holds" is
+ * the whole of INV-35. `open_count` counts the STORE, not this page, so a
+ * truncated page still reports the real depth.
+ */
+export type PerchHoldListResponse = {
+  readonly schema_version: number;
+  readonly observed_at_ms: number;
+  readonly holds: readonly PerchHeldActionView[];
+  readonly open_count: number;
+  readonly truncated: boolean;
+  readonly deciding_stalled_count: number;
+  readonly store_durable: boolean;
+};
+
+/** `GET /v1/response/holds/{hold_id}`. */
+export type PerchHoldDetailResponse = {
+  readonly schema_version: number;
+  readonly observed_at_ms: number;
+  readonly hold: PerchHeldActionView;
+};
+
+/**
+ * A `Record<keyof T, true>` literal is a compile error when a key is missing
+ * or invented, so these maps make the type list checkable at runtime without
+ * letting it drift from the type. `tauriPerch.test.mjs` compares them to the
+ * daemon's real bytes.
+ */
+const HELD_ACTION_VIEW_KEYS: Record<keyof PerchHeldActionView, true> = {
+  hold_id: true,
+  state: true,
+  notified_at_ms: true,
+  deciding_intent_event_id: true,
+  case_channel: true,
+  notice_event_id: true,
+  card_event_id: true,
+  action_kind: true,
+  severity: true,
+  held_at_ms: true,
+  expires_at_ms: true,
+  remaining_ms: true,
+  expired: true,
+  action_request: true,
+  policy_decision: true,
+  rationale: true,
+  leases_a_containment: true,
+  rehearsal: true,
+  inverse_resolution: true,
+  decision: true,
+};
+
+const HOLD_LIST_RESPONSE_KEYS: Record<keyof PerchHoldListResponse, true> = {
+  schema_version: true,
+  observed_at_ms: true,
+  holds: true,
+  open_count: true,
+  truncated: true,
+  deciding_stalled_count: true,
+  store_durable: true,
+};
+
+const HOLD_DECISION_RECORD_KEYS: Record<keyof PerchHoldDecisionRecord, true> = {
+  decision: true,
+  operator_id: true,
+  voter_id: true,
+  rationale_sha256: true,
+  hold_notice_published: true,
+  governance_clearance: true,
+  decided_at_ms: true,
+  nostr_intent_event_id: true,
+  signature: true,
+  rationale: true,
+  outcome: true,
+  dispatched: true,
+  receipt_id: true,
+  audit_trail_id: true,
+  refusal: true,
+};
+
+const HOLD_RATIONALE_KEYS: Record<keyof PerchHoldRationale, true> = {
+  rule_name: true,
+  reason: true,
+  threat_class: true,
+  severity: true,
+  request_carried_fields: true,
+  concentration_at_hold: true,
+  escalation_level: true,
+  governance_receipt_present: true,
+};
+
+/** The daemon DTO field lists this file claims to cover, by DTO name. */
+export const PERCH_HOLD_DTO_KEYS = {
+  HeldActionView: Object.keys(HELD_ACTION_VIEW_KEYS),
+  HoldListResponse: Object.keys(HOLD_LIST_RESPONSE_KEYS),
+  HoldDecisionRecord: Object.keys(HOLD_DECISION_RECORD_KEYS),
+  HoldRationale: Object.keys(HOLD_RATIONALE_KEYS),
+} as const satisfies Readonly<Record<string, readonly string[]>>;
+
+/**
+ * B2r. Every hold this daemon is holding, decided and expired ones included.
+ *
+ * The queue's authority. An error here is rendered as an error: an empty list
+ * is a claim about the world and an unreachable daemon is not in a position to
+ * make it, which is why nothing in this path substitutes `[]` for a failure.
+ */
+export function perchListHolds() {
+  return invokeTauri<PerchHoldListResponse>("perch_list_holds");
+}
+
+/**
+ * B2r. One hold.
+ *
+ * Also the way out of a `409` (W3-17): the console learns which decision won
+ * by RE-READING this route, never from the conflict's error body. The error
+ * body says which KIND of conflict happened; only this says what is true.
+ */
+export function perchGetHold(holdId: string) {
+  return invokeTauri<PerchHoldDetailResponse>("perch_get_hold", { holdId });
+}
+
+/**
+ * Store the daemon base URL and this operator's credential in the OS keyring.
+ *
+ * One-directional: values go in and there is no command that reads either back
+ * out (INV-22). Debug builds seed the same keys from the environment at
+ * startup (D-FC-4).
+ */
+export function perchConfigureDaemon(base_url: string, credential: string) {
+  return invokeTauri<void>("perch_configure_daemon", { base_url, credential });
+}
+
+// ===========================================================================
+// LEG 2 — THE DAEMON DECIDE, and the supersession card leg 1 gets when it
+// loses. `perch_decide_hold` and the hold arm of `perch_record_verdict` are
+// implemented by the decide/verdict track (plan Tasks 20 and 21); the shapes
+// below are the plan's documented interface, which the write reducer and the
+// mock bridge are both built against.
+// ===========================================================================
+
+/** `grant | refuse`. Never `deny`: `refuse` is the operator's word. */
+export type PerchHoldVerdict = "grant" | "refuse";
+
+/**
+ * What leg 2 reports. Six outcomes; a seventh is a wire change.
+ *
+ * `superseded` carries `superseded_by` and `winning_decision` as TYPED fields.
+ * The daemon's 409 body is `{error, message}` and nothing else (W3-17), so the
+ * Tauri command fills these by RE-READING `GET /v1/response/holds/{id}` — the
+ * error body says which KIND of conflict happened, and only the re-read says
+ * what is true.
+ */
+export type PerchDecideOutcome = {
+  readonly outcome:
+    | "dispatched"
+    | "refused_late"
+    | "refused_late_governance"
+    | "superseded"
+    | "expired"
+    | "unknown_hold";
+  readonly rule: string | null;
+  readonly reason: string | null;
+  readonly receipt_id: string | null;
+  readonly decided_at_ms: number;
+  /** The winning intent's event id, from the re-read. */
+  readonly superseded_by: string | null;
+  /** The winning decision, from the re-read. Never parsed out of `reason`. */
+  readonly winning_decision: PerchHoldVerdict | "unknown" | null;
+  /** True when this call replayed an existing record rather than deciding. */
+  readonly replayed: boolean;
+};
+
+/**
+ * Leg 2. The one route that can turn a held destructive action into a real one.
+ *
+ * `nostr_intent_event_id` is leg 1's card id and is the daemon's idempotency
+ * key, so a retry re-sends THIS call unchanged and never re-signs leg 1.
+ */
+export function perchDecideHold(input: {
+  holdId: string;
+  decision: PerchHoldVerdict;
+  /** Verbatim from `perchRecordVerdict`. */
+  nostrIntentEventId: string;
+  rationale: string | null;
+  armedAtMs: number | null;
+}) {
+  return invokeTauri<PerchDecideOutcome>("perch_decide_hold", input);
+}
+
+/**
+ * Publish the supersession update: a NIP-10 reply to this console's OWN leg-1
+ * card, marking it `leg2.state: "superseded"`.
+ *
+ * Published rather than left silent because the losing card is a genuine
+ * signed decision that will sit in the case channel forever. A reader who finds
+ * it later must be able to see, from the channel alone, that it did not run.
+ * The case channel comes from the daemon's hold record, never from the
+ * renderer.
+ */
+export function perchPublishVerdictUpdate(input: {
+  holdId: string;
+  ownIntentEventId: string;
+  supersededBy: string;
+  supersededAtMs: number;
+}) {
+  return invokeTauri<{ readonly nostr_intent_event_id: string }>(
+    "perch_publish_verdict_update",
+    { input },
+  );
+}
+
+/**
+ * Leg 1 for a HOLD subject (D-FC-3's `subject: "hold"` discriminator).
+ *
+ * The same command as the finding verdict, with a hold-shaped input. The Rust
+ * side re-reads the hold from the daemon and builds the card body from THAT
+ * answer, so the renderer chooses the decision and types the rationale and
+ * supplies no other content.
+ */
+export function perchRecordHoldVerdict(input: {
+  holdId: string;
+  decision: PerchHoldVerdict;
+  /** Free text the operator typed. Hashed into the signature preimage. */
+  rationale: string | null;
+}) {
+  return invokeTauri<{
+    /** The published card's event id — leg 2's idempotency key. */
+    readonly nostr_intent_event_id: string;
+    readonly decided_at_ms: number;
+    readonly signature: PerchDetachedSignature;
+    /** Read from the daemon's own hold record, not from the input. */
+    readonly hold_id: string;
+  }>("perch_record_hold_verdict", { input });
+}

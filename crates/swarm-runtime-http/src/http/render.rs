@@ -100,6 +100,19 @@ pub(super) fn render_review_layout(title: &str, subtitle: &str, body: &str) -> S
     )
 }
 
+/// The operator home's live demo panel.
+///
+/// It reads the daemon's `/v1/demo/dashboard` and `/v1/events/stream` from the
+/// operator's browser, cross-origin and with no credentials. B5
+/// (13-PLAN-THE-HOLD.md Task 14) closed both: the daemon demands a
+/// `context_token` on each and no longer answers the stream with a wildcard
+/// `Access-Control-Allow-Origin`, so this panel renders its own disconnected
+/// state against a post-B5 daemon. It was already `runtime.demo_mode`-only --
+/// both handlers answer `403 demo mode is disabled` otherwise -- and a context
+/// token always carries a scope, so the `agent_health` frames this panel asks
+/// for could not be served under one in any case. Restoring it means giving the
+/// operator surface a minted-token seam and a scope to mint against; that is
+/// not part of the hold.
 pub(super) fn render_demo_dashboard_panel(runtime_base_url: &str) -> String {
     let runtime_base_url_json =
         serde_json::to_string(runtime_base_url).unwrap_or_else(|_| "\"\"".to_string());

@@ -27,6 +27,18 @@ swarm-core.workspace = true
 swarm-perch-wire.workspace = true
 swarm-response.workspace = true
 swarm-runtime.workspace = true
+# THE HOLD. `HeldAction` -- the record the `swarm:hold:v1` card projects -- carries an
+# `ActionRequest` and a `PolicyDecision` from `swarm-policy` and a `DetachedSignature` from
+# `swarm-crypto`. Both are already in this crate's resolved graph through `swarm-runtime`; these
+# two lines let the projection NAME them, so `hold_view_from_record` destructures each record
+# exhaustively and a field added upstream is a compile error here rather than a silently absent
+# key on the wire (the rule `finding_to_wire` already follows).
+#
+# The direction is the safe one and the gate agrees: `tools/check-workspace-layering.sh` RULES
+# 1-4 constrain edges OUT OF the TCB (`swarm-crypto`, `swarm-policy`, `swarm-spine`), never
+# edges into it, and the bridge already names the TRUST_SENSITIVE `swarm-response`.
+swarm-crypto.workspace = true
+swarm-policy.workspace = true
 axum.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
@@ -50,6 +62,12 @@ nostr = { version = "0.44", default-features = false, features = ["std"] }
 # The W3-27 differential control: the wire crate's RFC 8785 bytes and keyless
 # hash must agree with the engine's spine envelope byte for byte.
 swarm-spine.workspace = true
+# `held_action_fixtures` is behind `test-fixtures`, which is declared by dev-dependencies only:
+# the fixtures must never ship in the daemon. `swarm-runtime-http` carries the identical line
+# for the identical reason. A hand-rolled `HeldAction` here would drift from the one
+# `HoldCapture` builds, and a drifted fixture is how a card test asserts against a record the
+# daemon would never produce.
+swarm-runtime = { workspace = true, features = ["test-fixtures"] }
 tempfile = "3"
 
 [lints]

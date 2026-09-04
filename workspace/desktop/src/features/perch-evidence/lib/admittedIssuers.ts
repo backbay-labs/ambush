@@ -90,6 +90,21 @@ export function isAdmittedIssuer(pubkey: string): boolean {
   return admitted.has(pubkey.toLowerCase());
 }
 
+/**
+ * The admitted set itself, for a consumer that needs set semantics rather than
+ * the predicate — the hold-queue reconciler compares a batch of notice signers
+ * and wants `has`, not a closure per row.
+ *
+ * Reference-stable until `setAdmittedIssuers` replaces it, so a memo keyed on
+ * it recomputes exactly when the admission changed. Returned as
+ * `ReadonlySet` because nothing outside this module may add a member: the
+ * daemon is the source, and a console that could widen its own admitted set
+ * would have no admitted set at all.
+ */
+export function perchAdmittedIssuerSet(): ReadonlySet<string> {
+  return admitted;
+}
+
 /** The lane channel ids from the last set, deduplicated, reference-stable. */
 export function perchLaneChannelIds(): readonly string[] {
   return laneIds;
@@ -146,6 +161,8 @@ export function useAdmittedIssuersKnown(): boolean {
   );
 }
 const getServerLanes = (): readonly string[] => EMPTY_LANES;
+const EMPTY_ADMITTED: ReadonlySet<string> = new Set();
+const getServerAdmitted = (): ReadonlySet<string> => EMPTY_ADMITTED;
 
 /**
  * The admitted-issuer predicate for React. The function identity never
@@ -168,6 +185,15 @@ export function useAdmittedIssuersVersion(): number {
     subscribePerchCounters,
     getVersion,
     getServerVersion,
+  );
+}
+
+/** The admitted set for React, re-read when the admission changes. */
+export function useAdmittedIssuerSet(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    subscribePerchCounters,
+    perchAdmittedIssuerSet,
+    getServerAdmitted,
   );
 }
 

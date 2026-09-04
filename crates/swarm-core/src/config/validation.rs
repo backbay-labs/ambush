@@ -376,6 +376,47 @@ impl SwarmConfig {
             });
         }
 
+        if self.runtime.response.hold_ttl_ms == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.response.hold_ttl_ms",
+                reason: "must be greater than zero; a hold with no bound is never expired"
+                    .to_string(),
+            });
+        }
+        if self.runtime.response.sweep_interval_ms == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.response.sweep_interval_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.runtime.response.decide_stall_ms == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.response.decide_stall_ms",
+                reason: "must be greater than zero; a decision that can stall forever is a trap"
+                    .to_string(),
+            });
+        }
+        if self
+            .runtime
+            .response
+            .hold_store_path
+            .as_ref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.response.hold_store_path",
+                reason: "must not be empty when set; omit the key for in-memory holds".to_string(),
+            });
+        }
+        for (slug, ttl) in &self.runtime.response.hold_ttl_ms_by_threat_class {
+            if *ttl == 0 {
+                return Err(ConfigValidationError::InvalidField {
+                    field: "runtime.response.hold_ttl_ms_by_threat_class",
+                    reason: format!("override for `{slug}` must be greater than zero"),
+                });
+            }
+        }
+
         self.response_adapter.validate()?;
         if let Some(config) = &self.siem_forward {
             config.validate()?;

@@ -7,6 +7,7 @@
 //! through these routes is visible to the tuning report by construction.
 
 pub mod feedback;
+pub mod holds;
 pub mod mint;
 pub mod reviewed;
 

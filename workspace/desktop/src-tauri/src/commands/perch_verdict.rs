@@ -48,10 +48,13 @@ pub const PERCH_RELAY_PUBLISHED_MARKERS: [&str; 1] = ["swarm:verdict:v1"];
 const _: () = assert!(PERCH_RELAY_PUBLISHED_KINDS.len() == 1);
 const _: () = assert!(PERCH_RELAY_PUBLISHED_KINDS[0] == KIND_CARD as u32);
 
-const OPERATOR_ED25519_SECRET_KEY: &str = "perch.operator_ed25519";
+pub(crate) const OPERATOR_ED25519_SECRET_KEY: &str = "perch.operator_ed25519";
+/// The daemon read leg 1 builds a hold verdict from. A GET, so it is not on
+/// the INV-01 write table.
+pub(crate) const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
 const CASE_INCIDENT_PREFIX: &str = "incident:perch-case:";
 const FINDING_FACT_SCHEMA: &str = "swarm.perch.finding.v1";
-const VERDICT_FACT_SCHEMA: &str = "swarm.perch.verdict.v1";
+pub(crate) const VERDICT_FACT_SCHEMA: &str = "swarm.perch.verdict.v1";
 
 /// The operator's three verbs on a finding (D-FC-3), from the wire crate.
 ///
@@ -102,7 +105,7 @@ pub struct RecordVerdictOutput {
 }
 
 /// Lowercase hex SHA-256 of `bytes`.
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
@@ -168,14 +171,14 @@ pub fn verdict_preimage(
     swarm_perch_wire::envelope::canonical_bytes(&value).unwrap_or_default()
 }
 
-fn is_hex64_lower(value: &str) -> bool {
+pub(crate) fn is_hex64_lower(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -183,33 +186,37 @@ fn now_ms() -> i64 {
 }
 
 /// RFC 3339 at second precision, UTC, the form every card's `issued_at` uses.
-fn iso_seconds(ms: i64) -> String {
+pub(crate) fn iso_seconds(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
         .unwrap_or_default()
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string()
 }
 
-/// Load the operator's Ed25519 key, minting it on first use.
+/// Load the operator's Ed25519 seed, minting one on first use.
 ///
-/// The secret lives in the same keyring blob as the chat identity and is
-/// destroyed by the same sign-out path. It never leaves this process.
-fn operator_signing_key() -> Result<SigningKey, String> {
+/// The seed lives in the same keyring blob as the chat identity and is
+/// destroyed by the same sign-out path. It never leaves this process, and the
+/// stored value is wrapped so it cannot be printed on the way out.
+pub(crate) fn operator_seed() -> Result<[u8; 32], String> {
     let store = crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
     if let Some(stored) = store.load(OPERATOR_ED25519_SECRET_KEY)? {
-        let bytes = hex::decode(stored.trim())
-            .map_err(|e| format!("the stored operator key is not hex: {e}"))?;
-        let secret: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| "the stored operator key is not 32 bytes".to_string())?;
-        return Ok(SigningKey::from_bytes(&secret));
+        return OperatorSecret::new(stored).decode();
     }
-    let mut secret = [0u8; 32];
-    getrandom::getrandom(&mut secret).map_err(|e| format!("entropy source: {e}"))?;
-    let key = SigningKey::from_bytes(&secret);
-    store.store(OPERATOR_ED25519_SECRET_KEY, &hex::encode(secret))?;
+    let mut seed = [0u8; 32];
+    getrandom::getrandom(&mut seed).map_err(|e| format!("entropy source: {e}"))?;
+    store.store(OPERATOR_ED25519_SECRET_KEY, &hex::encode(seed))?;
     tracing::info!("perch: minted the operator Ed25519 key");
-    Ok(key)
+    Ok(seed)
+}
+
+/// Load the operator's Ed25519 key, minting it on first use.
+///
+/// Delegates to [`operator_seed`] so there is ONE loader, one mint path and one
+/// redaction boundary for this secret. Two loaders for one key is how the two
+/// drift and how one of them ends up printing what the other protects.
+pub(crate) fn operator_signing_key() -> Result<SigningKey, String> {
+    Ok(SigningKey::from_bytes(&operator_seed()?))
 }
 
 // ===========================================================================
@@ -312,7 +319,7 @@ fn case_channel_is_visible(proofs: &[ChannelProof], case_channel: &str, my_pubke
 /// this command cannot read is a fault to surface, not a reason to keep asking
 /// for five seconds. Dropping the returned future stops the polling; nothing
 /// here is spawned.
-async fn await_case_channel<P, F>(mut probe: P) -> Result<(), String>
+pub(crate) async fn await_case_channel<P, F>(mut probe: P) -> Result<(), String>
 where
     P: FnMut() -> F,
     F: std::future::Future<Output = Result<bool, String>>,
@@ -449,6 +456,8 @@ pub async fn perch_record_verdict(
     if preimage.is_empty() {
         return Err("could not canonicalize the verdict preimage".to_string());
     }
+    // One construction, so a test that exercises `sign_verdict` is exercising
+    // what this command actually publishes rather than a rule rebuilt beside it.
     let signature = sign_verdict(&key, &preimage);
 
     let fact = serde_json::json!({
@@ -551,6 +560,78 @@ pub async fn perch_record_verdict(
         finding_id: finding.finding_id,
     })
 }
+
+// ── B2 leg 1: a verdict on a HOLD ──────────────────────────────────────────
+
+/// The operator's stored Ed25519 seed, in a shape nothing can print.
+///
+/// The hex is private to this module and has no accessor: [`decode`] hands
+/// back the 32 bytes and the string never escapes. `Display` and `Debug` both
+/// redact, so the leak this guards against — an error that interpolates the
+/// stored value on its way across IPC into the webview — is not merely
+/// detectable but unrepresentable.
+///
+/// [`decode`]: OperatorSecret::decode
+mod operator_secret {
+    /// A stored Ed25519 seed. See the module doc.
+    pub struct OperatorSecret(String);
+
+    impl OperatorSecret {
+        /// Wrap a stored hex seed.
+        #[must_use]
+        pub fn new(hex: String) -> Self {
+            Self(hex)
+        }
+
+        /// The 32 raw bytes.
+        ///
+        /// # Errors
+        ///
+        /// When the stored value is not 32 bytes of hex. Neither error names
+        /// any part of the value.
+        pub fn decode(&self) -> Result<[u8; 32], String> {
+            let bytes = hex::decode(self.0.trim())
+                .map_err(|_| "the stored operator key is not hex".to_string())?;
+            bytes
+                .try_into()
+                .map_err(|_| "the stored operator key is not 32 bytes".to_string())
+        }
+    }
+
+    impl std::fmt::Display for OperatorSecret {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("<redacted>")
+        }
+    }
+
+    impl std::fmt::Debug for OperatorSecret {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("<redacted>")
+        }
+    }
+}
+
+pub use operator_secret::OperatorSecret;
+
+/// Every command in this file that publishes to the relay.
+///
+/// `#[cfg(test)]` because nothing in the production path consults it: it is an
+/// inventory the tests below compare against the file's actual
+/// `#[tauri::command]` declarations, so a new publisher cannot land without
+/// being named here. Unlike `PERCH_RELAY_PUBLISHED_KINDS`, which the signing
+/// path itself reads, this one asserts about the source rather than gating it.
+#[cfg(test)]
+pub const PERCH_RELAY_PUBLISHING_COMMANDS: [&str; 3] = [
+    "perch_record_verdict",
+    "perch_record_hold_verdict",
+    "perch_publish_verdict_update",
+];
+
+/// The commands in this file that publish NOTHING. Written down so the
+/// inverse assertion below can be exact: a new command lands in one list or
+/// the other, and a new publisher that lands in neither fails the test.
+#[cfg(test)]
+pub const PERCH_NON_PUBLISHING_COMMANDS: [&str; 1] = ["perch_operator_identity"];
 
 #[cfg(test)]
 #[path = "perch_verdict_tests.rs"]

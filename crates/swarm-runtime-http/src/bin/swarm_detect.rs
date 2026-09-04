@@ -753,6 +753,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_runtime_events(runtime_events.clone())
             .with_governance_policy(Arc::clone(&governance_policy))
             .with_approval_harness(approval_harness);
+        // B1. The daemon's ONE hold store, built from `runtime.response` the way
+        // the containment store is built from `runtime.containment`. A relative
+        // path resolves against the config file's directory.
+        //
+        // This sits ABOVE the dispatcher, not beside the containment sweep: the
+        // dispatcher takes its router from `state.current_request_response_router()`
+        // on the next line, and a router built before `with_hold_store` carries no
+        // capture, so every RequireHuman would be skipped with nothing recorded and
+        // nothing logged. Every later `state.clone()` sees the store.
+        let hold_config_dir = cli
+            .config
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let hold_settings = state.current_hold_settings();
+        let hold_store: Arc<dyn swarm_runtime::held_action::HeldActionStore> = Arc::new(
+            swarm_runtime::held_action::ConfiguredHeldActionStore::from_settings(
+                &hold_settings,
+                &hold_config_dir,
+            )?,
+        );
+        if hold_settings.hold_store_path.is_none() {
+            tracing::warn!(
+                module = module_path!(),
+                "runtime.response.hold_store_path is unset; holds are in memory and a restart forgets every open hold"
+            );
+        }
+        let state = state.with_hold_store(Arc::clone(&hold_store));
         let dispatcher_shutdown = shutdown_rx.clone();
         let monitor_shutdown = shutdown_rx.clone();
         let mut dispatcher = AgentDispatcher::new(
@@ -1000,7 +1028,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::new(state.current_substrate()),
         )
         .with_shared_mode_state(Arc::clone(&mode_state))
-        .with_runtime_events(runtime_events);
+        .with_runtime_events(runtime_events.clone());
         let mut monitor_handle = Some(tokio::spawn(async move {
             concentration_monitor
                 .run_until_shutdown(CONCENTRATION_MONITOR_INTERVAL_MS, monitor_shutdown)
@@ -1075,6 +1103,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sweep.run_until_shutdown(interval_ms, sweep_shutdown).await;
             })
         });
+        // B1's TTL and stall sweep, beside the containment one and for the same
+        // reason: without it an expired hold is a row nobody retires and a
+        // decision that stalled is a hold parked in `deciding` forever, which no
+        // operator and no retry can move.
+        let mut hold_sweep_handle = Some({
+            let sweep = swarm_runtime::hold_sweep::HoldSweep::new(
+                Arc::clone(&hold_store),
+                Some(runtime_events.clone()),
+                hold_settings.decide_stall_ms,
+            );
+            let sweep_shutdown = shutdown_rx.clone();
+            let interval_ms = hold_settings.sweep_interval_ms;
+            tracing::info!(
+                module = module_path!(),
+                interval_ms,
+                hold_ttl_ms = hold_settings.hold_ttl_ms,
+                decide_stall_ms = hold_settings.decide_stall_ms,
+                durable = hold_settings.hold_store_path.is_some(),
+                "hold sweep started"
+            );
+            tokio::spawn(async move { sweep.run_until_shutdown(interval_ms, sweep_shutdown).await })
+        });
         // The perch bridge: the daemon's only writer of daemon-sourced facts to the relay.
         // A misconfigured bridge must not silently ship a daemon that publishes nothing, so
         // `build` fails loudly on a missing seed, a spool inside the workspace, a missing lane,
@@ -1090,6 +1140,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ingest_identity: ingest_identity.id.clone(),
             operator_principals: config.operator.auth.effective_principals(),
             containment: containment_sweep.as_ref().map(Arc::clone),
+            // The SAME `Arc` the decide route and the sweep hold, not a second store: the
+            // bridge's `mark_case_channel` / `mark_notified` callbacks have to land on the
+            // record the operator's decision will compare-and-set.
+            hold_store: Some(Arc::clone(&hold_store)),
             shutdown: shutdown_rx.clone(),
         }) {
             Ok(Some(bridge)) => {
@@ -1186,6 +1240,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // containment sweep -- a daemon with no sweep still promotes and
         // records verdicts. `docs/PERCH-DEV.md` greps for the mounted line.
         if config.operator.enabled {
+            // The hold reads check `read`, not `approve`: they are the
+            // reconciliation authority and every operator has to see the queue.
+            // A principal that can decide but cannot look at what it is deciding
+            // gets a 403 on every read, which reads to the operator as an empty
+            // queue rather than as a misconfiguration. Say so at boot.
+            for principal in config.operator.auth.effective_principals() {
+                if principal
+                    .scopes
+                    .contains(&swarm_core::config::OperatorScope::Approve)
+                    && !principal
+                        .scopes
+                        .contains(&swarm_core::config::OperatorScope::Read)
+                {
+                    tracing::warn!(
+                        module = module_path!(),
+                        operator_id = %principal.operator_id,
+                        "principal holds `approve` without `read`; the hold reads will answer 403 for it"
+                    );
+                }
+            }
             match swarm_runtime_http::http::perch_operator_router(&config, state.clone()) {
                 Ok(perch_router) => {
                     tracing::info!(module = module_path!(), "perch operator routes mounted");
@@ -1232,6 +1306,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = containment_sweep_handle.take() {
                     await_background_task("containment_sweep", handle).await;
+                }
+                if let Some(handle) = hold_sweep_handle.take() {
+                    await_background_task("hold_sweep", handle).await;
                 }
                 if let Some(handle) = perch_bridge_handle.take() {
                     await_background_task("perch_bridge", handle).await;
@@ -1293,6 +1370,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = containment_sweep_handle.take() {
                     await_background_task("containment_sweep", handle).await;
+                }
+                if let Some(handle) = hold_sweep_handle.take() {
+                    await_background_task("hold_sweep", handle).await;
                 }
                 if let Some(handle) = perch_bridge_handle.take() {
                     await_background_task("perch_bridge", handle).await;

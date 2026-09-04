@@ -5,6 +5,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# The verdict-key state builder, for tests in crates that cannot see this
+# crate's `#[cfg(test)]` items (`swarm-runtime-http`). Dev-dependency only.
+test-fixtures = []
+
 [dependencies]
 anyhow.workspace = true
 arc-swap.workspace = true
@@ -20,6 +26,10 @@ serde_json.workspace = true
 sha2.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
+# The decide route verifies the SAME four-member preimage the console signed.
+# This is the transport-neutral wire crate (00-DECISIONS W3-27) and links no
+# other `swarm-*` package, so the edge does not widen the dependency graph.
+swarm-perch-wire.workspace = true
 swarm-ingest-json.workspace = true
 swarm-ingest-sentinel.workspace = true
 swarm-ingest-tetragon.workspace = true
@@ -46,6 +56,11 @@ serde_yaml.workspace = true
 # `swarm_policy::governance::GovernanceAuthority` trait, which is the boundary
 # SPLIT-05 introduced for exactly this reason.
 swarm-agents.workspace = true
+# The `test-fixtures` feature carries `held_action_fixtures`, so the decide
+# tests build the same HeldAction the daemon does instead of a hand-rolled
+# lookalike. Dev-only: off for the normal build, so no fixture reaches the
+# daemon.
+swarm-runtime = { workspace = true, features = ["test-fixtures"] }
 tower.workspace = true
 
 [lints]
