@@ -1,10 +1,12 @@
 //! ADR 0014 C1 obligation 3: the set of commands that must call the gate is
-//! asserted, not remembered. Every `#[tauri::command]` under `commands/` that
-//! signs renderer-supplied content — its body reaches a signing path
+//! asserted, not remembered. Every `#[tauri::command]` anywhere under `src/`
+//! that signs renderer-supplied content — its body reaches a signing path
 //! (`state.signing_keys()`, a `submit_event*` funnel, `sign_with_keys(`, or a
-//! `submit_signed_event*` publish) and it takes a `content: String`, either as
-//! a direct parameter or through a struct-typed parameter carrying that field
-//! — must call `perch_sign_gate(` in the same function body.
+//! `submit_signed_event*` publish) and it takes a `content` of a
+//! renderer-text type (`String`, `Option<String>`, `&str`, or their `Option`/
+//! borrow spellings), either as a direct parameter or through a struct-typed
+//! parameter carrying that field — must call `perch_sign_gate(` in the same
+//! function body.
 //!
 //! Re-measured on 2026-09-03 against the real crate (the plan's five sites
 //! were counted with stale line numbers): `sign_event`,
@@ -13,6 +15,16 @@
 //! `publish_project_owner_announcement` (content arrives in an input struct),
 //! plus `set_canvas` and `publish_note`, which sign renderer content through
 //! the `submit_event` funnel that resolves `state.signing_keys()` itself.
+//!
+//! Scope was widened on 2026-09-03 after review: the scan previously walked
+//! only `src/commands/`, matched the literal `#[tauri::command]` (so an
+//! attribute carrying arguments — `#[tauri::command(rename_all = …)]` — left
+//! the audit silently), and required the literal `content: String`. Roughly
+//! twenty command-bearing files live elsewhere under `src/`
+//! (`unread_catch_up.rs`, `huddle/*.rs`, `archive/sync.rs`,
+//! `terminal_runtime.rs`, `builderlab.rs`), and each of those three narrowings
+//! was a way for a content-signing command to be exempt without anyone
+//! deciding it should be.
 //!
 //! Known limit of a textual scan: a command that hands its content to a
 //! private helper which signs (`archive_identity` → `archive_identity_core`)
@@ -35,6 +47,9 @@ const SIGNING_NEEDLES: &[&str] = &[
 ];
 
 const GATE_CALL: &str = "perch_sign_gate(";
+
+/// Prefix of the Tauri command attribute, with or without arguments.
+const COMMAND_ATTRIBUTE: &str = "#[tauri::command";
 
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
@@ -66,11 +81,15 @@ fn command_source_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// `(command name, source text from `#[tauri::command]` to the closing brace)`.
+/// `(command name, source text from `#[tauri::command…]` to the closing brace)`.
+///
+/// Matched on the attribute **prefix**, so a command carrying attribute
+/// arguments (`#[tauri::command(rename_all = "snake_case")]`) stays in the
+/// audit instead of dropping out of it unnoticed.
 fn command_bodies(src: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut idx = 0;
-    while let Some(pos) = src[idx..].find("#[tauri::command]") {
+    while let Some(pos) = src[idx..].find(COMMAND_ATTRIBUTE) {
         let start = idx + pos;
         let sig_start = src[start..].find("fn ").map(|p| start + p).unwrap_or(start);
         let name_end = src[sig_start + 3..]
@@ -132,14 +151,54 @@ fn collect_struct_bodies(src: &str, out: &mut HashMap<String, String>) {
     }
 }
 
-/// True when `text` declares a `content: String` field or parameter (not a
-/// `content: String::new()` struct-literal member).
+/// The type spelling that follows a `content:` binding, whitespace and
+/// lifetimes removed, cut at the first `,`/`)`/`}`/newline. `content: String`
+/// yields `String`; the struct-literal member `content: String::new()` yields
+/// `String::new(`, which matches no declared type.
+fn normalized_content_type(rest: &str) -> String {
+    let end = rest.find([',', ')', '}', '\n']).unwrap_or(rest.len());
+    let mut out = String::new();
+    let mut chars = rest[..end].chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            // Drop a lifetime token so `&'a str` normalizes to `&str`.
+            while chars
+                .peek()
+                .is_some_and(|n| n.is_ascii_alphanumeric() || *n == '_')
+            {
+                chars.next();
+            }
+            continue;
+        }
+        if !c.is_whitespace() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Parameter and field types that carry renderer-supplied text. `String` alone
+/// missed `Option<String>` and the borrowed forms, so a command taking either
+/// signed renderer content outside the audit.
+const CONTENT_TYPES: &[&str] = &[
+    "String",
+    "Option<String>",
+    "&String",
+    "&str",
+    "Option<&str>",
+    "Cow<str>",
+    "Option<Cow<str>>",
+];
+
+/// True when `text` declares a `content` field or parameter of a renderer-text
+/// type (not a `content: String::new()` struct-literal member).
 fn declares_content_string(text: &str) -> bool {
-    let needle = "content: String";
+    let needle = "content:";
     let mut idx = 0;
     while let Some(pos) = text[idx..].find(needle) {
         let after = idx + pos + needle.len();
-        if !text[after..].starts_with("::") {
+        let candidate = normalized_content_type(&text[after..]);
+        if CONTENT_TYPES.contains(&candidate.as_str()) {
             return true;
         }
         idx = after;
@@ -214,9 +273,11 @@ fn audit(files: &[(String, String)]) -> Audit {
     }
 }
 
+/// Every non-test `.rs` file in the crate, not just `src/commands/` —
+/// command-bearing modules live all over `src/`.
 fn read_command_files() -> Vec<(String, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let dir = root.join("src/commands");
+    let dir = root.join("src");
     command_source_files(&dir)
         .into_iter()
         .map(|path| {
@@ -239,7 +300,8 @@ fn every_content_signing_command_calls_the_gate() {
     } = audit(&read_command_files());
     assert!(
         audited.len() >= 7,
-        "baseline on 2026-09-03 was seven commands; found {}: {audited:?}",
+        "baseline on 2026-09-03 was seven commands, re-measured the same after \
+         the scan widened to all of `src/`; found {}: {audited:?}",
         audited.len()
     );
     assert!(
@@ -264,6 +326,86 @@ fn inventory_scan_catches_a_removed_gate_call() {
             .iter()
             .any(|v| v.ends_with("identity.rs::sign_event")),
         "a removed gate call in sign_event must trip the scan: {violations:?}"
+    );
+}
+
+/// The scan's reach, asserted rather than assumed. Twenty-six command-bearing
+/// files live outside `src/commands/` (`unread_catch_up.rs`, `huddle/*.rs`,
+/// `archive/sync.rs`, `terminal_runtime.rs`, `builderlab.rs`, …). A walk
+/// narrowed back to `commands/` would drop every one of them from the audit
+/// with nothing going red, which is how the scope defect got in.
+#[test]
+fn inventory_scan_reaches_beyond_the_commands_directory() {
+    let files = read_command_files();
+    let commands_outside = files
+        .iter()
+        .filter(|(rel, _)| !rel.starts_with("src/commands/"))
+        .filter(|(_, src)| !command_bodies(src).is_empty())
+        .count();
+    assert!(
+        commands_outside >= 20,
+        "the scan must cover the whole crate, not just src/commands/; only \
+         {commands_outside} command-bearing files were found outside it"
+    );
+}
+
+/// The three widenings, each proved on synthetic source: a command outside
+/// `src/commands/`, an attribute carrying arguments, and the `content` shapes
+/// beyond a bare `String`. Each was previously a silent exemption — a command
+/// with any of these shapes signed renderer content outside the audit.
+#[test]
+fn inventory_scan_covers_widened_command_shapes() {
+    fn file(rel: &str, attribute: &str, name: &str, content_type: &str) -> (String, String) {
+        (
+            rel.to_string(),
+            format!(
+                "{attribute}\npub async fn {name}(content: {content_type}, state: State<'_, AppState>) -> Result<(), String> {{\n    let _keys = state.signing_keys()?;\n    Ok(())\n}}\n"
+            ),
+        )
+    }
+
+    let files = vec![
+        // Outside `src/commands/`, where roughly twenty command files live.
+        file(
+            "src/huddle/commands.rs",
+            "#[tauri::command]",
+            "post_from_huddle",
+            "String",
+        ),
+        // The attribute carries arguments.
+        file(
+            "src/commands/renamed.rs",
+            "#[tauri::command(rename_all = \"snake_case\")]",
+            "post_renamed",
+            "String",
+        ),
+        // Content shapes the `content: String` literal missed.
+        file(
+            "src/commands/optional.rs",
+            "#[tauri::command]",
+            "post_optional",
+            "Option<String>",
+        ),
+        file(
+            "src/commands/borrowed.rs",
+            "#[tauri::command]",
+            "post_borrowed",
+            "&str",
+        ),
+    ];
+
+    let Audit {
+        audited,
+        violations,
+    } = audit(&files);
+    assert_eq!(
+        audited.len(),
+        4,
+        "every widened shape must be audited: {audited:?}"
+    );
+    assert_eq!(
+        violations, audited,
+        "none of them calls the gate, so all four are violations"
     );
 }
 
