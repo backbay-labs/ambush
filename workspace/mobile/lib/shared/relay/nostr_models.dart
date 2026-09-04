@@ -70,7 +70,6 @@ abstract final class EventKind {
     streamMessageDiff, // 40008
     systemMessage, // 40099
     canvas, // 40100 — channel canvas document
-    channelThreadSummary, // 39005 — relay-signed thread summaries
     approvalRequest, // 46010 — channel-scoped workflow/hold approval requests
     huddleStarted, // 48100 — visible huddle session row
     huddleParticipantJoined, // 48101 — huddle lifecycle metadata

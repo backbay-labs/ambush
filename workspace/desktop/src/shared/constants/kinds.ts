@@ -109,7 +109,6 @@ export const CHANNEL_EVENT_KINDS = [
   KIND_STREAM_MESSAGE_DIFF, // 40008 — message diffs
   KIND_SYSTEM_MESSAGE, // 40099 — system messages (join, leave, etc.)
   KIND_CANVAS, // 40100 — channel canvas document
-  KIND_CHANNEL_THREAD_SUMMARY, // 39005 — relay-signed thread summaries
   KIND_APPROVAL_REQUEST, // 46010 — channel-scoped workflow/hold approval requests
   KIND_HUDDLE_STARTED, // 48100 — visible huddle session card
   KIND_HUDDLE_PARTICIPANT_JOINED, // 48101 — huddle lifecycle overlay
