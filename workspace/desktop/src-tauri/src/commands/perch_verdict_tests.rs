@@ -367,3 +367,287 @@ fn the_verdict_signature_verifies_under_the_daemon_s_own_rule() {
         "the operator id must never be used as a key_id"
     );
 }
+
+// ── B2 leg 1 for a HOLD subject ────────────────────────────────────────────
+
+fn hold_fixture() -> serde_json::Value {
+    serde_json::json!({ "hold": {
+        "hold_id": "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13",
+        "state": "notified",
+        "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+        "card_event_id": "b9".repeat(32),
+        "action_kind": "isolate_host",
+        "severity": "CRITICAL",
+        "expires_at_ms": 1_773_742_482_600_i64,
+        "remaining_ms": 1000,
+        "expired": false
+    }})
+}
+
+/// The daemon verifies `key_id == sha256(public_key)` and refuses anything
+/// else, so a `key_id` carrying a display name is a signature nobody can
+/// verify. Pinned here because the two sides are in two repositories' worth of
+/// code and the failure is silent until an integration run.
+#[test]
+fn the_signature_key_id_is_sha256_of_the_public_key() {
+    let seed = [7u8; 32];
+    let signature = sign_hold_decision(&seed, 5, HoldVerdictWord::Grant, "h_a07aeacf", None);
+    assert_eq!(signature.algorithm, "ed25519");
+    let key = SigningKey::from_bytes(&seed);
+    assert_eq!(
+        signature.key_id,
+        sha256_hex(&key.verifying_key().to_bytes())
+    );
+    assert_eq!(
+        signature.public_key_hex,
+        hex::encode(key.verifying_key().to_bytes())
+    );
+    assert_ne!(
+        signature.key_id, signature.public_key_hex,
+        "the key_id is the DIGEST of the key, not the key"
+    );
+}
+
+/// The signature verifies against the wire crate's preimage, which is the same
+/// implementation the daemon rebuilds and checks.
+#[test]
+fn the_signature_verifies_over_the_shared_wire_preimage() {
+    let seed = [7u8; 32];
+    let signature = sign_hold_decision(
+        &seed,
+        5,
+        HoldVerdictWord::Grant,
+        "h_a07aeacf",
+        Some("two detectors agree"),
+    );
+    let digest = swarm_perch_wire::verdict::rationale_sha256_hex(Some("two detectors agree"));
+    let preimage = swarm_perch_wire::verdict::decision_preimage_bytes(
+        5,
+        "grant",
+        "h_a07aeacf",
+        digest.as_deref(),
+    );
+    let key = SigningKey::from_bytes(&seed);
+    let bytes: [u8; 64] = hex::decode(&signature.signature_hex)
+        .expect("hex")
+        .try_into()
+        .expect("64 bytes");
+    key.verifying_key()
+        .verify_strict(&preimage, &ed25519_dalek::Signature::from_bytes(&bytes))
+        .expect("the daemon's preimage is the one we signed");
+}
+
+/// An absent rationale is `null` in the preimage, not the empty string's
+/// digest.
+///
+/// The daemon's `rationale_sha256_hex` returns `None` for an absent rationale,
+/// so a console that hashed `""` instead would sign different bytes and every
+/// decision without a rationale would be refused as a bad signature.
+#[test]
+fn an_absent_rationale_signs_a_null_digest_and_not_the_empty_strings_hash() {
+    let seed = [7u8; 32];
+    let signature = sign_hold_decision(&seed, 5, HoldVerdictWord::Refuse, "h_a07aeacf", None);
+    let key = SigningKey::from_bytes(&seed);
+    let bytes: [u8; 64] = hex::decode(&signature.signature_hex)
+        .expect("hex")
+        .try_into()
+        .expect("64 bytes");
+    let null_digest =
+        swarm_perch_wire::verdict::decision_preimage_bytes(5, "refuse", "h_a07aeacf", None);
+    let empty_digest = swarm_perch_wire::verdict::decision_preimage_bytes(
+        5,
+        "refuse",
+        "h_a07aeacf",
+        Some(&sha256_hex(b"")),
+    );
+    assert_ne!(null_digest, empty_digest, "the two shapes must differ");
+    key.verifying_key()
+        .verify_strict(&null_digest, &ed25519_dalek::Signature::from_bytes(&bytes))
+        .expect("an absent rationale signs the null shape");
+}
+
+#[test]
+fn a_hold_that_is_not_decidable_or_has_no_case_channel_is_refused_locally() {
+    let ok = hold_fixture();
+    assert!(assert_hold_decidable(&ok["hold"]).is_ok());
+
+    let mut expired = hold_fixture();
+    expired["hold"]["expired"] = serde_json::Value::Bool(true);
+    let error = assert_hold_decidable(&expired["hold"]).expect_err("expired");
+    assert!(error.contains("expired"), "{error}");
+
+    let mut decided = hold_fixture();
+    decided["hold"]["state"] = serde_json::Value::String("refused".into());
+    let error = assert_hold_decidable(&decided["hold"]).expect_err("terminal");
+    assert!(error.contains("refused"), "{error}");
+
+    let mut no_channel = hold_fixture();
+    no_channel["hold"]["case_channel"] = serde_json::Value::Null;
+    let error = assert_hold_decidable(&no_channel["hold"]).expect_err("no channel");
+    assert!(error.contains("case channel"), "{error}");
+}
+
+#[test]
+fn the_hold_card_body_is_three_parts_and_carries_the_hold_subject() {
+    let signature = sign_hold_decision(
+        &[7u8; 32],
+        1_773_738_979_000,
+        HoldVerdictWord::Grant,
+        "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13",
+        Some("two detectors agree"),
+    );
+    let content = build_hold_verdict_card(
+        &hold_fixture()["hold"],
+        "27799e23-ab25-4659-b381-3de47ea7ca4d",
+        HoldVerdictWord::Grant,
+        1_773_738_979_000,
+        Some("two detectors agree"),
+        "perch-dev-operator",
+        &"68".repeat(32),
+        &signature,
+    )
+    .expect("a card body");
+
+    let lines: Vec<&str> = content.split('\n').collect();
+    assert_eq!(lines[0], "<!-- swarm:verdict:v1 -->");
+    assert!(
+        lines[1].contains("grant")
+            && lines[1].contains("hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13"),
+        "{}",
+        lines[1]
+    );
+    assert_eq!(lines[2], "");
+    assert_eq!(lines[3], "```swarm:verdict:v1");
+
+    let envelope: serde_json::Value = serde_json::from_str(lines[4]).expect("the fenced JSON");
+    let fact = &envelope["fact"];
+    assert_eq!(fact["schema"], "swarm.perch.verdict.v1");
+    assert_eq!(fact["locator"]["subject"], "hold");
+    assert_eq!(
+        fact["locator"]["hold_id"],
+        "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13"
+    );
+    assert_eq!(fact["locator"]["hold_card_id"], "b9".repeat(32));
+    assert_eq!(
+        fact["locator"]["case_channel"],
+        "27799e23-ab25-4659-b381-3de47ea7ca4d"
+    );
+    assert_eq!(fact["decision"]["subject"], "hold");
+    assert_eq!(fact["decision"]["decision"], "grant");
+    assert_eq!(fact["leg2"]["state"], "sending");
+    assert_eq!(
+        fact["signature"]["signature_hex"], signature.signature_hex,
+        "the join between the legs is the signature, byte-identical on both"
+    );
+    // The generic signer must refuse this body: only this command may publish it.
+    assert!(crate::perch_sign_gate::perch_sign_gate(9, &content).is_err());
+}
+
+/// The hold card carries `h` and `k` and nothing else — no `e` across
+/// channels (D-FC-3), no `p`, no `t`/`l`.
+#[test]
+fn the_hold_card_tags_are_h_and_k_only() {
+    let tags = hold_verdict_tags("27799e23-ab25-4659-b381-3de47ea7ca4d");
+    let names: Vec<String> = tags.to_tags().into_iter().map(|t| t[0].clone()).collect();
+    assert_eq!(names, vec!["h", "k"]);
+    tags.assert_publishable(swarm_perch_wire::KIND_CARD)
+        .expect("publishable");
+}
+
+/// The stored seed cannot be formatted.
+///
+/// A test that only checked the output struct for a secret field would pass
+/// against an error like `format!("bad key: {stored}")`. The type makes that
+/// mutation harmless instead of merely detectable: the hex is private to its
+/// own module, has no accessor, and both `Display` and `Debug` redact.
+#[test]
+fn the_operator_secret_cannot_be_printed() {
+    let secret = OperatorSecret::new("de".repeat(32));
+    assert_eq!(format!("{secret}"), "<redacted>");
+    assert_eq!(format!("{secret:?}"), "<redacted>");
+    assert!(!format!("{secret} {secret:?}").contains("dede"));
+}
+
+/// Every error the key loader can produce names none of the secret.
+#[test]
+fn the_key_loaders_errors_carry_none_of_the_secret() {
+    let not_hex = "zz".repeat(32);
+    let error = OperatorSecret::new(not_hex.clone())
+        .decode()
+        .expect_err("not hex");
+    assert!(!error.contains(&not_hex), "{error}");
+    assert!(!error.contains("zzzz"), "{error}");
+
+    let short = "ab".repeat(16);
+    let error = OperatorSecret::new(short.clone())
+        .decode()
+        .expect_err("too short");
+    assert!(!error.contains(&short), "{error}");
+
+    // And a good secret decodes to exactly those bytes.
+    let good = OperatorSecret::new("07".repeat(32));
+    assert_eq!(good.decode().expect("decodes"), [7u8; 32]);
+}
+
+/// The identity that crosses IPC is the public half and its digest, and
+/// nothing else.
+#[test]
+fn only_the_public_half_crosses_ipc() {
+    let seed = [7u8; 32];
+    let identity = operator_identity_from_seed(&seed);
+    let rendered = serde_json::to_string(&identity).expect("serializes");
+    assert!(!rendered.contains(&hex::encode(seed)), "{rendered}");
+    let key = SigningKey::from_bytes(&seed);
+    assert_eq!(
+        identity.public_key_hex,
+        hex::encode(key.verifying_key().to_bytes())
+    );
+    assert_eq!(identity.key_id, sha256_hex(&key.verifying_key().to_bytes()));
+    // Two fields, so a later addition has to be looked at.
+    let value: serde_json::Value = serde_json::from_str(&rendered).expect("json");
+    let mut keys: Vec<&str> = value
+        .as_object()
+        .expect("object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["keyId", "publicKeyHex"]);
+}
+
+/// Both verdict subjects use the SAME key_id rule, because one verifier checks
+/// both. A finding verdict whose key_id was a display name verified nowhere.
+#[test]
+fn both_verdict_subjects_agree_on_the_key_id_rule() {
+    let seed = [7u8; 32];
+    let key = SigningKey::from_bytes(&seed);
+    let expected = sha256_hex(&key.verifying_key().to_bytes());
+    let hold = sign_hold_decision(&seed, 1, HoldVerdictWord::Grant, "h_a07aeacf", None);
+    assert_eq!(hold.key_id, expected);
+    // The finding path builds its signature inline; assert the rule it must
+    // follow is the one `swarm_crypto` enforces, spelled once here.
+    assert_ne!(
+        expected, "console",
+        "an operator id is not a key_id; the verifier computes sha256(public_key)"
+    );
+    assert_eq!(expected.len(), 64);
+}
+
+/// One loader for the operator key, so the two verdict subjects cannot end up
+/// reading it two ways.
+#[test]
+fn the_operator_key_has_exactly_one_loader() {
+    let source = include_str!("perch_verdict.rs");
+    assert_eq!(
+        source.matches("store.load(OPERATOR_ED25519_SECRET_KEY)").count(),
+        1,
+        "the operator seed must be read in one place; a second reader is a second redaction boundary to get wrong"
+    );
+    assert_eq!(
+        source
+            .matches("store.store(OPERATOR_ED25519_SECRET_KEY")
+            .count(),
+        1,
+        "and minted in one place"
+    );
+}

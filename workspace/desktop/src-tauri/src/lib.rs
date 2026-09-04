@@ -896,6 +896,8 @@ pub fn run() {
             perch_finding_feedback,
             perch_mint_incident,
             perch_record_verdict,
+            perch_record_hold_verdict,
+            perch_operator_identity,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

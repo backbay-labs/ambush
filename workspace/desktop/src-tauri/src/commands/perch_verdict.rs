@@ -49,6 +49,9 @@ const _: () = assert!(PERCH_RELAY_PUBLISHED_KINDS.len() == 1);
 const _: () = assert!(PERCH_RELAY_PUBLISHED_KINDS[0] == KIND_CARD as u32);
 
 const OPERATOR_ED25519_SECRET_KEY: &str = "perch.operator_ed25519";
+/// The daemon read leg 1 builds a hold verdict from. A GET, so it is not on
+/// the INV-01 write table.
+const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
 const CASE_INCIDENT_PREFIX: &str = "incident:perch-case:";
 const FINDING_FACT_SCHEMA: &str = "swarm.perch.finding.v1";
 const VERDICT_FACT_SCHEMA: &str = "swarm.perch.verdict.v1";
@@ -192,24 +195,11 @@ fn iso_seconds(ms: i64) -> String {
 
 /// Load the operator's Ed25519 key, minting it on first use.
 ///
-/// The secret lives in the same keyring blob as the chat identity and is
-/// destroyed by the same sign-out path. It never leaves this process.
+/// Delegates to [`operator_seed`] so there is ONE loader, one mint path and one
+/// redaction boundary for this secret. Two loaders for one key is how the two
+/// drift and how one of them ends up printing what the other protects.
 fn operator_signing_key() -> Result<SigningKey, String> {
-    let store = crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
-    if let Some(stored) = store.load(OPERATOR_ED25519_SECRET_KEY)? {
-        let bytes = hex::decode(stored.trim())
-            .map_err(|e| format!("the stored operator key is not hex: {e}"))?;
-        let secret: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| "the stored operator key is not 32 bytes".to_string())?;
-        return Ok(SigningKey::from_bytes(&secret));
-    }
-    let mut secret = [0u8; 32];
-    getrandom::getrandom(&mut secret).map_err(|e| format!("entropy source: {e}"))?;
-    let key = SigningKey::from_bytes(&secret);
-    store.store(OPERATOR_ED25519_SECRET_KEY, &hex::encode(secret))?;
-    tracing::info!("perch: minted the operator Ed25519 key");
-    Ok(key)
+    Ok(SigningKey::from_bytes(&operator_seed()?))
 }
 
 // ===========================================================================
@@ -449,7 +439,17 @@ pub async fn perch_record_verdict(
     if preimage.is_empty() {
         return Err("could not canonicalize the verdict preimage".to_string());
     }
-    let signature = sign_verdict(&key, &preimage);
+    let signature = DetachedSignature {
+        algorithm: "ed25519".to_string(),
+        // sha256(public_key), NOT the operator's display name.
+        // `swarm_crypto::verify_detached_signature` refuses any other key_id,
+        // so a name here is a signature nobody downstream can verify. The
+        // finding feedback route does not verify today, which is precisely why
+        // this was invisible until the hold route did.
+        key_id: sha256_hex(&key.verifying_key().to_bytes()),
+        public_key_hex: public_key_hex.clone(),
+        signature_hex: hex::encode(key.sign(&preimage).to_bytes()),
+    };
 
     let fact = serde_json::json!({
         "schema": VERDICT_FACT_SCHEMA,
@@ -549,6 +549,408 @@ pub async fn perch_record_verdict(
         decided_at_ms,
         signature,
         finding_id: finding.finding_id,
+    })
+}
+
+// ── B2 leg 1: a verdict on a HOLD ──────────────────────────────────────────
+
+/// The operator's stored Ed25519 seed, in a shape nothing can print.
+///
+/// The hex is private to this module and has no accessor: [`decode`] hands
+/// back the 32 bytes and the string never escapes. `Display` and `Debug` both
+/// redact, so the leak this guards against — an error that interpolates the
+/// stored value on its way across IPC into the webview — is not merely
+/// detectable but unrepresentable.
+///
+/// [`decode`]: OperatorSecret::decode
+mod operator_secret {
+    /// A stored Ed25519 seed. See the module doc.
+    pub struct OperatorSecret(String);
+
+    impl OperatorSecret {
+        /// Wrap a stored hex seed.
+        #[must_use]
+        pub fn new(hex: String) -> Self {
+            Self(hex)
+        }
+
+        /// The 32 raw bytes.
+        ///
+        /// # Errors
+        ///
+        /// When the stored value is not 32 bytes of hex. Neither error names
+        /// any part of the value.
+        pub fn decode(&self) -> Result<[u8; 32], String> {
+            let bytes = hex::decode(self.0.trim())
+                .map_err(|_| "the stored operator key is not hex".to_string())?;
+            bytes
+                .try_into()
+                .map_err(|_| "the stored operator key is not 32 bytes".to_string())
+        }
+    }
+
+    impl std::fmt::Display for OperatorSecret {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("<redacted>")
+        }
+    }
+
+    impl std::fmt::Debug for OperatorSecret {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("<redacted>")
+        }
+    }
+}
+
+pub use operator_secret::OperatorSecret;
+
+/// The operator's two words on a hold. Never `deny`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldVerdictWord {
+    /// Let the held action run.
+    Grant,
+    /// Refuse it.
+    Refuse,
+}
+
+impl HoldVerdictWord {
+    /// The wire word, which is also the one inside the signature preimage.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Grant => "grant",
+            Self::Refuse => "refuse",
+        }
+    }
+}
+
+/// What the renderer supplies for a hold verdict: an id, a word, and free text.
+///
+/// Every factual field in the card comes from the daemon's own record of the
+/// hold, fetched by id, so a compromised webview cannot forge what the verdict
+/// claims to be about.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordHoldVerdictInput {
+    /// The hold being decided.
+    pub hold_id: String,
+    /// Grant or refuse.
+    pub decision: HoldVerdictWord,
+    /// The operator's own words. Bound by its digest in the preimage.
+    pub rationale: Option<String>,
+}
+
+/// What leg 2 needs from leg 1, and nothing else.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordHoldVerdictOutput {
+    /// The published card's event id. Leg 2's idempotency key.
+    pub nostr_intent_event_id: String,
+    /// Stamped once here, and inside the preimage. Leg 2 forwards it verbatim.
+    pub decided_at_ms: i64,
+    /// The detached Ed25519 signature leg 2 sends back.
+    pub signature: DetachedSignature,
+    /// Read out of the daemon's record, never from the input.
+    pub hold_id: String,
+    /// The channel the card was published into.
+    pub case_channel: String,
+}
+
+/// The public half of the operator's verdict key, for the operator to paste
+/// into the daemon's principal entry as `verdict_public_key_hex`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorIdentityOutput {
+    /// 64 lowercase hex.
+    pub public_key_hex: String,
+    /// `sha256(public_key)`, which is what the daemon's verifier checks.
+    pub key_id: String,
+}
+
+/// Derive the public identity from a seed. Pure, so the IPC shape is testable
+/// without a keyring.
+#[must_use]
+fn operator_identity_from_seed(seed: &[u8; 32]) -> OperatorIdentityOutput {
+    let public = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+    OperatorIdentityOutput {
+        public_key_hex: hex::encode(public),
+        key_id: sha256_hex(&public),
+    }
+}
+
+/// Load the operator's Ed25519 seed, minting one on first use.
+///
+/// The seed lives in the same keyring blob as the chat identity and is
+/// destroyed by the same sign-out path. It never leaves this process, and the
+/// stored value is wrapped so it cannot be printed on the way out.
+fn operator_seed() -> Result<[u8; 32], String> {
+    let store = crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
+    if let Some(stored) = store.load(OPERATOR_ED25519_SECRET_KEY)? {
+        return OperatorSecret::new(stored).decode();
+    }
+    let mut seed = [0u8; 32];
+    getrandom::getrandom(&mut seed).map_err(|e| format!("entropy source: {e}"))?;
+    store.store(OPERATOR_ED25519_SECRET_KEY, &hex::encode(seed))?;
+    tracing::info!("perch: minted the operator Ed25519 key");
+    Ok(seed)
+}
+
+/// Sign the four-member hold preimage.
+///
+/// `key_id` is `sha256(public_key)`, which is what
+/// `swarm_crypto::verify_detached_signature` checks: it refuses any other
+/// value, so a `key_id` carrying a display name would be a signature nobody
+/// could verify. The preimage comes from the shared wire crate rather than a
+/// local `json!`, because the daemon rebuilds it with that same function and
+/// two hand-written copies of one canonical form is the drift the shared crate
+/// exists to prevent.
+fn sign_hold_decision(
+    seed: &[u8; 32],
+    decided_at_ms: i64,
+    decision: HoldVerdictWord,
+    hold_id: &str,
+    rationale: Option<&str>,
+) -> DetachedSignature {
+    let key = SigningKey::from_bytes(seed);
+    let digest = swarm_perch_wire::verdict::rationale_sha256_hex(rationale);
+    let preimage = swarm_perch_wire::verdict::decision_preimage_bytes(
+        decided_at_ms,
+        decision.as_str(),
+        hold_id,
+        digest.as_deref(),
+    );
+    let public = key.verifying_key().to_bytes();
+    DetachedSignature {
+        algorithm: "ed25519".to_string(),
+        key_id: sha256_hex(&public),
+        public_key_hex: hex::encode(public),
+        signature_hex: hex::encode(key.sign(&preimage).to_bytes()),
+    }
+}
+
+/// Refuse locally what the daemon would refuse anyway, and say why.
+///
+/// A card published for a hold the daemon will not decide is an intent record
+/// with no possible outcome, and the operator learns nothing from a 409 they
+/// could have been told about before they pressed anything.
+fn assert_hold_decidable(hold: &serde_json::Value) -> Result<(String, String), String> {
+    if hold["expired"].as_bool().unwrap_or(true) {
+        return Err(
+            "this hold has expired; the daemon will refuse it and no card is published".to_string(),
+        );
+    }
+    match hold["state"].as_str().unwrap_or_default() {
+        "created" | "notified" | "armed" => {}
+        state => return Err(format!("this hold is `{state}` and cannot be decided")),
+    }
+    let case_channel = hold["case_channel"]
+        .as_str()
+        .filter(|channel| !channel.is_empty())
+        .ok_or_else(|| {
+            "this hold has no case channel yet; the bridge has not filed it, so there is nowhere \
+             to publish the intent card"
+                .to_string()
+        })?;
+    let hold_id = hold["hold_id"]
+        .as_str()
+        .ok_or_else(|| "the hold record carries no hold_id".to_string())?;
+    Ok((hold_id.to_string(), case_channel.to_string()))
+}
+
+/// `h` and `k` and nothing else.
+///
+/// No `e`: the hold card lives in the case channel and an `e` tag across
+/// channels would make the relay's thread resolver mutate another channel's
+/// reply counts (D-FC-3). No `p`: a card may not mention. No `t`/`l`: the
+/// threat class and severity belong to the hold, not to the human's decision.
+fn hold_verdict_tags(case_channel: &str) -> TagSet {
+    TagSet::card(CardKind::Verdict, case_channel.to_string(), None, None)
+}
+
+/// Build the three-part leg-1 body for a hold subject.
+///
+/// # Errors
+///
+/// When the envelope or the card grammar refuses the assembled parts.
+#[allow(clippy::too_many_arguments)]
+fn build_hold_verdict_card(
+    hold: &serde_json::Value,
+    case_channel: &str,
+    decision: HoldVerdictWord,
+    decided_at_ms: i64,
+    rationale: Option<&str>,
+    operator_id: &str,
+    nostr_pubkey: &str,
+    signature: &DetachedSignature,
+) -> Result<String, String> {
+    let hold_id = hold["hold_id"].as_str().unwrap_or_default();
+    let action_kind = hold["action_kind"].as_str().unwrap_or_default();
+    let fact = serde_json::json!({
+        "schema": VERDICT_FACT_SCHEMA,
+        "issuer": {
+            "swarm_agent_id": operator_id,
+            "role": serde_json::Value::Null,
+            "nostr_pubkey": nostr_pubkey,
+        },
+        "emitted_at_ms": decided_at_ms,
+        "locator": {
+            "subject": "hold",
+            "hold_id": hold_id,
+            "case_channel": case_channel,
+            "hold_card_id": hold["card_event_id"],
+        },
+        "decision": {
+            "subject": "hold",
+            "decision": decision.as_str(),
+            "hold_id": hold_id,
+            "decided_at_ms": decided_at_ms,
+            "operator_id": operator_id,
+            "rationale_sha256": swarm_perch_wire::verdict::rationale_sha256_hex(rationale),
+            "rationale": rationale,
+        },
+        "signature": signature,
+        "leg2": {
+            "state": "sending",
+            "receipt_id": serde_json::Value::Null,
+            "refusal_check": serde_json::Value::Null,
+            "superseded_by": serde_json::Value::Null,
+            "superseded_at_ms": serde_json::Value::Null,
+        },
+    });
+    let envelope = swarm_perch_wire::envelope::CardEnvelope::seal_unsigned(
+        CardKind::Verdict,
+        &format!("swarm:ed25519:{}", signature.public_key_hex),
+        1,
+        None,
+        iso_seconds(decided_at_ms),
+        fact,
+    )
+    .map_err(|e| format!("verdict envelope: {e}"))?;
+    let human = format!(
+        "{} · hold {hold_id} · {action_kind} · by {operator_id} · {}",
+        decision.as_str(),
+        iso_seconds(decided_at_ms)
+    );
+    let body = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
+    build_content(CardKind::Verdict, &human, &body).map_err(|e| format!("verdict card: {e}"))
+}
+
+/// The public half of this console's verdict key, minting it on first use.
+///
+/// The operator pastes `publicKeyHex` into the daemon's principal entry as
+/// `verdict_public_key_hex`; until they do, every decision this console submits
+/// is refused, which is the fail-closed direction.
+///
+/// # Errors
+///
+/// When the keyring is unreadable or holds a corrupt key.
+#[tauri::command]
+pub async fn perch_operator_identity(
+    _state: State<'_, AppState>,
+) -> Result<OperatorIdentityOutput, String> {
+    Ok(operator_identity_from_seed(&operator_seed()?))
+}
+
+/// LEG 1 of a hold decision: publish the operator's signed intent as a
+/// `swarm:verdict:v1` card, and return what leg 2 needs.
+///
+/// The renderer supplies a hold id, a word and free text. Every factual field
+/// in the card comes from the daemon's own record of that hold, fetched here by
+/// id, so a compromised webview cannot forge what the verdict claims to be
+/// about. A successful return means an intent record exists and the world has
+/// not changed; leg 2 is a separate command.
+///
+/// The clock is stamped ONCE, here, and it is inside the signature. Leg 2
+/// forwards it verbatim rather than restating it.
+///
+/// # Errors
+///
+/// When the hold id is malformed, when the daemon is unreachable or has no such
+/// hold, when the hold is not decidable, when the operator or chat identity is
+/// unavailable, or when the relay refuses the event.
+#[tauri::command]
+pub async fn perch_record_hold_verdict(
+    input: RecordHoldVerdictInput,
+    state: State<'_, AppState>,
+) -> Result<RecordHoldVerdictOutput, String> {
+    if !swarm_perch_wire::tags::is_opaque_hold_id(&input.hold_id) {
+        return Err("holdId must match ^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$".to_string());
+    }
+    let detail = crate::perch::daemon_client::perch_daemon_get(
+        &state,
+        &crate::perch::daemon_client::route(ROUTE_GET_HOLD, &[("hold_id", &input.hold_id)])?,
+    )
+    .await?;
+    if detail.status != 200 {
+        return Err(format!(
+            "daemon answered {}: {}",
+            detail.status,
+            detail.body["message"].as_str().unwrap_or_default()
+        ));
+    }
+    let hold = &detail.body["hold"];
+    let (hold_id, case_channel) = assert_hold_decidable(hold)?;
+
+    let decided_at_ms = now_ms();
+    let operator = operator_id()?;
+    let seed = operator_seed()?;
+    let signature = sign_hold_decision(
+        &seed,
+        decided_at_ms,
+        input.decision,
+        &hold_id,
+        input.rationale.as_deref(),
+    );
+    let keys = state.signing_keys()?;
+    let content = build_hold_verdict_card(
+        hold,
+        &case_channel,
+        input.decision,
+        decided_at_ms,
+        input.rationale.as_deref(),
+        &operator,
+        &keys.public_key().to_hex(),
+        &signature,
+    )?;
+    let published_marker = format!("<!-- {} -->", PERCH_RELAY_PUBLISHED_MARKERS[0]);
+    if content.lines().next() != Some(published_marker.as_str()) {
+        return Err("the verdict card does not carry the one published marker".to_string());
+    }
+
+    let tags = hold_verdict_tags(&case_channel);
+    tags.assert_publishable(KIND_CARD)
+        .map_err(|e| format!("verdict tags: {e}"))?;
+    let nostr_tags: Vec<nostr::Tag> = tags
+        .to_tags()
+        .into_iter()
+        .map(nostr::Tag::parse)
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("verdict tags: {e}"))?;
+    let event = nostr::EventBuilder::new(nostr::Kind::Custom(KIND_CARD), content)
+        .tags(nostr_tags)
+        .sign_with_keys(&keys)
+        .map_err(|e| format!("signing the verdict card: {e}"))?;
+    let submitted = crate::relay::submit_signed_event_at_with_keys(
+        &event,
+        &state,
+        &crate::relay::relay_api_base_url_with_override(&state),
+        &keys,
+    )
+    .await?;
+    if !submitted.accepted {
+        return Err(format!(
+            "relay refused the verdict card: {}",
+            submitted.message
+        ));
+    }
+
+    Ok(RecordHoldVerdictOutput {
+        nostr_intent_event_id: event.id.to_hex(),
+        decided_at_ms,
+        signature,
+        hold_id,
+        case_channel,
     })
 }
 
