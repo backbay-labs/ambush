@@ -254,6 +254,22 @@ jobs:
       - name: Check Perch chart tokens
         run: bash tools/check-perch-chart-tokens.sh
 
+      # Fourteen is a decision, not a count that happened. The cost of a
+      # surface is not its code; it is the place a person has to remember to
+      # look during an incident. Surfaces arrive one reasonable addition at a
+      # time, each defensible on its own, so the number is written down and
+      # changing it means editing the manifest in the same commit.
+      - name: Check the Perch surface count is exactly fourteen
+        run: bash tools/check-perch-surface-count.sh
+
+      # An OS notification is rendered by the operating system: outside this
+      # app's markup, outside its escaping, and on a lock screen. A detector's
+      # command_line in a notification body is a remote-controlled string on
+      # the operator's screen, and no care in the renderer prevents it because
+      # the renderer is not involved. Four wake classes; findings never page.
+      - name: Check the Perch notification bodies interpolate only typed fields
+        run: bash tools/check-perch-notification-fields.sh
+
       # INV-01. "Perch never authorizes" is a claim about a SET: the non-GET
       # requests the console process can issue to a daemon host. A claim about
       # a set is only true if the set is enumerable, so the console has one

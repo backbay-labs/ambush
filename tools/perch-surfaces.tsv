@@ -1,0 +1,25 @@
+# tools/perch-surfaces.tsv -- the fourteen surfaces of APPENDIX-NORMATIVE.md §1 (ADR 0011 clause 1).
+#
+# Read by tools/check-perch-surface-count.sh, which asserts EXACTLY fourteen
+# rows, that every routed row s path is declared in
+# workspace/desktop/src/app/routes.ts, and that every row s component file
+# exists. Fourteen is a decision: a console with a fifteenth surface has one
+# an operator was never told about, and the cost of a surface is not the code
+# but the place a person has to remember to look.
+#
+# A route of `-` means the surface is reached from inside another one.
+id	surface	route	component
+S1	The Watch	/	workspace/desktop/src/features/perch-watch/ui/WatchScreen.tsx
+S2	Verdict Row	-	workspace/desktop/src/features/perch-watch/ui/VerdictPane.tsx
+S3	Case	/cases/$caseId	workspace/desktop/src/features/perch-evidence/ui/CaseScreen.tsx
+S4	Case Canvas	-	workspace/desktop/src/features/perch-evidence/ui/CaseCanvasTab.tsx
+S5	Lanes	/lanes/$laneId	workspace/desktop/src/features/perch-evidence/ui/LaneScreen.tsx
+S6	Containments	/leases	workspace/desktop/src/features/perch-containment/ui/ContainmentBoard.tsx
+S7	Policy	/policy	workspace/desktop/src/features/perch-policy/ui/PolicyScreen.tsx
+S8	Watchfloor	/watch-floor	workspace/desktop/src/features/perch-policy/ui/WatchfloorScreen.tsx
+S9	Ledger	/ledger	workspace/desktop/src/features/perch-shift/ui/LedgerScreen.tsx
+S10	Tuning bench	/tuning	workspace/desktop/src/features/perch-policy/ui/TuningScreen.tsx
+S11	Handoff	/handoff	workspace/desktop/src/features/perch-shift/ui/HandoffScreen.tsx
+S12	Gaps	/gaps	workspace/desktop/src/features/perch-policy/ui/GapsScreen.tsx
+S13	swarmctl terminal	-	workspace/desktop/src/features/terminal/terminalCaseScope.ts
+S14	Governance strip	-	workspace/desktop/src/features/perch/ui/GovernanceStrip.tsx
