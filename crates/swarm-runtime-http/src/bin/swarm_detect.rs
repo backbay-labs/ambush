@@ -1028,7 +1028,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::new(state.current_substrate()),
         )
         .with_shared_mode_state(Arc::clone(&mode_state))
-        .with_runtime_events(runtime_events);
+        .with_runtime_events(runtime_events.clone());
         let mut monitor_handle = Some(tokio::spawn(async move {
             concentration_monitor
                 .run_until_shutdown(CONCENTRATION_MONITOR_INTERVAL_MS, monitor_shutdown)
@@ -1102,6 +1102,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::spawn(async move {
                 sweep.run_until_shutdown(interval_ms, sweep_shutdown).await;
             })
+        });
+        // B1's TTL and stall sweep, beside the containment one and for the same
+        // reason: without it an expired hold is a row nobody retires and a
+        // decision that stalled is a hold parked in `deciding` forever, which no
+        // operator and no retry can move.
+        let mut hold_sweep_handle = Some({
+            let sweep = swarm_runtime::hold_sweep::HoldSweep::new(
+                Arc::clone(&hold_store),
+                Some(runtime_events.clone()),
+                hold_settings.decide_stall_ms,
+            );
+            let sweep_shutdown = shutdown_rx.clone();
+            let interval_ms = hold_settings.sweep_interval_ms;
+            tracing::info!(
+                module = module_path!(),
+                interval_ms,
+                hold_ttl_ms = hold_settings.hold_ttl_ms,
+                decide_stall_ms = hold_settings.decide_stall_ms,
+                durable = hold_settings.hold_store_path.is_some(),
+                "hold sweep started"
+            );
+            tokio::spawn(async move { sweep.run_until_shutdown(interval_ms, sweep_shutdown).await })
         });
         // The perch bridge: the daemon's only writer of daemon-sourced facts to the relay.
         // A misconfigured bridge must not silently ship a daemon that publishes nothing, so
@@ -1261,6 +1283,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(handle) = containment_sweep_handle.take() {
                     await_background_task("containment_sweep", handle).await;
                 }
+                if let Some(handle) = hold_sweep_handle.take() {
+                    await_background_task("hold_sweep", handle).await;
+                }
                 if let Some(handle) = perch_bridge_handle.take() {
                     await_background_task("perch_bridge", handle).await;
                 }
@@ -1321,6 +1346,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = containment_sweep_handle.take() {
                     await_background_task("containment_sweep", handle).await;
+                }
+                if let Some(handle) = hold_sweep_handle.take() {
+                    await_background_task("hold_sweep", handle).await;
                 }
                 if let Some(handle) = perch_bridge_handle.take() {
                     await_background_task("perch_bridge", handle).await;
