@@ -122,6 +122,17 @@ pub struct ResponseReceiptAudit {
     pub policy: Option<ResponsePolicyAudit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub governance: Option<ResponseGovernanceAudit>,
+    /// The human who granted a held action (B2o). `None` on the autonomous
+    /// path, and ABSENT from the serialized form there, so "a machine decided
+    /// this" and "a human decided this and the details were lost" cannot look
+    /// alike to a reader of the chain.
+    ///
+    /// Boxed: an `OperatorApproval` is roughly 250 bytes of strings, it is
+    /// `None` on every autonomous receipt, and `AuditResponseRecord` pays for
+    /// its largest variant on every clone of every audit trail. `Box` is
+    /// transparent to serde, so the wire form is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_by: Option<Box<swarm_core::types::OperatorApproval>>,
 }
 
 /// Policy attribution captured on a successful response receipt.
@@ -219,6 +230,14 @@ impl ResponseStatus {
 }
 
 impl ResponseReceipt {
+    /// Attach the operator who granted the hold. Mirrors `with_policy_audit`.
+    ///
+    /// Takes the approval unboxed: the boxing is storage, not contract.
+    pub fn with_operator_approval(mut self, approval: swarm_core::types::OperatorApproval) -> Self {
+        self.audit.approved_by = Some(Box::new(approval));
+        self
+    }
+
     pub fn with_policy_audit(
         mut self,
         verdict: PolicyVerdict,
@@ -272,4 +291,77 @@ pub trait ResponseExecutor: Send + Sync {
         lease: &CapabilityLease,
         mode: ExecutionMode,
     ) -> Result<ResponseReceipt, ResponseError>;
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::{ExecutionMode, ResponseReceipt, ResponseReceiptAudit, ResponseStatus};
+
+    #[test]
+    fn a_receipt_carries_who_approved_it_and_serializes_the_field() {
+        let receipt = ResponseReceipt {
+            receipt_id: "r-1".into(),
+            action: "isolate_host".into(),
+            mode: ExecutionMode::Enforced,
+            status: ResponseStatus::Executed,
+            summary: "isolated".into(),
+            details: serde_json::json!({}),
+            audit: ResponseReceiptAudit::default(),
+        }
+        .with_operator_approval(swarm_core::types::OperatorApproval {
+            operator_id: "perch-dev-operator".into(),
+            voter_id: format!("swarm:ed25519:{}", "ab".repeat(32)),
+            hold_id: "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13".into(),
+            decided_at_ms: 1,
+            signature: swarm_crypto::DetachedSignature {
+                algorithm: "ed25519".into(),
+                key_id: "k".into(),
+                public_key_hex: "ab".repeat(32),
+                signature_hex: "cd".repeat(64),
+            },
+            rationale: Some("two detectors agree".into()),
+            rationale_sha256: Some("ef".repeat(32)),
+            nostr_intent_event_id: Some("01".repeat(32)),
+        });
+        let value = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(
+            value["audit"]["approved_by"]["operator_id"],
+            "perch-dev-operator"
+        );
+        assert_eq!(
+            value["audit"]["approved_by"]["voter_id"],
+            format!("swarm:ed25519:{}", "ab".repeat(32))
+        );
+        assert_eq!(
+            value["audit"]["approved_by"]["hold_id"],
+            "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13"
+        );
+        let back: ResponseReceipt = serde_json::from_value(value).unwrap();
+        assert!(back.audit.approved_by.is_some());
+        // A receipt written before B2o still deserializes.
+        let legacy: ResponseReceiptAudit = serde_json::from_str(r#"{"policy":null}"#).unwrap();
+        assert!(legacy.approved_by.is_none());
+    }
+
+    /// The autonomous path leaves the field absent rather than writing an empty
+    /// object: "a machine decided this" and "a human decided this and we lost
+    /// the details" must not serialize the same way.
+    #[test]
+    fn an_unapproved_receipt_omits_the_field_entirely() {
+        let receipt = ResponseReceipt {
+            receipt_id: "r-2".into(),
+            action: "isolate_host".into(),
+            mode: ExecutionMode::Enforced,
+            status: ResponseStatus::Executed,
+            summary: "isolated".into(),
+            details: serde_json::json!({}),
+            audit: ResponseReceiptAudit::default(),
+        };
+        let value = serde_json::to_value(&receipt).unwrap();
+        assert!(
+            value["audit"].get("approved_by").is_none(),
+            "an autonomous receipt must not carry an approved_by key at all"
+        );
+    }
 }

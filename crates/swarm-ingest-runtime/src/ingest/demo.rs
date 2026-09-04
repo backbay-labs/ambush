@@ -726,6 +726,8 @@ pub async fn run_first_run_wizard(
             &pending.detection,
             &pending.request,
             &context,
+            // B2o: the demo lane has no operator signature to attach.
+            None,
         )
         .await
         .map_err(|error| FirstRunWizardError::ReplayFailed {
@@ -1370,6 +1372,8 @@ pub(crate) async fn demo_approval_resume_handler(
             &pending.detection,
             &pending.request,
             &context,
+            // B2o: the demo lane has no operator signature to attach.
+            None,
         )
         .await
     {
