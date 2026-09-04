@@ -6,6 +6,7 @@
 //! incident store the platform status route reads, so a measurement written
 //! through these routes is visible to the tuning report by construction.
 
+pub mod deposits;
 pub mod feedback;
 pub mod holds;
 pub mod mint;
