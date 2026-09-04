@@ -153,6 +153,10 @@ export type PerchMockFixture = {
    * message-carrying variant, for a daemon that answered with its own words.
    */
   daemonError?: string | null;
+  /** The containment leases `perch_list_containments` reports. */
+  containments?: readonly Record<string, unknown>[];
+  /** The body `perch_release_containment` answers with. */
+  release?: Record<string, unknown> | null;
   /** The leg-2 outcome `perch_decide_hold` answers with. */
   decide?: MockDecideOutcome | null;
   /** Hold leg 2 open this long, so `sending` is observable as its own state. */
@@ -216,6 +220,8 @@ type MockState = {
   holds: MockPerchHold[];
   openCount: number | null;
   daemonError: string | null;
+  containments: Record<string, unknown>[];
+  release: Record<string, unknown> | null;
   decide: MockDecideOutcome | null;
   decideDelayMs: number;
   legOneError: string | null;
@@ -248,6 +254,8 @@ function defaults(): MockState {
     holds: [],
     openCount: null,
     daemonError: null,
+    containments: [],
+    release: null,
     decide: null,
     decideDelayMs: 0,
     legOneError: null,
@@ -325,6 +333,10 @@ function applyFixture(target: MockState, fixture: PerchMockFixture): void {
   if (fixture.daemonError !== undefined) {
     target.daemonError = fixture.daemonError;
   }
+  if (fixture.containments) {
+    target.containments = fixture.containments.map((lease) => ({ ...lease }));
+  }
+  if (fixture.release !== undefined) target.release = fixture.release;
   if (fixture.decide !== undefined) target.decide = fixture.decide;
   if (fixture.decideDelayMs !== undefined) {
     target.decideDelayMs = fixture.decideDelayMs;
@@ -461,6 +473,8 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_record_hold_verdict",
   "perch_decide_hold",
   "perch_publish_verdict_update",
+  "perch_list_containments",
+  "perch_release_containment",
 ]);
 
 /**
@@ -821,6 +835,27 @@ export function handlePerchMockCommand(
     case "perch_publish_verdict_update":
       s.log.push(command);
       return publishVerdictUpdate(payload);
+    case "perch_list_containments":
+      s.log.push(command);
+      return {
+        schema_version: 1,
+        observed_at_ms: Date.now(),
+        leases: s.containments.map((lease) => ({ ...lease })),
+      };
+    case "perch_release_containment":
+      s.log.push(command);
+      // The default is a release whose inverse worked. A spec that wants the
+      // 200-with-`lease_closed: false` case seeds it, because that outcome is
+      // the one the board must never render as success.
+      return (
+        s.release ?? {
+          lease_closed: true,
+          fully_reversed: true,
+          attestation_verified: true,
+          attestation_error: null,
+          steps: [],
+        }
+      );
     case "perch_record_verdict":
       s.log.push(command);
       return after(s.verdictDelayMs, () => recordVerdict(payload));

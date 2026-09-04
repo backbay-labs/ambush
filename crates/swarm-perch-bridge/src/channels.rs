@@ -482,11 +482,7 @@ impl CaseRouting {
     /// [`BridgeError::SpoolIo`] when the sidecar write fails. The caller must
     /// treat that as a publish failure: an unrecorded card id is the one that
     /// produces a duplicate on restart.
-    pub fn record_lease_card(
-        &mut self,
-        lease_id: &str,
-        event_id: &str,
-    ) -> Result<(), BridgeError> {
+    pub fn record_lease_card(&mut self, lease_id: &str, event_id: &str) -> Result<(), BridgeError> {
         if self.state.lease_cards.contains_key(lease_id) {
             return Ok(());
         }

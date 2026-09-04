@@ -17,7 +17,9 @@ use tauri::State;
 
 use crate::app_state::AppState;
 use crate::commands::perch_verdict::DetachedSignature;
-use crate::perch::daemon_client::{perch_daemon_get, perch_daemon_post, route, DaemonResponse};
+use crate::perch::daemon_client::{
+    daemon_response_error, perch_daemon_get, perch_daemon_post, route, DaemonResponse,
+};
 
 const ROUTE_FINDING_FEEDBACK: &str = "/v1/operator/findings/{finding_id}/feedback";
 const ROUTE_MINT_INCIDENT: &str = "/v1/operator/incidents";
@@ -26,6 +28,7 @@ const ROUTE_DECIDE_HOLD: &str = "/v1/response/holds/{hold_id}/decide";
 /// The re-read a 409 resolves through. A GET, deliberately not on the write
 /// table (00-DECISIONS W3-17).
 const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
+const ROUTE_RELEASE_CONTAINMENT: &str = "/v1/operator/containment/leases/{lease_id}/release";
 
 /// Leg 2 of a finding verdict (B3): tell the daemon what the operator decided,
 /// naming the leg-1 card that carries the signed intent.
@@ -475,3 +478,33 @@ pub async fn perch_decide_hold(
 #[cfg(test)]
 #[path = "perch_writes_tests.rs"]
 mod tests;
+
+/// `POST /v1/operator/containment/leases/{lease_id}/release` — ask the daemon
+/// to run a containment's inverse now rather than at its TTL.
+///
+/// The body is returned whole. The caller reads `lease_closed` from it and
+/// never the HTTP status: the daemon answers 200 for a release whose inverse
+/// FAILED, because the request was understood and carried out — the world
+/// simply did not change. A console that read the status would report a host
+/// as freed while it is still contained.
+///
+/// # Errors
+///
+/// When the lease id is malformed, when the daemon is unreachable, or when the
+/// daemon refuses the request itself.
+#[tauri::command]
+pub async fn perch_release_containment(
+    lease_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let r = perch_daemon_post(
+        &state,
+        &route(ROUTE_RELEASE_CONTAINMENT, &[("lease_id", &lease_id)])?,
+        serde_json::json!({}),
+    )
+    .await?;
+    if r.status != 200 {
+        return Err(daemon_response_error(&r));
+    }
+    Ok(r.body)
+}

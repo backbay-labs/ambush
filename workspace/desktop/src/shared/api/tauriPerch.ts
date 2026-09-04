@@ -133,6 +133,18 @@ export function perchAdmittedIssuers() {
   return invokeTauri<PerchAdmittedIssuers>("perch_admitted_issuers");
 }
 
+/**
+ * Every open containment lease the daemon still lists.
+ *
+ * A 503 comes back as a thrown error, not an empty array: "no containment
+ * lease store is configured" and "nothing is contained" are different facts,
+ * and a board that rendered them the same would tell an operator the world is
+ * clear when nothing is watching it.
+ */
+export function perchListContainments() {
+  return invokeTauri<unknown>("perch_list_containments");
+}
+
 /** The read commands, named once so the E2E bridge can assert it answers all
  *  of them. */
 export const PERCH_READ_COMMANDS = [
@@ -141,6 +153,7 @@ export const PERCH_READ_COMMANDS = [
   "perch_list_holds",
   "perch_get_hold",
   "perch_configure_daemon",
+  "perch_list_containments",
 ] as const;
 
 // ===========================================================================
@@ -231,11 +244,23 @@ export function perchMintIncident(input: PerchMintIncidentInput) {
   });
 }
 
+/**
+ * Ask the daemon to run a containment's inverse now rather than at its TTL.
+ *
+ * The caller reads `lease_closed` from the BODY and never the HTTP status. The
+ * daemon answers 200 for a release whose inverse failed, because the request
+ * was understood and carried out — the world simply did not change.
+ */
+export function perchReleaseContainment(leaseId: string) {
+  return invokeTauri<unknown>("perch_release_containment", { leaseId });
+}
+
 /** The daemon-bound write commands this milestone implements. */
 export const PERCH_DAEMON_WRITE_COMMANDS = [
   "perch_finding_feedback",
   "perch_mint_incident",
   "perch_decide_hold",
+  "perch_release_containment",
 ] as const;
 
 /**

@@ -19,6 +19,7 @@ const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
 /// on purpose: a queue that needs a second page is a queue whose depth alarm
 /// has long since fired, and `truncated` in the answer says so honestly.
 const HOLD_PAGE: usize = 200;
+const ROUTE_LIST_CONTAINMENTS: &str = "/v1/operator/containment/leases";
 
 /// The daemon's honest review window: findings it has already ruled on, so the
 /// console can show what its own verdicts did.
@@ -165,4 +166,34 @@ pub async fn perch_configure_daemon(
         crate::perch::daemon_client::PERCH_DAEMON_BEARER_KEY,
         credential,
     )
+}
+
+/// `GET /v1/operator/containment/leases` — every containment lease the daemon
+/// still lists as open.
+///
+/// A 503 is returned to the caller as a typed error rather than an empty list:
+/// "no containment lease store is configured" and "nothing is contained" are
+/// different facts, and a board that rendered them the same would tell an
+/// operator the world is clear when nothing is watching it.
+///
+/// # Errors
+///
+/// The daemon's own message when it answers anything but 200, and the
+/// transport error when it cannot be reached — both already redacted.
+#[tauri::command]
+pub async fn perch_list_containments(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let r = perch_daemon_get(
+        &state,
+        &DaemonRoute {
+            template: ROUTE_LIST_CONTAINMENTS,
+            path: ROUTE_LIST_CONTAINMENTS.to_string(),
+        },
+    )
+    .await?;
+    if r.status != 200 {
+        return Err(daemon_response_error(&r));
+    }
+    Ok(r.body)
 }

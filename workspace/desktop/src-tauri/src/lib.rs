@@ -894,6 +894,8 @@ pub fn run() {
             perch_admitted_issuers,
             perch_decide_hold,
             perch_list_holds,
+            perch_list_containments,
+            perch_release_containment,
             perch_get_hold,
             perch_configure_daemon,
             perch_finding_feedback,
