@@ -1197,6 +1197,77 @@ mod tests {
     }
 
     #[test]
+    fn the_alarm_frame_is_global_carries_p_only_and_exactly_the_ten_keys() {
+        let hold = isolate_host_hold();
+        let frame = hold_alarm_frame(
+            &hold,
+            case_channel(),
+            "swarm:ed25519:5fa3",
+            8,
+            1_773_738_882_610,
+        )
+        .unwrap();
+        let mut keys: Vec<&str> = frame
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "action_kind",
+                "case_channel",
+                "emitted_at_ms",
+                "expires_at_ms",
+                "hold_id",
+                "issuer",
+                "kind",
+                "schema",
+                "seq",
+                "severity"
+            ]
+        );
+        assert_eq!(frame["schema"], "swarm.perch.frame.hold_alarm.v1");
+        assert_eq!(frame["kind"], 26006);
+        assert_eq!(frame["issuer"], "swarm:ed25519:5fa3");
+        assert_eq!(frame["seq"], 8);
+        assert_eq!(frame["emitted_at_ms"], 1_773_738_882_610i64);
+        assert_eq!(frame["severity"], "CRITICAL");
+        assert_eq!(frame["action_kind"], "isolate_host");
+        assert_eq!(frame["case_channel"], CASE);
+        assert_eq!(frame["hold_id"], hold.hold_id);
+        // The narrowing this frame exists to enforce. `hunt_id` is the telemetry event id, a
+        // join key into detection data, and this is the widest-audience object in the registry.
+        assert!(
+            frame.get("hunt_id").is_none(),
+            "hunt_id never rides the global frame"
+        );
+        for banned in [
+            "hunt_id",
+            "host_id",
+            "action_request",
+            "rationale",
+            "evidence",
+            "detection",
+            "rehearsal",
+            "policy_decision",
+            "h",
+        ] {
+            assert!(
+                frame.get(banned).is_none(),
+                "{banned} must not ride a 26006"
+            );
+        }
+        // It decodes back into the typed frame, which is what the console parses.
+        let typed: swarm_perch_wire::Frame = serde_json::from_value(frame).unwrap();
+        assert_eq!(typed.frame_kind(), swarm_perch_wire::FrameKind::HoldAlarm);
+        assert!(!typed.frame_kind().sheddable(), "26006 is never shed");
+        assert_eq!(typed.frame_kind().stream(), swarm_perch_wire::Stream::Alarm);
+    }
+
+    #[test]
     fn rf_d1_the_notice_this_producer_builds_can_never_be_threaded() {
         // RF-D1 is producer-enforced and only producer-enforced. The relay ADMITS an e-tagged
         // 46010 and threads it -- `requires_h_channel_scope` also gates

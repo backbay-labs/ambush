@@ -391,7 +391,8 @@ impl PerchBridge {
             identities: Arc::clone(&identities),
             config: config.clone(),
             holds,
-            publisher: ConnectionSupervisor::new(config.relay_url.clone(), alarm_identity),
+            publisher: ConnectionSupervisor::new(config.relay_url.clone(), alarm_identity)
+                .with_alarm_burst(config.alarm_burst_per_min),
             metrics,
             shutdown: shutdown.clone(),
         })));

@@ -310,6 +310,13 @@ struct HoldCardLedger {
     /// The TERMINAL card's Nostr event id, once accepted. Exactly one per hold, ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     terminal: Option<String>,
+    /// Whether the `kind:26006` alarm for this hold reached the relay.
+    ///
+    /// Ephemeral events leave no trace to reconcile against, and the store's `notice_event_id`
+    /// answers a different question, so a deferred alarm would be indistinguishable from a sent
+    /// one and "deferred, never dropped" would be a claim rather than a property.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    alarm: bool,
 }
 
 impl CaseRouting {
@@ -489,6 +496,33 @@ impl CaseRouting {
         if !self.state.created_channels.insert(channel.to_string()) {
             return Ok(());
         }
+        self.persist()
+    }
+
+    /// Whether the `26006` alarm for this hold has reached the relay.
+    pub fn alarm_published_for_hold(&self, hold_id: &str) -> bool {
+        self.state
+            .hold_cards
+            .get(hold_id)
+            .is_some_and(|ledger| ledger.alarm)
+    }
+
+    /// Records the `26006` the relay accepted, so a deferred alarm is re-planned and a sent one
+    /// is not.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::SpoolIo`] when the sidecar write fails.
+    pub fn record_alarm_published(&mut self, hold_id: &str) -> Result<(), BridgeError> {
+        let entry = self
+            .state
+            .hold_cards
+            .entry(hold_id.to_string())
+            .or_default();
+        if entry.alarm {
+            return Ok(());
+        }
+        entry.alarm = true;
         self.persist()
     }
 

@@ -306,6 +306,12 @@ impl HoldPublisher {
                 hold_id: hold_id.clone(),
                 card_event_id: open_card,
             });
+        }
+        // Gated on the LEDGER, not on the notice: an alarm the burst cap deferred must be
+        // re-planned on a later tick, and the notice will by then be `Some`. An ephemeral event
+        // leaves nothing on the relay to reconcile against, so this entry is the only record
+        // that the frame went out.
+        if !self.routing.alarm_published_for_hold(&id) {
             steps.push(PublishStep::PublishAlarm {
                 hold_id: hold_id.clone(),
             });
@@ -559,7 +565,10 @@ impl HoldPublisher {
                 }
                 Ok(())
             }
-            PublishStep::AddMember { .. } | PublishStep::PublishAlarm { .. } => Ok(()),
+            PublishStep::PublishAlarm { hold_id } => {
+                self.routing.record_alarm_published(hold_id.as_str())
+            }
+            PublishStep::AddMember { .. } => Ok(()),
         }
     }
 

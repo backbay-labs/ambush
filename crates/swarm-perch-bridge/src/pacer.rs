@@ -17,7 +17,7 @@ use crate::cards::{SeqChain, build_finding_card};
 use crate::error::BridgeError;
 use crate::identity::IdentityTable;
 use crate::metrics::BridgeMetrics;
-use crate::publish::{OkOutcome, RetryDecision, retry_decision};
+use crate::publish::{AlarmAdmission, OkOutcome, RetryDecision, retry_decision};
 use crate::spool::{GapCause, IssuerIdx, Seq, Spool, SpoolSet};
 use crate::stream::Stream;
 
@@ -90,6 +90,23 @@ pub trait FramePublisher: Send {
         &mut self,
         frame: &Frame,
     ) -> impl Future<Output = Result<OkOutcome, BridgeError>> + Send;
+
+    /// Submits one ephemeral `26006` OUTSIDE the tick, bounded by a sliding one-minute burst
+    /// window.
+    ///
+    /// A REQUIRED method, not a defaulted one. A default that ignored the cap would make the
+    /// cap unreachable from any test that drives the drainer through a double, and an
+    /// unexercised bound on the one frame the bridge is allowed to send unpaced is not a bound.
+    ///
+    /// # Errors
+    ///
+    /// As [`FramePublisher::publish`]. A full window is `Ok(AlarmAdmission::Deferred)`, not an
+    /// error: the caller keeps its spool record and the next tick re-plans.
+    fn submit_alarm(
+        &mut self,
+        frame: &Frame,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<AlarmAdmission, BridgeError>> + Send;
 }
 
 /// What one submission did, so the caller knows whether to rewind.
@@ -446,6 +463,16 @@ mod tests {
             self.frames.push(frame.clone());
             Ok(self.answer.clone())
         }
+
+        /// The pacer never submits an alarm -- the alarm lane is the drainer's. Recording it
+        /// the same way keeps this double honest if that ever changes.
+        async fn submit_alarm(
+            &mut self,
+            frame: &Frame,
+            _now_ms: i64,
+        ) -> Result<AlarmAdmission, BridgeError> {
+            self.publish(frame).await.map(AlarmAdmission::Sent)
+        }
     }
 
     const LANES: [(&str, &str); 12] = [
@@ -708,6 +735,14 @@ mod tests {
                 self.seen.push(frame.event_id.clone());
                 self.contents.push(frame.signed.content.clone());
                 Err(BridgeError::Ws(ambush_ws_client::WsClientError::Timeout))
+            }
+
+            async fn submit_alarm(
+                &mut self,
+                frame: &Frame,
+                _now_ms: i64,
+            ) -> Result<AlarmAdmission, BridgeError> {
+                self.publish(frame).await.map(AlarmAdmission::Sent)
             }
         }
 

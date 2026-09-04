@@ -36,6 +36,7 @@ use crate::holds::{HoldPlan, HoldPublisher};
 use crate::identity::IdentityTable;
 use crate::metrics::BridgeMetrics;
 use crate::pacer::{Frame, FramePublisher, PERCH_FRAME_MAX_BYTES};
+use crate::publish::AlarmAdmission;
 use crate::spool::{Spool, SpoolSet};
 use crate::stream::{Stream, threat_class_slug};
 
@@ -313,7 +314,29 @@ async fn publish_hold_sequence<P: FramePublisher>(
             covers: (identity, 0),
             created_at_secs: now_secs,
         };
-        let outcome = match publisher.publish(&frame).await {
+        // The `26006` is the ONE frame that leaves outside the tick: the <= 400 ms end-to-end
+        // budget rides it, and a frame that waits for a tick has already spent 1000 ms of that.
+        // It is bounded instead by a sliding one-minute burst window, and a full window DEFERS
+        // it -- the record stays at the spool head and the ledger still has no alarm entry, so
+        // the next tick re-plans exactly this step.
+        let submitted = if matches!(step, PublishStep::PublishAlarm { .. }) {
+            match publisher.submit_alarm(&frame, now_ms).await {
+                Ok(AlarmAdmission::Sent(outcome)) => Ok(outcome),
+                Ok(AlarmAdmission::Deferred) => {
+                    metrics.alarm_deferred();
+                    tracing::warn!(
+                        module = module_path!(),
+                        step = step.label(),
+                        "the alarm burst window is full; this 26006 is deferred to a later tick"
+                    );
+                    return Ok(false);
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            publisher.publish(&frame).await
+        };
+        let outcome = match submitted {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::warn!(
@@ -420,6 +443,9 @@ mod tests {
         answer: OkOutcome,
         /// A handle the test keeps after the drainer is moved into a task.
         sink: Option<Arc<Mutex<Vec<Frame>>>>,
+        /// The REAL burst window, so the drainer's alarm lane is exercised through the same
+        /// bound production runs under rather than through a stub that always admits.
+        burst: crate::publish::AlarmBurst,
     }
 
     impl FramePublisher for Recording {
@@ -431,6 +457,17 @@ mod tests {
             }
             self.frames.push(frame.clone());
             Ok(self.answer.clone())
+        }
+
+        async fn submit_alarm(
+            &mut self,
+            frame: &Frame,
+            now_ms: i64,
+        ) -> Result<AlarmAdmission, BridgeError> {
+            if !self.burst.try_admit(now_ms) {
+                return Ok(AlarmAdmission::Deferred);
+            }
+            self.publish(frame).await.map(AlarmAdmission::Sent)
         }
     }
 
@@ -495,6 +532,7 @@ mod tests {
                 frames: vec![],
                 answer,
                 sink: None,
+                burst: crate::publish::AlarmBurst::new(crate::publish::PERCH_ALARM_BURST_PER_MIN),
             },
             metrics,
             shutdown,
@@ -608,6 +646,46 @@ mod tests {
         );
     }
 
+    /// Polls `ready` until it holds or the deadline passes.
+    ///
+    /// A fixed `sleep` is a race here: the drainer publishes one record per tick and the number
+    /// of ticks a sequence needs depends on how many steps the relay took, so a test that sleeps
+    /// asserts on whatever the scheduler happened to finish. Polling asserts on the STATE the
+    /// test is about, and the deadline only bounds a failure.
+    async fn wait_for(mut ready: impl FnMut() -> bool) -> bool {
+        for _ in 0..600 {
+            if ready() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        ready()
+    }
+
+    /// How many frames of `kind` the recording sink has seen.
+    fn kind_count(recorded: &Arc<Mutex<Vec<Frame>>>, kind: u16) -> usize {
+        recorded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|frame| frame.signed.kind.as_u16() == kind)
+            .count()
+    }
+
+    /// The current value of a counter sample, by its full encoded name.
+    fn counter(registry: &Arc<Mutex<prometheus_client::registry::Registry>>, name: &str) -> u64 {
+        let mut out = String::new();
+        prometheus_client::encoding::text::encode(
+            &mut out,
+            &registry.lock().unwrap_or_else(PoisonError::into_inner),
+        )
+        .unwrap();
+        out.lines()
+            .find_map(|line| line.strip_prefix(&format!("{name} ")))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default()
+    }
+
     fn held_fixture() -> swarm_runtime::held_action::HeldAction {
         swarm_runtime::held_action_fixtures::fixture_hold(
             swarm_core::types::ResponseAction::IsolateHost {
@@ -678,18 +756,21 @@ mod tests {
             metrics,
             shutdown_rx,
         )));
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        let drained = Arc::clone(&spools);
+        let settled = wait_for(|| {
+            drained
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .alarm()
+                .peek(usize::MAX)
+                .is_ok_and(|records| records.is_empty())
+        })
+        .await;
         shutdown_tx.send(true).unwrap();
         handle.await.unwrap().unwrap();
 
         assert!(
-            spools
-                .lock()
-                .unwrap()
-                .alarm()
-                .peek(usize::MAX)
-                .unwrap()
-                .is_empty(),
+            settled,
             "the whole sequence landed, so the record is committed"
         );
         // The daemon record learned both callbacks.
@@ -765,9 +846,11 @@ mod tests {
         let recorded = Arc::new(Mutex::new(Vec::new()));
         built.publisher.sink = Some(Arc::clone(&recorded));
         let handle = tokio::spawn(run(built));
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        let sink = Arc::clone(&recorded);
+        let settled = wait_for(|| kind_count(&sink, 26006) == 1).await;
         shutdown_tx.send(true).unwrap();
         handle.await.unwrap().unwrap();
+        assert!(settled, "the sequence never reached its alarm");
 
         let frames = recorded.lock().unwrap().clone();
         assert_eq!(
@@ -858,9 +941,11 @@ mod tests {
         let recorded = Arc::new(Mutex::new(Vec::new()));
         built.publisher.sink = Some(Arc::clone(&recorded));
         let handle = tokio::spawn(run(built));
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        let sink = Arc::clone(&recorded);
+        let settled = wait_for(|| kind_count(&sink, 9007) >= 2).await;
         shutdown_tx.send(true).unwrap();
         handle.await.unwrap().unwrap();
+        assert!(settled, "the refused sequence never retried");
 
         assert!(
             !spools
@@ -887,6 +972,229 @@ mod tests {
             .map(|frame| frame.signed.kind.as_u16())
             .collect();
         assert!(kinds.iter().all(|kind| *kind == 9007), "{kinds:?}");
+    }
+
+    #[tokio::test]
+    async fn the_alarm_burst_cap_defers_rather_than_drops_and_holds_the_record() {
+        // The cap is proved against the DRAINER, not only against the window type: with room
+        // for two alarms and three holds waiting, exactly two 26006 frames reach the relay, the
+        // third is counted as deferred, and its spool record is still at the head with its card
+        // and notice already accepted -- so the retry publishes the alarm and nothing else.
+        let dir = tempfile::tempdir().unwrap();
+        let spools = Arc::new(Mutex::new(
+            SpoolSet::open(dir.path(), "c", 1 << 20, 8 << 20).unwrap(),
+        ));
+        let identities = identities();
+        let alarm_idx = identities.alarm();
+        let store = Arc::new(swarm_runtime::held_action::MemoryHeldActionStore::default());
+        let mut holds = Vec::new();
+        for _ in 0..3 {
+            let mut hold = held_fixture();
+            hold.hold_id = swarm_runtime::held_action::mint_hold_id();
+            store.create(hold.clone()).unwrap();
+            spools
+                .lock()
+                .unwrap()
+                .append(
+                    Stream::Alarm,
+                    Record::from_event(
+                        &response_held(&hold, swarm_runtime::held_action::HoldState::Created),
+                        alarm_idx,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            holds.push(hold);
+        }
+
+        let (metrics, registry) = BridgeMetrics::new();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut built = drainer(
+            &dir,
+            Arc::clone(&spools),
+            Arc::clone(&identities),
+            vec!["68".repeat(32)],
+            Some(Arc::clone(&store) as Arc<dyn swarm_runtime::held_action::HeldActionStore>),
+            OkOutcome::Accepted,
+            metrics,
+            shutdown_rx,
+        );
+        built.config.lane_channels.clear();
+        built.publisher.burst = crate::publish::AlarmBurst::new(2);
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        built.publisher.sink = Some(Arc::clone(&recorded));
+        let handle = tokio::spawn(run(built));
+        let sink = Arc::clone(&recorded);
+        let counts = Arc::clone(&registry);
+        let settled = wait_for(|| {
+            kind_count(&sink, 46010) == 3
+                && counter(&counts, "perch_bridge_alarm_deferred_total") >= 1
+        })
+        .await;
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+        assert!(
+            settled,
+            "the drainer never reached the third hold's deferred alarm"
+        );
+
+        assert_eq!(
+            kind_count(&recorded, 26006),
+            2,
+            "the burst window admits exactly its cap"
+        );
+        assert!(
+            counter(&registry, "perch_bridge_alarm_deferred_total") >= 1,
+            "the third alarm is DEFERRED, not dropped"
+        );
+
+        // The deferred hold kept its record, and everything before the alarm already landed --
+        // so the retry costs one frame, not a republished card.
+        assert!(
+            !spools
+                .lock()
+                .unwrap()
+                .alarm()
+                .peek(usize::MAX)
+                .unwrap()
+                .is_empty(),
+            "the deferred hold's record is still at the spool head"
+        );
+        let reopened = channels::CaseRouting::open(&dir.path().join("case-routing.json")).unwrap();
+        let deferred_holds: Vec<_> = holds
+            .iter()
+            .filter(|hold| !reopened.alarm_published_for_hold(&hold.hold_id))
+            .collect();
+        assert_eq!(
+            deferred_holds.len(),
+            1,
+            "exactly one hold is still un-alarmed"
+        );
+        let pending = deferred_holds[0];
+        assert!(
+            reopened.open_card_for_hold(&pending.hold_id).is_some(),
+            "its card was accepted and is never republished"
+        );
+        assert_eq!(
+            store.get(&pending.hold_id).unwrap().unwrap().state,
+            swarm_runtime::held_action::HoldState::Notified,
+            "and its notice was accepted"
+        );
+        // Exactly one card and one notice per hold, deferral or not.
+        let kinds: Vec<u16> = recorded
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|frame| frame.signed.kind.as_u16())
+            .collect();
+        assert_eq!(kinds.iter().filter(|kind| **kind == 9).count(), 3);
+        assert_eq!(kinds.iter().filter(|kind| **kind == 46010).count(), 3);
+    }
+
+    #[tokio::test]
+    async fn alarms_are_never_shed_while_evidence_is() {
+        // T-15. The evidence spool sheds oldest-first under its byte budget and records the
+        // range it lost; the alarm spool refuses an append instead, so alarm work is never
+        // evicted. With evidence actively evicting, every spooled hold still reaches the relay.
+        let dir = tempfile::tempdir().unwrap();
+        let spools = Arc::new(Mutex::new(
+            SpoolSet::open(dir.path(), "c", 4096, 8192).unwrap(),
+        ));
+        let identities = identities();
+        let alarm_idx = identities.alarm();
+        let store = Arc::new(swarm_runtime::held_action::MemoryHeldActionStore::default());
+
+        // Push the evidence spool past its budget so it evicts.
+        for index in 0..24 {
+            let bulky = finding_with_evidence(2_000 + index);
+            spools
+                .lock()
+                .unwrap()
+                .append(Stream::Evidence, Record::from_event(&bulky, 0).unwrap())
+                .unwrap();
+        }
+        let evidence_gaps = spools.lock().unwrap().evidence().take_gaps();
+        assert!(
+            evidence_gaps
+                .iter()
+                .any(|gap| matches!(gap, crate::spool::GapCause::SpoolEvicted { .. })),
+            "the evidence spool must have shed to make this test meaningful: {evidence_gaps:?}"
+        );
+
+        // The alarm spool, at the same budget, takes every hold and refuses none.
+        let mut holds = Vec::new();
+        for _ in 0..3 {
+            let mut hold = held_fixture();
+            hold.hold_id = swarm_runtime::held_action::mint_hold_id();
+            store.create(hold.clone()).unwrap();
+            spools
+                .lock()
+                .unwrap()
+                .append(
+                    Stream::Alarm,
+                    Record::from_event(
+                        &response_held(&hold, swarm_runtime::held_action::HoldState::Created),
+                        alarm_idx,
+                    )
+                    .unwrap(),
+                )
+                .expect("alarm work is never shed");
+            holds.push(hold);
+        }
+        assert!(
+            spools.lock().unwrap().alarm().take_gaps().is_empty(),
+            "the alarm spool never records an eviction gap"
+        );
+
+        let (metrics, _registry) = BridgeMetrics::new();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut built = drainer(
+            &dir,
+            Arc::clone(&spools),
+            Arc::clone(&identities),
+            vec!["68".repeat(32)],
+            Some(Arc::clone(&store) as Arc<dyn swarm_runtime::held_action::HeldActionStore>),
+            OkOutcome::Accepted,
+            metrics,
+            shutdown_rx,
+        );
+        built.config.lane_channels.clear();
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        built.publisher.sink = Some(Arc::clone(&recorded));
+        let handle = tokio::spawn(run(built));
+        let sink = Arc::clone(&recorded);
+        let settled = wait_for(|| kind_count(&sink, 26006) == 3).await;
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+        assert!(
+            settled,
+            "an alarm was lost while the evidence spool was shedding"
+        );
+        assert_eq!(
+            kind_count(&recorded, 26006),
+            3,
+            "every alarm survived a spool that was shedding evidence"
+        );
+        let reopened = channels::CaseRouting::open(&dir.path().join("case-routing.json")).unwrap();
+        for hold in &holds {
+            assert!(
+                reopened.alarm_published_for_hold(&hold.hold_id),
+                "hold {} lost its alarm",
+                hold.hold_id
+            );
+        }
+    }
+
+    /// A `Finding` event whose evidence blob is large enough to roll spool segments.
+    fn finding_with_evidence(seed: usize) -> RuntimeEvent {
+        serde_json::from_value(serde_json::json!({
+            "event_type": "finding", "emitted_at_ms": 1, "host_id": "web-04",
+            "finding": {"schema": "swarm_finding", "finding_id": format!("f{seed}"),
+                        "event_id": "tel-1", "strategy_id": "s", "threat_class": "execution",
+                        "severity": "LOW", "confidence": 0.5,
+                        "evidence": {"blob": "x".repeat(1_500)}}
+        }))
+        .unwrap()
     }
 
     #[tokio::test]
