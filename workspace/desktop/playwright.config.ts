@@ -51,6 +51,7 @@ export default defineConfig({
         "**/channel-composer-overflow.spec.ts",
         "**/badge.spec.ts",
         "**/watch-queues.spec.ts",
+        "**/perch-verdict-pane.spec.ts",
         "**/channel-browser.spec.ts",
         "**/channel-add-screenshots.spec.ts",
         "**/add-community-screenshots.spec.ts",

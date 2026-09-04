@@ -12,6 +12,7 @@ import {
   type PerchQueueId,
 } from "../lib/watchQueues";
 import { useHoldQueue } from "../useHoldQueue";
+import { VerdictPane } from "./VerdictPane";
 import { VerdictQueueRow } from "./VerdictQueueRow";
 import { WatchQueueSection } from "./WatchQueueSection";
 
@@ -71,6 +72,13 @@ export function WatchScreen({ currentPubkey, onOpenCase }: WatchScreenProps) {
   const undeliverable =
     openRows.length > 0 && openRows.every((row) => !row.noticed);
 
+  const selectedRow = rows.find((row) => rowKey(row) === selected);
+  const selectedHold =
+    selectedRow && selectedRow.kind !== "unreconciled"
+      ? selectedRow.hold
+      : null;
+  const selectedCaseChannel = selectedHold?.case_channel ?? null;
+
   return (
     <div
       data-testid="perch-watch"
@@ -128,29 +136,35 @@ export function WatchScreen({ currentPubkey, onOpenCase }: WatchScreenProps) {
         storeDurable={queue.data?.storeDurable ?? false}
         queueDepthAlarm={queue.data?.queueDepthAlarm ?? false}
       />
-      {/* Placeholder for the detail pane. Task 25 owns the Verdict Row; until
-          it lands, the selection is recorded and named rather than acted on,
-          so nothing here can look like a control that decides. */}
+      {/* The detail pane. An UNRECONCILED selection gets no Verdict Row: there
+          is no hold to render, and a pane built from the relay's notice would
+          be exactly the lie the queue refuses to tell one line above. */}
       <div
         data-testid="perch-detail-pane"
         data-perch-selected-row={selected ?? ""}
         data-perch-current-pubkey={currentPubkey ?? ""}
         hidden={selected === null}
       >
-        <button
-          type="button"
-          className="px-3 py-2 text-xs underline"
-          onClick={() => {
-            const row = rows.find(
-              (candidate) => rowKey(candidate) === selected,
-            );
-            const caseId =
-              row && row.kind !== "unreconciled" ? row.hold.case_channel : null;
-            if (caseId) onOpenCase?.(caseId);
-          }}
-        >
-          Open the case channel
-        </button>
+        {selectedHold ? (
+          <VerdictPane hold={selectedHold} writeState={{ phase: "idle" }} />
+        ) : selected !== null ? (
+          <p
+            data-testid="perch-detail-unreconciled"
+            className="px-3 py-2 text-xs text-[hsl(var(--perch-foreground-muted))]"
+          >
+            The daemon has no record of this hold, so there is nothing to decide
+            here. Nothing on this screen can act on it.
+          </p>
+        ) : null}
+        {selectedCaseChannel ? (
+          <button
+            type="button"
+            className="px-3 py-2 text-xs underline"
+            onClick={() => onOpenCase?.(selectedCaseChannel)}
+          >
+            Open the case channel
+          </button>
+        ) : null}
       </div>
     </div>
   );

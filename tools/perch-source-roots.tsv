@@ -54,7 +54,7 @@
 #
 root	status	gates	reason
 src/features/perch	required	copy,grant,adversary	Perch shell. 17-COMPONENT-SPECS.md section 1.1 decides the six feature directories; 14-CLIENT-ARCHITECTURE.md section 2.1 makes this list the canonical scan scope. Landed as the TypeScript wire mirror in First card Task 2.
-src/features/perch-watch	absent	copy,grant,adversary	The Watch (S1) + the Verdict Row (S2). Not created yet.
+src/features/perch-watch	required	copy,grant,adversary	The Watch (S1) + the Verdict Row (S2). Landed in The hold Task 24 (the four queues and the reconciled HOLDS queue); Tasks 25-27 add the Verdict Row, the dwell-gated grant control and the two-legged write. The grant gate's R2/R3 rules scan this root for the single data-perch-role="grant" declaration.
 src/features/perch-evidence	required	copy,grant,adversary	Marker registry + the seven card presenters. Landed in First card Task 17.
 src/features/perch-containment	absent	copy,grant,adversary	Containments (S6). The grant gate's R5 extend rule scans this root specifically. Not created yet.
 src/features/perch-policy	absent	copy,grant,adversary	Policy / Tuning / Gaps (S7, S10, S12). Not created yet.
