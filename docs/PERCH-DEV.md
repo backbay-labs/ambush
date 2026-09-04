@@ -93,6 +93,15 @@ curl -sf -H 'Accept: application/nostr+json' http://localhost:3000 | head -c 200
 `.env.perch` is git-ignored. Without a seed the daemon exits non-zero naming the variable,
 which is the intended failure: a bridge must not publish under a key nobody chose.
 
+`.env.perch.example` carries `SWARM_OPERATOR_CONTEXT_TOKEN` beside `SWARM_OPERATOR_TOKEN`,
+and `set -a` exports both. They are different secrets on purpose: B5 made the read-only
+Providence context token stop sharing the credential that also grants approve and
+maintenance, and `rulesets-dev/perch-dev.yaml` names the new variable explicitly under
+`operator_surface.auth.context_token_env`. Nothing in the hold walkthrough below reads a
+context-token surface, so a missing value costs only `/v1/demo/widget`,
+`/v1/demo/dashboard` and `/v1/events/stream` — each of which now answers `401
+context_token is required` to a caller that presents none.
+
 **`localhost`, not `127.0.0.1`, everywhere.** The relay binds row zero to the connection's
 `Host` header (`workspace/crates/ambush-relay/src/tenant.rs`) and seeds exactly one
 community for its own `RELAY_URL` host at startup. `docker-compose.yml` sets

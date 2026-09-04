@@ -368,6 +368,20 @@ pub(super) fn with_demo_cors(mut response: Response) -> Response {
     response
 }
 
+/// Stamp `Cache-Control: no-store` on a response and nothing else.
+///
+/// B5: `/v1/events/stream` used to answer through [`with_demo_cors`], whose
+/// wildcard `Access-Control-Allow-Origin` let any page the operator's browser
+/// loaded read the live runtime event stream cross-origin. The stream keeps the
+/// cache directive and loses the CORS grant; the `/v1/demo/*` handlers, which
+/// are `demo_mode_enabled()`-gated, keep both.
+pub(super) fn with_no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
 fn demo_run_report(run: DemoRunState) -> DemoRunReport {
     DemoRunReport {
         run_id: run.run_id,
@@ -1653,7 +1667,7 @@ pub(crate) async fn runtime_events_handler(
     let scope = match super::resolve_demo_scope(&operator, &query.scope) {
         Ok(scope) => scope,
         Err(error) => {
-            return with_demo_cors(
+            return with_no_store(
                 (
                     StatusCode::UNAUTHORIZED,
                     ResponseJson(DemoReplayErrorBody {
@@ -1667,7 +1681,7 @@ pub(crate) async fn runtime_events_handler(
     let filter = match parse_runtime_event_filter(query.types.as_deref()) {
         Ok(filter) => filter,
         Err(error) => {
-            return with_demo_cors(
+            return with_no_store(
                 (
                     StatusCode::BAD_REQUEST,
                     ResponseJson(DemoReplayErrorBody { error }),
@@ -1678,7 +1692,7 @@ pub(crate) async fn runtime_events_handler(
     };
 
     let Some(receiver) = state.subscribe_runtime_events() else {
-        return with_demo_cors(
+        return with_no_store(
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 ResponseJson(DemoReplayErrorBody {
@@ -1718,5 +1732,5 @@ pub(crate) async fn runtime_events_handler(
     let response = Sse::new(stream)
         .keep_alive(KeepAlive::default().interval(Duration::from_secs(15)))
         .into_response();
-    with_demo_cors(response)
+    with_no_store(response)
 }

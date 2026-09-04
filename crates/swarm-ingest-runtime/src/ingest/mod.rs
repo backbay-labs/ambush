@@ -663,12 +663,18 @@ fn resolve_demo_scope(
     query: &DemoScopeQuery,
 ) -> Result<ProvidenceContextScope, IngestRequestError> {
     let requested_scope = query.raw_scope();
+    // B5. The token is MANDATORY. The previous arm returned the requested scope
+    // unverified when the token was absent, which combined with the empty-scope
+    // short-circuit in `runtime_event_matches_scope` to hand an ANONYMOUS reader
+    // more than a scoped one.
     let Some(raw_token) = query
         .context_token
         .as_deref()
         .filter(|value| !value.is_empty())
     else {
-        return Ok(requested_scope);
+        return Err(IngestRequestError::ProvidenceContextToken {
+            reason: "context_token is required".to_string(),
+        });
     };
     let secret_material = operator_secret_material(operator)?;
     let claims = verify_providence_context_token(&secret_material, raw_token, now_ms())

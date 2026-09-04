@@ -3243,8 +3243,24 @@ async fn demo_dashboard_snapshot_endpoint_reports_live_runtime_state() {
     );
     let mode_state = Arc::new(ArcSwap::from_pointee(mode_state));
 
+    // B5: `resolve_demo_scope` now demands a context token, so the snapshot is
+    // read under a scope. `mint_providence_context_token` refuses an empty
+    // scope, so there is no longer an unscoped read of this surface at all.
+    let mut config = context_token_config(
+        "SWARM_DEMO_DASHBOARD_TEST_CONTEXT_TOKEN",
+        "demo-dashboard-secret",
+    );
+    config.runtime.demo_mode = true;
+    let token = context_token_for(
+        &config,
+        swarm_runtime::providence::ProvidenceContextScope {
+            threat_class: Some(swarm_core::ThreatClass::Execution),
+            ..Default::default()
+        },
+    );
     let app = detect_http_router(
-        demo_ingest_state()
+        IngestState::from_config(temp_path("demo-dashboard-token"), config)
+            .unwrap()
             .with_agent_health(agent_health)
             .with_mode_state(mode_state),
     );
@@ -3252,7 +3268,7 @@ async fn demo_dashboard_snapshot_endpoint_reports_live_runtime_state() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/v1/demo/dashboard")
+                .uri(format!("/v1/demo/dashboard?context_token={token}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3271,7 +3287,12 @@ async fn demo_dashboard_snapshot_endpoint_reports_live_runtime_state() {
     assert_eq!(body.mode_state.current, SwarmMode::Alert);
     assert_eq!(body.agent_health.len(), 1);
     assert_eq!(body.agent_health[0].id, "whisker-primary");
-    assert_eq!(body.concentrations.len(), 12);
+    // The token's threat class narrows the twelve standing concentrations to its own.
+    assert_eq!(body.concentrations.len(), 1);
+    assert_eq!(
+        body.concentrations[0].threat_class,
+        swarm_core::ThreatClass::Execution
+    );
 }
 
 #[tokio::test]
@@ -3609,7 +3630,25 @@ async fn providence_webhook_payload_includes_runtime_context_and_links() {
 async fn events_stream_filters_scoped_runtime_events_for_widget_context() {
     let broadcaster = RuntimeEventBroadcaster::new(16);
     let publisher = broadcaster.clone();
-    let app = detect_http_router(demo_ingest_state().with_runtime_events(broadcaster.clone()));
+    // B5: the stream refuses an anonymous reader, so this widget-context test
+    // carries the same token the widget's own JS forwards from its link.
+    let mut config = context_token_config(
+        "SWARM_EVENT_STREAM_WIDGET_TEST_CONTEXT_TOKEN",
+        "widget-stream-secret",
+    );
+    config.runtime.demo_mode = true;
+    let widget_token = context_token_for(
+        &config,
+        swarm_runtime::providence::ProvidenceContextScope {
+            hunt_id: Some("evt-widget-1".to_string()),
+            ..Default::default()
+        },
+    );
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("event-stream-widget-token"), config)
+            .unwrap()
+            .with_runtime_events(broadcaster.clone()),
+    );
     let publish_task = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(25)).await;
         publisher.publish(RuntimeEvent::AgentAction {
@@ -3646,7 +3685,9 @@ async fn events_stream_filters_scoped_runtime_events_for_widget_context() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/v1/events/stream?types=agent_action,response_execution&hunt_id=evt-widget-1")
+                .uri(format!(
+                    "/v1/events/stream?types=agent_action,response_execution&hunt_id=evt-widget-1&context_token={widget_token}"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -5024,7 +5065,22 @@ async fn platform_findings_stream_endpoint_emits_canonical_finding_events() {
 async fn events_stream_filters_typed_runtime_events() {
     let broadcaster = RuntimeEventBroadcaster::new(16);
     let publisher = broadcaster.clone();
-    let app = detect_http_router(test_ingest_state().with_runtime_events(broadcaster.clone()));
+    let config = context_token_config(
+        "SWARM_EVENT_STREAM_TYPED_TEST_CONTEXT_TOKEN",
+        "typed-stream-secret",
+    );
+    let token = context_token_for(
+        &config,
+        swarm_runtime::providence::ProvidenceContextScope {
+            hunt_id: Some("evt-ingest-1".to_string()),
+            ..Default::default()
+        },
+    );
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("event-stream-typed-token"), config)
+            .unwrap()
+            .with_runtime_events(broadcaster.clone()),
+    );
     let publish_task = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(25)).await;
         publisher.publish(RuntimeEvent::ConcentrationSnapshot {
@@ -5058,7 +5114,9 @@ async fn events_stream_filters_typed_runtime_events() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/v1/events/stream?types=agent_action")
+                .uri(format!(
+                    "/v1/events/stream?types=agent_action&context_token={token}"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -5086,10 +5144,32 @@ async fn events_stream_filters_typed_runtime_events() {
 }
 
 #[tokio::test]
-async fn events_stream_can_filter_evolution_status_events() {
+async fn the_event_stream_no_longer_discloses_evolution_status_to_a_scoped_reader() {
+    // B5. `runtime_event_matches_scope` answers `false` for `EvolutionStatus`,
+    // `AgentHealth`, `TamperAlert` and `CasePromoted` under any non-empty scope,
+    // and it short-circuited to `true` on the empty scope an unauthenticated
+    // reader used to get. Those four kinds were therefore visible to an
+    // anonymous caller and to nobody else -- the leak the brief names (tamper
+    // alerts with library paths). With the token mandatory and no token able to
+    // carry an empty scope, the stream stops carrying them at all.
     let broadcaster = RuntimeEventBroadcaster::new(16);
     let publisher = broadcaster.clone();
-    let app = detect_http_router(test_ingest_state().with_runtime_events(broadcaster.clone()));
+    let config = context_token_config(
+        "SWARM_EVENT_STREAM_EVOLUTION_TEST_CONTEXT_TOKEN",
+        "evolution-stream-secret",
+    );
+    let token = context_token_for(
+        &config,
+        swarm_runtime::providence::ProvidenceContextScope {
+            hunt_id: Some("evt-ingest-1".to_string()),
+            ..Default::default()
+        },
+    );
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("event-stream-evolution-token"), config)
+            .unwrap()
+            .with_runtime_events(broadcaster.clone()),
+    );
     let report = swarm_runtime::evolution_status::DefaultEvolutionStatusHarness::from_config(
         "inline",
         test_config("suspicious_process_tree"),
@@ -5104,12 +5184,22 @@ async fn events_stream_can_filter_evolution_status_events() {
             source: "test".to_string(),
             status: report,
         });
+        publisher.publish(RuntimeEvent::AgentAction {
+            emitted_at_ms: now_ms(),
+            agent_id: "weaver-primary".to_string(),
+            role: AgentRole::Weaver,
+            action_kind: "publish_findings".to_string(),
+            hunt_id: Some("evt-ingest-1".to_string()),
+            details: json!({"finding_count": 1}),
+        });
     });
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/v1/events/stream?types=evolution_status")
+                .uri(format!(
+                    "/v1/events/stream?types=evolution_status,agent_action&context_token={token}"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -5127,9 +5217,144 @@ async fn events_stream_can_filter_evolution_status_events() {
     .unwrap()
     .unwrap();
     let stream = String::from_utf8(body.to_vec()).unwrap();
-    assert!(stream.contains("event: evolution_status"));
-    assert!(stream.contains("\"generation_count\":0"));
-    assert!(!stream.contains("event: agent_action"));
+    assert!(
+        !stream.contains("event: evolution_status"),
+        "the scoped stream disclosed evolution status: {stream}"
+    );
+    assert!(
+        !stream.contains("\"generation_count\""),
+        "the scoped stream disclosed evolution status: {stream}"
+    );
+    // The kinds a scope can match still arrive, so this is a filter, not an outage.
+    assert!(
+        stream.contains("event: agent_action"),
+        "stream was: {stream}"
+    );
+}
+
+/// A config whose Providence context tokens are signed with `secret`.
+///
+/// B5 makes `context_token` mandatory on `GET /v1/events/stream` and on the two
+/// `demo_mode_enabled()` scope readers, so every test that reads one has to mint
+/// a token against a secret the daemon will verify. Each caller passes its own
+/// `env_name`: the process environment is shared across the test binary.
+fn context_token_config(env_name: &str, secret: &str) -> SwarmConfig {
+    let mut config = test_config("suspicious_process_tree");
+    config.operator.auth.context_token_env = env_name.to_string();
+    unsafe {
+        std::env::set_var(env_name, secret);
+    }
+    config
+}
+
+/// Mint a Providence context token for `config`.
+///
+/// The scope must be non-empty: `mint_providence_context_token` refuses an empty
+/// one, which is why B5 leaves no way to read the stream unscoped.
+fn context_token_for(
+    config: &SwarmConfig,
+    scope: swarm_runtime::providence::ProvidenceContextScope,
+) -> String {
+    swarm_runtime::providence::mint_providence_context_token(&config.operator, scope, now_ms())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_event_stream_refuses_an_anonymous_reader_and_serves_a_token_bearing_one() {
+    let config = context_token_config("SWARM_EVENT_STREAM_TEST_CONTEXT_TOKEN", "stream-secret");
+    let broadcaster = RuntimeEventBroadcaster::new(16);
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("event-stream-token"), config.clone())
+            .unwrap()
+            .with_runtime_events(broadcaster.clone()),
+    );
+
+    let anonymous = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/events/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        anonymous
+            .headers()
+            .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none(),
+        "the refusal must not carry a wildcard ACAO either"
+    );
+
+    // A Providence context token always carries a scope: `mint_providence_context_token`
+    // refuses an empty one. After B5 the stream is therefore readable only under a
+    // scope, never as the firehose an anonymous reader used to get.
+    let token = context_token_for(
+        &config,
+        swarm_runtime::providence::ProvidenceContextScope {
+            hunt_id: Some("evt-stream-token-1".to_string()),
+            ..Default::default()
+        },
+    );
+    let scoped = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/events/stream?context_token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scoped.status(), StatusCode::OK);
+    assert!(
+        scoped
+            .headers()
+            .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none(),
+        "the stream must not be readable cross-origin by any page the operator loads"
+    );
+    assert_eq!(
+        scoped.headers().get(axum::http::header::CACHE_CONTROL),
+        Some(&axum::http::HeaderValue::from_static("no-store"))
+    );
+    drop(broadcaster);
+}
+
+#[tokio::test]
+async fn the_event_stream_refuses_an_empty_context_token() {
+    let config = context_token_config(
+        "SWARM_EVENT_STREAM_EMPTY_TEST_CONTEXT_TOKEN",
+        "stream-secret-empty",
+    );
+    let broadcaster = RuntimeEventBroadcaster::new(16);
+    let app = detect_http_router(
+        IngestState::from_config(temp_path("event-stream-empty-token"), config)
+            .unwrap()
+            .with_runtime_events(broadcaster.clone()),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/events/stream?context_token=&hunt_id=evt-anonymous-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let rendered = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        rendered.contains("context_token is required"),
+        "unexpected refusal body: {rendered}"
+    );
+    drop(broadcaster);
 }
 
 #[tokio::test]

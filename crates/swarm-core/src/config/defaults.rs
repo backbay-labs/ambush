@@ -258,7 +258,13 @@ pub(super) fn default_operator_token_env() -> String {
 }
 
 pub(super) fn default_operator_context_token_env() -> String {
-    default_operator_token_env()
+    // B5: this used to resolve to `default_operator_token_env()`, so a
+    // deployment that set only `SWARM_OPERATOR_TOKEN` signed read-only
+    // Providence context tokens with the same secret as the mutable operator
+    // bearer. The two secrets are now separate by default; a deployment that
+    // relied on the old behaviour sets
+    // `operator_surface.auth.context_token_env: SWARM_OPERATOR_TOKEN`.
+    "SWARM_OPERATOR_CONTEXT_TOKEN".to_string()
 }
 
 pub(super) const fn default_http_rate_limit_burst_max_requests() -> usize {

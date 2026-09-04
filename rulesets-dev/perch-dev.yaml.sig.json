@@ -3,13 +3,13 @@
     "version": 1,
     "issued_at_ms": 1760000000000,
     "config_file_name": "perch-dev.yaml",
-    "sha256": "67c757e66ec442fd7abbeb16d18b67aee9040c032a967ea8ba6539c3e4c819b8",
-    "size_bytes": 15141
+    "sha256": "f0c75c0d220b87bd761051532266b5704ed6f7c62e54c7983db57d9eb8bd45f2",
+    "size_bytes": 15267
   },
   "signature": {
     "algorithm": "ed25519",
     "key_id": "18ffbaf6a1b664a1295be5af9dc32a0c394f2aecacefa17d0d9b49c19c670dc9",
     "public_key_hex": "f4170fc2340bda6fbda85facb0fb2d33de7f661f374598797f6825d8d8fbf10a",
-    "signature_hex": "ab92392e12a96439a842fb8d7a35ec0177dbc8cef8996dc396dcf74ec568c902d7a6bc175595969468ee990d1dc8687b50cfceddd8ffb7f4f11018bb590f3d0f"
+    "signature_hex": "c47d7f37b571f0864e2afef7c56b087ed2ae34ec4836a4093a6035429b33398f10521006f3cd360b3398853c7e3c98fd1612bb1bd58a9f6634b45edd41901d0d"
   }
 }

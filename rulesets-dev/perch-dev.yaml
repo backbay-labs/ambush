@@ -355,6 +355,12 @@ operator_surface:
   max_list_results: 50
   widget_token_ttl_secs: 900
   auth:
+    # B5 (13-PLAN-THE-HOLD.md Task 14): this defaults to
+    # SWARM_OPERATOR_CONTEXT_TOKEN and is now a DIFFERENT secret from the
+    # bearer above. It signs the read-only Providence context tokens that
+    # `/v1/events/stream`, `/v1/demo/dashboard` and `/v1/demo/widget` demand.
+    # Named explicitly so the dev loop does not silently depend on a default.
+    context_token_env: SWARM_OPERATOR_CONTEXT_TOKEN
     principals:
       - operator_id: console
         token_env: SWARM_OPERATOR_TOKEN
