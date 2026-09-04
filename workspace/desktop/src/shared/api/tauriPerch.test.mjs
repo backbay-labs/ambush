@@ -8,17 +8,27 @@
 // on one side and not the other fails here rather than at 3am on a hold
 // nobody can read.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-/** The Rust files that register perch Tauri commands, relative to this one. */
-const PERCH_RUST_COMMAND_FILES = [
-  "../../../src-tauri/src/commands/perch_reads.rs",
-  "../../../src-tauri/src/commands/perch_writes.rs",
-  "../../../src-tauri/src/commands/perch_verdict.rs",
-];
+/**
+ * Every Rust file that could register a perch Tauri command.
+ *
+ * The whole commands directory, not a hand-written list: a hand-written list
+ * silently loses coverage when a file is split or renamed, which is exactly
+ * what happened when the hold commands moved to `perch_verdict_hold.rs` — the
+ * list still named three files and the guard reported nine commands where it
+ * had seen ten.
+ */
+const PERCH_RUST_COMMAND_DIR = new URL(
+  "../../../src-tauri/src/commands/",
+  import.meta.url,
+);
+const PERCH_RUST_COMMAND_FILES = readdirSync(PERCH_RUST_COMMAND_DIR)
+  .filter((name) => name.endsWith(".rs"))
+  .map((name) => `../../../src-tauri/src/commands/${name}`);
 
 import fixture from "../../testing/perch/daemonHoldFixture.json" with {
   type: "json",
