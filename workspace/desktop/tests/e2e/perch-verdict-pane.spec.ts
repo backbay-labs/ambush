@@ -1,12 +1,10 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
 import {
-  enablePerchFeature,
   PERCH_HOLD_A,
   perchHold,
-  seedPerchDaemon,
+  installPerchWatchBridge,
   waitForPerchQueue,
 } from "../helpers/perchBridge";
 
@@ -52,9 +50,7 @@ async function openPane(
   page: Page,
   hold: Record<string, unknown>,
 ): Promise<void> {
-  await installMockBridge(page);
-  await enablePerchFeature(page);
-  await seedPerchDaemon(page, { holds: [hold] });
+  await installPerchWatchBridge(page, { holds: [hold] });
   await page.goto("/");
   await waitForPerchQueue(page);
   await page.getByTestId(`perch-queue-row-${PERCH_HOLD_A}`).click();
@@ -83,9 +79,7 @@ test("all five slots render in a fixed order for every action kind", async ({
 }) => {
   // One page, fifteen holds: the property is that the slot SET never varies
   // with the action, so varying the action is the test.
-  await installMockBridge(page);
-  await enablePerchFeature(page);
-  await seedPerchDaemon(page, {
+  await installPerchWatchBridge(page, {
     holds: [actionHold(...ACTIONS[0])],
   });
   await page.goto("/");
@@ -95,7 +89,9 @@ test("all five slots render in a fixed order for every action kind", async ({
     // Re-seed through the init script, not the live control: a reload rebuilds
     // the mock module from the seed, so a `setHolds` mutation would be gone by
     // the time the console makes its first read.
-    await seedPerchDaemon(page, { holds: [actionHold(kind, fields, leased)] });
+    await installPerchWatchBridge(page, {
+      holds: [actionHold(kind, fields, leased)],
+    });
     await page.reload();
     await waitForPerchQueue(page);
     await page.getByTestId(`perch-queue-row-${PERCH_HOLD_A}`).click();
@@ -197,9 +193,7 @@ test("an UNRECONCILED selection gets no Verdict Row at all", async ({
   // The pane is built from the daemon's record. With no record there is
   // nothing to build it from, and building it from the relay's notice is the
   // exact lie the queue refuses to tell.
-  await installMockBridge(page);
-  await enablePerchFeature(page);
-  await seedPerchDaemon(page, { holds: [], storeDurable: true });
+  await installPerchWatchBridge(page, { holds: [], storeDurable: true });
   await page.goto("/");
   await waitForPerchQueue(page);
   await expect(page.getByTestId("perch-verdict-pane")).toHaveCount(0);

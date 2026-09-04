@@ -1,13 +1,11 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
 import {
-  enablePerchFeature,
   PERCH_HOLD_A,
   perchHold,
   perchRecordedVerdicts,
-  seedPerchDaemon,
+  installPerchWatchBridge,
   waitForPerchQueue,
 } from "../helpers/perchBridge";
 
@@ -20,11 +18,9 @@ import {
  */
 async function openHold(
   page: Page,
-  seed: Parameters<typeof seedPerchDaemon>[1] = {},
+  seed: Parameters<typeof installPerchWatchBridge>[1] = {},
 ) {
-  await installMockBridge(page);
-  await enablePerchFeature(page);
-  await seedPerchDaemon(page, {
+  await installPerchWatchBridge(page, {
     holds: [perchHold({ hold_id: PERCH_HOLD_A })],
     ...seed,
   });

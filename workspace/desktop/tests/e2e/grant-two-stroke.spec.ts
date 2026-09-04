@@ -1,14 +1,12 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
 import {
-  enablePerchFeature,
   PERCH_HOLD_A,
   perchHold,
   perchRecordedVerdicts,
   readBlastRadius,
-  seedPerchDaemon,
+  installPerchWatchBridge,
   waitForPerchQueue,
 } from "../helpers/perchBridge";
 
@@ -22,9 +20,7 @@ import {
  */
 async function openHold(page: Page, viewport = { width: 1280, height: 300 }) {
   await page.setViewportSize(viewport);
-  await installMockBridge(page);
-  await enablePerchFeature(page);
-  await seedPerchDaemon(page, {
+  await installPerchWatchBridge(page, {
     holds: [perchHold({ hold_id: PERCH_HOLD_A })],
   });
   await page.goto("/");
