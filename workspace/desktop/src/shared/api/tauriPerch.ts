@@ -278,11 +278,49 @@ export const PERCH_DAEMON_WRITE_COMMANDS = [
  * Every perch Tauri command, in one place, so the E2E mock bridge can assert
  * it answers all of them and no count drifts from the file.
  */
+/**
+ * Local process control for the laptop demo's `swarm_detect`.
+ *
+ * A THIRD list, kept apart from the reads and the two write lists on purpose.
+ * These issue no request to any Ambush host, so they are outside INV-01 — and
+ * folding them into the daemon-write list would make that table read as six
+ * routes when the claim it carries is about five.
+ */
+export const PERCH_LOCAL_COMMANDS = [
+  "perch_sidecar_start",
+  "perch_sidecar_stop",
+  "perch_sidecar_status",
+] as const;
+
 export const PERCH_TAURI_COMMANDS = [
   ...PERCH_READ_COMMANDS,
   ...PERCH_RELAY_WRITE_COMMANDS,
   ...PERCH_DAEMON_WRITE_COMMANDS,
+  ...PERCH_LOCAL_COMMANDS,
 ] as const;
+
+/** Seeds are reported as PRESENT or absent. A value never crosses IPC. */
+export type PerchSidecarStatus = {
+  readonly pid: number;
+  readonly started_at_ms: number;
+  readonly healthz: "starting" | "ready" | "unhealthy" | "stopped";
+  readonly profile_path: string;
+  readonly seeds_present: { readonly nostr: boolean; readonly spine: boolean };
+};
+
+/** Start the bundled daemon under a config the Rust side re-resolves. */
+export function perchSidecarStart(configPath: string) {
+  return invokeTauri<PerchSidecarStatus>("perch_sidecar_start", { configPath });
+}
+
+export function perchSidecarStop() {
+  return invokeTauri<null>("perch_sidecar_stop");
+}
+
+/** `null` means the sidecar has never run — not that it is stopped. */
+export function perchSidecarStatus() {
+  return invokeTauri<PerchSidecarStatus | null>("perch_sidecar_status");
+}
 
 // ===========================================================================
 // B2r — THE HOLD READS. The reconciliation authority.

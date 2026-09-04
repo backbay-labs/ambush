@@ -101,6 +101,7 @@ pub fn build_app_state() -> AppState {
         identity_mutation: Mutex::new(()),
         managed_agents_store_lock: Mutex::new(()),
         channel_templates_store_lock: Mutex::new(()),
+        perch_sidecar: std::sync::Arc::new(crate::perch_sidecar::PerchSidecar::new()),
         managed_agent_processes: Mutex::new(HashMap::new()),
         provider_deploy_locks: Mutex::new(HashMap::new()),
         session_config_cache: Mutex::new(HashMap::new()),

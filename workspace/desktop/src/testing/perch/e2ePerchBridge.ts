@@ -241,6 +241,18 @@ type MockState = {
   log: string[];
   /** How many relay verdict cards this session published. */
   verdicts: number;
+  /**
+   * The laptop sidecar's last reported status, or `null` for never started.
+   * `null` and a `stopped` status are different, and the panel renders them
+   * differently, so the mock keeps them apart too.
+   */
+  sidecar: {
+    pid: number;
+    started_at_ms: number;
+    healthz: "starting" | "ready" | "unhealthy" | "stopped";
+    profile_path: string;
+    seeds_present: { nostr: boolean; spine: boolean };
+  } | null;
 };
 
 function defaults(): MockState {
@@ -272,6 +284,7 @@ function defaults(): MockState {
     feedback: new Map(),
     log: [],
     verdicts: 0,
+    sidecar: null,
   };
 }
 
@@ -483,6 +496,9 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_list_containments",
   "perch_release_containment",
   "perch_evasion_coverage",
+  "perch_sidecar_start",
+  "perch_sidecar_stop",
+  "perch_sidecar_status",
 ]);
 
 /**
@@ -878,6 +894,32 @@ export function handlePerchMockCommand(
     case "perch_record_verdict":
       s.log.push(command);
       return after(s.verdictDelayMs, () => recordVerdict(payload));
+    // The laptop sidecar. Local process control, so the mock's job is only to
+    // let the settings panel render its three states without a real daemon.
+    // The default is `null` -- never started -- because a mock that reported a
+    // running daemon would let a spec assert a stop control the product would
+    // not have shown.
+    case "perch_sidecar_start":
+      s.log.push(command);
+      s.sidecar = {
+        pid: 4242,
+        started_at_ms: s.nowMs,
+        healthz: "starting",
+        profile_path: String(
+          (payload as { configPath?: string } | null)?.configPath ?? "",
+        ),
+        // Presence only. A mock that carried a seed value would let a spec
+        // pass while the product leaked one (INV-22).
+        seeds_present: { nostr: true, spine: true },
+      };
+      return { ...s.sidecar };
+    case "perch_sidecar_stop":
+      s.log.push(command);
+      if (s.sidecar) s.sidecar = { ...s.sidecar, healthz: "stopped" };
+      return null;
+    case "perch_sidecar_status":
+      s.log.push(command);
+      return s.sidecar ? { ...s.sidecar } : null;
     case "perch_finding_feedback":
       s.log.push(command);
       return after(s.feedbackDelayMs, () => findingFeedback(payload));

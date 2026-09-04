@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": [
+      "binaries/ambush-acp",
+      "binaries/ambush-agent",
+      "binaries/ambush-backend-kubernetes",
+      "binaries/ambush-dev-mcp",
+      "binaries/git-credential-nostr",
+      "binaries/ambush",
+      "binaries/swarm_detect"
+    ]
+  }
+}

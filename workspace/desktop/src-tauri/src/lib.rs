@@ -41,6 +41,7 @@ mod observed_unread;
 // `pub(crate)` type its public fields carry -- reachable at `pub`, which the
 // `private_interfaces` lint refuses under `-D warnings`.
 mod perch;
+mod perch_sidecar;
 pub mod perch_sign_gate;
 #[cfg(test)]
 mod perch_sign_gate_inventory_tests;
@@ -546,6 +547,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::perch_sidecar_start,
+            commands::perch_sidecar_stop,
+            commands::perch_sidecar_status,
             terminal_runtime::terminal_attach,
             terminal_runtime::terminal_detach,
             terminal_runtime::terminal_close,
