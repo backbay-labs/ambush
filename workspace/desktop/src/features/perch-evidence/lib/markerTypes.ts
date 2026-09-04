@@ -141,5 +141,15 @@ export type SwarmCardEntry = {
   pillar: PerchPillar;
   /** Refuses to render outside these surfaces. A `hold` card in a lane is a bug, not a view. */
   homeSurface: readonly SwarmCardSurfaceKind[];
+  /**
+   * The highest attestation tier this card may ever CLAIM.
+   *
+   * A ceiling, not a reading. The tier a card actually renders comes from the
+   * envelope it carries; this bounds it, so a card whose evidence chain does
+   * not exist yet cannot display a badge for one. `tools/check-perch-tier-allowlist.sh`
+   * asserts these against a table whose third column names the precondition
+   * each ceiling depends on.
+   */
+  maxTier: 0 | 1 | 2;
   render: (args: SwarmCardRenderArgs) => React.ReactElement;
 };

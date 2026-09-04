@@ -19,13 +19,15 @@ import { UndecodableCard } from "./RefusalCards";
 export function defineSwarmCard<T>(spec: {
   pillar: PerchPillar;
   homeSurface: readonly SwarmCardSurfaceKind[];
+  maxTier: 0 | 1 | 2;
   decode: SwarmCardDecoder<T>;
   Presenter: React.ComponentType<SwarmCardProps<T>>;
 }): SwarmCardEntry {
-  const { decode, Presenter, pillar, homeSurface } = spec;
+  const { decode, Presenter, pillar, homeSurface, maxTier } = spec;
   return {
     pillar,
     homeSurface,
+    maxTier,
     render: ({ card, ctx }) => {
       const decoded = decode(card);
       if (!decoded.ok) {

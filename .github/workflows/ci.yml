@@ -270,6 +270,16 @@ jobs:
       - name: Check the Perch notification bodies interpolate only typed fields
         run: bash tools/check-perch-notification-fields.sh
 
+      # A tier badge is the strongest claim this product makes on any surface:
+      # it says an operator may rely on a chain of evidence. `maxTier` is the
+      # ceiling on that claim, and a ceiling raised ahead of the evidence is
+      # how a console ends up displaying a badge for a chain nobody can fetch.
+      # The table's third column names each ceiling's precondition, and the
+      # gate asserts equality both ways -- so raising one means editing the
+      # registry and the table in the same commit.
+      - name: Check the Perch card tier allowlist
+        run: bash tools/check-perch-tier-allowlist.sh
+
       # INV-01. "Perch never authorizes" is a claim about a SET: the non-GET
       # requests the console process can issue to a daemon host. A claim about
       # a set is only true if the set is enumerable, so the console has one

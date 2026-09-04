@@ -1,0 +1,32 @@
+# tools/perch-tier-allowlist.tsv -- which card types may declare maxTier > 0, and what each ceiling depends on.
+#
+# `maxTier` is a CEILING, not a reading. The tier a card actually renders comes
+# from the envelope it carries; this bounds it, so a card whose evidence chain
+# does not exist yet cannot display a badge for one.
+#
+# Read by tools/check-perch-tier-allowlist.sh, which asserts EQUALITY in both
+# directions against the `maxTier:` declarations in the desktop card registry
+# and the card modules it composes.
+#
+# WHY THE FIVE B6 ROWS ARE 0 AND NOT 2
+#   B6's signer landed, but sealing is NOT yet on the publish path: the pacer
+#   restores `prev_envelope_hash` on a non-acknowledged frame, so sealing at
+#   spool-append would advance the durable head for a card the relay never
+#   took, and the next real card would chain from a link nobody can fetch.
+#   Until `seal_at` is wired to sign at append and commit the head on ACK,
+#   there is no sealed envelope for any of these cards to carry. A ceiling of 2
+#   would let one display a tier-2 badge for evidence that does not exist.
+#   Tier 0 here is a rendered honest state, not a fallback -- the plan says so.
+#
+# COLUMNS, tab-separated:
+#   card         the SwarmMarkerKind
+#   maxTier      0 | 1 | 2 -- the highest tier this card may ever claim
+#   precondition what the ceiling depends on, and whether it holds today
+card	maxTier	precondition
+rollback	1	holds -- verify_release_attestation ships today
+verdict	1	holds -- B2 landed and provisions the operator's Ed25519 key
+finding	0	needs B6 on the publish path (Task 7 signer landed; seal is not wired to ACK)
+escalation	0	needs B6 on the publish path
+hold	0	needs B6 on the publish path
+receipt	0	needs B6 on the publish path
+lease	0	needs B6 on the publish path

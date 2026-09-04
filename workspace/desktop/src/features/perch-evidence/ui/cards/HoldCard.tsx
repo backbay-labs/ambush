@@ -133,6 +133,8 @@ export function HoldCardPresenter({
 export const holdCardEntry = defineSwarmCard<HoldPayload>({
   pillar: "authority",
   homeSurface: ["case"],
+  // 0 until B6 seals on the publish path. See FindingCard.
+  maxTier: 0,
   decode: decodeHold,
   Presenter: HoldCardPresenter,
 });
