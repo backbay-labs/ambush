@@ -73,6 +73,7 @@ pub mod metrics;
 pub mod pacer;
 pub mod publish;
 pub mod receive;
+pub mod spine;
 pub mod spool;
 pub mod stream;
 

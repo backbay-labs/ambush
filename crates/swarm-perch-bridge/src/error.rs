@@ -97,6 +97,63 @@ pub enum BridgeError {
         path: String,
     },
 
+    /// A slot that has no spine key. A programming error, surfaced typed.
+    #[error("no spine identity for slot {slot}")]
+    UnknownSlot {
+        /// The slot asked for.
+        slot: String,
+    },
+
+    /// The spine refused to build or verify an envelope, or it did not decode.
+    #[error("spine envelope: {0}")]
+    Envelope(String),
+
+    /// The signing profile named a seed env var that carries nothing usable.
+    ///
+    /// Refusing to start is the point: a bridge that fell back to unsigned
+    /// envelopes under a profile that says it signs would publish a chain no
+    /// console could tell from a forged one, and it would do so silently.
+    #[error(
+        "perch.spine_seed_env `{env}` is unset or shorter than 32 bytes of hex; \
+         refusing to start rather than publish unsigned envelopes under a signing profile"
+    )]
+    MissingSpineSeed {
+        /// The environment variable the profile named.
+        env: String,
+    },
+
+    /// The chain-head file could not be read or written as JSON.
+    #[error("chain-heads file {path} is unreadable: {reason}")]
+    ChainHeadCorrupt {
+        /// The file.
+        path: String,
+        /// What the parser or serializer said.
+        reason: String,
+    },
+
+    /// A head was advanced to a sequence that is not the next one.
+    ///
+    /// Refused rather than persisted: a stored regression becomes a gap, and a
+    /// console reads a gap as evidence of a missing or forged link.
+    #[error("chain head for {issuer} would regress: expected seq {expected}, got {found}")]
+    ChainHeadRegression {
+        /// The issuer whose chain it is.
+        issuer: String,
+        /// The sequence the store expected.
+        expected: u64,
+        /// The sequence it was handed.
+        found: u64,
+    },
+
+    /// The chain-head file was written under a different colony.
+    #[error("chain-head store belongs to colony {found}, not {expected}")]
+    ChainHeadColonyMismatch {
+        /// The colony this bridge runs as.
+        expected: String,
+        /// The colony the file names.
+        found: String,
+    },
+
     /// The alarm spool reached its byte budget. Alarm work is never evicted, so the append is
     /// refused instead (`11-BRIDGE-CRATE.md` section 4.2, tier 3) and the receive loop counts the
     /// refusal without ever blocking `recv()`.

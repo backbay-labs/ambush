@@ -61,6 +61,15 @@ pub struct PerchBridgeConfig {
     /// `OperatorPrincipalConfig.token_env`.
     #[serde(default = "default_nostr_seed_env")]
     pub nostr_seed_env: String,
+    /// Environment variable holding 32 bytes of hex: the root of the SPINE key
+    /// derivation (B6).
+    ///
+    /// Distinct from `nostr_seed_env` on purpose. The transport chain and the
+    /// record chain must not share key material: one says who published to the
+    /// relay, the other says who attests the record, and a single compromise
+    /// must not forge both.
+    #[serde(default = "default_spine_seed_env")]
+    pub spine_seed_env: String,
 
     /// Environment variable holding the NIP-OA owner attestation tag, as JSON.
     ///
@@ -134,6 +143,10 @@ pub struct PerchBridgeConfig {
 fn default_nostr_seed_env() -> String {
     "PERCH_BRIDGE_NOSTR_SEED".to_string()
 }
+
+fn default_spine_seed_env() -> String {
+    "PERCH_BRIDGE_SPINE_SEED".to_string()
+}
 fn default_spool_max_bytes() -> u64 {
     268_435_456
 }
@@ -171,6 +184,7 @@ impl Default for PerchBridgeConfig {
             enabled: false,
             relay_url: String::new(),
             nostr_seed_env: default_nostr_seed_env(),
+            spine_seed_env: default_spine_seed_env(),
             auth_tag_env: None,
             spool_dir: String::new(),
             spool_max_bytes: default_spool_max_bytes(),

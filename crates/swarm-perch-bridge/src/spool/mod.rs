@@ -12,6 +12,7 @@
 //! pacer, at publish time, so nothing here is a signed artifact and the spool is not a second
 //! record.
 
+pub mod chain_heads;
 pub mod checksum;
 pub mod cursor;
 pub mod segment;
