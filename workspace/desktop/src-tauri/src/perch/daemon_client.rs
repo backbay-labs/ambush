@@ -113,6 +113,13 @@ pub fn daemon_bearer() -> Result<String, String> {
     keyring_value(PERCH_DAEMON_BEARER_KEY)
 }
 
+/// This operator's daemon principal id from the keyring. Public by
+/// construction: the daemon derives the voter id from the operator's verifying
+/// key and refuses a signature whose key_id does not bind to the principal.
+pub fn operator_id() -> Result<String, String> {
+    keyring_value(PERCH_OPERATOR_ID_KEY)
+}
+
 fn keyring_value(key: &str) -> Result<String, String> {
     let store = crate::secret_store::SecretStore::shared(crate::app_state::keyring_service());
     match store.load(key) {
