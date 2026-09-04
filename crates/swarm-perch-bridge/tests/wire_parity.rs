@@ -46,8 +46,9 @@ fn every_golden_envelope_canonicalizes_identically_in_both_implementations() {
     let goldens = golden_card_envelopes();
     assert_eq!(
         goldens.len(),
-        8,
-        "eight card vectors: seven cards plus the superseded verdict"
+        9,
+        "nine card vectors: the seven card kinds, plus the superseded verdict and the \
+         finding-subject verdict that D-FC-3 added as distinct vectors of the same kind"
     );
     for (name, envelope) in goldens {
         let unsigned = without_hash_and_signature(&envelope);
