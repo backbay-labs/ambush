@@ -41,6 +41,13 @@ pub const PERCH_RELAY_PUBLISHED_KINDS: [u32; 1] = [9];
 /// The markers the operator's own key publishes. Closed, for the same reason.
 pub const PERCH_RELAY_PUBLISHED_MARKERS: [&str; 1] = ["swarm:verdict:v1"];
 
+// The closed sets are not decoration: the kind below is what the command
+// publishes, checked at compile time, and the marker is checked against the
+// built body before the event is signed. A widened set with an unchanged
+// command does not compile.
+const _: () = assert!(PERCH_RELAY_PUBLISHED_KINDS.len() == 1);
+const _: () = assert!(PERCH_RELAY_PUBLISHED_KINDS[0] == KIND_CARD as u32);
+
 const OPERATOR_ED25519_SECRET_KEY: &str = "perch.operator_ed25519";
 const CASE_INCIDENT_PREFIX: &str = "incident:perch-case:";
 const FINDING_FACT_SCHEMA: &str = "swarm.perch.finding.v1";
@@ -329,6 +336,12 @@ pub async fn perch_record_verdict(
     let body = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
     let content = build_content(CardKind::Verdict, &human, &body)
         .map_err(|e| format!("verdict card: {e}"))?;
+    // The body must carry the one marker the closed set names, or this command
+    // is publishing something the set does not describe.
+    let published_marker = format!("<!-- {} -->", PERCH_RELAY_PUBLISHED_MARKERS[0]);
+    if content.lines().next() != Some(published_marker.as_str()) {
+        return Err("the verdict card does not carry the one published marker".to_string());
+    }
 
     // `h` and `k` and nothing else: no `t`/`l` (the threat class and severity
     // belong to the finding, not to the human's decision), no `p` (a card may
