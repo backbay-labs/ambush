@@ -6,12 +6,19 @@ import {
   subscribePerchEphemeral,
 } from "@/shared/api/perchEphemeralStore";
 
+import { ConcentrationCurve } from "@/shared/viz/ConcentrationCurve";
+import { VizDefs } from "@/shared/viz/defs";
+import type { ConcentrationSample } from "@/shared/viz/types";
+
 import { LANE } from "../lib/laneCopy";
 import {
   laneLiveNumbers,
   laneTelemetryIsStale,
   type LanePolicy,
 } from "../lib/laneLiveNumbers";
+
+/** Ninety minutes at one frame a second. A lane screen is left open for a shift. */
+const CURVE_WINDOW_SAMPLES = 5_400;
 
 export type LaneScreenProps = {
   laneId: string;
@@ -66,6 +73,26 @@ export function LaneScreen({
   );
   const stale = numbers !== null && laneTelemetryIsStale(numbers);
 
+  // The curve's window, held in a ref so a thousand samples do not re-render
+  // the screen; the one-second tick above is what repaints. Bounded, because a
+  // lane screen is left open for a shift.
+  const samplesRef = React.useRef<ConcentrationSample[]>([]);
+  if (numbers !== null) {
+    const at = Math.floor((nowMs - numbers.ageMs) / 1000);
+    const last = samplesRef.current[samplesRef.current.length - 1];
+    if (!last || last.at !== at) {
+      samplesRef.current = [
+        ...samplesRef.current,
+        {
+          at,
+          total_strength: numbers.totalStrength,
+          distinct_sources: numbers.distinctSources,
+          peak_confidence: numbers.peakConfidence,
+        },
+      ].slice(-CURVE_WINDOW_SAMPLES);
+    }
+  }
+
   return (
     <section data-testid="perch-lane" data-lane-id={laneId} className="p-4">
       <header>
@@ -90,7 +117,45 @@ export function LaneScreen({
         </p>
       )}
 
-      <div data-testid="perch-lane-curve-slot" className="mt-3" />
+      <div data-testid="perch-lane-curve-slot" className="mt-3">
+        <VizDefs />
+        {numbers === null ? null : (
+          <ConcentrationCurve
+            threatClass={threatClass}
+            policy={{
+              half_life_secs: 3600,
+              evaporation_threshold: 0.01,
+              min_sources_for_escalation: 2,
+              alert_threshold: numbers.alertThreshold,
+              incident_threshold: numbers.incidentThreshold,
+            }}
+            samples={samplesRef.current}
+            // Regime B: no deposits behind this curve. The caption says so,
+            // because a curve that looked like the deposit-backed one on a
+            // case screen but was not would be the expensive confusion.
+            deposits={null}
+            suppressions={[]}
+            now={Math.floor(nowMs / 1000)}
+            nowFromDaemon={Math.floor((nowMs - numbers.ageMs) / 1000)}
+            attribution={{
+              kind: "count",
+              distinctSources: numbers.distinctSources,
+            }}
+            state={
+              stale
+                ? {
+                    kind: "degraded",
+                    detail: {
+                      what: "the concentration stream",
+                      stillShown:
+                        "the curve's last point is the newest frame received, not the current concentration",
+                    },
+                  }
+                : { kind: "ready" }
+            }
+          />
+        )}
+      </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
         {LANE.annotationsOnly}
