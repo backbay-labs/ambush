@@ -1,6 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import {
+  KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_V2,
+} from "../../src/shared/constants/kinds";
+import {
   emitPerchMessage,
   findingCardBody,
   installPerchBridge,
@@ -147,6 +151,45 @@ test.describe("perch marker admission", () => {
     expect(
       await readPerchCounterAt(page, "perch_marker_unadmitted_total"),
     ).toBe(1);
+  });
+
+  test("the card seam is not keyed to the chat message kind", async ({
+    page,
+  }) => {
+    // A card rides whatever kind reaches `MessageBody`'s fallback body, which
+    // is every timeline content kind without a dedicated `MessageRow` case —
+    // not kind 9 alone. The sign gate that refuses renderer-signed markers is
+    // being widened to that same set, so a console that only rendered cards on
+    // kind 9 would leave the other card-bearing kinds gated but unreadable.
+    //
+    // The same golden bytes, the same admitted signer, two kinds, one outcome.
+    await installPerchBridge(page);
+    await openLane(page);
+
+    const onChatKind = await emitPerchMessage(page, {
+      channelName: PERCH_LANE_CHANNEL_NAME,
+      content: CARD,
+      pubkey: PERCH_ADMITTED_ISSUER,
+      id: PERCH_FINDING_CARD_EVENT_ID,
+      kind: KIND_STREAM_MESSAGE,
+    });
+    const onSecondKind = await emitPerchMessage(page, {
+      channelName: PERCH_LANE_CHANNEL_NAME,
+      content: CARD,
+      pubkey: PERCH_ADMITTED_ISSUER,
+      kind: KIND_STREAM_MESSAGE_V2,
+    });
+    expect(KIND_STREAM_MESSAGE_V2).not.toBe(KIND_STREAM_MESSAGE);
+
+    for (const eventId of [onChatKind, onSecondKind]) {
+      const rendered = row(page, eventId);
+      await expect(rendered.getByTestId("perch-evidence-finding")).toHaveCount(
+        1,
+      );
+      await expect(rendered).not.toContainText(PERCH_FINDING_HUMAN_LINE);
+      await expect(rendered.locator("pre")).toHaveCount(0);
+      await expect(rendered.getByTestId("perch-tier-badge")).toHaveCount(1);
+    }
   });
 
   test("admitting nobody turns every card back into prose", async ({

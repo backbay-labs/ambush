@@ -202,6 +202,12 @@ export type PerchEmitInput = {
   /** Extra tags, e.g. a delegated authorship claim that must be ignored. */
   extraTags?: string[][];
   createdAt?: number;
+  /**
+   * The event kind. Defaults to the chat message kind. A card rides ANY kind
+   * that reaches the `MessageBody` seam, so a spec can prove the seam is not
+   * keyed to kind 9 by emitting the same bytes on another card-bearing kind.
+   */
+  kind?: number;
 };
 
 /**
@@ -221,6 +227,7 @@ export async function emitPerchMessage(
       id: emitted.id,
       extraTags: emitted.extraTags,
       createdAt: emitted.createdAt,
+      kind: emitted.kind,
     });
     if (!event) throw new Error("the mock bridge has no message emitter");
     return event.id;
