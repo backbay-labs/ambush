@@ -161,6 +161,11 @@ pub struct PerchBridge {
     stall: Arc<AtomicU64>,
     events: broadcast::Receiver<RuntimeEvent>,
     containment: Option<Arc<ContainmentSweep>>,
+    /// B6. The spine identities every published envelope is sealed under.
+    spine: Arc<crate::spine::SpineSigner>,
+    /// B6. The durable per-issuer chain heads, so a restart continues its
+    /// chains rather than forking them.
+    chain_heads: Arc<Mutex<crate::spool::chain_heads::ChainHeadStore>>,
     hold_store: Option<Arc<dyn swarm_runtime::held_action::HeldActionStore>>,
     shutdown: watch::Receiver<bool>,
 }
@@ -220,6 +225,20 @@ impl PerchBridge {
         )?));
         let routing = CaseRouting::open(&spool_root.join(CASE_ROUTING_FILE))?;
 
+        // B6. Both before the bridge can publish anything. A missing or unusable
+        // seed is FATAL here rather than a silent fallback to unsigned
+        // envelopes: a bridge that published an unsigned chain under a signing
+        // profile would emit records nobody could tell from forged ones, and it
+        // would do so without a single line of output.
+        let spine = Arc::new(crate::spine::SpineSigner::from_config(
+            &config,
+            &colony_id,
+            &identities.slot_labels(),
+        )?);
+        let chain_heads = Arc::new(Mutex::new(crate::spool::chain_heads::ChainHeadStore::open(
+            spool_root, &colony_id,
+        )?));
+
         let (metrics, registry) = BridgeMetrics::new();
 
         // First card promotes findings; a hold is Operator-complete. A deployment with no
@@ -251,6 +270,8 @@ impl PerchBridge {
             stall: Arc::new(AtomicU64::new(0)),
             events,
             containment,
+            spine,
+            chain_heads,
             hold_store,
             shutdown,
         }))
@@ -314,6 +335,11 @@ impl PerchBridge {
             stall,
             events,
             containment: _containment,
+            // B6. Held for the seal step that moves onto the publish path; the
+            // point of constructing them at build is that a missing seed is
+            // fatal before anything is published, not later.
+            spine: _spine,
+            chain_heads: _chain_heads,
             hold_store,
             shutdown,
         } = self;
@@ -482,5 +508,27 @@ mod tests {
         let lines: Vec<&str> = include_str!("lib.rs").lines().map(str::trim_end).collect();
         assert!(lines.contains(&"//! ## Owns"));
         assert!(lines.contains(&"//! ## Does not own"));
+    }
+
+    /// B6. A signing profile with no usable seed refuses to start.
+    ///
+    /// The alternative is the failure this whole task exists to prevent: a
+    /// bridge that quietly published unsigned envelopes under a profile that
+    /// says it signs, emitting a chain no reader could tell from a forged one.
+    #[test]
+    fn a_signing_profile_with_no_seed_refuses_rather_than_publishing_unsigned() {
+        let config = swarm_core::config::PerchBridgeConfig {
+            spine_seed_env: "PERCH_TEST_SEED_THAT_IS_NOT_SET".to_string(),
+            ..swarm_core::config::PerchBridgeConfig::default()
+        };
+        let result = crate::spine::SpineSigner::from_config(
+            &config,
+            "colony-a",
+            &["perch-alarm".to_string()],
+        );
+        assert!(matches!(
+            result,
+            Err(crate::error::BridgeError::MissingSpineSeed { .. })
+        ));
     }
 }

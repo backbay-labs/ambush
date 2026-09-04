@@ -1777,7 +1777,28 @@ git commit -s -m "feat(bridge): sign every envelope with a provisioned spine ide
 
 ---
 
-### Task 8: Bridge — response receipts first, then `swarm:lease:v1` from the 1 Hz containment sweep poll
+#### Task 7 status — 2026-09-04
+
+Steps 1 through 13 landed, plus the startup half of step 14. The wire crate's keyless chain
+primitives, the durable chain-head store, the spine signer, and construction of both in
+`PerchBridge::build` — so a signing profile with an unusable seed **refuses to start**, which is
+the security property the task exists for. Engine gates green: 1,566 tests, clippy `-D warnings`,
+layering and panic-contract.
+
+**The seal is not yet on the publish path**, and that is a design point rather than an omission
+left for later convenience. The plan puts the seal at spool append, where `seq` is assigned. But
+the pacer RESTORES `prev_envelope_hash` when a frame is not acknowledged, precisely so an
+unpublished card never advances the chain. A seal that wrote the durable head at append would
+advance it for a card the relay never took, and the next real card would chain from a link
+nobody can fetch — a broken chain produced by the mechanism meant to guarantee it.
+
+`SpineSigner::seal_at` is the shape that resolves it: it signs at an explicit `(seq, prev)` and
+touches no store, so the pacer can sign at append and commit the head on ACK. Wiring that means
+threading the signer and the head store through `build_finding_card` and `hold_card` and
+committing on the pacer's acknowledgement path, and it should land with the T-16 rewrite the
+plan describes (after B6 the envelope HAS a signature, so T-16's assertion narrows to the fact).
+
+## Task 8: Bridge — response receipts first, then `swarm:lease:v1` from the 1 Hz containment sweep poll
 
 **Files:**
 - Create: `crates/swarm-perch-bridge/src/leases.rs` (working watcher and card body; copied skeleton text may be used as a starting point but no `todo!()` is committed)

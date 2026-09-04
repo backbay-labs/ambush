@@ -109,24 +109,28 @@ impl SpineSigner {
         self.issuers.get(slot).map_or("", String::as_str)
     }
 
-    /// Seal `fact` under `slot`, advancing that issuer's chain head.
+    /// Sign one envelope at an explicit `(seq, prev)`, touching no store.
     ///
-    /// `seq` is the head's plus one (or 1), `prev_envelope_hash` is the head's
-    /// hash, and the head advances only AFTER the envelope is built and
-    /// verified — a failed seal leaves the chain exactly where it was, so a
-    /// retry continues rather than forks.
+    /// # Why this exists beside [`Self::seal`]
+    ///
+    /// The pacer restores `prev_envelope_hash` when a frame is not
+    /// acknowledged, so an unpublished card must not advance the chain. A seal
+    /// that wrote the durable head immediately would advance it for a card the
+    /// relay never took, and the next real card would chain from a link nobody
+    /// can fetch. Callers on that path sign here and commit the head on ACK;
+    /// callers that publish synchronously use [`Self::seal`].
     ///
     /// # Errors
     ///
-    /// [`BridgeError::UnknownSlot`] for a slot with no key;
+    /// [`BridgeError::UnknownSlot`] for a slot with no key, and
     /// [`BridgeError::Envelope`] when the fact's schema does not match `kind`,
-    /// or the spine refuses, or the result does not decode; and the chain-head
-    /// store's own errors.
-    pub fn seal(
+    /// the spine refuses, or the result does not decode.
+    pub fn seal_at(
         &self,
         slot: &str,
         kind: CardKind,
-        heads: &mut ChainHeadStore,
+        seq: u64,
+        prev: Option<String>,
         fact: Value,
     ) -> Result<CardEnvelope, BridgeError> {
         let keypair = self
@@ -135,11 +139,6 @@ impl SpineSigner {
             .ok_or_else(|| BridgeError::UnknownSlot {
                 slot: slot.to_string(),
             })?;
-        let issuer = self.issuer(slot).to_string();
-        let (seq, prev) = match heads.head(&issuer) {
-            Some(head) => (head.seq + 1, Some(head.envelope_hash.clone())),
-            None => (1, None),
-        };
         // The envelope says which card it carries; a fact of another kind under
         // that claim is a mislabelled record, not a formatting slip.
         let found = fact
@@ -162,8 +161,35 @@ impl SpineSigner {
                 "the spine rejected its own newly signed envelope".to_string(),
             ));
         }
-        let envelope: CardEnvelope = serde_json::from_value(value)
-            .map_err(|error| BridgeError::Envelope(error.to_string()))?;
+        serde_json::from_value(value).map_err(|error| BridgeError::Envelope(error.to_string()))
+    }
+
+    /// Seal `fact` under `slot`, advancing that issuer's chain head.
+    ///
+    /// `seq` is the head's plus one (or 1), `prev_envelope_hash` is the head's
+    /// hash, and the head advances only AFTER the envelope is built and
+    /// verified — a failed seal leaves the chain exactly where it was, so a
+    /// retry continues rather than forks.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::UnknownSlot`] for a slot with no key;
+    /// [`BridgeError::Envelope`] when the fact's schema does not match `kind`,
+    /// or the spine refuses, or the result does not decode; and the chain-head
+    /// store's own errors.
+    pub fn seal(
+        &self,
+        slot: &str,
+        kind: CardKind,
+        heads: &mut ChainHeadStore,
+        fact: Value,
+    ) -> Result<CardEnvelope, BridgeError> {
+        let issuer = self.issuer(slot).to_string();
+        let (seq, prev) = match heads.head(&issuer) {
+            Some(head) => (head.seq + 1, Some(head.envelope_hash.clone())),
+            None => (1, None),
+        };
+        let envelope = self.seal_at(slot, kind, seq, prev, fact)?;
         heads.advance(IssuerChainHead {
             issuer,
             seq,
