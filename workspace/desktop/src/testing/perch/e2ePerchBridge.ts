@@ -400,9 +400,17 @@ export function isPerchMockCommand(command: string): boolean {
 // The answers
 // ===========================================================================
 
+/**
+ * The Rust side's own prefix for a daemon it could not reach
+ * (`daemon unreachable: {e}` in `perch/daemon_client.rs`). The console
+ * classifies leg-2 outcomes by this prefix, so a mock that spelled it
+ * differently would exercise the wrong branch and prove nothing.
+ */
+export const PERCH_DAEMON_UNREACHABLE_PREFIX = "daemon unreachable:";
+
 function unreachable(): never {
   throw new Error(
-    "perch daemon unreachable: error sending request for url (http://127.0.0.1:9090)",
+    `${PERCH_DAEMON_UNREACHABLE_PREFIX} error sending request for url (http://127.0.0.1:9090)`,
   );
 }
 

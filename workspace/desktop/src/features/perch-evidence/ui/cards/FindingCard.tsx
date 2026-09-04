@@ -14,12 +14,16 @@ import { isAdmittedIssuer } from "../../lib/admittedIssuers";
 import type { SwarmCardDecoder, SwarmCardProps } from "../../lib/markerTypes";
 import { defineSwarmCard } from "../defineSwarmCard";
 import { EvidenceCardFrame } from "../EvidenceCardFrame";
+import { FindingCardActions } from "./FindingCardActions";
 
 /**
- * `swarm:finding:v1`, read-only. The verbs (`E` promotes, `D` dismisses)
- * arrive with their real workflow in Task 23; until then this card has no
- * action component and no stub callback, so nothing on it can look
- * actionable and do nothing.
+ * `swarm:finding:v1`, with its verbs.
+ *
+ * `E` promotes the finding to a case the daemon mints; `C`, `D` and `I`
+ * record a verdict in two legs. The action group is mounted only when the
+ * card decoded, so a refusal state never carries something to press. The
+ * facts it acts on come from the ADMITTED envelope below, never from the
+ * timeline row's own copies of them.
  */
 
 type FindingPayload = {
@@ -114,6 +118,7 @@ export function FindingCardPresenter({
             )}
           </Row>
         </dl>
+        <FindingCardActions card={{ cardEventId: card.eventId, fact }} />
       </EvidenceCardFrame>
     </div>
   );

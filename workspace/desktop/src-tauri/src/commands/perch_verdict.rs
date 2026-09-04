@@ -183,6 +183,126 @@ fn operator_signing_key() -> Result<SigningKey, String> {
     Ok(key)
 }
 
+// ===========================================================================
+// The case channel has to exist before a card is published into it.
+// ===========================================================================
+//
+// The daemon mints `case_id` and returns it (W3-14) BEFORE the bridge has seen
+// `RuntimeEvent::CasePromoted` and created the channel. Between those two
+// moments the console holds a channel UUID that names nothing. A `kind:9` with
+// an `h` tag for a channel the relay does not know is not held for later: it is
+// refused, or it is stored where nobody is subscribed. Either way the operator
+// is told a decision was recorded when no reader will ever see it, which is the
+// one failure this whole two-legged design exists to prevent.
+//
+// So leg 1 waits, with explicit filters, and refuses rather than guesses.
+
+/// NIP-29 channel metadata. Its `d` tag carries the channel id.
+const KIND_CHANNEL_METADATA: u16 = 39000;
+/// NIP-29 membership. Its `d` tag carries the channel id, its `p` tags members.
+const KIND_CHANNEL_MEMBERSHIP: u16 = 39002;
+
+/// How long leg 1 waits for the bridge to create the daemon-minted channel.
+const CASE_CHANNEL_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// The gap between probes.
+const CASE_CHANNEL_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The stable prefix that means: nothing was signed, nothing was published,
+/// nothing was sent to the daemon, and the same call may be made again.
+pub const CASE_CHANNEL_PENDING_PREFIX: &str = "case-channel-pending:";
+
+/// The two filters that prove the case channel exists AND that this operator
+/// is in it. Explicit `kinds` on both: an omitted `kinds` trips the relay's
+/// p-gate with a 403 rather than answering.
+#[must_use]
+fn case_channel_filters(case_channel: &str, my_pubkey: &str) -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({
+            "kinds": [KIND_CHANNEL_METADATA],
+            "#d": [case_channel],
+            "limit": 1,
+        }),
+        serde_json::json!({
+            "kinds": [KIND_CHANNEL_MEMBERSHIP],
+            "#d": [case_channel],
+            "#p": [my_pubkey],
+            "limit": 1,
+        }),
+    ]
+}
+
+/// One relay event reduced to what the probe reads. Keeping the decision over
+/// this shape rather than over `nostr::Event` is what lets the rule be tested
+/// without a relay and without signing anything.
+struct ChannelProof {
+    kind: u16,
+    tags: Vec<Vec<String>>,
+}
+
+impl ChannelProof {
+    /// Whether some tag on this event is exactly `[name, value]`-prefixed.
+    fn has(&self, name: &str, value: &str) -> bool {
+        self.tags
+            .iter()
+            .any(|tag| tag.len() >= 2 && tag[0] == name && tag[1] == value)
+    }
+}
+
+/// Narrow relay events to the probe's shape.
+fn channel_proofs(events: &[nostr::Event]) -> Vec<ChannelProof> {
+    events
+        .iter()
+        .map(|event| ChannelProof {
+            kind: event.kind.as_u16(),
+            tags: event
+                .tags
+                .iter()
+                .map(|tag| tag.as_slice().to_vec())
+                .collect(),
+        })
+        .collect()
+}
+
+/// Both halves, re-checked here rather than trusted from the filter: a relay
+/// that ignored `#p` would otherwise let a non-member publish into a case.
+#[must_use]
+fn case_channel_is_visible(proofs: &[ChannelProof], case_channel: &str, my_pubkey: &str) -> bool {
+    let metadata = proofs
+        .iter()
+        .any(|p| p.kind == KIND_CHANNEL_METADATA && p.has("d", case_channel));
+    let membership = proofs.iter().any(|p| {
+        p.kind == KIND_CHANNEL_MEMBERSHIP && p.has("d", case_channel) && p.has("p", my_pubkey)
+    });
+    metadata && membership
+}
+
+/// Poll `probe` every [`CASE_CHANNEL_POLL`] until it answers true or
+/// [`CASE_CHANNEL_WAIT`] is spent.
+///
+/// A probe error stops the wait immediately and is returned unchanged: a relay
+/// this command cannot read is a fault to surface, not a reason to keep asking
+/// for five seconds. Dropping the returned future stops the polling; nothing
+/// here is spawned.
+async fn await_case_channel<P, F>(mut probe: P) -> Result<(), String>
+where
+    P: FnMut() -> F,
+    F: std::future::Future<Output = Result<bool, String>>,
+{
+    let started = tokio::time::Instant::now();
+    loop {
+        if probe().await? {
+            return Ok(());
+        }
+        if started.elapsed() >= CASE_CHANNEL_WAIT {
+            return Err(format!(
+                "{CASE_CHANNEL_PENDING_PREFIX} the case channel is not on the relay after {} seconds. The bridge creates it when the daemon publishes CasePromoted; nothing was signed or sent.",
+                CASE_CHANNEL_WAIT.as_secs()
+            ));
+        }
+        tokio::time::sleep(CASE_CHANNEL_POLL).await;
+    }
+}
+
 /// The finding facts this command is allowed to copy into the verdict card.
 struct AdmittedFinding {
     finding_id: String,
@@ -256,6 +376,31 @@ pub async fn perch_record_verdict(
         ));
     }
 
+    // Before anything is signed or stamped: the channel this card names must
+    // exist and must list this operator. Failing here costs nothing — no
+    // signature, no relay event, no daemon call — and the caller may retry.
+    let keys = state.signing_keys()?;
+    let my_pubkey = keys.public_key().to_hex();
+    {
+        let app: &AppState = &state;
+        let case_channel = input.case_channel.clone();
+        let pubkey = my_pubkey.clone();
+        await_case_channel(move || {
+            let filters = case_channel_filters(&case_channel, &pubkey);
+            let case_channel = case_channel.clone();
+            let pubkey = pubkey.clone();
+            async move {
+                let events = crate::relay::query_relay(app, &filters).await?;
+                Ok(case_channel_is_visible(
+                    &channel_proofs(&events),
+                    &case_channel,
+                    &pubkey,
+                ))
+            }
+        })
+        .await?;
+    }
+
     let finding = admitted_finding_card(&state, &input.finding_card_id).await?;
     let decided_at_ms = now_ms();
     let operator = operator_id()?;
@@ -282,13 +427,14 @@ pub async fn perch_record_verdict(
         signature_hex: hex::encode(key.sign(&preimage).to_bytes()),
     };
 
-    let keys = state.signing_keys()?;
     let fact = serde_json::json!({
         "schema": VERDICT_FACT_SCHEMA,
         "issuer": {
             "swarm_agent_id": operator,
             "role": serde_json::Value::Null,
-            "nostr_pubkey": keys.public_key().to_hex(),
+            // The same key the case-channel membership probe asked about, so
+            // the card's issuer and the member the relay admitted are one.
+            "nostr_pubkey": my_pubkey,
         },
         "emitted_at_ms": decided_at_ms,
         "locator": {

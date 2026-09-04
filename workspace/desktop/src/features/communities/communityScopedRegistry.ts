@@ -8,6 +8,7 @@ import { resetLinkPreviewPreparations } from "@/features/messages/lib/linkPrevie
 import { resetPersistentAgentAudienceStore } from "@/features/messages/lib/persistentAgentAudience";
 import { clearTimeoutState } from "@/features/moderation/lib/timeoutStore";
 import { resetPerchAdmittedIssuers } from "@/features/perch-evidence/lib/admittedIssuers";
+import { resetFindingVerdictFlow } from "@/features/perch-evidence/lib/findingVerdictFlow";
 import { resetPerchCaseIndex } from "@/features/perch-evidence/lib/perchCaseIndex";
 import { resetPerchWriteStates } from "@/features/perch-evidence/lib/verdictWriteState";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
@@ -84,6 +85,7 @@ export const COMMUNITY_SCOPED_SINGLETONS = [
   "perchAdmittedIssuers",
   "perchWriteStates",
   "perchCaseIndex",
+  "perchFindingVerdictFlow",
 ] as const;
 
 /** The name of one community-scoped singleton in {@link COMMUNITY_SCOPED_SINGLETONS}. */
@@ -165,6 +167,10 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
   perchAdmittedIssuers: () => resetPerchAdmittedIssuers(),
   perchWriteStates: () => resetPerchWriteStates(),
   perchCaseIndex: () => resetPerchCaseIndex(),
+  // The stored leg-1 intents. A pending daemon leg belongs to the community
+  // whose relay carries its card; retrying it against another one would send
+  // a decision about a finding this community has never seen.
+  perchFindingVerdictFlow: () => resetFindingVerdictFlow(),
 };
 
 /**

@@ -127,3 +127,180 @@ fn the_verdict_card_tags_carry_no_e_and_no_p() {
     assert!(!names.contains(&"e".to_string()));
     assert!(!names.contains(&"p".to_string()));
 }
+
+// ===========================================================================
+// The case-channel gate
+// ===========================================================================
+
+fn proof(kind: u16, tags: &[[&str; 2]]) -> ChannelProof {
+    ChannelProof {
+        kind,
+        tags: tags
+            .iter()
+            .map(|t| t.iter().map(|s| (*s).to_string()).collect())
+            .collect(),
+    }
+}
+
+const CASE: &str = "27799e23-ab25-4659-b381-3de47ea7ca4d";
+const ME: &str = "e5ebc6cdb579be112e336cc319b5989b4bb6af11786ea90dbe52b5f08d741b34";
+const SOMEBODY_ELSE: &str = "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f";
+
+/// Both filters name their kinds explicitly. An omitted `kinds` trips the
+/// relay's p-gate with a 403, so a probe without one never answers at all and
+/// this command would time out on every case.
+#[test]
+fn the_case_channel_probe_names_both_kinds_and_scopes_the_membership_to_me() {
+    let filters = case_channel_filters(CASE, ME);
+    assert_eq!(filters.len(), 2);
+    assert_eq!(filters[0]["kinds"], serde_json::json!([39000]));
+    assert_eq!(filters[0]["#d"], serde_json::json!([CASE]));
+    assert!(filters[0].get("#p").is_none());
+    assert_eq!(filters[1]["kinds"], serde_json::json!([39002]));
+    assert_eq!(filters[1]["#d"], serde_json::json!([CASE]));
+    assert_eq!(filters[1]["#p"], serde_json::json!([ME]));
+}
+
+/// The rule is re-checked over the returned events, not inferred from having
+/// asked. A relay that ignored `#p` — or answered a different channel's
+/// membership — would otherwise let this command publish a decision into a
+/// case the operator is not in.
+#[test]
+fn visibility_needs_the_metadata_and_this_operators_own_membership() {
+    let metadata = proof(39000, &[["d", CASE]]);
+    let mine = proof(39002, &[["d", CASE], ["p", ME]]);
+    let theirs = proof(39002, &[["d", CASE], ["p", SOMEBODY_ELSE]]);
+    let other_case = proof(39002, &[["d", "not-this-case"], ["p", ME]]);
+
+    assert!(case_channel_is_visible(
+        &[
+            proof(39000, &[["d", CASE]]),
+            proof(39002, &[["d", CASE], ["p", SOMEBODY_ELSE], ["p", ME]]),
+        ],
+        CASE,
+        ME
+    ));
+    assert!(
+        !case_channel_is_visible(&[], CASE, ME),
+        "nothing is not proof"
+    );
+    assert!(
+        !case_channel_is_visible(&[proof(39000, &[["d", CASE]])], CASE, ME),
+        "a channel this operator is not in is not a channel to publish into"
+    );
+    assert!(
+        !case_channel_is_visible(&[mine], CASE, ME),
+        "membership without metadata is a half-created channel"
+    );
+    assert!(
+        !case_channel_is_visible(&[proof(39000, &[["d", CASE]]), theirs], CASE, ME),
+        "somebody else's membership is not this operator's"
+    );
+    assert!(
+        !case_channel_is_visible(&[metadata, other_case], CASE, ME),
+        "a membership in another channel proves nothing about this one"
+    );
+    assert!(
+        !case_channel_is_visible(
+            &[
+                proof(9, &[["d", CASE]]),
+                proof(9, &[["d", CASE], ["p", ME]])
+            ],
+            CASE,
+            ME
+        ),
+        "the kinds are load-bearing; a kind:9 saying so is not the relay saying so"
+    );
+}
+
+/// The wait ends the moment both halves are visible, and not a tick later.
+#[tokio::test(start_paused = true)]
+async fn the_wait_returns_as_soon_as_the_channel_appears() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let started = tokio::time::Instant::now();
+    let result = await_case_channel(move || {
+        let seen = seen.clone();
+        async move {
+            let n = seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(n >= 2)
+        }
+    })
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(started.elapsed(), std::time::Duration::from_millis(200));
+}
+
+/// Exhaustion refuses with a prefix the console can key on, and the wait is
+/// bounded at five seconds of 100 ms probes.
+#[tokio::test(start_paused = true)]
+async fn an_exhausted_wait_refuses_with_the_stable_prefix() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let started = tokio::time::Instant::now();
+    let error = await_case_channel(move || {
+        let seen = seen.clone();
+        async move {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(false)
+        }
+    })
+    .await
+    .expect_err("a channel that never appears must refuse");
+    assert!(
+        error.starts_with(CASE_CHANNEL_PENDING_PREFIX),
+        "the console keys retry on this prefix: {error}"
+    );
+    assert_eq!(started.elapsed(), CASE_CHANNEL_WAIT);
+    // t = 0, 100, ..., 5000: fifty sleeps, fifty-one probes.
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 51);
+}
+
+/// Nothing is spawned, so dropping the future stops the polling. A command
+/// the webview abandoned must not keep asking the relay for five seconds.
+#[tokio::test(start_paused = true)]
+async fn dropping_the_wait_stops_the_polling() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let cancelled = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        await_case_channel(move || {
+            let seen = seen.clone();
+            async move {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(false)
+            }
+        }),
+    )
+    .await;
+    assert!(cancelled.is_err(), "the outer timeout drops the wait");
+    let at_drop = calls.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(at_drop, 3, "probes at t = 0, 100 and 200 ms");
+    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        at_drop,
+        "a dropped wait polls nothing"
+    );
+}
+
+/// A relay this command cannot read is a fault to surface now, not a reason
+/// to keep asking for five seconds and then report a different problem.
+#[tokio::test(start_paused = true)]
+async fn a_probe_error_ends_the_wait_at_once() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = calls.clone();
+    let error = await_case_channel(move || {
+        let seen = seen.clone();
+        async move {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err::<bool, String>("relay query failed: 503".to_string())
+        }
+    })
+    .await
+    .expect_err("the probe's error is the command's error");
+    assert_eq!(error, "relay query failed: 503");
+    assert!(!error.starts_with(CASE_CHANNEL_PENDING_PREFIX));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

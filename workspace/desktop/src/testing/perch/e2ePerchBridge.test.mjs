@@ -6,6 +6,7 @@ import { PERCH_TAURI_COMMANDS } from "@/shared/api/tauriPerch";
 import {
   assertEveryPerchCommandHandled,
   PERCH_ADMITTED_ISSUER,
+  PERCH_DAEMON_UNREACHABLE_PREFIX,
   PERCH_CASE_CHANNEL,
   PERCH_FINDING_CARD_EVENT_ID,
   PERCH_FINDING_ID,
@@ -167,6 +168,21 @@ test("perch_finding_feedback records one row per finding and verdict event", () 
     handlePerchMockCommand("perch_reviewed_findings", {}).reviewed.length,
     2,
     "two intent ids are two rows; one intent id replayed is one",
+  );
+});
+
+test("the offline daemon speaks the Rust command's own error prefix", () => {
+  // The console keys `daemon-unreachable` off this exact prefix. A mock that
+  // said "perch daemon unreachable" would drive the `failed` branch instead
+  // and the spec would be testing a state the product never reaches.
+  assert.equal(PERCH_DAEMON_UNREACHABLE_PREFIX, "daemon unreachable:");
+  seedPerchFixture({ daemonReachable: false });
+  assert.throws(
+    () =>
+      handlePerchMockCommand("perch_mint_incident", {
+        input: { findingId: "x" },
+      }),
+    (error) => error.message.startsWith(PERCH_DAEMON_UNREACHABLE_PREFIX),
   );
 });
 
