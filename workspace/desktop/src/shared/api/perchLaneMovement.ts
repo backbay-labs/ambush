@@ -1,9 +1,9 @@
 import * as React from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 
-import { usePerchLaneChannelIds } from "@/features/perch-evidence/lib/admittedIssuers";
-import { readLaneMovementEnvelope } from "@/features/perch-evidence/lib/laneMovementEnvelope";
 import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
+import { usePerchLaneChannelIds } from "@/features/perch-evidence/lib/admittedIssuers";
+import { parseCardContent } from "@/features/perch/wire";
 import { getChannelIdFromTags } from "@/features/messages/lib/threading";
 import { useIdentityQuery } from "@/shared/api/hooks";
 
@@ -24,6 +24,39 @@ import {
  * one REQ set; syncs are coalesced per tick, so a hundred rows mounting at
  * once reconcile once.
  */
+
+/** The two envelope members the lane-movement sink reads. */
+export type LaneMovementEnvelope = {
+  readonly issuer: string;
+  readonly seq: number;
+};
+
+/**
+ * Read `issuer` and `seq` out of a swarm card body, through the wire
+ * mirror's own parser so the console has exactly one card grammar.
+ *
+ * Returns null for prose, for a marker that is not the whole of line 0, for
+ * a kind or version the mirror does not know, for a fence whose info string
+ * is not the marker's own, and for a malformed or ill-typed envelope. Never
+ * throws: this runs on every lane event.
+ */
+export function readLaneMovementEnvelope(
+  content: string,
+): LaneMovementEnvelope | null {
+  const parts = parseCardContent(content);
+  if (!parts) return null;
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(parts.json);
+  } catch {
+    return null;
+  }
+  if (typeof envelope !== "object" || envelope === null) return null;
+  const { issuer, seq } = envelope as { issuer?: unknown; seq?: unknown };
+  if (typeof issuer !== "string" || issuer.length === 0) return null;
+  if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 0) return null;
+  return { issuer, seq };
+}
 
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 30_000;

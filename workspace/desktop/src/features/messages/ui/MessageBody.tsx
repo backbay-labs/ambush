@@ -2,9 +2,22 @@ import * as React from "react";
 import { toast } from "sonner";
 import { hasLinkPreviewSuppression } from "@/features/messages/lib/formatTimelineMessages";
 import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedBy";
+import { getChannelIdFromTags } from "@/features/messages/lib/threading";
 import { parseWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import type { TimelineMessage } from "@/features/messages/types";
 import { getConfigNudgeAuthorPubkey } from "@/features/messages/ui/configNudgeAuthPubkey";
+import {
+  useAdmittedIssuerPredicate,
+  useAdmittedIssuersVersion,
+} from "@/features/perch-evidence/lib/admittedIssuers";
+import type {
+  SwarmCardContext,
+  SwarmMarkerParse,
+} from "@/features/perch-evidence/lib/markerTypes";
+import { parseSwarmMarker } from "@/features/perch-evidence/lib/parseSwarmMarker";
+import { useSwarmCardSurface } from "@/features/perch-evidence/ui/SwarmCardSurface";
+import { SwarmEvidenceCard } from "@/features/perch-evidence/ui/swarmCardRegistry";
+import { UnadmittedMarkerNotice } from "@/features/perch-evidence/ui/UnadmittedMarkerNotice";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { editMessage } from "@/shared/api/tauri";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
@@ -33,6 +46,11 @@ export type MessageBodyProps = {
   videoReviewContext?: VideoReviewContext;
 };
 
+/** The common case: a body that is not a swarm card. One frozen identity. */
+const NOT_A_SWARM_MARKER: SwarmMarkerParse = Object.freeze({
+  status: "not-a-marker",
+} as const);
+
 /** Renders the fallback body for message kinds without a dedicated row case. */
 export function MessageBody({
   agentAddressPrefix,
@@ -51,6 +69,45 @@ export function MessageBody({
   videoReviewCommentRootId,
   videoReviewContext,
 }: MessageBodyProps) {
+  // The perch seam (12-PLAN-FIRST-CARD.md Task 17): route the body by its
+  // line 0 and its raw signer before any other sniff. The parse is memoised
+  // per message and per admitted-set version; the predicate's identity never
+  // changes, so the version is what re-parses a row after the set loads.
+  const swarmSurface = useSwarmCardSurface();
+  const isAdmittedIssuer = useAdmittedIssuerPredicate();
+  const admittedVersion = useAdmittedIssuersVersion();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `admittedVersion` is the memo's invalidation key — `isAdmittedIssuer`'s identity never changes, so the version is what re-parses a row once the admitted set loads
+  const swarmParse = React.useMemo(
+    () =>
+      swarmSurface.enabled
+        ? parseSwarmMarker({
+            content: message.body,
+            signerPubkey: message.signerPubkey,
+            channelTag: getChannelIdFromTags(message.tags ?? []),
+            eventId: message.id,
+            isAdmittedIssuer,
+          })
+        : NOT_A_SWARM_MARKER,
+    [
+      swarmSurface.enabled,
+      message.body,
+      message.signerPubkey,
+      message.tags,
+      message.id,
+      isAdmittedIssuer,
+      admittedVersion,
+    ],
+  );
+  const swarmCtx = React.useMemo<SwarmCardContext>(
+    () => ({
+      surface: swarmSurface.surface,
+      caseChannelId: swarmSurface.caseChannelId,
+      searchQuery: searchQuery ?? "",
+      density: "comfortable",
+    }),
+    [swarmSurface.surface, swarmSurface.caseChannelId, searchQuery],
+  );
+
   const linkPreviewsSuppressed = hasLinkPreviewSuppression(message.tags);
   const removeLinkPreviewsForEveryone =
     channelId && onEdit && !message.pending && !linkPreviewsSuppressed
@@ -103,6 +160,18 @@ export function MessageBody({
 
   const { nonDmChannelNames: channelNames } = useChannelNavigation();
 
+  if (
+    swarmParse.status === "ok" ||
+    swarmParse.status === "unknown-kind" ||
+    swarmParse.status === "unsupported-version"
+  ) {
+    return <SwarmEvidenceCard parsed={swarmParse} ctx={swarmCtx} />;
+  }
+  const unadmittedNotice =
+    swarmParse.status === "unadmitted-issuer" ? (
+      <UnadmittedMarkerNotice slug={swarmParse.slug} eventId={message.id} />
+    ) : null;
+
   const waveMessage = parseWaveMessageContent(message.body);
   if (waveMessage) {
     return (
@@ -116,34 +185,36 @@ export function MessageBody({
     );
   }
 
-  // perch seam: see 12-PLAN-FIRST-CARD.md Task 17
   return (
-    <VideoReviewCommentMarkdown
-      channelNames={channelNames}
-      className={cn(
-        "max-w-full text-message",
-        emojiOnly &&
-          "text-4xl leading-tight [&_p]:leading-tight [&_img[data-custom-emoji]]:h-[1.45em] [&_img[data-custom-emoji]]:align-middle [&_button:has(img[data-custom-emoji])]:align-middle",
-      )}
-      configNudgeAuthorPubkey={getConfigNudgeAuthorPubkey(
-        message,
-        isKnownAgentPubkey,
-      )}
-      content={message.body}
-      messageId={message.id}
-      linkPreviewsSuppressed={linkPreviewsSuppressed}
-      linkPreviewTags={message.tags}
-      leadingInlineContent={agentAddressPrefix}
-      onRemoveLinkPreviewsForEveryone={removeLinkPreviewsForEveryone}
-      customEmoji={customEmoji}
-      imetaByUrl={imetaByUrl}
-      agentMentionPubkeysByName={agentMentionPubkeysByName}
-      mentionNames={mentionNames}
-      mentionPubkeysByName={mentionPubkeysByName}
-      searchQuery={searchQuery}
-      snapshotSharedBy={snapshotSharedBy}
-      videoReviewCommentRootId={videoReviewCommentRootId}
-      videoReviewContext={videoReviewContext}
-    />
+    <>
+      {unadmittedNotice}
+      <VideoReviewCommentMarkdown
+        channelNames={channelNames}
+        className={cn(
+          "max-w-full text-message",
+          emojiOnly &&
+            "text-4xl leading-tight [&_p]:leading-tight [&_img[data-custom-emoji]]:h-[1.45em] [&_img[data-custom-emoji]]:align-middle [&_button:has(img[data-custom-emoji])]:align-middle",
+        )}
+        configNudgeAuthorPubkey={getConfigNudgeAuthorPubkey(
+          message,
+          isKnownAgentPubkey,
+        )}
+        content={message.body}
+        messageId={message.id}
+        linkPreviewsSuppressed={linkPreviewsSuppressed}
+        linkPreviewTags={message.tags}
+        leadingInlineContent={agentAddressPrefix}
+        onRemoveLinkPreviewsForEveryone={removeLinkPreviewsForEveryone}
+        customEmoji={customEmoji}
+        imetaByUrl={imetaByUrl}
+        agentMentionPubkeysByName={agentMentionPubkeysByName}
+        mentionNames={mentionNames}
+        mentionPubkeysByName={mentionPubkeysByName}
+        searchQuery={searchQuery}
+        snapshotSharedBy={snapshotSharedBy}
+        videoReviewCommentRootId={videoReviewCommentRootId}
+        videoReviewContext={videoReviewContext}
+      />
+    </>
   );
 }

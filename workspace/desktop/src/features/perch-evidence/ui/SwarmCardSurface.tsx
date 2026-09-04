@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useLocation } from "@tanstack/react-router";
+import { type AnyRouter, useRouter } from "@tanstack/react-router";
 
 import { derivePerchShellRoute } from "@/app/perchViews";
 import { usePerchSubscriptionsMount } from "@/shared/api/perchLaneMovement";
@@ -41,6 +41,33 @@ export function SwarmCardSurfaceProvider({
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
+const NO_ROUTER_PATHNAME = "/";
+const noopUnsubscribe = () => {};
+
+/**
+ * The router pathname, or `/` when no `RouterProvider` is mounted.
+ *
+ * `useLocation` throws without a router. `MessageBody` calls this hook on
+ * every timeline row, and its unit tests render it with no router at all, so
+ * the location is read through React's own `useSyncExternalStore` against the
+ * router's typed location store and its navigation events, and tolerates the
+ * router being absent. A router is a stable presence for a component's life,
+ * so the callbacks never change identity underneath a mounted row.
+ */
+function useRouterPathname(): string {
+  const router = useRouter({ warn: false }) as AnyRouter | undefined;
+  const subscribe = React.useCallback(
+    (onChange: () => void) =>
+      router ? router.subscribe("onResolved", onChange) : noopUnsubscribe,
+    [router],
+  );
+  const read = React.useCallback(
+    () => router?.stores.location.get().pathname ?? NO_ROUTER_PATHNAME,
+    [router],
+  );
+  return React.useSyncExternalStore(subscribe, read, read);
+}
+
 /**
  * The surface a swarm card is rendered on. Without a provider the surface is
  * derived from the router location (`/cases/` is a case, `/channels/` a
@@ -58,7 +85,7 @@ export function useSwarmCardSurface(): SwarmCardSurface {
   // is refcounted, so a timeline of rows is one REQ set.
   usePerchSubscriptionsMount(enabled);
   const provided = React.useContext(Ctx);
-  const pathname = useLocation({ select: (l) => l.pathname });
+  const pathname = useRouterPathname();
   return React.useMemo<SwarmCardSurface>(() => {
     if (provided) return { enabled, ...provided };
     const route = derivePerchShellRoute(pathname);

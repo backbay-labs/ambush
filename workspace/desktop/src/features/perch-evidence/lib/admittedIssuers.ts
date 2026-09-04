@@ -126,6 +126,20 @@ export function useAdmittedIssuerPredicate(): (pubkey: string) => boolean {
   return isAdmittedIssuer;
 }
 
+/**
+ * The version counter behind the predicate, for a memo that must recompute
+ * when the admitted set changes even though `isAdmittedIssuer`'s identity
+ * never does. The set loads asynchronously after the first timeline render,
+ * so a parse memoised on the function alone would stay "unadmitted" forever.
+ */
+export function useAdmittedIssuersVersion(): number {
+  return useSyncExternalStore(
+    subscribePerchCounters,
+    getVersion,
+    getServerVersion,
+  );
+}
+
 /** The lane channel ids for React, reference-stable until the set changes. */
 export function usePerchLaneChannelIds(): readonly string[] {
   return useSyncExternalStore(
