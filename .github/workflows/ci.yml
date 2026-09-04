@@ -840,6 +840,42 @@ jobs:
           path: artifacts/benchmarks/hot-path-regression.log
           if-no-files-found: error
 
+  # The chart is a deployment contract: what it renders is what someone runs.
+  # A template that stops rendering, or renders a secret it should not, fails
+  # nothing else in this repository -- there is no compiler between this chart
+  # and a cluster.
+  helm:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install helm-unittest
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version 0.8.2
+
+      - name: Build chart dependencies
+        run: helm dependency build deploy/helm/swarm-team-six
+
+      - name: Lint the chart
+        run: helm lint deploy/helm/swarm-team-six
+
+      # The render is the proof the templates hold together with every Perch
+      # value on. Lint alone passes a chart whose templates never execute.
+      - name: Render with the Perch values
+        run: helm template ci deploy/helm/swarm-team-six -f deploy/helm/swarm-team-six/ci/perch-values.yaml > /dev/null
+
+      - name: Chart unit tests
+        run: helm unittest deploy/helm/swarm-team-six
+
+      - name: Check the dev compose
+        run: bash tools/check-perch-compose.sh
+
   supply-chain:
     needs:
       - changes

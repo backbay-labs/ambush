@@ -1,0 +1,94 @@
+suite: the Perch bridge's credentials
+templates:
+  - templates/perch-secret.yaml
+  - templates/deployment.yaml
+tests:
+  - it: renders nothing when perch is disabled
+    # The default is off. A chart that minted a secret for a feature nobody
+    # enabled would put credentials in a cluster that has no use for them.
+    templates:
+      - templates/perch-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: carries three separate credentials, never one reused
+    templates:
+      - templates/perch-secret.yaml
+    set:
+      perch:
+        enabled: true
+        nostrSeed: "aa"
+        spineSeed: "bb"
+        operatorToken: "cc"
+    asserts:
+      - equal:
+          path: stringData.PERCH_BRIDGE_NOSTR_SEED
+          value: "aa"
+      # The SPINE seed derives under its own domain string. Sharing material
+      # with the transport chain would let a compromise of one forge the other.
+      - equal:
+          path: stringData.PERCH_BRIDGE_SPINE_SEED
+          value: "bb"
+      - equal:
+          path: stringData.SWARM_OPERATOR_TOKEN
+          value: "cc"
+
+  - it: refuses to render with a missing seed rather than minting an empty one
+    templates:
+      - templates/perch-secret.yaml
+    set:
+      perch:
+        enabled: true
+        spineSeed: "bb"
+        operatorToken: "cc"
+    asserts:
+      - failedTemplate:
+          errorMessage: "perch.nostrSeed is required unless perch.existingSecret is set"
+
+  - it: mints no secret when an existing one is named
+    templates:
+      - templates/perch-secret.yaml
+    set:
+      perch:
+        enabled: true
+        existingSecret: byo-perch
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: the deployment reads the credentials as environment, never as args
+    templates:
+      - templates/deployment.yaml
+    set:
+      perch:
+        enabled: true
+        nostrSeed: "aa"
+        spineSeed: "bb"
+        operatorToken: "cc"
+    asserts:
+      # An arg is visible in `ps` to anything sharing the pod's PID namespace
+      # and in every `kubectl describe`.
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: RELEASE-NAME-swarm-team-six-perch
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --config
+            - /etc/swarm/config.yaml
+            - --serve
+            - --bind
+            - "0.0.0.0:9090"
+
+  - it: an existing secret is what the deployment reads
+    templates:
+      - templates/deployment.yaml
+    set:
+      perch:
+        enabled: true
+        existingSecret: byo-perch
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: byo-perch

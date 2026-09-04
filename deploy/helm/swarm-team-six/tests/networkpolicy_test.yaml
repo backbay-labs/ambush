@@ -1,0 +1,72 @@
+suite: default-deny egress
+templates:
+  - templates/networkpolicy.yaml
+tests:
+  - it: is on by default
+    # The daemon's job is to watch. A watcher that can reach everything is an
+    # exfiltration path out of the cluster it was deployed to protect, so the
+    # policy defaults ON and an operator turns it off deliberately.
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.policyTypes
+          value: [Ingress, Egress]
+
+  - it: allows DNS, because without it every other rule reads as a service being down
+    asserts:
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 53
+      - equal:
+          path: spec.egress[0].to[0].podSelector.matchLabels.k8s-app
+          value: kube-dns
+
+  - it: admits no namespace to the operator port until one is named
+    asserts:
+      - equal:
+          path: spec.ingress[0].from
+          value: null
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 9090
+
+  - it: admits exactly the namespaces named
+    set:
+      networkPolicy:
+        operatorNamespaceSelectors:
+          - kubernetes.io/metadata.name: perch-operators
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: perch-operators
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 1
+
+  - it: carries the caller's extra egress rules after DNS
+    set:
+      networkPolicy:
+        egress:
+          - to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ambush
+            ports:
+              - protocol: TCP
+                port: 3000
+    asserts:
+      - lengthEqual:
+          path: spec.egress
+          count: 2
+      - equal:
+          path: spec.egress[1].ports[0].port
+          value: 3000
+
+  - it: renders nothing when disabled
+    set:
+      networkPolicy:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

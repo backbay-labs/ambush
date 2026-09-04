@@ -1,0 +1,23 @@
+# The CI render: everything Perch adds, on, with placeholder credentials.
+#
+# `helm template` against this file is what proves the templates render at all.
+# The values are deliberately obvious non-secrets — a chart's CI values file is
+# public, and a realistic-looking seed here would eventually be copied.
+perch:
+  enabled: true
+  nostrSeed: "0000000000000000000000000000000000000000000000000000000000000000"
+  spineSeed: "1111111111111111111111111111111111111111111111111111111111111111"
+  operatorToken: "ci-token-not-a-secret"
+
+networkPolicy:
+  enabled: true
+  operatorNamespaceSelectors:
+    - kubernetes.io/metadata.name: perch-operators
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ambush
+      ports:
+        - protocol: TCP
+          port: 3000

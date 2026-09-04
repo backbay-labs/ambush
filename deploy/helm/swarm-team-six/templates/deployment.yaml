@@ -41,6 +41,14 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+          {{- if .Values.perch.enabled }}
+          # The bridge's seeds and the operator bearer reach the process as
+          # environment, never as args: an arg is visible in `ps` to anything
+          # sharing the pod's PID namespace and to every `kubectl describe`.
+          envFrom:
+            - secretRef:
+                name: {{ .Values.perch.existingSecret | default (printf "%s-perch" (include "swarm-team-six.fullname" .)) }}
+          {{- end }}
           startupProbe:
             httpGet:
               path: /startupz
