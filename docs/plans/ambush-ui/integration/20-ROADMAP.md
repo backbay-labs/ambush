@@ -337,7 +337,7 @@ Create one row when a milestone exits; until then its state is `not accepted`.
 |---|---|---|---|---|---|
 | Repository baseline | — | migration plan Tasks 1–8 only | — | n/a | not landed |
 | Ground | `49a535535` | root build/fmt/clippy/tests + 13 gate scripts; `workspace/just ci`; smoke E2E | Workspace CI 25/25 on PR #13 | `evidence/ground.md` | **accepted 2026-09-03** |
-| First card | — | — | — | `evidence/first-card.md` | not accepted |
+| First card | `642270647` | root fmt/clippy/tests, six tool gates, copy + write-allowlist gates, provisioning test | pending on PR | `evidence/first-card.md` | implementation complete; awaiting hosted CI and review |
 | The hold | — | — | — | `evidence/the-hold.md` | not accepted |
 | Operator-complete | — | — | — | `evidence/operator-complete.md` | not accepted |
 

@@ -1,6 +1,6 @@
 # First card — exit evidence
 
-**Milestone:** First card (`12-PLAN-FIRST-CARD.md`). **Exit commit:** `EXIT_SHA` on
+**Milestone:** First card (`12-PLAN-FIRST-CARD.md`). **Exit commit:** `642270647` on
 `codex/ambush-fc-devstack`, rebased onto the Ground head `7549b8946`.
 **Tree state at exit:** clean. **Recorded:** 2026-09-04.
 
