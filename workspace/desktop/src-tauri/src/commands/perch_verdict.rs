@@ -439,17 +439,9 @@ pub async fn perch_record_verdict(
     if preimage.is_empty() {
         return Err("could not canonicalize the verdict preimage".to_string());
     }
-    let signature = DetachedSignature {
-        algorithm: "ed25519".to_string(),
-        // sha256(public_key), NOT the operator's display name.
-        // `swarm_crypto::verify_detached_signature` refuses any other key_id,
-        // so a name here is a signature nobody downstream can verify. The
-        // finding feedback route does not verify today, which is precisely why
-        // this was invisible until the hold route did.
-        key_id: sha256_hex(&key.verifying_key().to_bytes()),
-        public_key_hex: public_key_hex.clone(),
-        signature_hex: hex::encode(key.sign(&preimage).to_bytes()),
-    };
+    // One construction, so a test that exercises `sign_verdict` is exercising
+    // what this command actually publishes rather than a rule rebuilt beside it.
+    let signature = sign_verdict(&key, &preimage);
 
     let fact = serde_json::json!({
         "schema": VERDICT_FACT_SCHEMA,

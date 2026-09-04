@@ -135,9 +135,15 @@ fn a_transport_error_message_carries_neither_the_daemon_url_nor_the_bearer() {
 #[test]
 fn redaction_removes_only_the_secrets() {
     let url = "http://127.0.0.1:9090";
-    let bearer = "tok-abc";
-    let message = format!("POST {url}/v1/x failed with tok-abc after 3s");
-    let redacted = redact_for_ipc(&message, url, bearer);
+    // A realistic bearer. Exact-match replacement has an eight-character floor
+    // (`MIN_REPLACEABLE_TOKEN`) so a short secret cannot redact every string
+    // that happens to contain it; the prefix pass below covers the short case.
+    let bearer = "tok-abc-6f2ec2b47a";
+    let message = format!("POST {url}/v1/x failed with {bearer} after 3s");
+    // `redact_for_ipc` takes one secret; the send path composes it over both
+    // through `transport_error_message`, so the two-secret property is asserted
+    // on the composition the production path actually calls.
+    let redacted = transport_error_message(&message, url, bearer);
     assert!(!redacted.contains(bearer));
     assert!(!redacted.contains("127.0.0.1:9090"));
     assert!(
@@ -146,8 +152,23 @@ fn redaction_removes_only_the_secrets() {
     );
 
     // An empty secret must not turn every character into a redaction marker.
-    let untouched = redact_for_ipc("nothing secret here", "", "");
+    let untouched = redact_for_ipc("nothing secret here", "");
     assert_eq!(untouched, "nothing secret here");
+
+    // The floor is a deliberate limit, pinned so it cannot drift into a silent
+    // leak: a sub-eight-character token is NOT exact-matched. What still covers
+    // it is the credential-prefix pass, which keys on the shape rather than on
+    // the value, so the header spelling is redacted whatever its length.
+    let short = "tok-abc";
+    assert!(
+        redact_for_ipc(&format!("failed with {short}"), short).contains(short),
+        "the exact-match floor moved; revisit the prefix pass before relying on it"
+    );
+    let by_shape = redact_for_ipc(&format!("authorization: bearer {short}"), short);
+    assert!(
+        !by_shape.contains(short),
+        "a short bearer escaped the prefix pass: {by_shape}"
+    );
 }
 
 /// `Retry-After` is read from the header, not invented.
