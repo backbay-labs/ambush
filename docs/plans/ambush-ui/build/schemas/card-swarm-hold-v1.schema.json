@@ -232,6 +232,17 @@
                 }
               ],
               "description": "Null on the open card, set on the terminal card."
+            },
+            "partition_state_at_hold": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/PartitionState"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "B2g-p. The governance partition state when the hold was CREATED. `null` means the console could not establish it and must say so rather than assume healthy."
             }
           }
         }
@@ -384,6 +395,17 @@
             "object",
             "null"
           ]
+        },
+        "partition_state_at_execution": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/PartitionState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "B2g-p. The partition state when the decision RAN, read after dispatch. Which of the two UNATTESTED renderings applies (INV-08): `partitioned` or `healing` means `UNATTESTED - BY DESIGN`."
         }
       }
     }

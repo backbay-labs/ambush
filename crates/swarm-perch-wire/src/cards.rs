@@ -1466,6 +1466,11 @@ pub struct HeldAction {
     /// `None` on the open card, `Some` on the terminal card.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<HoldDecisionRecord>,
+    /// B2g-p. The governance partition state when the hold was CREATED.
+    /// `None` means the console could not establish it and must say so rather
+    /// than assume healthy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_state_at_hold: Option<WirePartitionState>,
 }
 
 /// The hold state machine.
@@ -1602,6 +1607,11 @@ pub struct HoldDecisionRecord {
     /// The named check that refused late, when one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<Value>,
+    /// B2g-p. The partition state when the decision RAN, read after dispatch.
+    /// Which of the two UNATTESTED renderings applies (INV-08): `partitioned`
+    /// or `healing` means `UNATTESTED — BY DESIGN`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_state_at_execution: Option<WirePartitionState>,
 }
 
 /// The operator's two verbs.

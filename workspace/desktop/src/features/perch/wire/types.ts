@@ -523,6 +523,11 @@ export type HoldFact = {
       readonly reason?: string | null;
     }[];
     readonly decision?: unknown | null;
+    /**
+     * B2g-p. The partition state when the hold was CREATED. Absent means the
+     * console could not establish it and must say so, never assume healthy.
+     */
+    readonly partition_state_at_hold?: PartitionState | null;
   };
 };
 

@@ -1777,11 +1777,14 @@ impl IngestState {
     /// capture clones for its `ResponseHeld` publications.
     pub fn with_hold_store(mut self, store: Arc<dyn HeldActionStore>) -> Self {
         let settings = self.current_hold_settings();
-        self.hold_capture = Some(Arc::new(perch_ops::holds::HoldCapture::new(
-            store,
-            self.runtime_events.clone(),
-            settings,
-        )));
+        let mut capture =
+            perch_ops::holds::HoldCapture::new(store, self.runtime_events.clone(), settings);
+        // B2g-p. The same authority the dispatcher holds, so a hold and the
+        // decision that resolves it are stamped from one reading of the quorum.
+        if let Some(governance) = self.governance_policy.as_ref() {
+            capture = capture.with_governance(Arc::clone(governance));
+        }
+        self.hold_capture = Some(Arc::new(capture));
         self
     }
 
@@ -1848,6 +1851,18 @@ impl IngestState {
 
     pub fn current_detector(&self) -> Arc<CompositeDetector> {
         self.detector.load_full()
+    }
+
+    /// The governance authority's current partition state, or `None` when no
+    /// authority is wired.
+    ///
+    /// `None` means "could not establish" and must never be rendered as
+    /// healthy: the whole point of stamping it is that an operator can tell a
+    /// reading from its absence.
+    pub fn current_partition_state(&self) -> Option<swarm_policy::governance::PartitionState> {
+        self.governance_policy
+            .as_ref()
+            .map(|policy| policy.status_report().partition_state)
     }
 
     pub fn current_substrate(&self) -> swarm_pheromone::ConfiguredPheromoneSubstrate {

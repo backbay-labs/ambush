@@ -252,6 +252,7 @@ mod tests {
             receipt_id: None,
             audit_trail_id: None,
             refusal: None,
+            partition_state_at_execution: None,
         };
         record.hold_notice_published = claimed.notified_at_ms.is_some();
         store

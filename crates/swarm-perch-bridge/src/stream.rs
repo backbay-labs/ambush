@@ -583,6 +583,24 @@ pub fn hold_decision_to_wire(decision: HoldDecision) -> WireDecision {
     }
 }
 
+/// The engine's partition state on the wire.
+///
+/// A total match, not a string round trip: the two enums are the same four
+/// states and a new one on either side must fail to compile here rather than
+/// serialize as something the console does not know how to render (INV-08).
+pub fn partition_state_to_wire(
+    state: swarm_policy::governance::PartitionState,
+) -> swarm_perch_wire::cards::WirePartitionState {
+    use swarm_perch_wire::cards::WirePartitionState as Wire;
+    use swarm_policy::governance::PartitionState as Engine;
+    match state {
+        Engine::Healthy => Wire::Healthy,
+        Engine::Degraded => Wire::Degraded,
+        Engine::Partitioned => Wire::Partitioned,
+        Engine::Healing => Wire::Healing,
+    }
+}
+
 /// The wire form of a stored decision.
 ///
 /// NARROWING, and every dropped field is a daemon-side fact with no place on a card that
@@ -607,8 +625,10 @@ pub fn hold_decision_record_to_wire(record: &HoldDecisionRecord) -> WireHoldDeci
         receipt_id,
         audit_trail_id: _,
         refusal,
+        partition_state_at_execution,
     } = record;
     WireHoldDecisionRecord {
+        partition_state_at_execution: partition_state_at_execution.map(partition_state_to_wire),
         decision: hold_decision_to_wire(*decision),
         operator_id: operator_id.clone(),
         decided_at_ms: *decided_at_ms,

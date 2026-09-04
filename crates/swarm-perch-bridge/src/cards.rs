@@ -354,6 +354,7 @@ pub fn hold_view_from_record(hold: &HeldAction) -> Result<WireHeldAction, Bridge
         deciding_intent_event_id: _,
         cas_instant_ms: _,
         prior_state: _,
+        partition_state_at_hold,
     } = hold;
     Ok(WireHeldAction {
         hold_id: hold_id.clone(),
@@ -369,6 +370,8 @@ pub fn hold_view_from_record(hold: &HeldAction) -> Result<WireHeldAction, Bridge
         rehearsal: rehearsal.as_ref().map(rehearsal_to_wire),
         inverse_resolution: Vec::new(),
         decision: decision.as_ref().map(hold_decision_record_to_wire),
+        partition_state_at_hold: partition_state_at_hold
+            .map(crate::stream::partition_state_to_wire),
     })
 }
 

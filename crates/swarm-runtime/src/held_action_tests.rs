@@ -204,6 +204,7 @@ fn refused_record(intent: &str) -> HoldDecisionRecord {
         receipt_id: None,
         audit_trail_id: None,
         refusal: None,
+        partition_state_at_execution: None,
     }
 }
 
