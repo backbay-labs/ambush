@@ -23,7 +23,23 @@ import { ContainmentRow } from "./ContainmentRow";
  * Collapsing any two of them would tell an operator the world is clear when
  * the console simply cannot see it.
  */
-export function ContainmentBoard(): React.ReactElement {
+export type ContainmentBoardProps = {
+  /**
+   * A lease to scroll to and outline, from `?lease=`. The omnibox's
+   * `release containment` command navigates here with it rather than
+   * releasing anything itself, so this is where that command's stated
+   * consequence is honoured.
+   *
+   * Focusing is all it does. It does NOT arm or auto-open the release
+   * dialog: a deep link that pre-confirmed a destructive action would be a
+   * write path around the confirmation this board exists to impose.
+   */
+  focusLeaseId?: string | null;
+};
+
+export function ContainmentBoard({
+  focusLeaseId = null,
+}: ContainmentBoardProps = {}): React.ReactElement {
   const nowMs = useLeaseClock();
   const query = useContainmentsQuery();
   const release = useReleaseContainment();
@@ -132,6 +148,7 @@ export function ContainmentBoard(): React.ReactElement {
                 lease={lease}
                 nowMs={nowMs}
                 daemonReachable={daemonReachable}
+                focused={lease.leaseId === focusLeaseId}
                 onRelease={onRelease}
               />
             ))}

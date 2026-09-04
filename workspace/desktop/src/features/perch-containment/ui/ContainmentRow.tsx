@@ -21,6 +21,8 @@ function undoRung(actionKind: string): string {
 }
 
 export type ContainmentRowProps = {
+  /** Deep-linked from `?lease=`. Outlined only; never pre-armed. */
+  focused?: boolean;
   lease: ContainmentLeaseView;
   /** The board's single clock. Rows never run their own interval. */
   nowMs: number;
@@ -29,6 +31,7 @@ export type ContainmentRowProps = {
 };
 
 export function ContainmentRow({
+  focused = false,
   lease,
   nowMs,
   daemonReachable,
@@ -48,6 +51,7 @@ export function ContainmentRow({
   return (
     <tr
       data-testid={`perch-containment-row-${lease.leaseId}`}
+      data-focused={focused ? "1" : undefined}
       data-perch-lease-id={lease.leaseId}
       className="border-b border-[hsl(var(--perch-border-strong))]"
     >

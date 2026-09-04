@@ -16,6 +16,15 @@ type AppShellKeyboardShortcutsOptions = {
   onNewMessage: () => unknown;
   onSearchCurrentChannel: () => void;
   onSearchEverything: () => void;
+  /**
+   * Opens the operator omnibox instead of search, when the perch feature is on.
+   *
+   * The two are the same key because they are the same intent — "find
+   * something" — and giving the console its own key would mean an operator
+   * learns two. `undefined` when perch is off, and then ⌘K is search exactly
+   * as before.
+   */
+  onOpenPerchOmnibox?: (() => void) | undefined;
 };
 
 export function useAppShellKeyboardShortcuts({
@@ -28,6 +37,7 @@ export function useAppShellKeyboardShortcuts({
   onNewMessage,
   onSearchCurrentChannel,
   onSearchEverything,
+  onOpenPerchOmnibox,
 }: AppShellKeyboardShortcutsOptions) {
   React.useLayoutEffect(() => {
     if (disabled) return;
@@ -72,7 +82,9 @@ export function useAppShellKeyboardShortcuts({
 
       if (key === "k" && !event.shiftKey) {
         event.preventDefault();
-        onSearchEverything();
+        // The omnibox is a superset: plain text still searches, and it is what
+        // routes the query onward. With perch off this is search unchanged.
+        (onOpenPerchOmnibox ?? onSearchEverything)();
         return;
       }
 
@@ -120,5 +132,6 @@ export function useAppShellKeyboardShortcuts({
     onNewMessage,
     onSearchCurrentChannel,
     onSearchEverything,
+    onOpenPerchOmnibox,
   ]);
 }

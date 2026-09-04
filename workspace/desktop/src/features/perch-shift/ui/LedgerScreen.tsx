@@ -9,6 +9,8 @@ export type LedgerRow = {
 };
 
 export type LedgerScreenProps = {
+  /** Seeded from `?q=`, which the omnibox sets. */
+  initialQuery?: string;
   /** Rows the relay returned for the last executed query, or null before one. */
   rows: LedgerRow[] | null;
   onSearch: (query: LedgerQuery) => void;
@@ -28,10 +30,11 @@ export type LedgerScreenProps = {
  * make.
  */
 export function LedgerScreen({
+  initialQuery = "",
   rows,
   onSearch,
 }: LedgerScreenProps): React.ReactElement {
-  const [raw, setRaw] = React.useState("");
+  const [raw, setRaw] = React.useState(initialQuery);
   const parsed = React.useMemo(() => buildLedgerQuery(raw), [raw]);
   const operators = Object.entries(parsed.ftsTerms);
 

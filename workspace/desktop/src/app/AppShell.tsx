@@ -1,9 +1,15 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Outlet, useLocation } from "@tanstack/react-router";
+import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import { deriveShellRoute, markAllReadSources } from "@/app/AppShell.helpers";
 import { useTerminalContext } from "@/app/useTerminalContext";
 import { PerchGovernanceStripSlot } from "@/features/perch/ui/PerchGovernanceStripSlot";
+import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
+
+const PerchOmnibox = React.lazy(async () => {
+  const module = await import("@/features/perch-shift/ui/PerchOmnibox");
+  return { default: module.PerchOmnibox };
+});
 import { AppShellProvider } from "@/app/AppShellContext";
 import { AppShellOverlays, TerminalBootstrap } from "@/app/AppShellOverlays";
 import { AppShellSettingsSurface } from "@/app/AppShellSettingsSurface";
@@ -485,6 +491,10 @@ export function AppShell() {
     () => setIsCreateChannelOpen(true),
     [],
   );
+  const perchEnabled = useFeatureEnabled("perch");
+  const [perchOmniboxOpen, setPerchOmniboxOpen] = React.useState(false);
+  const routerNavigate = useNavigate();
+
   useAppShellKeyboardShortcuts({
     activeChannelId: selectedView === "channel" ? selectedChannelId : null,
     canSearchCurrentChannel:
@@ -494,6 +504,9 @@ export function AppShell() {
     onCreateChannel: handleOpenCreateChannel,
     onGoHome: goHome,
     onNewMessage: goNewMessage,
+    onOpenPerchOmnibox: perchEnabled
+      ? () => setPerchOmniboxOpen(true)
+      : undefined,
     onSearchCurrentChannel: handleOpenChannelSearch,
     onSearchEverything: handleOpenSearch,
   });
@@ -729,6 +742,24 @@ export function AppShell() {
                               showing the numbers would be the worst possible
                               combination. */}
                           <PerchGovernanceStripSlot />
+                          {perchEnabled ? (
+                            <React.Suspense fallback={null}>
+                              <PerchOmnibox
+                                open={perchOmniboxOpen}
+                                onOpenChange={setPerchOmniboxOpen}
+                                // The omnibox emits an intent; the Ledger owns
+                                // the search. Routing the text there rather
+                                // than searching here is what keeps the
+                                // omnibox free of a second search path.
+                                onQuery={(text) => {
+                                  void routerNavigate({
+                                    to: "/ledger",
+                                    search: { q: text },
+                                  });
+                                }}
+                              />
+                            </React.Suspense>
+                          ) : null}
                           <Outlet />
                         </AppShellChannelSurface>
                       </TerminalContextOverrideProvider>

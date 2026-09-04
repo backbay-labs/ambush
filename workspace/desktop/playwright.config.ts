@@ -187,6 +187,7 @@ export default defineConfig({
         "**/perch-containment.spec.ts",
         "**/perch-watchfloor.spec.ts",
         "**/perch-handoff.spec.ts",
+        "**/perch-omnibox.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

@@ -5576,7 +5576,7 @@ call). The `perch` preview flag stays off by default.
 | 10 containment board | `/leases`, the state model, the timer, the rollback list, the release confirmation dialog, the partition section and its Playwright spec | — |
 | 11 lane screen | `laneLiveNumbers`, `laneCopy`, `LaneScreen`, `/lanes/$laneId`, the regime-B curve in the header slot, and `PerchNav` making all ten routes reachable | — |
 | 12 governance | `derivePerchGovernanceMode`, `governanceCopy`, `GovernanceStrip`, mounted above the outlet on every route including the Watchfloor's bare chrome | — |
-| 13 ledger and export | `buildLedgerQuery`, `planExportFiles`, `buildExportManifest`, `omniboxCommands`, `LedgerScreen`, `/ledger`, the tier allowlist gate, `perch_verify.rs`, `perch_export.rs` | the ⌘K omnibox UI |
+| 13 ledger and export | `buildLedgerQuery`, `planExportFiles`, `buildExportManifest`, `omniboxCommands`, `LedgerScreen`, `/ledger`, the tier allowlist gate, `perch_verify.rs`, `perch_export.rs`, the ⌘K omnibox | — |
 | 14 tuning | `tuningProvenance`, `TuningScreen`, `/tuning` | the daemon reads behind it |
 | 15 gaps | `gapsCatalog`, `GapsScreen`, `/gaps` | — |
 | 16 policy | `policyEvaluation`, `PolicyScreen`, `/policy` | the daemon-side policy route; the screen renders an empty rule list until it exists |
