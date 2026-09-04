@@ -12,13 +12,45 @@ fn the_operator_key_publishes_exactly_one_kind_and_one_marker() {
 /// The generic signer must refuse the exact line 0 this command publishes, or
 /// the two are not describing one rule. A marker the gate lets through is a
 /// marker the renderer could have signed itself.
+///
+/// Written over EVERY kind the gate acts on rather than over kind 9 alone, so
+/// it stays correct — and gets stronger on its own — when the gate widens from
+/// the one chat kind to every card-bearing kind that reaches the renderer's
+/// seam. Nothing here names a kind, so that widening needs no edit in this file.
+///
+/// A DIFFERENT swarm marker is the detector. Asking "does this kind refuse the
+/// marker this command publishes" and then asserting exactly that would be a
+/// test of its own premise; asking "does this kind refuse some OTHER swarm
+/// marker" is independent, and it is what catches a gate with a hole for
+/// precisely this command's line 0.
 #[test]
-fn the_generic_signer_refuses_what_this_command_publishes() {
-    assert!(crate::perch_sign_gate::perch_sign_gate(9, "<!-- swarm:verdict:v1 -->\nx").is_err());
+fn the_generic_signer_refuses_what_this_command_publishes_on_every_kind_it_gates() {
+    use crate::perch_sign_gate::perch_sign_gate;
+    let published = format!("{}\nx", CardKind::Verdict.marker());
+    let detector = format!("{}\nx", CardKind::Hold.marker());
+    let mut gated: Vec<u16> = Vec::new();
+    for kind in u16::MIN..=u16::MAX {
+        if perch_sign_gate(kind, &detector).is_ok() {
+            continue;
+        }
+        gated.push(kind);
+        assert!(
+            perch_sign_gate(kind, &published).is_err(),
+            "kind {kind} refuses a swarm marker but admits the line 0 perch_record_verdict publishes"
+        );
+    }
+    // Two today: the chat kind, whose refusal is content-gated, and the hold
+    // notice, refused outright. A vacuous loop would pass silently, so the
+    // floor is asserted rather than assumed.
+    assert!(
+        gated.len() >= 2,
+        "the gate acted on {} kind(s); the probe is broken",
+        gated.len()
+    );
     // And the marker this file names is the one the card actually carries, so
-    // the assertion above cannot drift away from the published body.
+    // the assertions above cannot drift away from the published body.
     assert_eq!(
-        swarm_perch_wire::marker::CardKind::Verdict.marker(),
+        CardKind::Verdict.marker(),
         format!("<!-- {} -->", PERCH_RELAY_PUBLISHED_MARKERS[0])
     );
 }
