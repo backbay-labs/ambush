@@ -30,7 +30,7 @@ const entries = [
   { kind: "envelope", id: "seq-7", bytes: BYTES, tier: 2, reconciled: true },
 ];
 
-test("every file carries a tier and the bundle says what it does not answer", () => {
+test("every file carries a tier and the bundle says what it does not answer", async () => {
   const files = planExportFiles(entries);
   assert.ok(
     files.some(
@@ -53,7 +53,7 @@ test("every file carries a tier and the bundle says what it does not answer", ()
     "an unreconciled row is a claim the daemon does not corroborate; the bundle must not lend it authority",
   );
 
-  const manifest = buildExportManifest(files, {
+  const manifest = await buildExportManifest(files, {
     exportingOperator: `swarm:ed25519:${"a".repeat(64)}`,
     derived: [{ fn: "derivePerchGovernanceMode()", value: "healthy" }],
   });
@@ -85,7 +85,7 @@ test("envelopes/ is present and empty, not omitted, when nothing is signed", () 
   );
 });
 
-test("the digest is over the bytes as given, so a signed record stays verifiable", () => {
+test("the digest is over the bytes as given, so a signed record stays verifiable", async () => {
   const files = planExportFiles([
     {
       kind: "receipt",
@@ -95,7 +95,7 @@ test("the digest is over the bytes as given, so a signed record stays verifiable
       reconciled: true,
     },
   ]);
-  const manifest = buildExportManifest(files, {
+  const manifest = await buildExportManifest(files, {
     exportingOperator: "op",
     derived: [],
   });
@@ -106,12 +106,12 @@ test("the digest is over the bytes as given, so a signed record stays verifiable
   );
 });
 
-test("VERIFY.md names only tiers the bundle actually contains", () => {
+test("VERIFY.md names only tiers the bundle actually contains", async () => {
   const files = planExportFiles([
     { kind: "receipt", id: "a", bytes: BYTES, tier: 0, reconciled: true },
   ]);
   const md = renderVerifyMd(
-    buildExportManifest(files, { exportingOperator: "op", derived: [] }),
+    await buildExportManifest(files, { exportingOperator: "op", derived: [] }),
   );
   assert.match(md, /Tier 0 files/);
   assert.doesNotMatch(md, /Tier 1 files/);

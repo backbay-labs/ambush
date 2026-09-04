@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 /**
  * The export bundle: the record, as bytes, with a manifest that says exactly
  * what it does and does not answer.
@@ -80,13 +78,31 @@ export type ExportManifest = {
   manifest_signature: string | null;
 };
 
-export function buildExportManifest(
+/**
+ * SHA-256 through Web Crypto.
+ *
+ * This is renderer code: `node:crypto` is not available here, and reaching for
+ * it would compile against types the bundle does not ship.
+ */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  // A fresh, exactly-sized buffer: a Uint8Array can be a view into a larger
+  // (or shared) buffer, and hashing the backing store would digest bytes the
+  // caller never handed us.
+  const exact = new Uint8Array(bytes.byteLength);
+  exact.set(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", exact);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function buildExportManifest(
   files: readonly ExportFile[],
   opts: {
     exportingOperator: string;
     derived: readonly { fn: string; value: unknown }[];
   },
-): ExportManifest {
+): Promise<ExportManifest> {
   const tiers = Array.from(
     new Set(files.map((file) => file.verification_tier)),
   ).sort() as (0 | 1 | 2)[];
@@ -95,11 +111,13 @@ export function buildExportManifest(
     exporting_operator: opts.exportingOperator,
     answers_who_approved: false,
     verification_tiers_present: tiers,
-    files: files.map((file) => ({
-      path: file.path,
-      sha256: createHash("sha256").update(file.bytes).digest("hex"),
-      verification_tier: file.verification_tier,
-    })),
+    files: await Promise.all(
+      files.map(async (file) => ({
+        path: file.path,
+        sha256: await sha256Hex(file.bytes),
+        verification_tier: file.verification_tier,
+      })),
+    ),
     manifest_signature: null,
   };
 }
