@@ -97,6 +97,13 @@ pub enum BridgeError {
         path: String,
     },
 
+    /// The containment lease store could not be read.
+    #[error("containment lease store: {reason}")]
+    LeaseStore {
+        /// What the store said.
+        reason: String,
+    },
+
     /// A slot that has no spine key. A programming error, surfaced typed.
     #[error("no spine identity for slot {slot}")]
     UnknownSlot {

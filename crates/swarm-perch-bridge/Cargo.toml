@@ -63,6 +63,7 @@ ambush-ws-client = { version = "0.1.0", path = "../../workspace/crates/ambush-ws
 nostr = { version = "0.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+async-trait.workspace = true
 # The W3-27 differential control: the wire crate's RFC 8785 bytes and keyless
 # hash must agree with the engine's spine envelope byte for byte.
 swarm-spine.workspace = true

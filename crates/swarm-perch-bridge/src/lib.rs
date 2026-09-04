@@ -69,6 +69,7 @@ pub mod channels;
 pub mod error;
 pub mod holds;
 pub mod identity;
+pub mod leases;
 pub mod metrics;
 pub mod pacer;
 pub mod publish;
