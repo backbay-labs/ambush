@@ -1,0 +1,30 @@
+# file	id -- the exact (file, ban row) set BOTH scanners must produce.
+#
+# The two clean.* files appear zero times ON PURPOSE: a scanner producing any
+# hit for either fails the parity test in the other direction, which is how the
+# ratified `Lanes` nav label, the daemon's verbatim hold reason, the
+# capability_id token and the four word-boundary near-misses stay passing.
+#
+# Mode rides the filename suffix inside this directory (README.md). Both
+# scanners refuse a corpus file matching neither suffix rather than scanning it
+# in the wrong mode.
+violations.copy.ts	approve
+violations.copy.ts	bare-lane
+violations.copy.ts	bare-lease
+violations.copy.ts	bare-source-count
+violations.copy.ts	clowder
+violations.copy.ts	deny-label
+violations.copy.ts	exclamation
+violations.copy.ts	hunt-noun
+violations.copy.ts	legacy-codename
+violations.copy.ts	product-codename
+violations.copy.ts	quorum-fraction
+violations.copy.ts	reassurance
+violations.copy.ts	shield-glyph
+violations.copy.ts	trust-claim
+violations.markup.tsx	approve
+violations.markup.tsx	bare-lane
+violations.markup.tsx	bare-source-count
+violations.markup.tsx	clowder
+violations.markup.tsx	reassurance
+violations.markup.tsx	trust-claim

@@ -251,6 +251,30 @@ jobs:
           PERCH_DESKTOP_ROOT: ${{ github.workspace }}/workspace/desktop
         run: bash tools/check-perch-write-allowlist.sh
 
+      # The copy gate. `Approve` on a control is the product claiming an
+      # authority it does not have; `A` bound to a verdict is the key surviving
+      # the relabelled button; a bare source count is
+      # min_sources_for_escalation misread. Each row of tools/copy-ban-list.tsv
+      # carries the sentence that says which, and the same list is read by
+      # workspace/desktop/scripts/check-copy-banned-terms.mjs under `pnpm check`
+      # -- one list, two runners, with a shared corpus and a parity assertion so
+      # the two cannot drift.
+      #
+      # PARTIAL COVERAGE IS EXPECTED HERE AND IS NOT A PASS. 00-DECISIONS.md
+      # W3-24 defers the twelve docs/assets README-art rewrites to
+      # Operator-complete Task 20, so tools/copy-scope.tsv carries one reviewed
+      # `deferred` row, the asset half is skipped, and the gate prints
+      # PARTIAL COVERAGE on every run and never closes with an unqualified
+      # "copy gate clean". Deleting, doubling or mistyping that row exits 1
+      # rather than quietly shrinking what the gate covers.
+      #
+      # The fixture runs before the real scan on every invocation: planted
+      # violations for every ban row, clean controls for each honest
+      # replacement, the four word-boundary near-misses, both keymap
+      # violations, and all nine ways the scope row can be wrong.
+      - name: Check Perch copy against the banned-term list
+        run: bash tools/check-copy-banned-terms.sh
+
       # BFT-03 / phase 321 criterion 3. The criterion reads "no production path
       # holds more than one governor signing key in memory" and names no method
       # of checking it, which makes it satisfiable by assertion -- the exact

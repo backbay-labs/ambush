@@ -1,0 +1,50 @@
+# tools/copy-scope.tsv -- WHETHER THE ASSET HALF OF THE COPY GATE IS ENFORCING.
+#
+# WHY THIS FILE EXISTS
+#   The copy gate scans two trees: this repository's docs/assets/*.svg, and the
+#   Perch product source under workspace/desktop. The skeleton the gate was
+#   copied from assumed the asset half is ALWAYS required and refused to pass
+#   when it found no SVG.
+#
+#   That assumption is wrong for this milestone and 00-DECISIONS.md W3-24 says
+#   so. The first real run of the gate over docs/assets found 41 violations
+#   across 12 of the 20 files -- 4 x "Swarm Team Six", 2 x "clowders", 4 x "hunt"
+#   as a noun, 14 x bare "lane", 7 x "trusted"/"proof", 2 x "approval", 2 x bare
+#   "lease", 4 x a bare source count -- every one of them in an aria-label or a
+#   <text> node, i.e. in a string that reaches a screen reader or a chart label.
+#   Those twelve files are engine README art. Rewriting them is real editorial
+#   work on diagrams nobody has looked at yet, and W3-24 defers it to
+#   Operator-complete Task 20 rather than blocking First card on it.
+#
+#   The wrong way to defer is to leave the asset half out of the gate, or to
+#   allowlist 41 strings. Both make the deferral invisible: the gate would print
+#   a clean line and nobody would ever learn that a whole scope is unscanned.
+#   So the deferral is DATA, it is reviewed, and the gate is loud about it --
+#   `PARTIAL COVERAGE` on every run, and the closing line never says
+#   "copy gate clean" without naming the scope it did not cover.
+#
+#   THE FLIP IS ATOMIC. Operator-complete Task 20 rewrites the twelve files and
+#   changes `deferred` to `required` in the SAME commit. `required` demands at
+#   least one SVG and scans every one of them, so the commit that flips the word
+#   without fixing the strings fails, and the commit that fixes the strings
+#   without flipping the word leaves the PARTIAL COVERAGE warning printing.
+#
+# THIS FILE IS READ STRICTLY, ON PURPOSE
+#   A missing file, zero rows, MORE THAN ONE row, a row with the wrong number of
+#   columns, an unknown status, an empty reason, or a scope directory that does
+#   not exist all exit 1. A gate whose scope can be narrowed by deleting a line
+#   is not a gate: the deletion has to be louder than the coverage it removes,
+#   or the next person shrinks the gate by accident and the build stays green.
+#
+# COLUMNS, tab-separated:
+#   scope   path relative to the repository root. Must exist.
+#   status  deferred | required. Nothing else.
+#             deferred  the scope is NOT scanned; the gate prints
+#                       `PARTIAL COVERAGE: <scope> deferred by <reason's ruling>`
+#                       and its closing line names the scope.
+#             required  the scope MUST contain at least one *.svg and every one
+#                       of them is scanned.
+#   reason  why it is in that state, naming the ruling. Mandatory, reviewed.
+#
+scope	status	reason
+docs/assets	deferred	W3-24: rewrite and require in Operator-complete Task 20
