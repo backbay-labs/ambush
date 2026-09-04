@@ -6,6 +6,7 @@
 
 import { Route as rootRouteImport } from "./routes/root";
 import { Route as workflowsRouteImport } from "./routes/workflows";
+import { Route as watchFloorRouteImport } from "./routes/watch-floor";
 import { Route as settingsRouteImport } from "./routes/settings";
 import { Route as remindersRouteImport } from "./routes/reminders";
 import { Route as pulseRouteImport } from "./routes/pulse";
@@ -25,6 +26,11 @@ import { Route as channelsDotchannelIdDotpostsDotpostIdRouteImport } from "./rou
 const workflowsRoute = workflowsRouteImport.update({
   id: "/workflows",
   path: "/workflows",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const watchFloorRoute = watchFloorRouteImport.update({
+  id: "/watch-floor",
+  path: "/watch-floor",
   getParentRoute: () => rootRouteImport,
 } as any);
 const settingsRoute = settingsRouteImport.update({
@@ -114,6 +120,7 @@ export interface FileRoutesByFullPath {
   "/pulse": typeof pulseRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
+  "/watch-floor": typeof watchFloorRoute;
   "/workflows": typeof workflowsRoute;
   "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
@@ -132,6 +139,7 @@ export interface FileRoutesByTo {
   "/pulse": typeof pulseRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
+  "/watch-floor": typeof watchFloorRoute;
   "/workflows": typeof workflowsRoute;
   "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
@@ -151,6 +159,7 @@ export interface FileRoutesById {
   "/pulse": typeof pulseRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
+  "/watch-floor": typeof watchFloorRoute;
   "/workflows": typeof workflowsRoute;
   "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
@@ -171,6 +180,7 @@ export interface FileRouteTypes {
     | "/pulse"
     | "/reminders"
     | "/settings"
+    | "/watch-floor"
     | "/workflows"
     | "/cases/$caseId"
     | "/channels/$channelId"
@@ -189,6 +199,7 @@ export interface FileRouteTypes {
     | "/pulse"
     | "/reminders"
     | "/settings"
+    | "/watch-floor"
     | "/workflows"
     | "/cases/$caseId"
     | "/channels/$channelId"
@@ -207,6 +218,7 @@ export interface FileRouteTypes {
     | "/pulse"
     | "/reminders"
     | "/settings"
+    | "/watch-floor"
     | "/workflows"
     | "/cases/$caseId"
     | "/channels/$channelId"
@@ -226,6 +238,7 @@ export interface RootRouteChildren {
   pulseRoute: typeof pulseRoute;
   remindersRoute: typeof remindersRoute;
   settingsRoute: typeof settingsRoute;
+  watchFloorRoute: typeof watchFloorRoute;
   workflowsRoute: typeof workflowsRoute;
   casesDotcaseIdRoute: typeof casesDotcaseIdRoute;
   channelsDotchannelIdRoute: typeof channelsDotchannelIdRoute;
@@ -242,6 +255,13 @@ declare module "@tanstack/react-router" {
       path: "/workflows";
       fullPath: "/workflows";
       preLoaderRoute: typeof workflowsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/watch-floor": {
+      id: "/watch-floor";
+      path: "/watch-floor";
+      fullPath: "/watch-floor";
+      preLoaderRoute: typeof watchFloorRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/settings": {
@@ -362,6 +382,7 @@ const rootRouteChildren: RootRouteChildren = {
   pulseRoute: pulseRoute,
   remindersRoute: remindersRoute,
   settingsRoute: settingsRoute,
+  watchFloorRoute: watchFloorRoute,
   workflowsRoute: workflowsRoute,
   casesDotcaseIdRoute: casesDotcaseIdRoute,
   channelsDotchannelIdRoute: channelsDotchannelIdRoute,

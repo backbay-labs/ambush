@@ -240,6 +240,20 @@ jobs:
       - name: Check Perch wire field-set parity
         run: bash tools/check-perch-wire-parity.sh
 
+      # A chart that names a colour directly is invisible to a theme switch,
+      # and these figures are read in both themes and printed in greyscale into
+      # incident reports. Four rules: no hex literal, no `fill`/`stroke`
+      # attribute outside `none` and a `url(#…)` reference, no bare source
+      # count (render law 2), and no read of the 38 shadcn variable names
+      # ThemeProvider writes INLINE on the root -- an inline declaration
+      # outranks any stylesheet, so a chart reading one gets a value the Perch
+      # palette does not control.
+      #
+      # It runs its own fixture on every invocation: shapes each rule must
+      # catch, and controls none may flag.
+      - name: Check Perch chart tokens
+        run: bash tools/check-perch-chart-tokens.sh
+
       # INV-01. "Perch never authorizes" is a claim about a SET: the non-GET
       # requests the console process can issue to a daemon host. A claim about
       # a set is only true if the set is enumerable, so the console has one

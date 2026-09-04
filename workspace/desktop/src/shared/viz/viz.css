@@ -1,0 +1,99 @@
+@layer components {
+  /*
+   * The ONLY place a Perch chart names a colour.
+   *
+   * Every chart reaches its ink through a class here, never an inline `fill`
+   * or `stroke`. An inline colour is invisible to a theme switch, and these
+   * figures are read in both themes and printed in greyscale into incident
+   * reports. Meaning that matters is carried by shape — dash pattern, hatch,
+   * position — so a reader who cannot separate two hues still reads the chart.
+   */
+  .viz-series-1 {
+    fill: hsl(var(--perch-viz-series-1));
+    stroke: hsl(var(--perch-viz-series-1));
+  }
+  .viz-series-2 {
+    fill: hsl(var(--perch-viz-series-2));
+    stroke: hsl(var(--perch-viz-series-2));
+  }
+  .viz-series-3 {
+    fill: hsl(var(--perch-viz-series-3));
+    stroke: hsl(var(--perch-viz-series-3));
+  }
+  .viz-series-4 {
+    fill: hsl(var(--perch-viz-series-4));
+    stroke: hsl(var(--perch-viz-series-4));
+  }
+  .viz-series-5 {
+    fill: hsl(var(--perch-viz-series-5));
+    stroke: hsl(var(--perch-viz-series-5));
+  }
+  .viz-series-6 {
+    fill: hsl(var(--perch-viz-series-6));
+    stroke: hsl(var(--perch-viz-series-6));
+  }
+
+  .stop-series-1 {
+    stop-color: hsl(var(--perch-viz-series-1));
+  }
+  .stop-series-2 {
+    stop-color: hsl(var(--perch-viz-series-2));
+  }
+  .stop-series-3 {
+    stop-color: hsl(var(--perch-viz-series-3));
+  }
+  .stop-series-4 {
+    stop-color: hsl(var(--perch-viz-series-4));
+  }
+  .stop-series-5 {
+    stop-color: hsl(var(--perch-viz-series-5));
+  }
+  .stop-series-6 {
+    stop-color: hsl(var(--perch-viz-series-6));
+  }
+
+  /* A threshold is a dashed rule, never a filled region: a filled region
+     reads as "this range is bad", and a threshold is a single number. */
+  .viz-threshold {
+    stroke: hsl(var(--perch-chart-rule));
+    fill: none;
+    stroke-opacity: 0.6;
+    stroke-dasharray: 5 5;
+  }
+  .viz-incident {
+    stroke: hsl(var(--perch-sev-critical));
+    fill: none;
+    stroke-dasharray: 2 6;
+  }
+  .viz-grid {
+    stroke: hsl(var(--perch-viz-grid));
+    fill: none;
+  }
+  /* The part of a bar that is NOT filled. Named for what it is; calling it a
+     track implies a fixed capacity the number does not have. */
+  .viz-unfilled {
+    fill: hsl(var(--perch-viz-unfilled));
+  }
+  .viz-hatch {
+    stroke: hsl(var(--perch-viz-suppressed-hatch));
+    stroke-opacity: var(--perch-alpha-hatch, 0.35);
+  }
+  .viz-axis {
+    fill: hsl(var(--perch-chart-axis-ink));
+  }
+  .viz-rule-label {
+    fill: hsl(var(--perch-chart-rule-label));
+  }
+  .viz-danger-mark {
+    stroke: hsl(var(--perch-danger-mark));
+  }
+  .viz-plot-ground {
+    fill: hsl(var(--perch-card));
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .crossring {
+      display: none;
+    }
+  }
+}

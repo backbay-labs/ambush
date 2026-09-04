@@ -13,7 +13,7 @@
 
   .perch-kill-chain-node {
     fill: hsl(var(--perch-card));
-    stroke: hsl(var(--perch-border));
+    stroke: hsl(var(--perch-border-strong));
     stroke-width: 1;
   }
 
