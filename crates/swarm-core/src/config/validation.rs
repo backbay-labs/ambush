@@ -597,6 +597,7 @@ impl SwarmConfig {
         self.identity.validate()?;
 
         self.platform_api.validate()?;
+        self.perch.validate()?;
         validate_http_rate_limit_config(
             &self.platform_api.rate_limit,
             HttpRateLimitFieldNames {

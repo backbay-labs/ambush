@@ -22,6 +22,7 @@ members = [
     "crates/swarm-guard",
     "crates/swarm-crypto",
     "crates/swarm-perch-wire",
+    "crates/swarm-perch-bridge",
 ]
 # The Ambush workspace (relay, desktop, web, mobile) is a second Cargo workspace
 # under workspace/ with its own toolchain pin; see docs/plans/ambush-ui/integration/00-DECISIONS.md D2.
@@ -55,6 +56,8 @@ swarm-consensus = { version = "0.1.0", path = "crates/swarm-consensus" }
 swarm-spine = { version = "0.1.0", path = "crates/swarm-spine" }
 swarm-guard = { version = "0.1.0", path = "crates/swarm-guard" }
 swarm-crypto = { version = "0.1.0", path = "crates/swarm-crypto" }
+swarm-perch-wire = { version = "0.1.0", path = "crates/swarm-perch-wire" }
+swarm-perch-bridge = { version = "0.1.0", path = "crates/swarm-perch-bridge" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

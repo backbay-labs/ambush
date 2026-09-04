@@ -63,6 +63,9 @@ pub struct SwarmConfig {
     /// Local authenticated operator-surface settings.
     #[serde(default, rename = "operator_surface")]
     pub operator: OperatorSurfaceConfig,
+    /// The operator-console bridge (`swarm-perch-bridge`); off unless a deployment opts in.
+    #[serde(default)]
+    pub perch: PerchBridgeConfig,
     /// Optional shared TLS settings for both HTTP serve surfaces.
     #[serde(default)]
     pub tls: Option<TlsConfig>,

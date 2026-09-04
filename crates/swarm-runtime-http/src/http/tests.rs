@@ -191,6 +191,7 @@ pub(super) fn operator_config() -> SwarmConfig {
                 nostr_pubkey: None,
             },
         },
+        perch: swarm_core::config::PerchBridgeConfig::default(),
         tls: None,
     }
 }

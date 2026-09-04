@@ -366,6 +366,7 @@ mod tests {
             identity: IdentityConfig::default(),
             platform_api: PlatformApiConfig::default(),
             operator: Default::default(),
+            perch: swarm_core::config::PerchBridgeConfig::default(),
             tls: None,
         }
     }

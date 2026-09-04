@@ -176,6 +176,7 @@ pub(crate) fn test_config(strategy: &str) -> SwarmConfig {
         identity: swarm_core::config::IdentityConfig::default(),
         platform_api: PlatformApiConfig::default(),
         operator: OperatorSurfaceConfig::default(),
+        perch: swarm_core::config::PerchBridgeConfig::default(),
         tls: None,
     };
     redirect_evolution_paths(&mut config, &test_config_store_root());

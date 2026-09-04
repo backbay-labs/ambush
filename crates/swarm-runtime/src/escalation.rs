@@ -593,6 +593,23 @@ mod tests {
         assert!(incident.mode_changed);
     }
 
+    #[test]
+    fn standard_threat_class_slugs_match_swarm_core_config() {
+        // `swarm-core` pins the twelve slugs for `perch.lane_channels` validation because it
+        // cannot call this crate (layering). The pin must never drift from this enumeration.
+        assert_eq!(
+            super::standard_threat_classes()
+                .iter()
+                .map(|c| serde_json::to_value(c)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string())
+                .collect::<Vec<_>>(),
+            swarm_core::config::STANDARD_THREAT_CLASS_SLUGS
+        );
+    }
+
     #[tokio::test]
     async fn repeated_alerts_do_not_deescalate_incident_mode() {
         let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));

@@ -154,6 +154,7 @@ fn operator_config(root: &std::path::Path) -> SwarmConfig {
                 nostr_pubkey: None,
             },
         },
+        perch: swarm_core::config::PerchBridgeConfig::default(),
         tls: None,
     };
     config.evolution.paths.evolution_population_results_dir =

@@ -81,6 +81,7 @@ fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
         identity: super::IdentityConfig::default(),
         platform_api: PlatformApiConfig::default(),
         operator: OperatorSurfaceConfig::default(),
+        perch: super::PerchBridgeConfig::default(),
         tls: None,
     }
 }
