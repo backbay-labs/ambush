@@ -338,7 +338,7 @@ Create one row when a milestone exits; until then its state is `not accepted`.
 | Repository baseline | — | migration plan Tasks 1–8 only | — | n/a | not landed |
 | Ground | `49a535535` | root build/fmt/clippy/tests + 13 gate scripts; `workspace/just ci`; smoke E2E | Workspace CI 25/25 on PR #13 | `evidence/ground.md` | **accepted 2026-09-03** |
 | First card | `642270647` | root fmt/clippy/tests, six tool gates, copy + write-allowlist gates, provisioning test | pending on PR | `evidence/first-card.md` | **not accepted** — all 24 tasks implemented and gates green, but the end-to-end walking skeleton has not been run; the console half is mock-backed |
-| The hold | — | — | — | `evidence/the-hold.md` | not accepted |
+| The hold | `9c2d7ad41` | root build/fmt/clippy + 1,543 workspace tests; all 18 tool gates; Tauri clippy + 3,086 tests; desktop check/typecheck/6,040 unit tests; file-size ratchet | pending on PR | `evidence/the-hold.md` | **not accepted** — the daemon-and-relay half ran live end to end (hold produced, filed, addressed, refused, granted with a 60 s lease, replayed, 409 on conflict); the CONSOLE half is mock-backed and was never driven against that stack |
 | Operator-complete | — | — | — | `evidence/operator-complete.md` | not accepted |
 
 Each evidence record contains:
