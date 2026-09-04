@@ -48,6 +48,7 @@ const VECTORS: &[(&str, &str)] = &[
     vector!("card-swarm-hold-v1"),
     vector!("card-swarm-verdict-v1"),
     vector!("card-swarm-verdict-v1-superseded"),
+    vector!("card-swarm-verdict-v1-finding"),
     vector!("card-swarm-receipt-v1"),
     vector!("card-swarm-lease-v1"),
     vector!("card-swarm-rollback-v1"),
@@ -71,9 +72,10 @@ fn every_vector_parses() {
 
 #[test]
 fn the_registry_is_seven_cards_one_stored_kind_and_seven_frames() {
-    // Eight card VECTORS, seven card TYPES: `swarm:verdict:v1` has two, the
-    // second being the losing console's `superseded` update card. Counting
-    // distinct `fact.schema` values is what keeps this honest.
+    // Nine card VECTORS, seven card TYPES: `swarm:verdict:v1` has three -- the
+    // hold grant, the losing console's `superseded` update card, and the
+    // finding-subject verdict D-FC-3 added. Counting distinct `fact.schema`
+    // values is what keeps this honest.
     let mut schemas: Vec<String> = VECTORS
         .iter()
         .filter(|(n, _)| n.starts_with("card-"))
@@ -104,7 +106,7 @@ fn the_registry_is_seven_cards_one_stored_kind_and_seven_frames() {
 /// result. It is a test now. Re-pin with `tools/sync-perch-golden.sh`, never by
 /// hand: the vectors are extracted from the schemas' own `examples`, so editing a
 /// vector to match a hash inverts the whole mechanism.
-const GOLDEN_SHA256: &str = "10233c15d1945bad14124022dbb359ed5e00de2f9b4300b6ea55e0b3124a285f";
+const GOLDEN_SHA256: &str = "5a189116479f2c0a73b27ee5a9effc73554375c22d83cc76594f5bd06aeaec82";
 
 #[test]
 fn the_golden_corpus_matches_its_pinned_hash() {
@@ -479,4 +481,59 @@ fn the_verdict_vectors_carry_an_operator_issuer_with_a_null_role() {
     assert!(serde_json::from_value::<Card>(v["fact"].clone()).is_ok());
     v["fact"]["issuer"]["role"] = Value::String("tom".into());
     assert!(serde_json::from_value::<Card>(v["fact"].clone()).is_err());
+}
+
+#[test]
+fn the_verdict_subject_discriminator_is_on_the_wire() {
+    // D-FC-3. One marker carries verdicts on two subjects because the registry
+    // is closed at seven. The tag is a wire field, not an inference from which
+    // keys happen to be present, so a reader never has to guess which join
+    // keys a card carries -- and a hold-shaped body can never be read as a
+    // finding verdict by accident.
+    use swarm_perch_wire::cards::{VerdictDecision, VerdictLocator};
+    for (name, expected) in [
+        ("card-swarm-verdict-v1", "hold"),
+        ("card-swarm-verdict-v1-superseded", "hold"),
+        ("card-swarm-verdict-v1-finding", "finding"),
+    ] {
+        let raw = VECTORS.iter().find(|(n, _)| *n == name).unwrap().1;
+        let v: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(v["fact"]["locator"]["subject"], expected, "{name}");
+        assert_eq!(v["fact"]["decision"]["subject"], expected, "{name}");
+        let card: swarm_perch_wire::cards::VerdictCard =
+            serde_json::from_value(v["fact"].clone()).unwrap();
+        match (&card.locator, &card.decision) {
+            (VerdictLocator::Hold { .. }, VerdictDecision::Hold { .. }) => {
+                assert_eq!(expected, "hold")
+            }
+            (VerdictLocator::Finding { .. }, VerdictDecision::Finding { .. }) => {
+                assert_eq!(expected, "finding");
+            }
+            _ => panic!("{name}: the locator and the decision disagree on their subject"),
+        }
+    }
+}
+
+#[test]
+fn a_finding_verdict_carries_no_hold_id_and_joins_by_the_card_id() {
+    // The `e` tag is deliberately absent (D-FC-3): the finding card lives in a
+    // lane channel and the verdict in a case channel, so an `e` across
+    // channels would let the relay's thread resolver mutate a lane card's
+    // reply_count from a case. `locator.finding_card_id` in the SIGNED body is
+    // the join instead, so nothing outside the signature carries it.
+    let raw = VECTORS
+        .iter()
+        .find(|(n, _)| *n == "card-swarm-verdict-v1-finding")
+        .unwrap()
+        .1;
+    let v: Value = serde_json::from_str(raw).unwrap();
+    assert!(v["fact"]["locator"]["hold_id"].is_null());
+    assert!(v["fact"]["decision"]["hold_id"].is_null());
+    assert_eq!(
+        v["fact"]["locator"]["finding_card_id"]
+            .as_str()
+            .map(str::len),
+        Some(64)
+    );
+    assert_eq!(v["fact"]["decision"]["decision"], "dismiss");
 }

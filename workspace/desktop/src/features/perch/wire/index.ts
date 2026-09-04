@@ -71,6 +71,7 @@ export type {
   ExecutionMode,
   FactIssuer,
   FindingFact,
+  FindingVerdictWord,
   Frame,
   FrameHeader,
   GapBlock,

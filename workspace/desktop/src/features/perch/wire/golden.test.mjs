@@ -69,9 +69,10 @@ function vector(stem) {
 // ─────────────────────────────────────────────────────── the vectors exist
 
 test("the registry is seven cards, one stored kind and seven frames", () => {
-  // Eight card VECTORS, seven card TYPES: `swarm:verdict:v1` has two, the
-  // second being the losing console's `superseded` update card. Counting
-  // distinct `fact.schema` values is what keeps this honest.
+  // Nine card VECTORS, seven card TYPES: `swarm:verdict:v1` has three -- the
+  // hold grant, the losing console's `superseded` update card, and the
+  // finding-subject verdict D-FC-3 added. Counting distinct `fact.schema`
+  // values is what keeps this honest.
   const schemas = new Set(
     vectors("card-").map(({ raw }) => JSON.parse(raw).fact.schema),
   );
@@ -96,7 +97,7 @@ test("the registry is seven cards, one stored kind and seven frames", () => {
  * hash inverts the entire mechanism.
  */
 const GOLDEN_SHA256 =
-  "10233c15d1945bad14124022dbb359ed5e00de2f9b4300b6ea55e0b3124a285f";
+  "5a189116479f2c0a73b27ee5a9effc73554375c22d83cc76594f5bd06aeaec82";
 
 test("the golden corpus matches its pinned hash", () => {
   const hash = createHash("sha256");
@@ -216,6 +217,38 @@ test("a superseded verdict names the card that won", () => {
     "a superseded card with no winner is a dead end for the reconciler",
   );
   assert.equal(typeof leg2.superseded_at_ms, "number");
+});
+
+test("the verdict subject discriminator is on the wire, both blocks", () => {
+  // D-FC-3. One marker carries verdicts on two subjects because the registry is
+  // closed at seven. The tag is a wire field, not an inference from which keys
+  // happen to be present, so a hold-shaped body can never be read as a finding
+  // verdict by accident.
+  for (const [stem, subject] of [
+    ["card-swarm-verdict-v1", "hold"],
+    ["card-swarm-verdict-v1-superseded", "hold"],
+    ["card-swarm-verdict-v1-finding", "finding"],
+  ]) {
+    const card = JSON.parse(vector(stem).raw);
+    assert.equal(card.fact.locator.subject, subject, stem);
+    assert.equal(card.fact.decision.subject, subject, stem);
+    assert.doesNotThrow(() => cardEnvelope.parse(card), stem);
+  }
+});
+
+test("a hold verb on a finding subject does not decode", () => {
+  // `grant` authorizes an action the daemon is holding; `confirm` records that
+  // a detection was true. They go to different daemon routes, so one
+  // vocabulary would let a grant be written where a confirm belongs.
+  const card = JSON.parse(vector("card-swarm-verdict-v1-finding").raw);
+  card.fact.decision.decision = "grant";
+  assert.throws(() => cardEnvelope.parse(card));
+  const mixed = JSON.parse(vector("card-swarm-verdict-v1-finding").raw);
+  mixed.fact.locator.subject = "hold";
+  assert.throws(
+    () => cardEnvelope.parse(mixed),
+    "a hold locator without hold keys is not a locator",
+  );
 });
 
 test("only a superseded verdict may carry a winner", () => {

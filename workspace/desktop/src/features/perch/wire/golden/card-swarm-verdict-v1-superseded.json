@@ -8,7 +8,8 @@
       "hold_id": "h_a07aeacf",
       "operator_id": "perch-operator-2",
       "rationale_sha256": "6ec22089809e9c2e8c5a2799c3a248e92d71c4c223b73101c9a768eb1615d1d2",
-      "rationale": "Same call, one tick later."
+      "rationale": "Same call, one tick later.",
+      "subject": "hold"
     },
     "emitted_at_ms": 1773738979050,
     "issuer": {
@@ -26,7 +27,8 @@
     "locator": {
       "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
       "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c",
-      "hold_id": "h_a07aeacf"
+      "hold_id": "h_a07aeacf",
+      "subject": "hold"
     },
     "schema": "swarm.perch.verdict.v1",
     "signature": {

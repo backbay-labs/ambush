@@ -120,16 +120,25 @@ export function holdIdOf(tags: readonly Tag[]): string | undefined {
   return tagValue(tags, "hold");
 }
 
-/** Tags for the one event the operator's own key publishes. */
+/**
+ * Tags for the one event the operator's own key publishes.
+ *
+ * NO `e` TAG (00-DECISIONS.md D-FC-3). The card this verdict is about lives in
+ * another channel — a finding card in a lane, a hold card in its own case —
+ * and an `e` pointing across channels makes the relay's NIP-10 thread resolver
+ * mutate that card's `reply_count` from here. The join is the card id inside
+ * the SIGNED body (`locator.finding_card_id` / `locator.hold_card_id`), which
+ * an indexed tag could not be trusted to carry anyway. A later supersession
+ * update may reply to its OWN same-channel leg-1 verdict card; that `e` is
+ * built at that call site, not here.
+ */
 export function verdictCardTags(args: {
   readonly caseChannel: string;
-  readonly holdCardId: string;
   readonly threatClassSlug: string;
   readonly severity: Severity;
 }): Tag[] {
   return [
     ["h", args.caseChannel],
-    ["e", args.holdCardId],
     ["t", args.threatClassSlug],
     ["l", args.severity],
     ["k", "verdict" satisfies CardKind],

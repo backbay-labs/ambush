@@ -81,6 +81,12 @@ fn the_verdict_line_leads_with_the_operators_verb() {
         line("card-swarm-verdict-v1-superseded"),
         "grant · hold h_a07aeacf · by perch-operator-2 · 2026-03-17T09:16:19Z"
     );
+    // D-FC-3's finding arm: the same card, the same shape of line, a different
+    // verb vocabulary and a different subject noun.
+    assert_eq!(
+        line("card-swarm-verdict-v1-finding"),
+        "dismiss · finding f-6b1d4c90 · by perch-operator-1 · 2026-03-17T09:21:00Z"
+    );
 }
 
 #[test]

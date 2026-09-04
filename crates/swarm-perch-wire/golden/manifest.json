@@ -43,6 +43,11 @@
       "example_index": 1
     },
     {
+      "file": "card-swarm-verdict-v1-finding.json",
+      "schema": "card-swarm-verdict-v1.schema.json",
+      "example_index": 2
+    },
+    {
       "file": "event-46010-hold-notice.json",
       "schema": "event-46010-hold-notice.schema.json",
       "example_index": 0

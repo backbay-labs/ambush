@@ -33,77 +33,187 @@
           "description": "The RuntimeEvent's own emitted_at_ms, carried through unchanged. THE SORT KEY for every Perch surface. The Nostr event's `created_at` is a transport timestamp stamped at publish, because MAX_TIMESTAMP_DRIFT_SECS is 900 and REJECTS (crates/buzz-relay/src/handlers/ingest.rs:2224-2231) and `created_at` is inside the Nostr signature, so a spooled card carrying its true emit time becomes permanently unpublishable fifteen minutes after it was produced."
         },
         "locator": {
-          "type": "object",
-          "required": [
-            "hold_id",
-            "case_channel",
-            "hold_card_id"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "hold_id": {
-              "$ref": "common.schema.json#/$defs/HoldId"
+          "description": "Join keys, discriminated by `subject` (00-DECISIONS.md D-FC-3). One marker carries verdicts on two subjects because the marker registry is closed at seven and an eighth is not an option.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "subject",
+                "hold_id",
+                "case_channel",
+                "hold_card_id"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "subject": {
+                  "const": "hold"
+                },
+                "hold_id": {
+                  "$ref": "common.schema.json#/$defs/HoldId"
+                },
+                "case_channel": {
+                  "$ref": "common.schema.json#/$defs/Uuid"
+                },
+                "hold_card_id": {
+                  "$ref": "common.schema.json#/$defs/Hex64Lower",
+                  "description": "Nostr event id of the open swarm:hold:v1 card. Also the `e` tag."
+                }
+              }
             },
-            "case_channel": {
-              "$ref": "common.schema.json#/$defs/Uuid"
-            },
-            "hold_card_id": {
-              "$ref": "common.schema.json#/$defs/Hex64Lower",
-              "description": "Nostr event id of the open swarm:hold:v1 card. Also the `e` tag."
+            {
+              "type": "object",
+              "required": [
+                "subject",
+                "finding_id",
+                "finding_card_id",
+                "case_channel",
+                "incident_id"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "subject": {
+                  "const": "finding"
+                },
+                "finding_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The finding the daemon knows by this id, read out of the admitted finding card's own body."
+                },
+                "finding_card_id": {
+                  "$ref": "common.schema.json#/$defs/Hex64Lower",
+                  "description": "Nostr event id of the admitted swarm:finding:v1 card. THE JOIN, and deliberately NOT an `e` tag: the finding card lives in a lane channel and this card in a case channel, so an `e` would make the relay's NIP-10 thread resolver mutate a lane card's reply_count from a case. See 00-DECISIONS.md D-FC-3."
+                },
+                "case_channel": {
+                  "$ref": "common.schema.json#/$defs/Uuid"
+                },
+                "incident_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The incident the daemon minted for this case (B3i). Leg 2 sends it back on the feedback route."
+                }
+              }
             }
-          }
+          ]
         },
         "decision": {
-          "type": "object",
-          "required": [
-            "decision",
-            "hold_id",
-            "decided_at_ms",
-            "operator_id",
-            "rationale_sha256"
-          ],
-          "additionalProperties": false,
-          "properties": {
-            "decision": {
-              "type": "string",
-              "enum": [
-                "grant",
-                "refuse"
-              ]
-            },
-            "hold_id": {
-              "$ref": "common.schema.json#/$defs/HoldId"
-            },
-            "decided_at_ms": {
-              "$ref": "common.schema.json#/$defs/UnixMillis"
-            },
-            "operator_id": {
-              "type": "string",
-              "description": "The configured Ambush operator principal id (crates/swarm-core/src/config/operator.rs:118-129). The console asserts it equals voter_id_from_public_key(signature.public_key_hex) before publishing, because the decide route will."
-            },
-            "rationale_sha256": {
-              "oneOf": [
-                {
-                  "$ref": "common.schema.json#/$defs/Hex64Lower"
-                },
-                {
-                  "type": "null"
-                }
+          "description": "What was decided, discriminated by `subject`. The signing preimage is a subset of the arm that carries it (D-FC-3).",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "subject",
+                "decision",
+                "hold_id",
+                "decided_at_ms",
+                "operator_id",
+                "rationale_sha256"
               ],
-              "description": "SHA-256 of the UTF-8 rationale string, or JSON null when rationale is absent. This binds the fourth member of the signing preimage without making free text part of its canonical JSON shape."
-            },
-            "rationale": {
-              "oneOf": [
-                {
-                  "type": "string"
+              "additionalProperties": false,
+              "properties": {
+                "subject": {
+                  "const": "hold"
                 },
-                {
-                  "type": "null"
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "grant",
+                    "refuse"
+                  ]
+                },
+                "hold_id": {
+                  "$ref": "common.schema.json#/$defs/HoldId"
+                },
+                "decided_at_ms": {
+                  "$ref": "common.schema.json#/$defs/UnixMillis"
+                },
+                "operator_id": {
+                  "type": "string",
+                  "description": "The configured Ambush operator principal id (crates/swarm-core/src/config/operator.rs:118-129). The console asserts it equals voter_id_from_public_key(signature.public_key_hex) before publishing, because the decide route will."
+                },
+                "rationale_sha256": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/Hex64Lower"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "SHA-256 of the UTF-8 rationale string, or JSON null when rationale is absent. This binds the fourth member of the signing preimage without making free text part of its canonical JSON shape."
+                },
+                "rationale": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Free text the operator typed. Never parsed by anything."
                 }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "subject",
+                "decision",
+                "finding_id",
+                "decided_at_ms",
+                "operator_id",
+                "rationale_sha256"
               ],
-              "description": "Free text the operator typed. Never parsed by anything."
+              "additionalProperties": false,
+              "properties": {
+                "subject": {
+                  "const": "finding"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "confirm",
+                    "dismiss",
+                    "investigate"
+                  ],
+                  "description": "The operator's three verbs on a finding (B3). A separate vocabulary from grant/refuse: `grant` authorizes an action the daemon is holding, `confirm` records that a detection was true, and the two go to different daemon routes."
+                },
+                "finding_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "decided_at_ms": {
+                  "$ref": "common.schema.json#/$defs/UnixMillis"
+                },
+                "operator_id": {
+                  "type": "string",
+                  "description": "The configured Ambush operator principal id (crates/swarm-core/src/config/operator.rs:118-129). The console asserts it equals voter_id_from_public_key(signature.public_key_hex) before publishing, because the decide route will."
+                },
+                "rationale_sha256": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/Hex64Lower"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "SHA-256 of the UTF-8 rationale, or JSON null when absent. The finding-subject Ed25519 preimage is the RFC 8785 form of {decided_at_ms, decision, finding_id, rationale_sha256} - W3-16's four-member shape with finding_id in hold_id's place."
+                },
+                "rationale": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Free text the operator typed. Never parsed by anything."
+                }
+              }
             }
-          }
+          ]
         },
         "signature": {
           "$ref": "common.schema.json#/$defs/DetachedSignature",
@@ -236,11 +346,13 @@
         },
         "emitted_at_ms": 1773738979000,
         "locator": {
+          "subject": "hold",
           "hold_id": "h_a07aeacf",
           "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
           "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c"
         },
         "decision": {
+          "subject": "hold",
           "decision": "grant",
           "hold_id": "h_a07aeacf",
           "decided_at_ms": 1773738979000,
@@ -280,11 +392,13 @@
         },
         "emitted_at_ms": 1773738979050,
         "locator": {
+          "subject": "hold",
           "hold_id": "h_a07aeacf",
           "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
           "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c"
         },
         "decision": {
+          "subject": "hold",
           "decision": "grant",
           "hold_id": "h_a07aeacf",
           "decided_at_ms": 1773738979050,
@@ -304,6 +418,53 @@
           "refusal_check": null,
           "superseded_by": "243aad87527a33433a60e2f990d83de1e84618a69e583fbd8172de4e8fe7d9d8",
           "superseded_at_ms": 1773738979310
+        }
+      },
+      "envelope_hash": "0xabababababababababababababababababababababababababababababababab"
+    },
+    {
+      "schema": "swarm.spine.envelope.v1",
+      "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+      "seq": 1,
+      "prev_envelope_hash": null,
+      "issued_at": "2026-03-17T09:21:00Z",
+      "capability_token": null,
+      "fact": {
+        "schema": "swarm.perch.verdict.v1",
+        "issuer": {
+          "swarm_agent_id": "perch-operator-1",
+          "role": null,
+          "nostr_pubkey": "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5"
+        },
+        "emitted_at_ms": 1773739260000,
+        "locator": {
+          "subject": "finding",
+          "finding_id": "f-6b1d4c90",
+          "finding_card_id": "3f7a1c2b8d9e0f4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2",
+          "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+          "incident_id": "incident:perch-case:27799e23-ab25-4659-b381-3de47ea7ca4d"
+        },
+        "decision": {
+          "subject": "finding",
+          "decision": "dismiss",
+          "finding_id": "f-6b1d4c90",
+          "decided_at_ms": 1773739260000,
+          "operator_id": "perch-operator-1",
+          "rationale_sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+          "rationale": "The encoded command line is the nightly backup job on this host. Dismissing."
+        },
+        "signature": {
+          "algorithm": "ed25519",
+          "key_id": "perch-operator-1",
+          "public_key_hex": "bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+          "signature_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "leg2": {
+          "state": "sending",
+          "receipt_id": null,
+          "refusal_check": null,
+          "superseded_by": null,
+          "superseded_at_ms": null
         }
       },
       "envelope_hash": "0xabababababababababababababababababababababababababababababababab"

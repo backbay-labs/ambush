@@ -512,19 +512,49 @@ export const verdictFact = z.strictObject({
   schema: z.literal("swarm.perch.verdict.v1"),
   emitted_at_ms: unixMillis,
   issuer: operatorFactIssuer,
-  locator: z.strictObject({
-    hold_id: holdId,
-    case_channel: uuid,
-    hold_card_id: hex64,
-  }),
-  decision: z.strictObject({
-    decision: z.enum(["grant", "refuse"]),
-    hold_id: holdId,
-    decided_at_ms: unixMillis,
-    operator_id: z.string().min(1),
-    rationale_sha256: hex64.nullable(),
-    rationale: z.string().nullish(),
-  }),
+  // ONE MARKER, TWO SUBJECTS (00-DECISIONS.md D-FC-3). The registry is closed
+  // at seven markers, and First card records a verdict on a FINDING
+  // (`confirm|dismiss|investigate`) that the hold-only shape cannot carry. The
+  // `subject` tag is on the wire in both blocks rather than inferred from which
+  // keys are present, so a hold-shaped body can never be read as a finding
+  // verdict by accident. A finding verdict carries NO `hold_id` and NO `e` tag:
+  // the finding card lives in a lane channel and this one in a case channel,
+  // and `locator.finding_card_id` inside the signed body is the join.
+  locator: z.discriminatedUnion("subject", [
+    z.strictObject({
+      subject: z.literal("hold"),
+      hold_id: holdId,
+      case_channel: uuid,
+      hold_card_id: hex64,
+    }),
+    z.strictObject({
+      subject: z.literal("finding"),
+      finding_id: z.string().min(1),
+      finding_card_id: hex64,
+      case_channel: uuid,
+      incident_id: z.string().min(1),
+    }),
+  ]),
+  decision: z.discriminatedUnion("subject", [
+    z.strictObject({
+      subject: z.literal("hold"),
+      decision: z.enum(["grant", "refuse"]),
+      hold_id: holdId,
+      decided_at_ms: unixMillis,
+      operator_id: z.string().min(1),
+      rationale_sha256: hex64.nullable(),
+      rationale: z.string().nullish(),
+    }),
+    z.strictObject({
+      subject: z.literal("finding"),
+      decision: z.enum(["confirm", "dismiss", "investigate"]),
+      finding_id: z.string().min(1),
+      decided_at_ms: unixMillis,
+      operator_id: z.string().min(1),
+      rationale_sha256: hex64.nullable(),
+      rationale: z.string().nullish(),
+    }),
+  ]),
   signature: detachedSignature,
   // TWO OPERATORS, ONE HOLD. Both consoles publish a signed leg-1 card; the
   // daemon's compare-and-set picks one and 409s the other; the loser publishes an

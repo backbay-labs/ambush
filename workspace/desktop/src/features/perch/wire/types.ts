@@ -465,6 +465,13 @@ export type HoldState =
 /** `grant` | `refuse`. **Never `deny`** — appendix §7 keeps the three verbs apart. */
 export type Decision = "grant" | "refuse";
 
+/**
+ * The operator's three verbs on a FINDING (B3), a separate vocabulary from
+ * `Decision`: `grant` authorizes an action the daemon is holding, `confirm`
+ * records that a detection was true, and the two go to different daemon routes.
+ */
+export type FindingVerdictWord = "confirm" | "dismiss" | "investigate";
+
 export type HoldFact = {
   readonly schema: "swarm.perch.hold.v1";
   readonly issuer: FactIssuer;
@@ -545,20 +552,47 @@ export type VerdictFact = {
   /** A PERSON produced this fact. See `OperatorFactIssuer` for why it is its own type. */
   readonly issuer: OperatorFactIssuer;
   readonly emitted_at_ms: UnixMillis;
-  readonly locator: {
-    readonly hold_id: HoldId;
-    readonly case_channel: string;
-    readonly hold_card_id: string;
-  };
-  readonly decision: {
-    readonly decision: Decision;
-    readonly hold_id: string;
-    readonly decided_at_ms: UnixMillis;
-    readonly operator_id: string;
-    /** SHA-256 of the UTF-8 rationale, or JSON `null` when absent. */
-    readonly rationale_sha256: string | null;
-    readonly rationale?: string | null;
-  };
+  /**
+   * Join keys, discriminated by `subject` (D-FC-3). A finding verdict carries
+   * no `hold_id` and the card carries no `e` tag: the finding card lives in a
+   * lane channel and this one in a case channel, so `finding_card_id` inside
+   * the signed body is the join.
+   */
+  readonly locator:
+    | {
+        readonly subject: "hold";
+        readonly hold_id: HoldId;
+        readonly case_channel: string;
+        readonly hold_card_id: string;
+      }
+    | {
+        readonly subject: "finding";
+        readonly finding_id: string;
+        readonly finding_card_id: string;
+        readonly case_channel: string;
+        readonly incident_id: string;
+      };
+  readonly decision:
+    | {
+        readonly subject: "hold";
+        readonly decision: Decision;
+        readonly hold_id: string;
+        readonly decided_at_ms: UnixMillis;
+        readonly operator_id: string;
+        /** SHA-256 of the UTF-8 rationale, or JSON `null` when absent. */
+        readonly rationale_sha256: string | null;
+        readonly rationale?: string | null;
+      }
+    | {
+        readonly subject: "finding";
+        readonly decision: FindingVerdictWord;
+        readonly finding_id: string;
+        readonly decided_at_ms: UnixMillis;
+        readonly operator_id: string;
+        /** SHA-256 of the UTF-8 rationale, or JSON `null` when absent. */
+        readonly rationale_sha256: string | null;
+        readonly rationale?: string | null;
+      };
   /**
    * Ed25519 over the canonical form of
    * `{decided_at_ms, decision, hold_id, rationale_sha256}` —

@@ -1680,7 +1680,7 @@ pub struct VerdictCard {
     /// Join keys.
     pub locator: VerdictLocator,
     /// What was decided.
-    pub decision: VerdictBody,
+    pub decision: VerdictDecision,
     /// Ed25519 over the RFC 8785 canonical form of
     /// `{decided_at_ms, decision, hold_id, rationale_sha256}` — EXACTLY the
     /// preimage the decide route requires (W3-16), so ONE signature serves both
@@ -1695,22 +1695,70 @@ pub struct VerdictCard {
     pub leg2: Option<Leg2State>,
 }
 
-/// Join keys for a verdict card.
+/// Join keys for a verdict card, discriminated by what was decided (D-FC-3).
+///
+/// One marker carries verdicts on two different subjects because the registry
+/// is closed at seven and an eighth is not an option. The `subject` tag is on
+/// the wire, so a reader never has to guess which join keys a card carries.
+///
+/// Each arm is a named struct rather than an inline variant body: the wire
+/// bytes are identical (serde's internal tagging flattens a newtype variant
+/// beside its tag), and `tools/check-perch-wire-parity.sh` reads `pub field:`
+/// declarations, which an inline variant body does not produce.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VerdictLocator {
+#[serde(tag = "subject", rename_all = "snake_case")]
+pub enum VerdictLocator {
+    /// A verdict on a held action.
+    Hold(VerdictHoldLocator),
+    /// A verdict on a finding: confirm, dismiss or investigate (B3).
+    Finding(VerdictFindingLocator),
+}
+
+/// Join keys for a verdict on a held action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerdictHoldLocator {
     /// The hold.
     pub hold_id: String,
     /// The case channel. `INV-12` asserts it equals the `h` tag; `INV-13`
     /// asserts a mismatch refuses to render.
     pub case_channel: String,
-    /// Nostr event id of the open `swarm:hold:v1` card. Also the `e` tag.
+    /// Nostr event id of the open `swarm:hold:v1` card.
     pub hold_card_id: String,
 }
 
-/// The decision itself. The signing preimage is a subset of this.
+/// Join keys for a verdict on a finding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VerdictBody {
-    /// `grant` | `refuse`.
+pub struct VerdictFindingLocator {
+    /// The finding the daemon knows by this id, read out of the admitted
+    /// finding card's own body and never from a renderer-supplied copy.
+    pub finding_id: String,
+    /// Nostr event id of the admitted `swarm:finding:v1` card, 64 lowercase
+    /// hex. THE JOIN, and deliberately not an `e` tag: the finding card lives
+    /// in a lane channel and this card in a case channel, so an `e` would make
+    /// the relay's NIP-10 thread resolver mutate a lane card's `reply_count`
+    /// from a case.
+    pub finding_card_id: String,
+    /// The case channel. `INV-12` asserts it equals the `h` tag.
+    pub case_channel: String,
+    /// The incident the daemon minted for this case (B3i).
+    pub incident_id: String,
+}
+
+/// The decision itself, discriminated by subject. The signing preimage is a
+/// subset of the arm that carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "subject", rename_all = "snake_case")]
+pub enum VerdictDecision {
+    /// `grant` | `refuse`, on a held action.
+    Hold(VerdictHoldDecision),
+    /// `confirm` | `dismiss` | `investigate`, on a finding.
+    Finding(VerdictFindingDecision),
+}
+
+/// What was decided about a held action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerdictHoldDecision {
+    /// The operator's verb.
     pub decision: Decision,
     /// The hold.
     pub hold_id: String,
@@ -1725,6 +1773,57 @@ pub struct VerdictBody {
     /// Free text. Never parsed by anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rationale: Option<String>,
+}
+
+/// What was decided about a finding.
+///
+/// The Ed25519 preimage for this arm is the RFC 8785 form of
+/// `{decided_at_ms, decision, finding_id, rationale_sha256}` — W3-16's
+/// four-member shape with `finding_id` in `hold_id`'s place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerdictFindingDecision {
+    /// The operator's verb.
+    pub decision: FindingVerdictWord,
+    /// The finding.
+    pub finding_id: String,
+    /// When the operator signed.
+    pub decided_at_ms: i64,
+    /// The configured operator principal id.
+    pub operator_id: String,
+    /// SHA-256 of the UTF-8 rationale, or JSON `null` when absent.
+    pub rationale_sha256: Option<String>,
+    /// Free text. Never parsed by anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+}
+
+/// The operator's three verbs on a finding (B3).
+///
+/// A separate enum from [`Decision`] on purpose: `grant` authorizes an action
+/// the daemon is holding, `confirm` records that a detection was true. Sharing
+/// one enum would let a grant be written where a confirm belongs, and the two
+/// go to different daemon routes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingVerdictWord {
+    /// A true detection. Feeds the daemon's tuning as a confirmed finding.
+    Confirm,
+    /// A false positive. Feeds the daemon's false-positive tracking.
+    Dismiss,
+    /// Neither yet: keep the case open and say so on the record.
+    Investigate,
+}
+
+impl FindingVerdictWord {
+    /// The wire spelling, which is also the human-line word.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Confirm => "confirm",
+            Self::Dismiss => "dismiss",
+            Self::Investigate => "investigate",
+        }
+    }
 }
 
 /// What leg 2 did.
@@ -1807,14 +1906,31 @@ impl Leg2State {
 }
 
 impl VerdictCard {
-    /// `{grant|refuse} · hold {hold_id} · by {operator_id} · {ISO}`
+    /// `{grant|refuse} · hold {hold_id} · by {operator_id} · {ISO}` for a held
+    /// action, and
+    /// `{confirm|dismiss|investigate} · finding {finding_id} · by {operator_id} · {ISO}`
+    /// for a finding.
     #[must_use]
     pub fn human_line(&self) -> String {
+        let (verb, subject, operator_id, decided_at_ms) = match &self.decision {
+            VerdictDecision::Hold(d) => (
+                d.decision.as_str(),
+                format!("hold {}", d.hold_id),
+                &d.operator_id,
+                d.decided_at_ms,
+            ),
+            VerdictDecision::Finding(d) => (
+                d.decision.as_str(),
+                format!("finding {}", d.finding_id),
+                &d.operator_id,
+                d.decided_at_ms,
+            ),
+        };
         [
-            self.decision.decision.as_str().to_string(),
-            format!("hold {}", self.decision.hold_id),
-            format!("by {}", self.decision.operator_id),
-            iso_seconds(self.decision.decided_at_ms),
+            verb.to_string(),
+            subject,
+            format!("by {operator_id}"),
+            iso_seconds(decided_at_ms),
         ]
         .join(HUMAN_SEP)
     }
