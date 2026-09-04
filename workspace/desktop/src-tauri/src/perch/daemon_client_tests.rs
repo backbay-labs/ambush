@@ -92,3 +92,81 @@ fn the_allowlist_arm_discriminates_on_both_the_verb_and_the_template() {
         "/v1/operator/findings/{finding_id}/feedback"
     ));
 }
+
+// ── keyring values must not cross IPC ──────────────────────────────────────
+
+/// A transport failure names the URL it was dialling; the message that crosses
+/// IPC must not.
+///
+/// The daemon URL and the bearer are keyring values this process keeps. The
+/// redaction happens where a transport error BECOMES a string, not at each
+/// call site, because a call site can forget — and a test that only checked a
+/// hand-built string would pass over a client that never called the redactor.
+/// So this drives the real message builder with the real shape of a reqwest
+/// error.
+#[test]
+fn a_transport_error_message_carries_neither_the_daemon_url_nor_the_bearer() {
+    let url = "https://daemon.internal:9090/v1/response/holds/hold_x/decide";
+    let bearer = "super-secret-operator-bearer-token";
+    // The shape reqwest actually produces: the URL, verbatim, inside the text.
+    let raw = format!("error sending request for url ({url}): connection refused");
+    let message = transport_error_message(&raw, url, bearer);
+
+    assert!(
+        !message.contains(bearer),
+        "the bearer crossed IPC: {message}"
+    );
+    assert!(
+        !message.contains(url),
+        "the daemon URL crossed IPC: {message}"
+    );
+    assert!(
+        !message.contains("daemon.internal:9090"),
+        "the daemon ORIGIN crossed IPC, which discloses where it lives: {message}"
+    );
+    assert!(
+        message.contains("daemon unreachable"),
+        "the operator still needs to know what happened: {message}"
+    );
+}
+
+/// The redactor is not a no-op and not a blank: it removes the two secrets and
+/// leaves everything else legible.
+#[test]
+fn redaction_removes_only_the_secrets() {
+    let url = "http://127.0.0.1:9090";
+    let bearer = "tok-abc";
+    let message = format!("POST {url}/v1/x failed with tok-abc after 3s");
+    let redacted = redact_for_ipc(&message, url, bearer);
+    assert!(!redacted.contains(bearer));
+    assert!(!redacted.contains("127.0.0.1:9090"));
+    assert!(
+        redacted.contains("failed") && redacted.contains("after 3s"),
+        "the redactor ate the diagnosis: {redacted}"
+    );
+
+    // An empty secret must not turn every character into a redaction marker.
+    let untouched = redact_for_ipc("nothing secret here", "", "");
+    assert_eq!(untouched, "nothing secret here");
+}
+
+/// `Retry-After` is read from the header, not invented.
+///
+/// The decide route sends it on the two conflicts that resolve by themselves;
+/// a client that guessed its own interval would either hammer the daemon or
+/// keep the operator waiting longer than the daemon asked.
+#[test]
+fn a_daemon_response_carries_the_retry_after_the_daemon_sent() {
+    let response = DaemonResponse {
+        status: 409,
+        body: serde_json::json!({ "error": "decision_in_flight" }),
+        retry_after_seconds: Some(1),
+    };
+    assert_eq!(response.retry_after_seconds, Some(1));
+    let without = DaemonResponse {
+        status: 409,
+        body: serde_json::json!({ "error": "hold_already_decided" }),
+        retry_after_seconds: None,
+    };
+    assert_eq!(without.retry_after_seconds, None);
+}

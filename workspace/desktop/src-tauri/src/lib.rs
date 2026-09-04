@@ -892,6 +892,7 @@ pub fn run() {
             tray_menu::update_tray_agent_activity,
             perch_reviewed_findings,
             perch_admitted_issuers,
+            perch_decide_hold,
             perch_finding_feedback,
             perch_mint_incident,
             perch_record_verdict,

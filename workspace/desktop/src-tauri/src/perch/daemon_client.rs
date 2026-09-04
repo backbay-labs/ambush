@@ -47,14 +47,21 @@ pub struct DaemonRoute {
     pub path: String,
 }
 
-/// A daemon answer: the HTTP status, and the JSON body (`Null` when the body
-/// was empty or not JSON). Commands decide what a non-200 means.
+/// A daemon answer: the HTTP status, the JSON body (`Null` when the body was
+/// empty or not JSON), and `Retry-After` when the daemon sent one. Commands
+/// decide what a non-200 means.
 #[derive(Debug, Clone)]
 pub struct DaemonResponse {
     /// The HTTP status code.
     pub status: u16,
     /// The parsed JSON body, or `Null`.
     pub body: serde_json::Value,
+    /// `Retry-After`, in whole seconds, when the daemon sent one.
+    ///
+    /// The decide route sends it on the two 409s that resolve by themselves,
+    /// and a client that invented its own interval would either hammer the
+    /// daemon or make the operator wait longer than the daemon asked.
+    pub retry_after_seconds: Option<u64>,
 }
 
 /// Percent-encode `value` over the RFC 3986 unreserved set. Everything else is
@@ -150,16 +157,59 @@ async fn perch_daemon_request(
     if let Some(body) = body {
         request = request.json(&body);
     }
+    let bearer = daemon_bearer()?;
     let response = request
         .send()
         .await
-        .map_err(|e| format!("daemon unreachable: {e}"))?;
+        .map_err(|e| transport_error_message(&e.to_string(), &url, &bearer))?;
     let status = response.status().as_u16();
+    let retry_after_seconds = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
     let body = response
         .json::<serde_json::Value>()
         .await
         .unwrap_or(serde_json::Value::Null);
-    Ok(DaemonResponse { status, body })
+    Ok(DaemonResponse {
+        status,
+        body,
+        retry_after_seconds,
+    })
+}
+
+/// Build the message for a transport failure with the daemon URL and the
+/// bearer removed.
+///
+/// A `reqwest::Error`'s `Display` names the URL it was dialling, and both the
+/// URL and the token are keyring values this process is supposed to keep. The
+/// redaction happens HERE, at the one place a transport error becomes a
+/// string, rather than at each call site, because a call site can forget.
+pub fn transport_error_message(error: &str, url: &str, bearer: &str) -> String {
+    format!("daemon unreachable: {}", redact_for_ipc(error, url, bearer))
+}
+
+/// Remove the daemon URL and the bearer token from a message that is about to
+/// cross IPC into the webview.
+///
+/// The origin is redacted as well as the full URL: a message naming only
+/// `127.0.0.1:9090` still discloses where the daemon lives.
+pub fn redact_for_ipc(message: &str, url: &str, bearer: &str) -> String {
+    let mut out = message.to_string();
+    for secret in [bearer, url, url.trim_end_matches('/')] {
+        if !secret.is_empty() {
+            out = out.replace(secret, "<redacted>");
+        }
+    }
+    if let Some(origin) = url
+        .split_once("://")
+        .map(|(_, rest)| rest.trim_end_matches('/'))
+        .filter(|origin| !origin.is_empty())
+    {
+        out = out.replace(origin, "<redacted>");
+    }
+    out
 }
 
 /// Read a daemon route. GETs are not on the write table and are not checked
