@@ -103,6 +103,22 @@ pheromone:
   deescalation_cooldown_secs: 300
   response_playbook:
     rules:
+      # The rule the hold demo turns on. `severity` here is an EXACT match, unlike the policy
+      # gate's `min_severity`, so a CRITICAL finding does not match a HIGH rule --
+      # `suspicious_process_tree` emits CRITICAL for `powershell -enc` from WINWORD, and without
+      # this row the daemon logs `no playbook action proposed for any finding on event` and no
+      # hold can ever be produced. `isolate_host` is one of the twelve destructive actions, so
+      # the static human gate holds it; `deploy_decoy` is not, which is why the HIGH rule below
+      # could never have driven this demo either. `isolate_host` must stay ABSENT from
+      # `policy.rules` below: a matching allow rule outranks the static human gate and would
+      # dispatch it without a human.
+      - threat_class: execution
+        severity: CRITICAL
+        min_confidence: 0.85
+        max_confidence: 1.00
+        actions:
+          - type: isolate_host
+            host_id: host-ops-1
       - threat_class: execution
         severity: HIGH
         min_confidence: 0.90
