@@ -68,10 +68,28 @@ jobs:
               - 'workspace/**/*.keystore'
               - 'workspace/**/agent-keys/**'
 
+  # Deliberately NOT behind the `changes` path gate. `tools/check-no-committed-keys.sh`
+  # detects three shapes: key-ish file names, PEM/OpenSSH headers in file CONTENT, and
+  # high-entropy 32/64-byte blobs. A path filter can re-admit the first shape only, so a
+  # workspace-only commit adding, say, `workspace/relay/deploy_id` holding a raw Ed25519
+  # seed would skip the scanner entirely if this step lived in a gated job. It needs no
+  # toolchain and no cache, so running it on every event costs seconds.
+  #
+  # A live Ed25519 seed sat tracked at rulesets/data/agent-keys/ from 69814a4 until the
+  # repo went public, and no gate looked for it. That is the failure this job exists for.
+  committed-keys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check for committed key material
+        run: bash tools/check-no-committed-keys.sh
+
   fmt:
     needs:
       - changes
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -103,7 +121,7 @@ jobs:
   panic-contract:
     needs:
       - changes
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -136,12 +154,6 @@ jobs:
 
       - name: Check runtime panic contract
         run: bash tools/check-runtime-panic-contract.sh
-
-      # No toolchain needed; kept in this job because it is a fast static check.
-      # A live Ed25519 seed sat tracked at rulesets/data/agent-keys/ from 69814a4
-      # until the repo went public, and no gate looked for it.
-      - name: Check for committed key material
-        run: bash tools/check-no-committed-keys.sh
 
       # INCFIX-03. No toolchain needed; another fast static check. `#[path =
       # "x.inc"]` pulls real Rust into a crate that rust-analyzer and every
@@ -238,7 +250,7 @@ jobs:
   build:
     needs:
       - changes
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -277,7 +289,7 @@ jobs:
     needs:
       - changes
       - build
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -318,7 +330,7 @@ jobs:
     needs:
       - changes
       - build
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -443,7 +455,7 @@ jobs:
     needs:
       - changes
       - build
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -497,7 +509,7 @@ jobs:
   fixture-freshness:
     needs:
       - changes
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -528,7 +540,7 @@ jobs:
     needs:
       - changes
       - build
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -584,7 +596,7 @@ jobs:
     needs:
       - changes
       - build
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -657,7 +669,7 @@ jobs:
     needs:
       - changes
       - build
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -696,7 +708,7 @@ jobs:
     needs:
       - changes
       - build
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -744,7 +756,7 @@ jobs:
   supply-chain:
     needs:
       - changes
-    if: needs.changes.outputs.engine == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

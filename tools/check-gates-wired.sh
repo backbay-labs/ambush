@@ -114,18 +114,34 @@ workflows = sys.argv[2 + script_count :]
 # stripping `${{ }}` and whitespace.
 PERMISSIVE_CONDITIONS = {"always()", "!cancelled()", "success() || failure()"}
 
-# The one narrowing JOB-level condition accepted, verbatim: the engine path
-# gate (see CONDITIONAL STEPS in the header). Valid only when the workflow
-# declares the `changes` job whose output it reads.
-PATH_GATE_JOB_CONDITIONS = {"needs.changes.outputs.engine == 'true'"}
+# The narrowing JOB-level conditions accepted, verbatim: the engine path gate
+# (see CONDITIONAL STEPS in the header), with and without the push backstop
+# that keeps a failed `changes` job from turning every lane into a passing skip.
+PATH_GATE_JOB_CONDITIONS = {
+    "needs.changes.outputs.engine == 'true'",
+    "github.event_name == 'push' || needs.changes.outputs.engine == 'true'",
+}
 PATH_GATE_JOB = "changes"
+PATH_GATE_OUTPUT = "engine"
 
 
-def job_condition_accepted(job_if, job_names):
+def job_condition_accepted(job_if, job_needs, gate_job_outputs):
+    """Whether a job-level `if:` may still count its steps as wired gates.
+
+    A narrowing condition is accepted only when it is one of the exact path-gate
+    forms AND the job declares `needs: changes` AND that `changes` job actually
+    declares the `engine` output the condition reads. Without the `needs` check a
+    job carrying the condition and no `needs:` evaluates `needs.changes` to null
+    on every event, never runs, and would still be certified as wired.
+    """
     condition = normalize_condition(job_if)
     if condition in PERMISSIVE_CONDITIONS:
         return True
-    return condition in PATH_GATE_JOB_CONDITIONS and PATH_GATE_JOB in job_names
+    if condition not in PATH_GATE_JOB_CONDITIONS:
+        return False
+    if PATH_GATE_JOB not in job_needs:
+        return False
+    return PATH_GATE_OUTPUT in gate_job_outputs
 
 
 def normalize_condition(value):
@@ -235,6 +251,8 @@ def parse_workflow(path):
                 continue
             job_name = parsed[0]
             job_if = None
+            job_needs = set()
+            job_outputs = set()
             steps = []
             index += 1
 
@@ -256,6 +274,38 @@ def parse_workflow(path):
                 if job_key == "if":
                     job_if = job_value
                     index += 1
+                    continue
+                if job_key in ("needs", "outputs"):
+                    target = job_needs if job_key == "needs" else job_outputs
+                    inline = job_value.strip()
+                    if inline.startswith("[") and inline.endswith("]"):
+                        target.update(
+                            item.strip().strip("\"'")
+                            for item in inline[1:-1].split(",")
+                            if item.strip()
+                        )
+                        index += 1
+                        continue
+                    if inline:
+                        target.add(inline.strip("\"'"))
+                        index += 1
+                        continue
+                    index += 1
+                    while index < len(lines):
+                        line = lines[index]
+                        if is_skippable(line):
+                            index += 1
+                            continue
+                        if indent_of(line) <= 4:
+                            break
+                        entry = line.strip()
+                        if entry.startswith("- "):
+                            target.add(entry[2:].strip().strip("\"'"))
+                        else:
+                            entry_parsed = split_key(line)
+                            if entry_parsed is not None:
+                                target.add(entry_parsed[0])
+                        index += 1
                     continue
                 if job_key != "steps":
                     index += 1
@@ -305,7 +355,7 @@ def parse_workflow(path):
                     current[step_key] = step_value
                     index += 1
 
-            jobs.append((job_name, job_if, steps))
+            jobs.append((job_name, job_if, job_needs, job_outputs, steps))
 
     return has_trigger, jobs
 
@@ -322,7 +372,7 @@ for path in workflows:
         sys.exit(1)
     if not has_trigger:
         print(f"note: {path} declares no `on:` trigger; its jobs do not count as wired")
-    total_run_steps += sum(1 for _, _, steps in jobs for step in steps if step["run"])
+    total_run_steps += sum(1 for *_, steps in jobs for step in steps if step["run"])
     parsed_workflows.append((path, has_trigger, jobs))
 
 if total_run_steps == 0:
@@ -340,8 +390,11 @@ for script in scripts:
     wired_at = []
     rejected = []
     for path, has_trigger, jobs in parsed_workflows:
-        job_names = {job_name for job_name, _, _ in jobs}
-        for job_name, job_if, steps in jobs:
+        gate_job_outputs = set()
+        for candidate_name, _, _, candidate_outputs, _ in jobs:
+            if candidate_name == PATH_GATE_JOB:
+                gate_job_outputs = candidate_outputs
+        for job_name, job_if, job_needs, _, steps in jobs:
             for step in steps:
                 run = step["run"]
                 if not run or script not in run:
@@ -350,7 +403,9 @@ for script in scripts:
                 if not has_trigger:
                     rejected.append(f"{where} (workflow has no `on:` trigger)")
                     continue
-                if job_if is not None and not job_condition_accepted(job_if, job_names):
+                if job_if is not None and not job_condition_accepted(
+                    job_if, job_needs, gate_job_outputs
+                ):
                     rejected.append(f"{where} (job guarded by `if: {job_if}`)")
                     continue
                 if step["if"] is not None and (
