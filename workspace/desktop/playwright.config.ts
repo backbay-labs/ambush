@@ -184,6 +184,9 @@ export default defineConfig({
         "**/team-catalog-screenshots.spec.ts",
         "**/perch-marker-admission.spec.ts",
         "**/perch-finding-card.spec.ts",
+        "**/perch-containment.spec.ts",
+        "**/perch-watchfloor.spec.ts",
+        "**/perch-handoff.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
