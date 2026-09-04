@@ -1785,18 +1785,26 @@ primitives, the durable chain-head store, the spine signer, and construction of 
 the security property the task exists for. Engine gates green: 1,566 tests, clippy `-D warnings`,
 layering and panic-contract.
 
-**The seal is not yet on the publish path**, and that is a design point rather than an omission
-left for later convenience. The plan puts the seal at spool append, where `seq` is assigned. But
-the pacer RESTORES `prev_envelope_hash` when a frame is not acknowledged, precisely so an
-unpublished card never advances the chain. A seal that wrote the durable head at append would
-advance it for a card the relay never took, and the next real card would chain from a link
-nobody can fetch — a broken chain produced by the mechanism meant to guarantee it.
+**Step 14 landed for the evidence path.** The pacer signs at append through
+`SpineSigner::seal_at` and commits the durable head on ACKNOWLEDGEMENT and nowhere else. That
+split is the design point: the pacer restores `prev_envelope_hash` when a frame is not
+acknowledged, precisely so an unpublished card never advances the chain, and a seal that wrote
+the durable head at append would advance it for a card the relay never took — the next real card
+would then chain from a link nobody can fetch, a broken chain produced by the mechanism meant to
+guarantee it. A head that cannot be advanced is logged rather than propagated: the card IS
+published, so returning an error would re-send a frame the relay already took; the next seal
+reads the stale head, produces a duplicate `seq`, and the store refuses it — visible, not a
+silent fork.
 
-`SpineSigner::seal_at` is the shape that resolves it: it signs at an explicit `(seq, prev)` and
-touches no store, so the pacer can sign at append and commit the head on ACK. Wiring that means
-threading the signer and the head store through `build_finding_card` and `hold_card` and
-committing on the pacer's acknowledgement path, and it should land with the T-16 rewrite the
-plan describes (after B6 the envelope HAS a signature, so T-16's assertion narrows to the fact).
+The envelope is issued under the SPINE identity rather than the Nostr key that publishes it, and
+`a_card_built_with_a_signer_carries_a_signature_that_verifies` asserts the signature verifies
+under the issuer it names. Without a signer the envelope is unsigned, which is what the fixture
+generator and the pre-B6 tests construct.
+
+**Still outstanding on Task 7:** the hold and alarm card paths still seal unsigned (only the
+evidence pacer is wired), the `bridge_envelopes_signed` metric is not registered, and the T-16
+rewrite the plan describes has not been done (after B6 the envelope HAS a signature, so T-16's
+assertion narrows to the fact object).
 
 ## Task 8: Bridge — response receipts first, then `swarm:lease:v1` from the 1 Hz containment sweep poll
 

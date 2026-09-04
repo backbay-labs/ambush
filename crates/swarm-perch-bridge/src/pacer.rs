@@ -133,6 +133,12 @@ pub struct Pacer<P: FramePublisher> {
     /// card the relay did not take must not advance the chain, and the value to restore is not
     /// derivable from the current one.
     chain_before: std::collections::BTreeMap<IssuerIdx, SeqChain>,
+    /// B6. The spine identities every envelope is sealed under, when the
+    /// bridge was built with a signing profile.
+    spine: Option<Arc<crate::spine::SpineSigner>>,
+    /// B6. The durable chain heads, advanced only on ACKNOWLEDGEMENT: a card
+    /// the relay did not take must not advance a chain that survives restart.
+    chain_heads: Option<Arc<Mutex<crate::spool::chain_heads::ChainHeadStore>>>,
     /// A signed frame whose OK never arrived, awaiting a byte-identical retry.
     inflight: Option<Frame>,
     /// The gaps the in-flight frame carries. Returned to the spool if it is abandoned.
@@ -158,9 +164,26 @@ impl<P: FramePublisher> Pacer<P> {
             publisher,
             chains: std::collections::BTreeMap::new(),
             chain_before: std::collections::BTreeMap::new(),
+            spine: None,
+            chain_heads: None,
             inflight: None,
             inflight_gaps: Vec::new(),
         }
+    }
+
+    /// Attach B6's signer and durable chain heads.
+    ///
+    /// Absent leaves envelopes unsigned, which is what the fixture generator
+    /// and the pre-B6 tests construct.
+    #[must_use]
+    pub fn with_spine(
+        mut self,
+        spine: Arc<crate::spine::SpineSigner>,
+        chain_heads: Arc<Mutex<crate::spool::chain_heads::ChainHeadStore>>,
+    ) -> Self {
+        self.spine = Some(spine);
+        self.chain_heads = Some(chain_heads);
+        self
     }
 
     /// The publisher, for assertions.
@@ -266,6 +289,7 @@ impl<P: FramePublisher> Pacer<P> {
             &mut chain,
             &gaps,
             now_ms,
+            self.spine.as_deref(),
         )?;
 
         let Some(body) = built else {
@@ -338,6 +362,12 @@ impl<P: FramePublisher> Pacer<P> {
             Ok(outcome) if outcome.is_success() => {
                 let (issuer, seq) = frame.covers;
                 self.commit(issuer, seq)?;
+                // B6. The durable head advances HERE and nowhere else. A card
+                // the relay never took must not advance a chain that survives
+                // restart, or the next real card chains from a link nobody can
+                // fetch — a broken chain produced by the mechanism meant to
+                // guarantee it.
+                self.commit_chain_head(issuer, seq);
                 self.chain_before.remove(&issuer);
                 self.inflight_gaps.clear();
                 self.metrics.source_events_published(Stream::Evidence);
@@ -394,6 +424,47 @@ impl<P: FramePublisher> Pacer<P> {
         let mut guard = self.spools.lock().unwrap_or_else(PoisonError::into_inner);
         for cause in gaps {
             guard.evidence().mark_gap(cause.clone());
+        }
+    }
+
+    /// Advance the durable chain head for `issuer` to the envelope the relay
+    /// just acknowledged.
+    ///
+    /// Failures are counted and logged rather than propagated: the card IS
+    /// published, and returning an error here would re-send a frame the relay
+    /// already took. The next seal reads the stale head, produces a duplicate
+    /// `seq`, and the store refuses it — visible, and not a silent fork.
+    fn commit_chain_head(&self, issuer: IssuerIdx, seq: Seq) {
+        let (Some(spine), Some(heads)) = (self.spine.as_ref(), self.chain_heads.as_ref()) else {
+            return;
+        };
+        let Some(identity) = self.identities.get(issuer) else {
+            return;
+        };
+        let Some(chain) = self.chains.get(&issuer) else {
+            return;
+        };
+        let Some(envelope_hash) = chain.prev_envelope_hash.clone() else {
+            return;
+        };
+        // The head carries the seq that was SIGNED. `verify_chain_link` requires
+        // the next envelope's `seq` to be exactly one past the head's, so a head
+        // counted separately from the envelope would fail every check.
+        let head = swarm_perch_wire::envelope::IssuerChainHead {
+            issuer: spine.issuer(identity.slot.label()).to_string(),
+            seq,
+            envelope_hash,
+        };
+        if let Err(error) = heads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .advance(head)
+        {
+            tracing::warn!(
+                module = module_path!(),
+                reason = %error,
+                "chain head could not be advanced; the next seal will be refused rather than fork"
+            );
         }
     }
 

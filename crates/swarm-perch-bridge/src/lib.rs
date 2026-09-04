@@ -335,11 +335,8 @@ impl PerchBridge {
             stall,
             events,
             containment: _containment,
-            // B6. Held for the seal step that moves onto the publish path; the
-            // point of constructing them at build is that a missing seed is
-            // fatal before anything is published, not later.
-            spine: _spine,
-            chain_heads: _chain_heads,
+            spine,
+            chain_heads,
             hold_store,
             shutdown,
         } = self;
@@ -395,7 +392,10 @@ impl PerchBridge {
             colony_id.clone(),
             metrics.clone(),
             ConnectionSupervisor::new(config.relay_url.clone(), ingest_identity),
-        );
+        )
+        // B6. Every evidence envelope is sealed under its slot's spine identity,
+        // and the durable head advances only when the relay acknowledges it.
+        .with_spine(Arc::clone(&spine), Arc::clone(&chain_heads));
         let mut pacer_task = tokio::spawn(pacer.run(shutdown.clone()));
 
         // The hold publisher owns the routing sidecar: the hold path writes card ids into it
