@@ -155,6 +155,8 @@ export type PerchMockFixture = {
   daemonError?: string | null;
   /** The containment leases `perch_list_containments` reports. */
   containments?: readonly Record<string, unknown>[];
+  /** The coverage snapshot `perch_evasion_coverage` reports. */
+  evasionCoverage?: Record<string, unknown> | null;
   /** The body `perch_release_containment` answers with. */
   release?: Record<string, unknown> | null;
   /** The leg-2 outcome `perch_decide_hold` answers with. */
@@ -221,6 +223,7 @@ type MockState = {
   openCount: number | null;
   daemonError: string | null;
   containments: Record<string, unknown>[];
+  evasionCoverage: Record<string, unknown> | null;
   release: Record<string, unknown> | null;
   decide: MockDecideOutcome | null;
   decideDelayMs: number;
@@ -255,6 +258,7 @@ function defaults(): MockState {
     openCount: null,
     daemonError: null,
     containments: [],
+    evasionCoverage: null,
     release: null,
     decide: null,
     decideDelayMs: 0,
@@ -335,6 +339,9 @@ function applyFixture(target: MockState, fixture: PerchMockFixture): void {
   }
   if (fixture.containments) {
     target.containments = fixture.containments.map((lease) => ({ ...lease }));
+  }
+  if (fixture.evasionCoverage !== undefined) {
+    target.evasionCoverage = fixture.evasionCoverage;
   }
   if (fixture.release !== undefined) target.release = fixture.release;
   if (fixture.decide !== undefined) target.decide = fixture.decide;
@@ -475,6 +482,7 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_publish_verdict_update",
   "perch_list_containments",
   "perch_release_containment",
+  "perch_evasion_coverage",
 ]);
 
 /**
@@ -835,6 +843,17 @@ export function handlePerchMockCommand(
     case "perch_publish_verdict_update":
       s.log.push(command);
       return publishVerdictUpdate(payload);
+    case "perch_evasion_coverage":
+      s.log.push(command);
+      return (
+        s.evasionCoverage ?? {
+          generated_at_ms: Date.now(),
+          suite_name: "evasion-breadth-v1",
+          suite_path: "scenario-suites/evasion-breadth-v1.yaml",
+          corpus_version: "1",
+          detectors: [],
+        }
+      );
     case "perch_list_containments":
       s.log.push(command);
       return {

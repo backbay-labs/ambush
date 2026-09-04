@@ -50,6 +50,7 @@ export const perchKeys = {
   hold: (holdId: string) => key("daemon", "hold", holdId),
   /** GET /v1/operator/containment/leases. */
   containments: () => key("daemon", "containments"),
+  evasionCoverage: () => key("daemon", "evasionCoverage"),
   /** B3r GET /v1/operator/findings/reviewed?since_ms= — the served review map. */
   reviewedFindings: (sinceMs: number) =>
     key("daemon", "reviewed-findings", sinceMs),
@@ -156,6 +157,12 @@ export const PERCH_FRESHNESS = {
     poll: false,
     invalidatesOnWrite: [],
     why: "The served review-state map. Refetched after every finding verdict and on reconnect; a stale map paints a row unreviewed for seconds, which is the one place the relay may front-run the daemon.",
+  },
+  evasionCoverage: {
+    staleTime: 300_000,
+    poll: false,
+    invalidatesOnWrite: [],
+    why: "The detector coverage catalog changes when the evasion suite does, which is a deploy rather than a second. Polling it would ask the daemon the same question three hundred times between two answers that could differ.",
   },
   deposits: {
     staleTime: 1_000,

@@ -145,6 +145,16 @@ export function perchListContainments() {
   return invokeTauri<unknown>("perch_list_containments");
 }
 
+/**
+ * What the detectors deliberately do not see, served whole.
+ *
+ * The console renders each gap's own rationale rather than a paraphrase: a
+ * summary would be this console asserting a limit it did not measure.
+ */
+export function perchEvasionCoverage() {
+  return invokeTauri<unknown>("perch_evasion_coverage");
+}
+
 /** The read commands, named once so the E2E bridge can assert it answers all
  *  of them. */
 export const PERCH_READ_COMMANDS = [
@@ -154,6 +164,7 @@ export const PERCH_READ_COMMANDS = [
   "perch_get_hold",
   "perch_configure_daemon",
   "perch_list_containments",
+  "perch_evasion_coverage",
 ] as const;
 
 // ===========================================================================

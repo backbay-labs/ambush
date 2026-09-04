@@ -20,6 +20,7 @@ const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
 /// has long since fired, and `truncated` in the answer says so honestly.
 const HOLD_PAGE: usize = 200;
 const ROUTE_LIST_CONTAINMENTS: &str = "/v1/operator/containment/leases";
+const ROUTE_EVASION_COVERAGE: &str = "/v2/api/evasion/coverage";
 
 /// The daemon's honest review window: findings it has already ruled on, so the
 /// console can show what its own verdicts did.
@@ -189,6 +190,34 @@ pub async fn perch_list_containments(
         &DaemonRoute {
             template: ROUTE_LIST_CONTAINMENTS,
             path: ROUTE_LIST_CONTAINMENTS.to_string(),
+        },
+    )
+    .await?;
+    if r.status != 200 {
+        return Err(daemon_response_error(&r));
+    }
+    Ok(r.body)
+}
+
+/// `GET /v2/api/evasion/coverage` — what the detectors deliberately do NOT see.
+///
+/// Served whole and unsummarized. Each gap carries the rationale its author
+/// wrote, and the console renders that prose rather than a paraphrase: a
+/// summary would be the console asserting a limit it did not measure.
+///
+/// # Errors
+///
+/// The daemon's own message on any non-200, and the transport error when it
+/// cannot be reached.
+#[tauri::command]
+pub async fn perch_evasion_coverage(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let r = perch_daemon_get(
+        &state,
+        &DaemonRoute {
+            template: ROUTE_EVASION_COVERAGE,
+            path: ROUTE_EVASION_COVERAGE.to_string(),
         },
     )
     .await?;
