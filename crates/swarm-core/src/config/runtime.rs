@@ -58,6 +58,9 @@ pub struct RuntimeSettings {
     /// Bounds and storage for reversible containment (QRT-01..03).
     #[serde(default)]
     pub containment: ContainmentSettings,
+    /// Durability, TTL and sweep cadence for holds (B1).
+    #[serde(default)]
+    pub response: ResponseHoldSettings,
 }
 
 /// How long a containment may hold, how often expiry is checked, and where open
@@ -101,6 +104,68 @@ impl Default for ContainmentSettings {
             lease_ttl_ms: default_containment_lease_ttl_ms(),
             sweep_interval_ms: default_containment_sweep_interval_ms(),
             lease_store_path: None,
+        }
+    }
+}
+
+/// Where held destructive actions are recorded, how long they stay decidable,
+/// and how often the sweep runs.
+///
+/// Every field is `#[serde(default)]` for the reason [`ContainmentSettings`]
+/// gives: `rulesets/default.yaml` is digest-signed and cannot take a new key,
+/// so the shipped ruleset keeps loading and a deployment adds the block to its
+/// own config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseHoldSettings {
+    /// `None` keeps holds in memory only, which means a restart FORGETS every
+    /// open hold: the action is not taken, no expiry record is published, and
+    /// the operator's queue silently loses rows. Same failure shape, same
+    /// wording, as [`ContainmentSettings::lease_store_path`].
+    #[serde(default)]
+    pub hold_store_path: Option<String>,
+    /// How long a hold stays decidable. `PERCH_HOLD_TTL_MS`, default 3,600,000.
+    #[serde(default = "default_hold_ttl_ms")]
+    pub hold_ttl_ms: u64,
+    /// Per-threat-class overrides, keyed by the threat-class slug
+    /// (`lateral_movement`, ...). Keyed by slug and not by
+    /// [`ThreatClass`](crate::pheromone::ThreatClass) because
+    /// `ThreatClass::Custom(String)` is a newtype variant and a serde map key
+    /// must be a string.
+    #[serde(default)]
+    pub hold_ttl_ms_by_threat_class: BTreeMap<String, u64>,
+    /// How often the hold sweep runs. Default 5,000.
+    #[serde(default = "default_hold_sweep_interval_ms")]
+    pub sweep_interval_ms: u64,
+    /// A `deciding` claim older than this is resolved to `failed` by the sweep.
+    /// Default 60,000, equal to `policy.lease_ttl_ms`.
+    #[serde(default = "default_decide_stall_ms")]
+    pub decide_stall_ms: u64,
+    /// A governance receipt older than this at decision time is refused as
+    /// `governance.receipt_stale`. Default 86,400,000.
+    #[serde(default = "default_governance_receipt_max_age_ms")]
+    pub governance_receipt_max_age_ms: u64,
+}
+
+impl ResponseHoldSettings {
+    /// The TTL for one threat class: the override when present, else the default.
+    pub fn hold_ttl_ms_for(&self, threat_class_slug: &str) -> u64 {
+        self.hold_ttl_ms_by_threat_class
+            .get(threat_class_slug)
+            .copied()
+            .unwrap_or(self.hold_ttl_ms)
+    }
+}
+
+impl Default for ResponseHoldSettings {
+    fn default() -> Self {
+        Self {
+            hold_store_path: None,
+            hold_ttl_ms: default_hold_ttl_ms(),
+            hold_ttl_ms_by_threat_class: BTreeMap::new(),
+            sweep_interval_ms: default_hold_sweep_interval_ms(),
+            decide_stall_ms: default_decide_stall_ms(),
+            governance_receipt_max_age_ms: default_governance_receipt_max_age_ms(),
         }
     }
 }

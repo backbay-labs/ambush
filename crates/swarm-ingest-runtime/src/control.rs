@@ -1784,6 +1784,7 @@ mod tests {
                 partition_contingency_blast_radius_cap: 1,
                 max_dead_letter_bytes: None,
                 containment: Default::default(),
+                response: Default::default(),
             },
             detection: swarm_core::config::DetectionConfig {
                 strategy: "suspicious_process_tree".to_string(),

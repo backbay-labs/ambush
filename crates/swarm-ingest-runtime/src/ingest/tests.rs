@@ -134,6 +134,7 @@ pub(crate) fn test_config(strategy: &str) -> SwarmConfig {
             partition_contingency_blast_radius_cap: 1,
             max_dead_letter_bytes: None,
             containment: Default::default(),
+            response: Default::default(),
         },
         detection: DetectionConfig {
             strategy: strategy.to_string(),

@@ -1,12 +1,13 @@
 use super::{
     AuditConfig, AuditdBridgeConfig, BundleStoreConfig, CanaryConfig, CloudTrailBridgeConfig,
-    CorrelationConfig, DeceptionConfig, DeceptionMonitoringConfig, DeceptionPlacementStrategy,
-    DeceptionPlaybookConfig, DeceptionPlaybookEntry, EvolutionAssuranceCoverageOverrideConfig,
-    EvolutionConfig, EvolutionFitnessWeightsConfig, InvestigationConfig, JsonFileSourceConfig,
-    NotificationChannelConfig, OperatorPrincipalConfig, OperatorScope, OperatorSurfaceConfig,
-    PheromoneBackendConfig, PheromoneConfig, PlatformApiConfig, PlatformApiKeyConfig,
-    PlatformApiScope, PolicyActionSelector, PolicyConfig, PolicyRuleConfig, PolicyRuleDecision,
-    PolicyTimeWindowConfig, PromotionConfig, RequestSignatureConfig, ResponsePlaybookBranch,
+    ConfigValidationError, CorrelationConfig, DeceptionConfig, DeceptionMonitoringConfig,
+    DeceptionPlacementStrategy, DeceptionPlaybookConfig, DeceptionPlaybookEntry,
+    EvolutionAssuranceCoverageOverrideConfig, EvolutionConfig, EvolutionFitnessWeightsConfig,
+    InvestigationConfig, JsonFileSourceConfig, NotificationChannelConfig, OperatorPrincipalConfig,
+    OperatorScope, OperatorSurfaceConfig, PheromoneBackendConfig, PheromoneConfig,
+    PlatformApiConfig, PlatformApiKeyConfig, PlatformApiScope, PolicyActionSelector, PolicyConfig,
+    PolicyRuleConfig, PolicyRuleDecision, PolicyTimeWindowConfig, PromotionConfig,
+    RequestSignatureConfig, ResponseHoldSettings, ResponsePlaybookBranch,
     ResponsePlaybookCondition, ResponsePlaybookConfig, ResponsePlaybookRule,
     RuntimeAntiTamperConfig, RuntimeMode, RuntimeSettings, SecretString, SentinelBridgeConfig,
     SwarmConfig, SysmonBridgeConfig, TelemetryBridgeConfig, TelemetrySourceConfig,
@@ -44,6 +45,7 @@ fn valid_config(backend: PheromoneBackendConfig) -> SwarmConfig {
             partition_contingency_blast_radius_cap: 1,
             max_dead_letter_bytes: None,
             containment: Default::default(),
+            response: Default::default(),
         },
         detection: super::DetectionConfig {
             strategy: "suspicious_process_tree".to_string(),
@@ -1712,4 +1714,112 @@ fn evolution_fitness_weights_still_accept_the_inert_speed_weight() {
             .abs()
             < 1e-12
     );
+}
+
+/// The B1 hold block round-trips from YAML, defaults every key that is absent,
+/// and resolves a per-threat-class TTL override by slug.
+#[test]
+fn response_hold_settings_default_and_round_trip() {
+    let yaml = r#"
+hold_store_path: data/perch-dev/holds
+hold_ttl_ms: 1800000
+hold_ttl_ms_by_threat_class:
+  lateral_movement: 900000
+"#;
+    let settings: ResponseHoldSettings = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(
+        settings.hold_store_path.as_deref(),
+        Some("data/perch-dev/holds")
+    );
+    assert_eq!(settings.hold_ttl_ms, 1_800_000);
+    assert_eq!(settings.hold_ttl_ms_for("lateral_movement"), 900_000);
+    assert_eq!(settings.hold_ttl_ms_for("execution"), 1_800_000);
+    assert_eq!(settings.sweep_interval_ms, 5_000);
+    assert_eq!(settings.decide_stall_ms, 60_000);
+    assert_eq!(settings.governance_receipt_max_age_ms, 86_400_000);
+
+    let defaults = ResponseHoldSettings::default();
+    assert_eq!(defaults.hold_store_path, None);
+    assert_eq!(defaults.hold_ttl_ms, 3_600_000);
+}
+
+/// Fail-closed validation, beside the containment rules: an unbounded hold and
+/// a store path that is set but blank are both configuration errors.
+#[test]
+fn response_hold_settings_reject_an_empty_store_path_and_a_zero_ttl() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.runtime.response.hold_store_path = Some("   ".to_string());
+    let error = config.validate().unwrap_err();
+    assert!(matches!(
+        error,
+        ConfigValidationError::InvalidField {
+            field: "runtime.response.hold_store_path",
+            ..
+        }
+    ));
+
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.runtime.response.hold_ttl_ms = 0;
+    let error = config.validate().unwrap_err();
+    assert!(matches!(
+        error,
+        ConfigValidationError::InvalidField {
+            field: "runtime.response.hold_ttl_ms",
+            ..
+        }
+    ));
+}
+
+/// The other three fail-closed rules, so a zero sweep interval, a zero stall
+/// bound and a zero per-class override cannot reach a running daemon.
+#[test]
+fn response_hold_settings_reject_zero_sweep_stall_and_overrides() {
+    for (mutate, field) in [
+        (
+            Box::new(|config: &mut SwarmConfig| config.runtime.response.sweep_interval_ms = 0)
+                as Box<dyn Fn(&mut SwarmConfig)>,
+            "runtime.response.sweep_interval_ms",
+        ),
+        (
+            Box::new(|config: &mut SwarmConfig| config.runtime.response.decide_stall_ms = 0),
+            "runtime.response.decide_stall_ms",
+        ),
+        (
+            Box::new(|config: &mut SwarmConfig| {
+                config
+                    .runtime
+                    .response
+                    .hold_ttl_ms_by_threat_class
+                    .insert("execution".to_string(), 0);
+            }),
+            "runtime.response.hold_ttl_ms_by_threat_class",
+        ),
+    ] {
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        mutate(&mut config);
+        let error = config.validate().unwrap_err();
+        let ConfigValidationError::InvalidField { field: actual, .. } = error;
+        assert_eq!(actual, field);
+    }
+}
+
+/// The block is optional on the wire, for the reason the containment block is:
+/// `rulesets/default.yaml` is digest-signed and cannot take a new key.
+#[test]
+fn a_runtime_block_with_no_response_keys_loads_with_bounded_defaults() {
+    let json = serde_json::json!({
+        "mode": "detect_only",
+        "telemetry_sources": [],
+        "max_in_flight_actions": 4,
+    });
+    let settings: RuntimeSettings = serde_json::from_value(json).unwrap();
+    assert_eq!(settings.response.hold_ttl_ms, 3_600_000);
+    assert_eq!(settings.response.sweep_interval_ms, 5_000);
+    assert_eq!(settings.response.decide_stall_ms, 60_000);
+    assert_eq!(settings.response.governance_receipt_max_age_ms, 86_400_000);
+    assert_eq!(settings.response.hold_store_path, None);
+    assert!(settings.response.hold_ttl_ms_by_threat_class.is_empty());
 }
