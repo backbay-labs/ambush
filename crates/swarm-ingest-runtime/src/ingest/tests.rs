@@ -107,7 +107,7 @@ fn test_config_store_root() -> PathBuf {
     ))
 }
 
-fn test_config(strategy: &str) -> SwarmConfig {
+pub(crate) fn test_config(strategy: &str) -> SwarmConfig {
     let mut config = SwarmConfig {
         schema_version: 1,
         name: "ingest-test".to_string(),
@@ -176,6 +176,7 @@ fn test_config(strategy: &str) -> SwarmConfig {
         identity: swarm_core::config::IdentityConfig::default(),
         platform_api: PlatformApiConfig::default(),
         operator: OperatorSurfaceConfig::default(),
+        perch: swarm_core::config::PerchBridgeConfig::default(),
         tls: None,
     };
     redirect_evolution_paths(&mut config, &test_config_store_root());

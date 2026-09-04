@@ -19,6 +19,7 @@ anyhow.workspace = true
 hex.workspace = true
 http.workspace = true
 swarm-crypto.workspace = true
+uuid.workspace = true
 zeroize.workspace = true
 
 [lints]

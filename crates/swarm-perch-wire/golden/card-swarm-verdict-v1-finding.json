@@ -1,0 +1,47 @@
+{
+  "capability_token": null,
+  "envelope_hash": "0xabababababababababababababababababababababababababababababababab",
+  "fact": {
+    "decision": {
+      "decided_at_ms": 1773739260000,
+      "decision": "dismiss",
+      "finding_id": "f-6b1d4c90",
+      "operator_id": "perch-operator-1",
+      "rationale_sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+      "rationale": "The encoded command line is the nightly backup job on this host. Dismissing.",
+      "subject": "finding"
+    },
+    "emitted_at_ms": 1773739260000,
+    "issuer": {
+      "nostr_pubkey": "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5",
+      "role": null,
+      "swarm_agent_id": "perch-operator-1"
+    },
+    "leg2": {
+      "receipt_id": null,
+      "refusal_check": null,
+      "state": "sending",
+      "superseded_at_ms": null,
+      "superseded_by": null
+    },
+    "locator": {
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "finding_card_id": "3f7a1c2b8d9e0f4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2",
+      "finding_id": "f-6b1d4c90",
+      "incident_id": "incident:perch-case:27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "subject": "finding"
+    },
+    "schema": "swarm.perch.verdict.v1",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "perch-operator-1",
+      "public_key_hex": "bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+      "signature_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "issued_at": "2026-03-17T09:21:00Z",
+  "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+  "prev_envelope_hash": null,
+  "schema": "swarm.spine.envelope.v1",
+  "seq": 1
+}

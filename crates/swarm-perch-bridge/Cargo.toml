@@ -1,0 +1,56 @@
+[package]
+name = "swarm-perch-bridge"
+description = "In-process RuntimeEvent subscriber that spools to disk and publishes to the Ambush relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# WHY EVERY EDGE BELOW EXISTS
+#
+# This crate is strictly downstream: `swarm-runtime-http` mounts it, and nothing
+# in the TCB (`swarm-crypto`, `swarm-policy`, `swarm-spine` --
+# tools/check-workspace-layering.sh `TCB`) names it. That direction is what makes
+# RULE 3 (`tcb-resolved-transport-*`) unable to fire: reachability is measured
+# OUT OF each TCB crate, and none of them reaches here.
+#
+# It IS in TRUST_SENSITIVE (ADR 0015), which is a different tuple and gates only
+# RULE 5, the two `//! ## Owns` / `//! ## Does not own` headings in src/lib.rs.
+#
+# Deliberately ABSENT and load-bearing by their absence (00-DECISIONS W3-13):
+#   swarm-ingest-runtime  -- the bridge takes a broadcast::Receiver as an input,
+#                            not an IngestState, so a unit test can drive it from
+#                            a plain broadcast::channel(16).
+#   swarm-runtime-http    -- naming it would be a cycle.
+#   reqwest / axum-as-a-client -- the bridge has no HTTP client.
+[dependencies]
+swarm-core.workspace = true
+swarm-perch-wire.workspace = true
+swarm-response.workspace = true
+swarm-runtime.workspace = true
+axum.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+prometheus-client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+# W3-6: a path dependency into the second workspace, not a vendored copy.
+# The crate's `workspace = true` dependencies resolve against
+# workspace/Cargo.toml, so nostr arrives with that manifest's features.
+ambush-ws-client = { version = "0.1.0", path = "../../workspace/crates/ambush-ws-client" }
+# The same nostr the ws-client resolves; features unify at the crate level.
+nostr = { version = "0.44", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# The W3-27 differential control: the wire crate's RFC 8785 bytes and keyless
+# hash must agree with the engine's spine envelope byte for byte.
+swarm-spine.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

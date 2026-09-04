@@ -1,0 +1,11 @@
+{
+  "emitted_at_ms": 1787754973200,
+  "from": "normal",
+  "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+  "kind": 26003,
+  "reason": "concentration crossed alert_threshold",
+  "schema": "swarm.perch.frame.mode_transition.v1",
+  "seq": 12,
+  "to": "alert",
+  "triggering_threat_class": "data_exfiltration"
+}

@@ -1,0 +1,91 @@
+{
+  "generated_by": "scripts/sync-perch-golden.sh -> gen-golden.py; DO NOT HAND-EDIT a vector",
+  "source": "each vector is the `examples[i]` entry of the named schema, verbatim, serialized with sort_keys=True and indent=2",
+  "vectors": [
+    {
+      "file": "card-swarm-escalation-v1.json",
+      "schema": "card-swarm-escalation-v1.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "card-swarm-finding-v1.json",
+      "schema": "card-swarm-finding-v1.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "card-swarm-hold-v1.json",
+      "schema": "card-swarm-hold-v1.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "card-swarm-lease-v1.json",
+      "schema": "card-swarm-lease-v1.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "card-swarm-receipt-v1.json",
+      "schema": "card-swarm-receipt-v1.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "card-swarm-rollback-v1.json",
+      "schema": "card-swarm-rollback-v1.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "card-swarm-verdict-v1.json",
+      "schema": "card-swarm-verdict-v1.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "card-swarm-verdict-v1-superseded.json",
+      "schema": "card-swarm-verdict-v1.schema.json",
+      "example_index": 1
+    },
+    {
+      "file": "card-swarm-verdict-v1-finding.json",
+      "schema": "card-swarm-verdict-v1.schema.json",
+      "example_index": 2
+    },
+    {
+      "file": "event-46010-hold-notice.json",
+      "schema": "event-46010-hold-notice.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "frame-26000-ingest-rate.json",
+      "schema": "frame-26000-ingest-rate.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "frame-26001-concentration.json",
+      "schema": "frame-26001-concentration.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "frame-26002-agent-health.json",
+      "schema": "frame-26002-agent-health.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "frame-26003-mode-transition.json",
+      "schema": "frame-26003-mode-transition.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "frame-26004-governance-status.json",
+      "schema": "frame-26004-governance-status.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "frame-26005-tamper-alert.json",
+      "schema": "frame-26005-tamper-alert.schema.json",
+      "example_index": 0
+    },
+    {
+      "file": "frame-26006-hold-alarm.json",
+      "schema": "frame-26006-hold-alarm.schema.json",
+      "example_index": 0
+    }
+  ]
+}

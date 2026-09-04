@@ -107,28 +107,68 @@
             },
             "evidence": {
               "description": "serde_json::Value, unconstrained, DERIVED FROM TELEMETRY AN ADVERSARY CAN SHAPE. Every string reached from here must be wrapped in <AdversaryString> (INV-14). Truncated by the bridge when the serialized card would exceed PERCH_CARD_MAX_BYTES; see 13-WIRE-SCHEMAS.md section 4.4."
-            },
-            "evidence_truncated": {
-              "type": "object",
-              "required": [
-                "bytes",
-                "sha256"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "bytes": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "sha256": {
-                  "$ref": "common.schema.json#/$defs/HexPrefixed"
-                }
-              },
-              "description": "Present only when the bridge replaced `evidence`. The card then renders an explicit absence with the byte count and the hash, never a silently smaller evidence blob."
             }
           },
           "x-carried-whole": "swarm_response::SwarmFindingEnvelope",
           "x-carried-note": "This object is a domain type carried VERBATIM. The Rust wire crate names the type rather than redeclaring its fields, so a field added upstream reaches the wire with no edit and a field removed upstream is a compile error. tools/check-perch-wire-parity.sh skips its property names on the Rust side for exactly that reason, and the golden vectors plus this schema are what hold the shape."
+        },
+        "evidence_truncated": {
+          "type": "object",
+          "required": [
+            "bytes",
+            "sha256"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sha256": {
+              "$ref": "common.schema.json#/$defs/HexPrefixed"
+            }
+          },
+          "description": "Present only when the bridge replaced `finding.evidence`. The card then renders an explicit absence with the byte count and the hash, never a silently smaller evidence blob. A property of the FACT, not of `finding`: SwarmFindingEnvelope is carried by type and cannot grow a field."
+        },
+        "gap": {
+          "type": "object",
+          "required": [
+            "cause",
+            "noticed_at_ms"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cause": {
+              "type": "string",
+              "enum": [
+                "broadcast_lagged",
+                "spool_evicted",
+                "spool_torn_tail",
+                "publish_window_expired"
+              ],
+              "description": "Exactly four causes. A coalesce is not a gap and never appears here."
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Present for `broadcast_lagged` only: the bridge never saw the events and has no seq for them."
+            },
+            "from_seq": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Present for the three spool causes: the start of an exact `seq` range, inclusive."
+            },
+            "to_seq": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Present for the three spool causes: the end of that `seq` range, inclusive."
+            },
+            "noticed_at_ms": {
+              "$ref": "common.schema.json#/$defs/UnixMillis",
+              "description": "When the bridge first recorded the loss, daemon clock."
+            }
+          },
+          "description": "Loss the bridge observed before this card, carried inside the same signed envelope so it cannot be lost independently of the card (11-BRIDGE-CRATE.md section 3.6). Absent on a normal card."
         }
       }
     }

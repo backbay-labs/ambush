@@ -1,9 +1,13 @@
 # The engine's dev stack: the daemon beside the Ambush relay it will report
 # into (docs/plans/ambush-ui/integration/11-PLAN-GROUND.md Task 10, P0-21).
 #
+#   cp .env.perch.example .env.perch            # then fill PERCH_BRIDGE_NOSTR_SEED
 #   docker compose up -d postgres redis relay   # the relay stack alone
 #   docker compose up -d                        # plus swarm-detect
-#   bash scripts/provision-perch.sh             # the dev operator + lane channels
+#   bash scripts/provision-perch.sh             # the dev operator identity
+#
+# The twelve lane channels are created by the bridge at daemon start, not by the
+# script (00-DECISIONS.md D-FC-5). docs/PERCH-DEV.md runs the whole thing.
 #
 # `relay` builds workspace/Dockerfile and reads workspace/.env for its relay
 # signing key (`cd workspace && just bootstrap` writes one); the in-network
@@ -27,8 +31,49 @@ services:
       # restarts; an anonymous or tmpfs mount would mint a new AgentId each boot.
       - ./rulesets:/app/rulesets:ro
       - swarm-identity:/app/rulesets/data
+    # This service runs the image's default command, `--config
+    # /app/rulesets/default.yaml`, and default.yaml carries no `perch` block, so
+    # the seed below is inert here until the config it loads has one. That is
+    # deliberate, and moving the dev profile in here is NOT a small change:
+    #
+    #   1. The dev profile is debug-signed and this image builds `--release`,
+    #      which refuses that signature by design. You would need a debug image.
+    #   2. `perch.relay_url` is `ws://localhost:3000`, which inside this
+    #      container is the container itself. The in-network address is
+    #      `ws://relay:3000` -- and the relay seeds ONE community, for its own
+    #      RELAY_URL host, so pointing the bridge at `relay:3000` while the relay
+    #      announces `localhost:3000` fails closed at the WebSocket upgrade with
+    #      a bare `HTTP error: 404 Not Found` and creates zero lanes. Measured
+    #      2026-09-04 by seeding a relay for `relay:3000` and connecting a bridge
+    #      as `localhost:3000`: 404, no channels.
+    #   3. Making BOTH agree on `relay:3000` then makes `localhost:3000`
+    #      unmapped, which is the address the desktop on the host adds as its
+    #      community -- so the console and the bridge would no longer share a
+    #      record. That trade is the whole reason docs/PERCH-DEV.md runs the
+    #      daemon on the HOST.
+    #
+    # If you still want it, a debug image plus:
+    #   volumes:  - ./rulesets-dev:/app/rulesets-dev:ro
+    #             - swarm-dev-identity:/app/rulesets-dev/data
+    #   command: ["--config", "/app/rulesets-dev/perch-dev.yaml", "--serve", "--bind", "0.0.0.0:9090"]
+    # and a ruleset whose relay_url matches whatever host the relay announces.
+    # (identity.agent_key_dir resolves against the CONFIG's parent --
+    # resolve_agent_key_dir(&cli.config, ...) in swarm_detect.rs -- which is why
+    # the writable layer moves with the config. Untested: see docs/PERCH-DEV.md.)
+    # The bridge's key-derivation seed and the operator bearer. Optional so
+    # `docker compose config` still works on a checkout that has not copied the
+    # template; without it the daemon exits naming PERCH_BRIDGE_NOSTR_SEED,
+    # which is the intended failure (a bridge must not publish under a key
+    # nobody chose).
+    env_file:
+      - path: ./.env.perch
+        required: false
     environment:
       RUST_LOG: info
+      # Also interpolated from the shell, so `set -a; . ./.env.perch; set +a`
+      # in front of a laptop-run daemon and this service read the same value.
+      PERCH_BRIDGE_NOSTR_SEED: ${PERCH_BRIDGE_NOSTR_SEED:-}
+      SWARM_OPERATOR_TOKEN: ${SWARM_OPERATOR_TOKEN:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/healthz || exit 1"]

@@ -1,0 +1,22 @@
+{
+  "content": "hold h_a07aeacf \u00b7 isolate_host \u00b7 CRITICAL \u00b7 host host-ops-1 \u00b7 expires 2026-03-17T10:14:42+00:00",
+  "kind": 46010,
+  "tags": [
+    [
+      "h",
+      "27799e23-ab25-4659-b381-3de47ea7ca4d"
+    ],
+    [
+      "p",
+      "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5"
+    ],
+    [
+      "hold",
+      "h_a07aeacf"
+    ],
+    [
+      "card",
+      "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c"
+    ]
+  ]
+}

@@ -8,10 +8,15 @@
 # wrapper that records every argv it is handed. Nothing here needs Docker, a
 # relay, or a built CLI.
 #
-# Covers the three defects fixed in the Ground review:
-#   1. the operator secret must never appear in a child process's argv;
-#   2. an unverifiable lane taxonomy is a hard failure, not a note on stderr;
-#   3. an archived lane is found and reused, not duplicated.
+# Covers what this script is still responsible for after D-FC-5 moved lane
+# creation into the bridge:
+#   1. the operator secret must never appear in a child process's argv, the
+#      defect fixed in the Ground review and re-fixed after Task 14 rewrote
+#      this file and reintroduced it;
+#   2. it writes the operator identity as owner-only files;
+#   3. it does NOT create channels -- the bridge owns the lanes now, and a
+#      script that quietly minted a thirteenth would be invisible otherwise;
+#   4. a daemon that is not up yet is a skip with a re-run line, not a failure.
 #
 # Usage: bash scripts/provision-perch.test.sh
 set -euo pipefail
@@ -146,20 +151,21 @@ run_provision() {
   echo "$status"
 }
 
-# --- 1. a fresh root provisions all twelve lanes ------------------------------
+# --- 1. a fresh root writes the operator identity ----------------------------
 work="$(make_root with-taxonomy)"
 status="$(run_provision "$work")"
 if [ "$status" -ne 0 ]; then
   fail "fresh provision exited $status"
   cat "$work/out.log" >&2
 else
-  lanes="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' \
-    "$work/out/lane-channels.json")"
-  [ "$lanes" = "12" ] || fail "fresh provision wrote $lanes lanes, expected 12"
-  pass "a fresh root provisions twelve lanes"
+  [ -f "$work/out/operator.env" ] || fail "fresh provision wrote no operator.env"
+  [ -f "$work/out/operator.nsec" ] || fail "fresh provision wrote no operator.nsec"
+  pass "a fresh root writes the operator identity"
 fi
 
 # --- 2. the operator secret never reaches a child process's argv --------------
+# The security defect this file exists for. Task 14 rewrote the script and
+# reintroduced it; the rebase caught it because this case is here.
 if grep -qF "$DEV_SECRET" "$work/node-argv.log"; then
   fail "the operator secret appears in node's argv (visible in ps -ef)"
 else
@@ -174,54 +180,40 @@ case "$pubkey" in
   *) fail "derived pubkey is not lowercase hex: $pubkey" ;;
 esac
 
-# --- 3. archived lanes are reused, not duplicated -----------------------------
-python3 - "$work/state.json" <<'PY'
-import json
-import sys
+# --- 3. the identity files are owner-only ------------------------------------
+for artefact in operator.nsec operator.env; do
+  mode="$(stat -f '%Lp' "$work/out/$artefact" 2>/dev/null || stat -c '%a' "$work/out/$artefact")"
+  [ "$mode" = "600" ] || fail "$artefact is mode $mode, expected 600"
+done
+case "$(cat "$work/out/operator.nsec")" in
+  nsec1*) pass "the identity files are owner-only and the nsec is bech32" ;;
+  *) fail "operator.nsec is not a bech32 nsec: $(cat "$work/out/operator.nsec")" ;;
+esac
 
-path = sys.argv[1]
-with open(path, encoding="utf-8") as handle:
-    state = json.load(handle)
-for channel in state["channels"]:
-    channel["archived"] = True
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(state, handle)
-PY
-before="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])))' \
-  "$work/out/lane-channels.json")"
-: >"$work/cli.log"
-status="$(run_provision "$work")"
-if [ "$status" -ne 0 ]; then
-  fail "re-run over archived lanes exited $status"
-  cat "$work/out.log" >&2
+# --- 4. the script creates no channels (D-FC-5) -------------------------------
+# The bridge mints the twelve lanes from the UUIDs committed in
+# `perch.lane_channels`. If this script ever creates one again it would be a
+# thirteenth channel nobody decided about, so the absence is asserted, not assumed.
+if grep -q ' create ' "$work/cli.log"; then
+  fail "the script created a channel; D-FC-5 gives the lanes to the bridge"
+  grep ' create ' "$work/cli.log" >&2
 else
-  creates="$(grep -c ' create ' "$work/cli.log" || true)"
-  unarchives="$(grep -c ' unarchive ' "$work/cli.log" || true)"
-  total="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["channels"]))' \
-    "$work/state.json")"
-  after="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])))' \
-    "$work/out/lane-channels.json")"
-  [ "$creates" = "0" ] || fail "re-run created $creates duplicate lane channels, expected 0"
-  [ "$unarchives" = "12" ] || fail "re-run unarchived $unarchives lanes, expected 12"
-  [ "$total" = "12" ] || fail "relay now holds $total channels, expected 12"
-  [ "$before" = "$after" ] || fail "lane ids changed across a re-run"
-  [ "$creates" = "0" ] && [ "$unarchives" = "12" ] \
-    && pass "an archived lane is found and unarchived, never duplicated"
+  pass "the script creates no channels"
 fi
-rm -rf "$work"
+[ -f "$work/out/lane-channels.json" ] \
+  && fail "the script wrote lane-channels.json, which D-FC-5 retired"
 
-# --- 4. an unverifiable lane taxonomy is fatal --------------------------------
-work="$(make_root without-taxonomy)"
-status="$(run_provision "$work")"
-if [ "$status" -eq 0 ]; then
-  fail "missing escalation.rs provisioned anyway (exit 0) instead of failing"
-elif ! grep -q "lane list cannot be checked" "$work/out.log"; then
-  fail "missing escalation.rs failed without explaining why:"
+# --- 5. a daemon that is not up is a skip, not a failure ----------------------
+# `make_root` gives no daemon, so the identity readback cannot succeed. It must
+# still exit 0 and tell the operator how to re-run it, because provisioning the
+# operator does not depend on the daemon being up yet.
+if [ -f "$work/out/identities.json" ]; then
+  fail "identities.json was written with no daemon running"
+elif ! grep -qi "identit" "$work/out.log"; then
+  fail "a skipped identity readback said nothing about how to re-run it:"
   cat "$work/out.log" >&2
-elif [ -f "$work/out/lane-channels.json" ]; then
-  fail "missing escalation.rs still wrote lane-channels.json"
 else
-  pass "a missing lane taxonomy is a hard failure"
+  pass "a daemon that is not up yet is a skip with a printed re-run line"
 fi
 rm -rf "$work"
 

@@ -1,5 +1,21 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// The preview server's port.
+//
+// `reuseExistingServer` is on outside CI, so the FIRST Playwright process on a
+// machine owns the server and every later one attaches to it — across git
+// worktrees, because the port was a hardcoded constant. The server runs
+// `-d dist`, so an attached run silently exercises whichever worktree started
+// it: a second checkout's specs pass or fail against a bundle that is not
+// theirs, with no error and no warning. When the owning run ends, every
+// attached run dies with `ERR_CONNECTION_REFUSED` mid-suite.
+//
+// Set `AMBUSH_E2E_PREVIEW_PORT` to a distinct value per checkout when running
+// more than one at a time. CI needs nothing: it sets `CI`, which turns
+// `reuseExistingServer` off.
+const PREVIEW_PORT = Number(process.env.AMBUSH_E2E_PREVIEW_PORT ?? 4173);
+const PREVIEW_URL = `http://127.0.0.1:${PREVIEW_PORT}`;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
@@ -11,7 +27,7 @@ export default defineConfig({
     ["json", { outputFile: "playwright-report.json" }],
   ],
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: PREVIEW_URL,
     screenshot: "only-on-failure",
     trace: "on-first-retry",
     video: "retain-on-failure",
@@ -162,6 +178,8 @@ export default defineConfig({
         "**/agent-numeric-tuning.spec.ts",
         "**/needs-restart-screenshots.spec.ts",
         "**/team-catalog-screenshots.spec.ts",
+        "**/perch-marker-admission.spec.ts",
+        "**/perch-finding-card.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
@@ -198,9 +216,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "python3 -m http.server 4173 -d dist",
+    command: `python3 -m http.server ${PREVIEW_PORT} -d dist`,
     cwd: ".",
     reuseExistingServer: !process.env.CI,
-    url: "http://127.0.0.1:4173",
+    url: PREVIEW_URL,
   },
 });

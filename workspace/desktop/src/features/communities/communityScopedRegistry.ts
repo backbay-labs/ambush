@@ -7,11 +7,20 @@ import { resetBackgroundMediaUploads } from "@/features/messages/lib/backgroundM
 import { resetLinkPreviewPreparations } from "@/features/messages/lib/linkPreviewPreparationStore";
 import { resetPersistentAgentAudienceStore } from "@/features/messages/lib/persistentAgentAudience";
 import { clearTimeoutState } from "@/features/moderation/lib/timeoutStore";
+import { resetPerchAdmittedIssuers } from "@/features/perch-evidence/lib/admittedIssuers";
+import { resetFindingVerdictFlow } from "@/features/perch-evidence/lib/findingVerdictFlow";
+import { resetPerchCaseIndex } from "@/features/perch-evidence/lib/perchCaseIndex";
+import { resetPerchWriteStates } from "@/features/perch-evidence/lib/verdictWriteState";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
+import { resetPerchLaneMovement } from "@/shared/api/perchLaneMovement";
+import {
+  resetPerchSeqTracking,
+  resetPerchSubscriptions,
+} from "@/shared/api/perchSubscriptions";
 import { relayClient } from "@/shared/api/relayClient";
 import { resetRateLimitGate } from "@/shared/api/relayRateLimitGate";
 import { clearTrayAgentActivity } from "@/shared/api/trayMenu";
@@ -69,6 +78,14 @@ export const COMMUNITY_SCOPED_SINGLETONS = [
   "searchHitEventCache",
   "markdownNodeCache",
   "messageLinkMetadataCache",
+  // Perch (the operator console). Torn down after the relay is disconnected
+  // so the subscription manager's CLOSE frames never race a live socket.
+  "perchSubscriptions",
+  "perchSeqTracking",
+  "perchAdmittedIssuers",
+  "perchWriteStates",
+  "perchCaseIndex",
+  "perchFindingVerdictFlow",
 ] as const;
 
 /** The name of one community-scoped singleton in {@link COMMUNITY_SCOPED_SINGLETONS}. */
@@ -140,6 +157,20 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
   searchHitEventCache: () => clearSearchHitEventCache(),
   markdownNodeCache: () => clearMarkdownNodeCache(),
   messageLinkMetadataCache: () => resetMessageLinkMetadataCache(),
+  // The lane-movement mount state feeds the subscription manager; both are
+  // cleared in one step, and the awaited part is the REQ teardown.
+  perchSubscriptions: async () => {
+    resetPerchLaneMovement();
+    await resetPerchSubscriptions();
+  },
+  perchSeqTracking: () => resetPerchSeqTracking(),
+  perchAdmittedIssuers: () => resetPerchAdmittedIssuers(),
+  perchWriteStates: () => resetPerchWriteStates(),
+  perchCaseIndex: () => resetPerchCaseIndex(),
+  // The stored leg-1 intents. A pending daemon leg belongs to the community
+  // whose relay carries its card; retrying it against another one would send
+  // a decision about a finding this community has never seen.
+  perchFindingVerdictFlow: () => resetFindingVerdictFlow(),
 };
 
 /**

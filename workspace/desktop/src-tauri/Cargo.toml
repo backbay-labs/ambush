@@ -109,6 +109,10 @@ ambush_agent_pkg = { package = "ambush-agent", path = "../../crates/ambush-agent
 ambush_voice_pkg = { package = "ambush-voice", path = "../../crates/ambush-voice" }
 ambush_terminal = { package = "ambush-terminal", path = "crates/ambush-terminal" }
 ambush_ws_client_pkg = { package = "ambush-ws-client", path = "../../crates/ambush-ws-client" }
+# The transport-neutral wire contract (W3-27): one canonical-bytes function and
+# one card grammar, shared with the engine rather than reimplemented here. It
+# depends on no `swarm-*` package, so this edge pulls in no engine domain.
+swarm-perch-wire = { path = "../../../crates/swarm-perch-wire", default-features = false }
 portable-pty = "0.9"
 iroh = { version = "1.0.2", optional = true }
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", tag = "v0.75.1", package = "mesh-llm-sdk", default-features = false, features = ["client", "serving"], optional = true }

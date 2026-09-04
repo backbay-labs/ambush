@@ -188,6 +188,10 @@ TRUST_SENSITIVE = (
     "swarm-guard",
     "swarm-crypto",
     "swarm-spine",
+    # ADR 0015 as amended by 00-DECISIONS W3-13: the bridge is the daemon's only
+    # writer of daemon-sourced facts to the relay, so RULE 5 evaluates its
+    # `src/lib.rs` for the two ownership headings.
+    "swarm-perch-bridge",
 )
 
 # TCBOUND-03's four named transport/CLI crates.
@@ -625,7 +629,8 @@ swarm-response|swarm-core swarm-crypto swarm-policy swarm-whisker reqwest
 swarm-spine|swarm-core swarm-crypto swarm-policy swarm-response swarm-whisker
 swarm-agents|swarm-pheromone swarm-spine
 swarm-runtime|swarm-spine swarm-policy swarm-response swarm-pheromone swarm-guard swarm-agents clap
-swarm-runtime-http|swarm-runtime axum
+swarm-perch-bridge|swarm-core swarm-runtime swarm-response
+swarm-runtime-http|swarm-runtime swarm-perch-bridge axum
 swarm-cli|swarm-policy clap
 reqwest|hyper
 hyper|
@@ -634,7 +639,7 @@ clap|'
 
 # The six TCBOUND-02 crates get the two headings in the fixture too, so RULE 5
 # is exercised by the fixture rather than skipped in it.
-FIXTURE_DOCUMENTED='swarm-policy swarm-pheromone swarm-response swarm-guard swarm-crypto swarm-spine'
+FIXTURE_DOCUMENTED='swarm-policy swarm-pheromone swarm-response swarm-guard swarm-crypto swarm-spine swarm-perch-bridge'
 
 build_fixture() { # <dir>
   local dir="$1" line crate deps dep members=""

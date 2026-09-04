@@ -2050,7 +2050,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
 **Files:**
 - Modify: `rulesets-dev/perch-dev.yaml` (+ re-sign `rulesets-dev/perch-dev.yaml.sig.json`), `docker-compose.yml` (`swarm-detect` env), `scripts/provision-perch.sh`, `.gitignore`, `docs/plans/ambush-ui/integration/00-DECISIONS.md` (D-FC-5 row), `docs/plans/ambush-ui/integration/11-PLAN-GROUND.md` (Task 10 step 2 note)
 - Create: `docs/PERCH-DEV.md`, `.env.perch.example`
-- Test: the daemon starts against the compose stack and `curl http://127.0.0.1:9090/metrics/perch/identities` lists three identities; twelve lanes exist on the relay
+- Test: the daemon starts against the stack and `curl http://127.0.0.1:9090/metrics/perch/identities` lists **one slot per admitted agent plus the two fixed `perch-telemetry` and `perch-alarm` slots** (measured 2026-09-04: six for the dev profile's four admitted agents, not the three this step originally claimed); twelve lanes exist on the relay. The two fixed keys reproduce byte-identically across daemon restarts on the same seed, and the agent slots change when the key directory is wiped, which is what the derivation predicts
 
 **Interfaces:**
 - Consumes: Ground Task 9's ruleset and signer; Ground Task 10's compose services and script; Task 9's mount; Task 13's lane creation.

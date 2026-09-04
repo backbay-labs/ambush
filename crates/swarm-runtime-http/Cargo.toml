@@ -29,6 +29,7 @@ swarm-pheromone.workspace = true
 swarm-policy.workspace = true
 swarm-response.workspace = true
 swarm-ingest-runtime.workspace = true
+swarm-perch-bridge.workspace = true
 swarm-runtime.workspace = true
 swarm-runtime-workbench.workspace = true
 swarm-spine.workspace = true

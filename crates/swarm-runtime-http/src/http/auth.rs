@@ -29,6 +29,21 @@ struct ConfiguredOperatorPrincipal {
     principal: AuthenticatedOperatorPrincipal,
     token_env: Arc<str>,
     token_expires_at_ms: Option<i64>,
+    /// Unit tests only: a bearer held in memory so a route test never touches
+    /// the process-global env. Production principals never carry one, and
+    /// `from_config` remains byte-for-byte env-backed.
+    #[cfg(test)]
+    inline_token: Option<Zeroizing<String>>,
+}
+
+impl ConfiguredOperatorPrincipal {
+    fn expected_token(&self) -> Option<Zeroizing<String>> {
+        #[cfg(test)]
+        if let Some(token) = &self.inline_token {
+            return Some(token.clone());
+        }
+        read_operator_token_from_env(self.token_env.as_ref())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -73,12 +88,30 @@ impl OperatorAuthState {
                     },
                     token_env: Arc::from(principal.token_env),
                     token_expires_at_ms: principal.token_expires_at_ms,
+                    #[cfg(test)]
+                    inline_token: None,
                 })
             })
             .collect::<Result<Vec<_>, OperatorHttpError>>()?;
         Ok(Self {
             principals: Arc::new(principals),
         })
+    }
+
+    /// One principal whose bearer is `token`, held in memory. Unit tests only.
+    #[cfg(test)]
+    pub(super) fn for_test(operator_id: &str, scopes: Vec<OperatorScope>, token: &str) -> Self {
+        Self {
+            principals: Arc::new(vec![ConfiguredOperatorPrincipal {
+                principal: AuthenticatedOperatorPrincipal {
+                    operator_id: Arc::from(operator_id),
+                    scopes,
+                },
+                token_env: Arc::from(""),
+                token_expires_at_ms: None,
+                inline_token: Some(Zeroizing::new(token.to_string())),
+            }]),
+        }
     }
 
     fn authenticate(
@@ -88,8 +121,7 @@ impl OperatorAuthState {
     ) -> Result<AuthenticatedOperatorPrincipal, OperatorBearerAuthFailure> {
         let mut expired = None;
         for principal in self.principals.iter() {
-            let Some(expected_token) = read_operator_token_from_env(principal.token_env.as_ref())
-            else {
+            let Some(expected_token) = principal.expected_token() else {
                 continue;
             };
             if expected_token.as_str() != token {

@@ -16,6 +16,7 @@ import { Route as workflowsDotworkflowIdRouteImport } from "./routes/workflows.$
 import { Route as projectsDotprojectIdRouteImport } from "./routes/projects.$projectId";
 import { Route as messagesDotnewRouteImport } from "./routes/messages.new";
 import { Route as channelsDotchannelIdRouteImport } from "./routes/channels.$channelId";
+import { Route as casesDotcaseIdRouteImport } from "./routes/cases.$caseId";
 import { Route as channelsDotchannelIdDotpostsDotpostIdRouteImport } from "./routes/channels.$channelId.posts.$postId";
 
 const workflowsRoute = workflowsRouteImport.update({
@@ -73,6 +74,11 @@ const channelsDotchannelIdRoute = channelsDotchannelIdRouteImport.update({
   path: "/channels/$channelId",
   getParentRoute: () => rootRouteImport,
 } as any);
+const casesDotcaseIdRoute = casesDotcaseIdRouteImport.update({
+  id: "/cases/$caseId",
+  path: "/cases/$caseId",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const channelsDotchannelIdDotpostsDotpostIdRoute =
   channelsDotchannelIdDotpostsDotpostIdRouteImport.update({
     id: "/channels/$channelId/posts/$postId",
@@ -88,6 +94,7 @@ export interface FileRoutesByFullPath {
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
   "/workflows": typeof workflowsRoute;
+  "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
   "/messages/new": typeof messagesDotnewRoute;
   "/projects/$projectId": typeof projectsDotprojectIdRoute;
@@ -102,6 +109,7 @@ export interface FileRoutesByTo {
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
   "/workflows": typeof workflowsRoute;
+  "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
   "/messages/new": typeof messagesDotnewRoute;
   "/projects/$projectId": typeof projectsDotprojectIdRoute;
@@ -117,6 +125,7 @@ export interface FileRoutesById {
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
   "/workflows": typeof workflowsRoute;
+  "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
   "/messages/new": typeof messagesDotnewRoute;
   "/projects/$projectId": typeof projectsDotprojectIdRoute;
@@ -133,6 +142,7 @@ export interface FileRouteTypes {
     | "/reminders"
     | "/settings"
     | "/workflows"
+    | "/cases/$caseId"
     | "/channels/$channelId"
     | "/messages/new"
     | "/projects/$projectId"
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | "/reminders"
     | "/settings"
     | "/workflows"
+    | "/cases/$caseId"
     | "/channels/$channelId"
     | "/messages/new"
     | "/projects/$projectId"
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | "/reminders"
     | "/settings"
     | "/workflows"
+    | "/cases/$caseId"
     | "/channels/$channelId"
     | "/messages/new"
     | "/projects/$projectId"
@@ -176,6 +188,7 @@ export interface RootRouteChildren {
   remindersRoute: typeof remindersRoute;
   settingsRoute: typeof settingsRoute;
   workflowsRoute: typeof workflowsRoute;
+  casesDotcaseIdRoute: typeof casesDotcaseIdRoute;
   channelsDotchannelIdRoute: typeof channelsDotchannelIdRoute;
   messagesDotnewRoute: typeof messagesDotnewRoute;
   projectsDotprojectIdRoute: typeof projectsDotprojectIdRoute;
@@ -262,6 +275,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof channelsDotchannelIdRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/cases/$caseId": {
+      id: "/cases/$caseId";
+      path: "/cases/$caseId";
+      fullPath: "/cases/$caseId";
+      preLoaderRoute: typeof casesDotcaseIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     "/channels/$channelId/posts/$postId": {
       id: "/channels/$channelId/posts/$postId";
       path: "/channels/$channelId/posts/$postId";
@@ -280,6 +300,7 @@ const rootRouteChildren: RootRouteChildren = {
   remindersRoute: remindersRoute,
   settingsRoute: settingsRoute,
   workflowsRoute: workflowsRoute,
+  casesDotcaseIdRoute: casesDotcaseIdRoute,
   channelsDotchannelIdRoute: channelsDotchannelIdRoute,
   messagesDotnewRoute: messagesDotnewRoute,
   projectsDotprojectIdRoute: projectsDotprojectIdRoute,

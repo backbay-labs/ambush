@@ -129,6 +129,7 @@
             identity: swarm_core::config::IdentityConfig::default(),
             platform_api: Default::default(),
             operator: swarm_core::config::OperatorSurfaceConfig::default(),
+            perch: swarm_core::config::PerchBridgeConfig::default(),
             tls: None,
         }
     }

@@ -5,6 +5,7 @@ use crate::evolution_status::EvolutionStatusReport;
 use serde::{Deserialize, Serialize};
 use swarm_core::agent::{AgentHealth, AgentRole, SwarmMode};
 use swarm_core::pheromone::{PheromoneConcentration, ThreatClass};
+use swarm_core::types::Severity;
 use swarm_policy::PolicyVerdict;
 use swarm_response::SwarmFindingEnvelope;
 use swarm_spine::IncidentGraphDimension;
@@ -136,6 +137,8 @@ pub enum RuntimeEventKind {
     ConcentrationSnapshot,
     Escalation,
     ModeTransition,
+    /// A finding was promoted to a case (12-PLAN-FIRST-CARD.md Task 11, B1d).
+    CasePromoted,
 }
 
 impl RuntimeEventKind {
@@ -152,6 +155,7 @@ impl RuntimeEventKind {
             Self::ConcentrationSnapshot => "concentration_snapshot",
             Self::Escalation => "escalation",
             Self::ModeTransition => "mode_transition",
+            Self::CasePromoted => "case_promoted",
         }
     }
 
@@ -168,6 +172,7 @@ impl RuntimeEventKind {
             "concentration_snapshot" => Some(Self::ConcentrationSnapshot),
             "escalation" => Some(Self::Escalation),
             "mode_transition" => Some(Self::ModeTransition),
+            "case_promoted" => Some(Self::CasePromoted),
             _ => None,
         }
     }
@@ -187,6 +192,33 @@ pub enum ReplayEventPhase {
 pub enum EscalationLevel {
     Alert,
     Incident,
+}
+
+/// Which ADR 0018 promotion clause turned a finding into a case.
+///
+/// Only `Manual` — the operator's `E` key through `POST /v1/operator/incidents`
+/// — is produced by the first build; the other two are the clauses the hold
+/// path and the correlation engine raise once they promote (00-DECISIONS W3-14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CasePromotionClause {
+    /// A response was held for a human decision; the hold is itself a promotion.
+    HeldAction,
+    /// The correlation engine assembled a multi-finding incident.
+    CorrelatedIncident,
+    /// An operator promoted the finding explicitly.
+    Manual,
+}
+
+impl CasePromotionClause {
+    /// The snake_case name the wire and the logs use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HeldAction => "held_action",
+            Self::CorrelatedIncident => "correlated_incident",
+            Self::Manual => "manual",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -302,6 +334,29 @@ pub enum RuntimeEvent {
         triggering_threat_class: Option<ThreatClass>,
         reason: String,
     },
+    /// A finding became a case. Published AFTER the incident record commits, so
+    /// the bridge creates the case channel — whose UUID is `case_id`, minted by
+    /// the daemon (00-DECISIONS W3-14) — for a record that already exists.
+    CasePromoted {
+        /// When the promotion was recorded (unix ms).
+        emitted_at_ms: i64,
+        /// The hunt the promoted finding belongs to.
+        hunt_id: String,
+        /// The case channel UUID the daemon minted.
+        case_id: String,
+        /// Which promotion clause fired.
+        clause: CasePromotionClause,
+        /// `incident:perch-case:{case_id}` — the incident record's id.
+        incident_id: String,
+        /// The finding that was promoted.
+        finding_id: String,
+        /// The finding's threat class.
+        threat_class: ThreatClass,
+        /// The finding's severity.
+        severity: Severity,
+        /// The one-line summary the case channel is named after.
+        summary: String,
+    },
 }
 
 impl RuntimeEvent {
@@ -317,7 +372,8 @@ impl RuntimeEvent {
             | Self::AgentHealth { emitted_at_ms, .. }
             | Self::ConcentrationSnapshot { emitted_at_ms, .. }
             | Self::Escalation { emitted_at_ms, .. }
-            | Self::ModeTransition { emitted_at_ms, .. } => *emitted_at_ms,
+            | Self::ModeTransition { emitted_at_ms, .. }
+            | Self::CasePromoted { emitted_at_ms, .. } => *emitted_at_ms,
         }
     }
 
@@ -334,6 +390,7 @@ impl RuntimeEvent {
             Self::ConcentrationSnapshot { .. } => RuntimeEventKind::ConcentrationSnapshot,
             Self::Escalation { .. } => RuntimeEventKind::Escalation,
             Self::ModeTransition { .. } => RuntimeEventKind::ModeTransition,
+            Self::CasePromoted { .. } => RuntimeEventKind::CasePromoted,
         }
     }
 }
@@ -366,7 +423,49 @@ pub fn parse_runtime_event_filter(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{RuntimeEventKind, parse_runtime_event_filter};
+    use super::{CasePromotionClause, RuntimeEvent, RuntimeEventKind, parse_runtime_event_filter};
+    use swarm_core::pheromone::ThreatClass;
+    use swarm_core::types::Severity;
+
+    #[test]
+    fn case_promoted_round_trips_and_is_the_twelfth_kind() {
+        let event = RuntimeEvent::CasePromoted {
+            emitted_at_ms: 7,
+            hunt_id: "hunt-1".into(),
+            case_id: "9499a6e2-8872-453b-80d9-dafc6fc7fc69".into(),
+            clause: CasePromotionClause::Manual,
+            incident_id: "incident:perch-case:9499a6e2-8872-453b-80d9-dafc6fc7fc69".into(),
+            finding_id: "f-1".into(),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            summary: "promoted".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["event_type"], "case_promoted");
+        assert_eq!(json["clause"], "manual");
+        assert_eq!(json["threat_class"], "execution");
+        assert_eq!(json["severity"], "HIGH");
+        assert_eq!(event.kind(), RuntimeEventKind::CasePromoted);
+        assert_eq!(event.emitted_at_ms(), 7);
+        assert_eq!(
+            RuntimeEventKind::parse("case_promoted"),
+            Some(RuntimeEventKind::CasePromoted)
+        );
+        assert_eq!(RuntimeEventKind::CasePromoted.as_str(), "case_promoted");
+        let back: RuntimeEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back.kind(), RuntimeEventKind::CasePromoted);
+        for (clause, name) in [
+            (CasePromotionClause::HeldAction, "held_action"),
+            (
+                CasePromotionClause::CorrelatedIncident,
+                "correlated_incident",
+            ),
+            (CasePromotionClause::Manual, "manual"),
+        ] {
+            assert_eq!(clause.as_str(), name);
+            assert_eq!(serde_json::to_value(clause).unwrap(), name);
+        }
+    }
 
     #[test]
     fn runtime_event_filter_parses_comma_separated_kinds() {
