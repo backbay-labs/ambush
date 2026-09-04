@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
 use swarm_core::BridgeStatusSnapshot;
@@ -186,23 +187,47 @@ pub(crate) fn test_config(strategy: &str) -> SwarmConfig {
 
 const TEST_PLATFORM_API_KEY: &str = "platform-read-secret";
 const TEST_PLATFORM_API_BEARER_TOKEN: &str = "platform-bearer-secret";
-const TEST_PLATFORM_API_BEARER_TOKEN_ENV: &str = "SWARM_PLATFORM_API_TEST_TOKEN";
 
-fn enable_platform_api(config: &mut SwarmConfig) {
+/// Serial number for [`enable_platform_api`]'s per-test bearer env var.
+static PLATFORM_API_TOKEN_ENV_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Mint an env var name no other test in this process will write.
+///
+/// `authenticate_bearer` re-reads the operator token from the environment on
+/// EVERY request (`ingest/platform_api.rs`), which is the contract
+/// `platform_api_routes_reload_rotated_bearer_token_without_restart` exists to
+/// prove. While every platform-API test named the same variable, that test's
+/// mid-test rewrite was visible to every sibling running beside it, and each one
+/// authenticating with the pre-rotation bearer answered 401 -- a different test
+/// failing on each parallel run. The token VALUE stays shared and constant; it
+/// is the variable NAME that has to be private, so one test's rotation cannot
+/// reach another's config.
+fn unique_platform_api_token_env() -> String {
+    format!(
+        "SWARM_PLATFORM_API_TEST_TOKEN_{}_{}",
+        std::process::id(),
+        PLATFORM_API_TOKEN_ENV_COUNTER.fetch_add(1, AtomicOrdering::Relaxed)
+    )
+}
+
+/// Configure `config` for the platform read API and return the name of the env
+/// var holding its bearer token.
+///
+/// Callers that rotate the token need the returned name; the rest may drop it.
+fn enable_platform_api(config: &mut SwarmConfig) -> String {
+    let token_env = unique_platform_api_token_env();
     config.platform_api.keys = vec![PlatformApiKeyConfig {
         name: "test-reader".to_string(),
         key_hash: super::platform_api::platform_api_key_hash_hex(TEST_PLATFORM_API_KEY),
         scopes: vec![PlatformApiScope::Read],
     }];
     config.operator.auth.operator_id = "platform-api-test-operator".to_string();
-    config.operator.auth.token_env = TEST_PLATFORM_API_BEARER_TOKEN_ENV.to_string();
-    config.operator.auth.context_token_env = TEST_PLATFORM_API_BEARER_TOKEN_ENV.to_string();
+    config.operator.auth.token_env = token_env.clone();
+    config.operator.auth.context_token_env = token_env.clone();
     unsafe {
-        std::env::set_var(
-            TEST_PLATFORM_API_BEARER_TOKEN_ENV,
-            TEST_PLATFORM_API_BEARER_TOKEN,
-        );
+        std::env::set_var(&token_env, TEST_PLATFORM_API_BEARER_TOKEN);
     }
+    token_env
 }
 
 fn mint_platform_context_token(
@@ -1823,7 +1848,7 @@ async fn platform_api_routes_require_bearer_and_api_key_but_health_and_ingest_do
 #[tokio::test]
 async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
     let mut config = test_config("suspicious_process_tree");
-    enable_platform_api(&mut config);
+    let token_env = enable_platform_api(&mut config);
     let app = detect_http_router(
         IngestState::from_config(temp_path("platform-auth-rotation"), config).unwrap(),
     );
@@ -1839,11 +1864,10 @@ async fn platform_api_routes_reload_rotated_bearer_token_without_restart() {
         .unwrap();
     assert_eq!(initial.status(), StatusCode::OK);
 
+    // Only this test's own variable is rewritten, so no sibling test running
+    // beside it ever observes the rotation.
     unsafe {
-        std::env::set_var(
-            TEST_PLATFORM_API_BEARER_TOKEN_ENV,
-            "platform-bearer-rotated",
-        );
+        std::env::set_var(&token_env, "platform-bearer-rotated");
     }
 
     let stale = app
