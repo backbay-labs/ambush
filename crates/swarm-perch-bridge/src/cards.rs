@@ -467,21 +467,36 @@ pub fn hold_card(
     chain: &mut SeqChain,
     covers: (IssuerIdx, Seq),
     now_ms: i64,
+    signer: Option<&crate::spine::SpineSigner>,
 ) -> Result<CardBody, BridgeError> {
     let card = hold_card_fact(hold, case_channel, finding_card_id)?;
     let human = card.human_line();
-    let spine_issuer = format!("swarm:ed25519:{}", issuer.keys.public_key().to_hex());
+    // With a signer the envelope is issued under the SPINE identity, a
+    // different key from the Nostr one that publishes it.
+    let spine_issuer = signer.map_or_else(
+        || format!("swarm:ed25519:{}", issuer.keys.public_key().to_hex()),
+        |signer| signer.issuer(issuer.slot.label()).to_string(),
+    );
     let fact = serde_json::to_value(Card::Hold(Box::new(card)))
         .map_err(|error| BridgeError::Encode(error.to_string()))?;
-    let envelope = CardEnvelope::seal_unsigned(
-        CardKind::Hold,
-        &spine_issuer,
-        seq,
-        chain.prev_envelope_hash.clone(),
-        issued_at_secs(now_ms),
-        fact,
-    )
-    .map_err(|error| BridgeError::Encode(error.to_string()))?;
+    let envelope = match signer {
+        Some(signer) => signer.seal_at(
+            issuer.slot.label(),
+            CardKind::Hold,
+            seq,
+            chain.prev_envelope_hash.clone(),
+            fact,
+        )?,
+        None => CardEnvelope::seal_unsigned(
+            CardKind::Hold,
+            &spine_issuer,
+            seq,
+            chain.prev_envelope_hash.clone(),
+            issued_at_secs(now_ms),
+            fact,
+        )
+        .map_err(|error| BridgeError::Encode(error.to_string()))?,
+    };
     let json =
         serde_json::to_string(&envelope).map_err(|error| BridgeError::Encode(error.to_string()))?;
     let content = build_content(CardKind::Hold, &human, &json)
@@ -967,6 +982,7 @@ mod tests {
             &mut chain,
             (0, 3),
             1_773_738_882_700,
+            None,
         )
         .unwrap();
 
@@ -1002,7 +1018,20 @@ mod tests {
             json["fact"]["hold"]["action_request"]["action"],
             serde_json::json!({"type": "isolate_host", "host_id": "host-ops-1"})
         );
-        // T-16: no card body this crate builds names a signature, a signer or a verification.
+        // T-16, narrowed by B6. The ENVELOPE now carries a `signature` when a
+        // signer is wired — that is the spine attesting the record, and it is
+        // the point of B6. What must never appear is a signature, a signer or a
+        // verification claim inside the FACT: the card states what happened,
+        // and a card that vouched for itself would be asking a reader to trust
+        // the thing under examination.
+        let fact = json["fact"].as_object().expect("the fact is an object");
+        for banned in ["signature", "signed_by", "verified"] {
+            assert!(
+                !fact.contains_key(banned),
+                "the fact must not carry {banned}"
+            );
+        }
+        // This body was built with no signer, so its envelope is unsigned too.
         assert!(json.get("signature").is_none());
         assert!(!body.content.contains("signed_by") && !body.content.contains("verified"));
         // The two clock-derived `HeldActionView` fields are NOT on an immutable card (INV-06).
@@ -1095,6 +1124,7 @@ mod tests {
             &mut SeqChain::default(),
             (0, 4),
             1_773_738_882_700,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1138,6 +1168,7 @@ mod tests {
             &mut SeqChain::default(),
             (0, 5),
             1,
+            None,
         )
         .unwrap();
         assert!(
@@ -1160,6 +1191,7 @@ mod tests {
             &mut SeqChain::default(),
             (0, 6),
             1,
+            None,
         )
         .unwrap();
         assert!(
@@ -1363,6 +1395,7 @@ mod tests {
             &mut SeqChain::default(),
             (0, 1),
             1,
+            None,
         )
         .unwrap();
         let content = hold_notice_content(&body);

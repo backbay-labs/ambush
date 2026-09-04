@@ -292,6 +292,16 @@ impl<P: FramePublisher> Pacer<P> {
             self.spine.as_deref(),
         )?;
 
+        // B6. Counted where the seal happened, so an operator comparing this
+        // with `bridge_source_events_published` can see whether what reached the
+        // relay was signed rather than taking it on faith.
+        if let Some(spine) = self.spine.as_ref()
+            && built.is_some()
+        {
+            self.metrics
+                .envelope_signed(spine.issuer(identity.slot.label()));
+        }
+
         let Some(body) = built else {
             // A card type this milestone does not publish. The record's meaning is not lost — it
             // stays in the daemon's own stores — so it is committed and counted apart from both

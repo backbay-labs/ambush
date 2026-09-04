@@ -1801,10 +1801,13 @@ The envelope is issued under the SPINE identity rather than the Nostr key that p
 under the issuer it names. Without a signer the envelope is unsigned, which is what the fixture
 generator and the pre-B6 tests construct.
 
-**Still outstanding on Task 7:** the hold and alarm card paths still seal unsigned (only the
-evidence pacer is wired), the `bridge_envelopes_signed` metric is not registered, and the T-16
-rewrite the plan describes has not been done (after B6 the envelope HAS a signature, so T-16's
-assertion narrows to the fact object).
+**Task 7 is complete.** The hold path seals under the spine too — a hold is the record an
+operator acts on, so it is the last card that should be publishable without attestation. The
+`bridge_envelopes_signed{issuer}` metric is registered and incremented where the seal happens, so
+an operator comparing it with `bridge_source_events_published` can see whether what reached the
+relay was signed rather than taking it on faith. T-16 is narrowed: the ENVELOPE now carries a
+signature, which is the point of B6, and the ban applies to the FACT — a card that vouched for
+itself would be asking a reader to trust the thing under examination.
 
 ## Task 8: Bridge — response receipts first, then `swarm:lease:v1` from the 1 Hz containment sweep poll
 

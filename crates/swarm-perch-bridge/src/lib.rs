@@ -412,7 +412,11 @@ impl PerchBridge {
             alarm_identity.clone(),
             alarm_idx,
             metrics.clone(),
-        );
+        )
+        // B6. Hold cards are sealed under the spine identity too; a hold is the
+        // record an operator acts on, so it is the last card that should be
+        // publishable without attestation.
+        .with_spine(Arc::clone(&spine));
         let mut alarm_task = Some(tokio::spawn(alarm::run(alarm::AlarmDrainer {
             spools: Arc::clone(&spools),
             identities: Arc::clone(&identities),
