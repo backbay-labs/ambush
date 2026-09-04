@@ -528,6 +528,51 @@ fn operator_surface_rejects_malformed_principal_nostr_pubkey() {
 }
 
 #[test]
+fn operator_principal_errors_are_propagated_not_restated() {
+    // `SwarmConfig::validate` must surface whatever `OperatorPrincipalConfig::validate`
+    // rejected. A caller that restates today's rule instead reports every rule the
+    // principal grows as a `nostr_pubkey` failure -- so each case is asserted against
+    // the principal's own error, not against a literal message.
+    let cases = [
+        (
+            "operator_surface.auth.principals.scopes",
+            OperatorPrincipalConfig {
+                operator_id: "console".to_string(),
+                token_env: "SWARM_OPERATOR_CONSOLE_TOKEN".to_string(),
+                token_expires_at_ms: None,
+                scopes: Vec::new(),
+                nostr_pubkey: None,
+            },
+        ),
+        (
+            "operator_surface.auth.principals.nostr_pubkey",
+            OperatorPrincipalConfig {
+                operator_id: "console".to_string(),
+                token_env: "SWARM_OPERATOR_CONSOLE_TOKEN".to_string(),
+                token_expires_at_ms: None,
+                scopes: vec![OperatorScope::Read],
+                nostr_pubkey: Some("npub1notahexkey".to_string()),
+            },
+        ),
+    ];
+
+    for (expected_field, principal) in cases {
+        let direct = principal.validate(0).unwrap_err().to_string();
+        assert!(
+            direct.starts_with(&format!("invalid field `{expected_field}`:")),
+            "principal-level error named the wrong field: {direct}"
+        );
+
+        let mut config = valid_config(PheromoneBackendConfig::InMemory);
+        config.runtime.require_durable_live_response = false;
+        config.operator.enabled = true;
+        config.operator.auth.principals = vec![principal];
+
+        assert_eq!(config.validate().unwrap_err().to_string(), direct);
+    }
+}
+
+#[test]
 fn platform_api_rejects_invalid_key_hash() {
     let mut config = valid_config(PheromoneBackendConfig::InMemory);
     config.runtime.require_durable_live_response = false;

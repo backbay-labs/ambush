@@ -192,24 +192,33 @@ impl OperatorPrincipalConfig {
             .is_some_and(|expires_at_ms| now_ms > expires_at_ms)
     }
 
-    /// Validate this principal's self-contained fields.
+    /// Validate this principal's self-contained fields, reporting failures against
+    /// its position `index` in `operator_surface.auth.principals`.
     ///
-    /// Today that is the optional [`nostr_pubkey`](Self::nostr_pubkey), which must be
-    /// exactly 64 lowercase hex characters when present. Cross-principal rules (unique
-    /// ids, unique token environments, at least one `read` scope) and the positional
-    /// checks belong to `SwarmConfig::validate`, which calls this for every effective
-    /// principal.
+    /// Owns every rule that needs nothing but this principal: [`scopes`](Self::scopes)
+    /// must grant something, and the optional [`nostr_pubkey`](Self::nostr_pubkey) must
+    /// be exactly 64 lowercase hex characters when present. Cross-principal rules
+    /// (unique ids, unique token environments, at least one `read` scope) belong to
+    /// `SwarmConfig::validate`, which calls this for every effective principal and
+    /// propagates whatever it returns -- so a rule added here is reported against its
+    /// own field, with no caller change.
     ///
     /// Crate-internal like its `PlatformApiConfig` and `TlsConfig` siblings: the loader is
     /// its only caller, and the phase-282 visibility baseline keeps it that way.
-    pub(super) fn validate(&self) -> Result<(), ConfigValidationError> {
+    pub(super) fn validate(&self, index: usize) -> Result<(), ConfigValidationError> {
+        if self.scopes.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "operator_surface.auth.principals.scopes",
+                reason: format!("principal {index} must grant at least one scope"),
+            });
+        }
         if let Some(key) = self.nostr_pubkey.as_deref()
             && !is_nostr_pubkey_hex(key)
         {
             return Err(ConfigValidationError::InvalidField {
                 field: "operator_surface.auth.principals.nostr_pubkey",
                 reason: format!(
-                    "principal `{}` nostr_pubkey must be exactly 64 lowercase hex characters",
+                    "principal {index} (`{}`) nostr_pubkey must be exactly 64 lowercase hex characters",
                     self.operator_id.trim()
                 ),
             });
@@ -417,7 +426,7 @@ mod tests {
         let p: OperatorPrincipalConfig =
             serde_yaml::from_str(yaml).unwrap_or_else(|e| panic!("{e}"));
         assert!(p.nostr_pubkey.is_none());
-        assert!(p.validate().is_ok());
+        assert!(p.validate(0).is_ok());
         assert!(p.nostr_pubkey_bytes().is_none());
     }
 
@@ -429,7 +438,7 @@ mod tests {
         let p: OperatorPrincipalConfig =
             serde_yaml::from_str(&yaml).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(p.nostr_pubkey.as_deref(), Some(hex.as_str()));
-        assert!(p.validate().is_ok());
+        assert!(p.validate(0).is_ok());
         assert_eq!(p.nostr_pubkey_bytes().map(|b| b.len()), Some(32));
         assert_eq!(p.nostr_pubkey_bytes(), Some([0xaa; 32]));
 
@@ -456,7 +465,7 @@ mod tests {
                 scopes: vec![OperatorScope::Approve],
                 nostr_pubkey: Some(bad.to_string()),
             };
-            let Err(error) = p.validate() else {
+            let Err(error) = p.validate(0) else {
                 panic!("{bad}: expected the malformed key to be rejected");
             };
             assert!(

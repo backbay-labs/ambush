@@ -703,21 +703,12 @@ impl SwarmConfig {
                         ),
                     });
                 }
-                if principal.scopes.is_empty() {
-                    return Err(ConfigValidationError::InvalidField {
-                        field: "operator_surface.auth.principals.scopes",
-                        reason: format!("principal {index} must grant at least one scope"),
-                    });
-                }
-                if principal.validate().is_err() {
-                    return Err(ConfigValidationError::InvalidField {
-                        field: "operator_surface.auth.principals.nostr_pubkey",
-                        reason: format!(
-                            "principal {index} (`{}`) nostr_pubkey must be exactly 64 lowercase hex characters",
-                            principal.operator_id.trim()
-                        ),
-                    });
-                }
+                // Every self-contained rule, propagated with its own field and
+                // reason. Restating one here would misreport the next rule
+                // `OperatorPrincipalConfig::validate` grows as a `nostr_pubkey`
+                // failure; the cross-principal rules above stay in this loop
+                // because they need `seen_*`.
+                principal.validate(index)?;
             }
 
             if !principals
