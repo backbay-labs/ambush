@@ -15,6 +15,7 @@ use swarm_ingest_runtime::anti_tamper::{AntiTamperFailure, AntiTamperMonitor};
 use swarm_ingest_runtime::bridge_runtime::BridgeRuntimeRegistry;
 use swarm_ingest_runtime::control::build_composite_detector;
 use swarm_ingest_runtime::ingest::{IngestState, detect_http_router};
+use swarm_perch_bridge::{BridgeBuildInput, PerchBridge};
 use swarm_policy::ApprovalContext;
 use swarm_runtime::agent_identity::{
     FileAgentIdentityRegistry, FileAgentKeyStore, PersistedAgentIdentity, RegistryAdmission,
@@ -960,6 +961,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             admitted_identities.push(weaver_id);
         }
+        let perch_admitted = admitted_identities.clone();
         dispatcher.set_admitted_identities(admitted_identities);
         let mut dispatcher_handle = Some(tokio::spawn(async move {
             dispatcher.run().await;
@@ -1073,6 +1075,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sweep.run_until_shutdown(interval_ms, sweep_shutdown).await;
             })
         });
+        // The perch bridge: the daemon's only writer of daemon-sourced facts to the relay.
+        // A misconfigured bridge must not silently ship a daemon that publishes nothing, so
+        // `build` fails loudly on a missing seed, a spool inside the workspace, a missing lane,
+        // or a daemon with no event broadcaster -- and this binary turns that into a startup
+        // failure. `docs/PERCH-DEV.md` greps for the mounted line.
+        let mut perch_bridge_handle = None;
+        let mut perch_metrics_router = None;
+        match PerchBridge::build(BridgeBuildInput {
+            config: config.perch.clone(),
+            colony_id: config.name.clone(),
+            events: state.subscribe_runtime_events(),
+            admitted_identities: perch_admitted,
+            ingest_identity: ingest_identity.id.clone(),
+            operator_principals: config.operator.auth.effective_principals(),
+            containment: containment_sweep.as_ref().map(Arc::clone),
+            shutdown: shutdown_rx.clone(),
+        }) {
+            Ok(Some(bridge)) => {
+                perch_metrics_router = Some(bridge.metrics_router());
+                tracing::info!(
+                    module = module_path!(),
+                    relay = %config.perch.relay_url,
+                    "perch bridge mounted"
+                );
+                perch_bridge_handle = Some(tokio::spawn(bridge.run()));
+            }
+            Ok(None) => tracing::info!(module = module_path!(), "perch bridge disabled in config"),
+            Err(error) => {
+                tracing::error!(
+                    module = module_path!(),
+                    reason = %error,
+                    "perch bridge NOT mounted; no evidence will reach the relay"
+                );
+                let fatal: Box<dyn std::error::Error> = Box::new(error);
+                return Err(fatal);
+            }
+        }
         let bridge_metrics = state.current_prometheus_metrics();
         // KNOWN LIMITATION: telemetry bridge workers are also spawned once from
         // the initial `runtime.telemetry_sources` config. `reload_from_disk()`
@@ -1165,6 +1204,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "operator surface disabled in config; perch operator routes not mounted"
             );
         }
+        // The bridge's own registry: `GET /metrics/perch`, its health probe, and the
+        // admitted-issuer listing the console reads (decision D-FC-2). Present only when the
+        // bridge is enabled, so a daemon without it answers 404 rather than an empty scrape.
+        if let Some(perch_router) = perch_metrics_router {
+            router = router.merge(perch_router);
+        }
         let server = serve_with_listener(
             listener,
             router,
@@ -1187,6 +1232,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = containment_sweep_handle.take() {
                     await_background_task("containment_sweep", handle).await;
+                }
+                if let Some(handle) = perch_bridge_handle.take() {
+                    await_background_task("perch_bridge", handle).await;
                 }
                 if let Some(handles) = bridge_handles.take() {
                     await_background_tasks("bridge", handles).await;
@@ -1245,6 +1293,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = containment_sweep_handle.take() {
                     await_background_task("containment_sweep", handle).await;
+                }
+                if let Some(handle) = perch_bridge_handle.take() {
+                    await_background_task("perch_bridge", handle).await;
                 }
                 if let Some(handles) = bridge_handles.take() {
                     await_background_tasks("bridge", handles).await;
