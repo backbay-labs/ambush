@@ -245,7 +245,7 @@ impl OperatorPrincipalConfig {
             return Err(ConfigValidationError::InvalidField {
                 field: "operator_surface.auth.principals.verdict_public_key_hex",
                 reason: format!(
-                    "principal `{}` verdict_public_key_hex must be exactly 64 lowercase hex characters",
+                    "principal {index} (`{}`) verdict_public_key_hex must be exactly 64 lowercase hex characters",
                     self.operator_id.trim()
                 ),
             });

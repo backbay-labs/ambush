@@ -175,7 +175,7 @@ pub async fn run<P: FramePublisher>(drainer: AlarmDrainer<P>) -> Result<(), Brid
                                     // The relay accepted the create, so stop replanning it. Until
                                     // this lands the hunt is routed but unconfirmed, which is what
                                     // makes a refused create retry instead of committing silently.
-                                    routing.mark_case_channel_created(case)?;
+                                    holds.routing_mut().record_channel_created(case)?;
                                     metrics.case_channel_created(clause.as_str());
                                     metrics.source_events_published(Stream::Alarm);
                                     tracing::info!(

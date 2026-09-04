@@ -267,6 +267,8 @@ struct RoutingState {
     hunts: BTreeMap<String, String>,
     #[serde(default)]
     receipts: BTreeMap<String, String>,
+    #[serde(default)]
+    hold_cards: BTreeMap<String, HoldCardLedger>,
     /// Channels whose `CreateChannel` step the relay ACCEPTED.
     ///
     /// Distinct from `hunts`, which records only that a channel id was chosen. A hunt is routed
@@ -275,10 +277,6 @@ struct RoutingState {
     /// routed hunt, so a refused create was retried into an empty step list, the caller's
     /// all-succeeded flag stayed true over zero steps, and the record was committed with the
     /// channel never created — leaving a daemon incident pointing at nothing.
-    #[serde(default)]
-    created: BTreeSet<String>,
-    #[serde(default)]
-    hold_cards: BTreeMap<String, HoldCardLedger>,
     #[serde(default)]
     created_channels: BTreeSet<String>,
 }
@@ -390,7 +388,7 @@ impl CaseRouting {
                         incoming: case_id.to_string(),
                     });
                 }
-                if self.state.created.contains(&existing.to_string()) {
+                if self.state.created_channels.contains(&existing.to_string()) {
                     return Ok((existing, Vec::new()));
                 }
                 // Routed but never confirmed created: re-plan the steps. Both are idempotent
@@ -439,21 +437,6 @@ impl CaseRouting {
             });
         }
         steps
-    }
-
-    /// Records that the relay accepted this channel's `CreateChannel` step.
-    ///
-    /// Until this is called the channel is routed but not known to exist, and
-    /// [`Self::ensure_case_channel`] keeps replanning its steps.
-    ///
-    /// # Errors
-    ///
-    /// [`BridgeError::SpoolIo`] when the sidecar cannot be written.
-    pub fn mark_case_channel_created(&mut self, channel: Uuid) -> Result<(), BridgeError> {
-        if self.state.created.insert(channel.to_string()) {
-            self.persist()?;
-        }
-        Ok(())
     }
 
     /// Recorded when a `RuntimeEvent::ResponseExecution` carries `receipt_id: Some(_)`. It is the
@@ -757,7 +740,7 @@ mod tests {
             "a routed-but-unconfirmed channel must replan its steps, not return none"
         );
         // Replay AFTER acceptance: no steps.
-        routing.mark_case_channel_created(case).unwrap();
+        routing.record_channel_created(case).unwrap();
         assert!(
             routing
                 .ensure_case_channel(&trigger, &ops, 1)
@@ -807,7 +790,7 @@ mod tests {
             1,
             "unconfirmed: the create must still be planned"
         );
-        routing.mark_case_channel_created(channel).unwrap();
+        routing.record_channel_created(channel).unwrap();
         assert!(
             routing
                 .ensure_case_channel(&promoted, &[], 60)
@@ -870,7 +853,7 @@ mod tests {
         );
 
         reopened
-            .mark_case_channel_created(case)
+            .record_channel_created(case)
             .unwrap_or_else(|error| panic!("mark: {error}"));
         assert!(
             reopened
@@ -1078,7 +1061,7 @@ mod tests {
         );
 
         // Idempotent once the relay has ACCEPTED the create: same channel, no steps.
-        routing.mark_case_channel_created(case).unwrap();
+        routing.record_channel_created(case).unwrap();
         let (again, more) = routing
             .ensure_case_channel(&trigger, &operators, 2_592_000)
             .unwrap();

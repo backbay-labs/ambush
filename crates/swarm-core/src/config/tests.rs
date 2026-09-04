@@ -528,7 +528,7 @@ fn operator_surface_rejects_malformed_principal_nostr_pubkey() {
     let error = config.validate().unwrap_err();
     assert_eq!(
         error.to_string(),
-        "invalid field `operator_surface.auth.principals.nostr_pubkey`: principal `console` nostr_pubkey must be exactly 64 lowercase hex characters"
+        "invalid field `operator_surface.auth.principals.nostr_pubkey`: principal 0 (`console`) nostr_pubkey must be exactly 64 lowercase hex characters"
     );
 
     config.operator.auth.principals[0].nostr_pubkey = Some("c".repeat(64));
@@ -550,6 +550,7 @@ fn operator_principal_errors_are_propagated_not_restated() {
                 token_expires_at_ms: None,
                 scopes: Vec::new(),
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
         ),
         (
@@ -560,6 +561,22 @@ fn operator_principal_errors_are_propagated_not_restated() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Read],
                 nostr_pubkey: Some("npub1notahexkey".to_string()),
+                verdict_public_key_hex: None,
+            },
+        ),
+        // The verdict key is validated on the same rule as `nostr_pubkey` and is a
+        // DIFFERENT key: secp256k1 addresses a console, Ed25519 says who may decide.
+        // Without a case here a malformed verdict key would reach the decide route's
+        // binding check instead of being refused at config load.
+        (
+            "operator_surface.auth.principals.verdict_public_key_hex",
+            OperatorPrincipalConfig {
+                operator_id: "console".to_string(),
+                token_env: "SWARM_OPERATOR_CONSOLE_TOKEN".to_string(),
+                token_expires_at_ms: None,
+                scopes: vec![OperatorScope::Read],
+                nostr_pubkey: None,
+                verdict_public_key_hex: Some("NOTLOWERCASEHEX".to_string()),
             },
         ),
     ];
@@ -1852,7 +1869,7 @@ fn operator_surface_rejects_a_malformed_principal_verdict_key_by_name() {
     assert_eq!(
         error.to_string(),
         "invalid field `operator_surface.auth.principals.verdict_public_key_hex`: principal \
-         `console` verdict_public_key_hex must be exactly 64 lowercase hex characters"
+         0 (`console`) verdict_public_key_hex must be exactly 64 lowercase hex characters"
     );
 }
 
