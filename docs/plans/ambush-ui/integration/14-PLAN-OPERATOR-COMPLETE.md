@@ -954,7 +954,31 @@ git commit -s -m "feat(http): GET /v1/operator/pheromone/deposits (B4) with the 
 
 ---
 
-### Task 5: B1c — `RuntimeEvent::ContainmentReleased`
+#### Task 4 status — 2026-09-04
+
+Steps 1-14 landed: the reduction and its two tests in `swarm-pheromone`, the engine op and its
+two tests in `swarm-ingest-runtime`, and the mounted route with the path inventory grown to
+seven. Root `cargo clippy --workspace --all-targets -- -D warnings` is clean and
+`cargo test --workspace` is 1,547 passing.
+
+**Steps 15 and 16 are blocked on two First card artifacts that never landed**, and are not
+claimed:
+
+- Step 15 regenerates `docs/openapi/perch-operator-v1.json` with
+  `crates/swarm-runtime-http/src/bin/generate_perch_openapi.rs`. Neither exists. The only
+  OpenAPI generator in the tree is `generate_platform_openapi.rs`, for the v2 platform API, and
+  the only document under `docs/openapi/` is `v2-platform-openapi.json`. The perch contract
+  lives at `build/openapi/perch-operator-v1.yaml` and is hand-maintained, so **nothing today
+  checks the served shape against it**. Writing the generator is a task in its own right and
+  should be one.
+- Step 16 wires "the desktop wrapper's return type", describing `perchDeposits(threatClass)` as
+  "already a wrapper". There is no `perchDeposits` in `shared/api/tauriPerch.ts`, and no
+  `perch_deposits` Tauri command. Adding one means a new command, a new entry in
+  `PERCH_TAURI_COMMANDS`, and a new arm in the E2E mock's closed set — all three of which the
+  cross-language guards added in The hold now enforce together. It belongs with the surface
+  that consumes it (Task 14, the tuning bench) rather than ahead of it.
+
+## Task 5: B1c — `RuntimeEvent::ContainmentReleased`
 
 **Files:**
 - Modify: `crates/swarm-runtime/src/runtime_events.rs:127-139`, `:142-173`, `:214-305`, `:308-338`
