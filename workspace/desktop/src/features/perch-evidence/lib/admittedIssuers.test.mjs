@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  admittedIssuersKnown,
   countUnadmittedMarker,
   ensureAdmittedIssuersLoaded,
   isAdmittedIssuer,
@@ -97,5 +98,36 @@ test("the loader runs at most once per window, applies its result, and a failure
   assert.equal(isAdmittedIssuer("01".repeat(32)), true, "previous set kept");
   assert.deepEqual(perchLaneChannelIds(), ["lane-a"]);
   assert.equal(warnings.length, 1);
+  resetPerchAdmittedIssuers();
+});
+
+test("nothing is counted until the console has an authoritative set", () => {
+  resetPerchAdmittedIssuers();
+  assert.equal(admittedIssuersKnown(), false);
+  // The cold-start window: every marker looks unadmitted because the daemon
+  // has not answered yet. Counting it would make the counter a launch count.
+  countUnadmittedMarker("event-before-the-answer");
+  assert.equal(readPerchCounter("perch_marker_unadmitted_total"), 0);
+  setAdmittedIssuers([], {});
+  assert.equal(admittedIssuersKnown(), true, "an empty answer is an answer");
+  countUnadmittedMarker("event-before-the-answer");
+  countUnadmittedMarker("event-before-the-answer");
+  assert.equal(
+    readPerchCounter("perch_marker_unadmitted_total"),
+    1,
+    "counted once, and only after the set is known",
+  );
+  resetPerchAdmittedIssuers();
+  assert.equal(admittedIssuersKnown(), false, "a community switch un-knows it");
+});
+
+test("a failed load leaves the set unknown, so nothing is refused on no answer", async () => {
+  resetPerchAdmittedIssuers();
+  await ensureAdmittedIssuersLoaded(async () => {
+    throw new Error("daemon unreachable");
+  });
+  assert.equal(admittedIssuersKnown(), false);
+  countUnadmittedMarker("event-after-a-failed-load");
+  assert.equal(readPerchCounter("perch_marker_unadmitted_total"), 0);
   resetPerchAdmittedIssuers();
 });

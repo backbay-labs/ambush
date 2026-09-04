@@ -162,6 +162,8 @@ export default defineConfig({
         "**/agent-numeric-tuning.spec.ts",
         "**/needs-restart-screenshots.spec.ts",
         "**/team-catalog-screenshots.spec.ts",
+        "**/perch-marker-admission.spec.ts",
+        "**/perch-finding-card.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

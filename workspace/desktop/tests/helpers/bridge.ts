@@ -631,6 +631,12 @@ type BridgeOptions = {
    * that exercise the Experiments toggle UI itself.
    */
   seedPreviewFeatures?: boolean;
+  /**
+   * Preview features to seed as enabled ON TOP of the default set. The
+   * default set omits `OPT_IN_FEATURE_IDS` (see `./features`), so this is how
+   * a spec that needs one of those turns it on for itself alone.
+   */
+  enableFeatures?: readonly string[];
   user?: keyof typeof TEST_IDENTITIES;
 };
 
@@ -837,14 +843,20 @@ async function seedDefaultCommunity(
   );
 }
 
-async function seedPreviewFeaturesEnabled(page: Page) {
+async function seedPreviewFeaturesEnabled(
+  page: Page,
+  enableFeatures?: readonly string[],
+) {
   await page.addInitScript(
     ({ key, ids }) => {
       const overrides: Record<string, boolean> = {};
       for (const id of ids) overrides[id] = true;
       window.localStorage.setItem(key, JSON.stringify(overrides));
     },
-    { key: FEATURE_OVERRIDES_STORAGE_KEY, ids: PREVIEW_FEATURE_IDS },
+    {
+      key: FEATURE_OVERRIDES_STORAGE_KEY,
+      ids: [...PREVIEW_FEATURE_IDS, ...(enableFeatures ?? [])],
+    },
   );
 }
 
@@ -870,7 +882,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   // Default to opting every preview feature in. Specs that exercise the
   // Experiments toggle UI itself pass `seedPreviewFeatures: false`.
   if (options.seedPreviewFeatures !== false) {
-    await seedPreviewFeaturesEnabled(page);
+    await seedPreviewFeaturesEnabled(page, options.enableFeatures);
   }
 
   await page.addInitScript(
@@ -976,6 +988,7 @@ export async function installMockBridge(
     skipOnboardingSeed?: boolean;
     skipCommunitySeed?: boolean;
     seedPreviewFeatures?: boolean;
+    enableFeatures?: readonly string[];
   },
 ) {
   await installBridge(page, {
@@ -986,6 +999,7 @@ export async function installMockBridge(
     skipOnboardingSeed: options?.skipOnboardingSeed,
     skipCommunitySeed: options?.skipCommunitySeed,
     seedPreviewFeatures: options?.seedPreviewFeatures,
+    enableFeatures: options?.enableFeatures,
   });
 }
 

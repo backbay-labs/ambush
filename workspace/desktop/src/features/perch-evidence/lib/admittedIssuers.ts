@@ -28,6 +28,7 @@ const EMPTY_LANES: readonly string[] = Object.freeze([]);
 const NO_LANES: Readonly<Record<string, string>> = Object.freeze({});
 
 let admitted: ReadonlySet<string> = new Set();
+let known = false;
 let lanes: Readonly<Record<string, string>> = NO_LANES;
 let laneIds: readonly string[] = EMPTY_LANES;
 const countedEvents = new Set<string>();
@@ -51,6 +52,7 @@ export function setAdmittedIssuers(
   pubkeys: readonly string[],
   nextLanes: Readonly<Record<string, string>>,
 ): void {
+  known = true;
   admitted = new Set(pubkeys.map((pubkey) => pubkey.toLowerCase()));
   lanes = Object.freeze({ ...nextLanes });
   const ids = Array.from(
@@ -62,6 +64,21 @@ export function setAdmittedIssuers(
   );
   laneIds = ids.length === 0 ? EMPTY_LANES : Object.freeze(ids);
   emit();
+}
+
+/**
+ * Whether this console has an authoritative admitted set at all.
+ *
+ * Before the daemon's answer arrives (D-FC-2) the set is empty, so every
+ * well-formed marker looks unadmitted. Counting those would put the cold-start
+ * window into `perch_marker_unadmitted_total`, and that counter is read as
+ * "somebody tried to plant a card" — a number inflated by every launch is a
+ * number nobody can act on. A failed load leaves this false: the console has
+ * no answer, and refusing on the strength of a missing answer is not a
+ * refusal it is entitled to make.
+ */
+export function admittedIssuersKnown(): boolean {
+  return known;
 }
 
 /**
@@ -87,8 +104,12 @@ export function perchLaneChannels(): Readonly<Record<string, string>> {
  * Count an unadmitted marker once per event id. A re-render is not a second
  * marker, and the counter is what the governance strip renders — rejected
  * frames are counted and dropped, never silently dropped.
+ *
+ * Silently does nothing until the admitted set is known, for the reason
+ * `admittedIssuersKnown` gives.
  */
 export function countUnadmittedMarker(eventId: string): void {
+  if (!known) return;
   if (countedEvents.has(eventId)) return;
   countedEvents.add(eventId);
   unadmittedTotal += 1;
@@ -114,6 +135,16 @@ export function subscribePerchCounters(listener: () => void): () => void {
 
 const getVersion = (): number => version;
 const getServerVersion = (): number => 0;
+const getServerKnown = (): boolean => false;
+
+/** `admittedIssuersKnown` for React, re-rendering when the answer arrives. */
+export function useAdmittedIssuersKnown(): boolean {
+  return useSyncExternalStore(
+    subscribePerchCounters,
+    admittedIssuersKnown,
+    getServerKnown,
+  );
+}
 const getServerLanes = (): readonly string[] => EMPTY_LANES;
 
 /**
@@ -183,6 +214,7 @@ export function ensureAdmittedIssuersLoaded(
 
 /** Community-switch fence. Registered in the typed reset registry. */
 export function resetPerchAdmittedIssuers(): void {
+  known = false;
   admitted = new Set();
   lanes = NO_LANES;
   laneIds = EMPTY_LANES;
