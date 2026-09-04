@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useLocation } from "@tanstack/react-router";
 import { deriveShellRoute, markAllReadSources } from "@/app/AppShell.helpers";
 import { useTerminalContext } from "@/app/useTerminalContext";
+import { PerchGovernanceStripSlot } from "@/features/perch/ui/PerchGovernanceStripSlot";
 import { AppShellProvider } from "@/app/AppShellContext";
 import { AppShellOverlays, TerminalBootstrap } from "@/app/AppShellOverlays";
 import { AppShellSettingsSurface } from "@/app/AppShellSettingsSurface";
@@ -719,6 +720,15 @@ export function AppShell() {
                             <TerminalBootstrap {...effectiveTerminalContext} />
                           }
                         >
+                          {/* S14. The strip is INSIDE the outlet's container
+                              and above the route, so it is present on every
+                              perch surface including the Watchfloor's bare
+                              chrome. The state it reports is the state in
+                              which every other number on screen becomes
+                              untrustworthy; a surface that hid it while
+                              showing the numbers would be the worst possible
+                              combination. */}
+                          <PerchGovernanceStripSlot />
                           <Outlet />
                         </AppShellChannelSurface>
                       </TerminalContextOverrideProvider>

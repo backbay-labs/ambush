@@ -55,9 +55,11 @@ mod secret_store;
 mod shutdown;
 mod team_catalog;
 mod templates;
+mod terminal_case_scope;
 mod terminal_runtime;
 #[cfg_attr(not(test), allow(dead_code))]
 mod terminal_transport;
+mod terminal_wire;
 #[cfg(target_os = "macos")]
 mod tray_menu;
 mod unread_catch_up;
