@@ -7,6 +7,7 @@ import { resetBackgroundMediaUploads } from "@/features/messages/lib/backgroundM
 import { resetLinkPreviewPreparations } from "@/features/messages/lib/linkPreviewPreparationStore";
 import { resetPersistentAgentAudienceStore } from "@/features/messages/lib/persistentAgentAudience";
 import { clearTimeoutState } from "@/features/moderation/lib/timeoutStore";
+import { resetKeymapArmingState } from "@/features/perch/lib/keymapArmingState";
 import { resetPerchAdmittedIssuers } from "@/features/perch-evidence/lib/admittedIssuers";
 import { resetFindingVerdictFlow } from "@/features/perch-evidence/lib/findingVerdictFlow";
 import { resetPerchCaseIndex } from "@/features/perch-evidence/lib/perchCaseIndex";
@@ -90,6 +91,7 @@ export const COMMUNITY_SCOPED_SINGLETONS = [
   "perchCaseIndex",
   "perchFindingVerdictFlow",
   "perchReconcileCounters",
+  "perchKeymapArming",
 ] as const;
 
 /** The name of one community-scoped singleton in {@link COMMUNITY_SCOPED_SINGLETONS}. */
@@ -182,6 +184,10 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
   perchFindingVerdictFlow: () => resetFindingVerdictFlow(),
   // A divergence belongs to the colony whose daemon and relay disagreed.
   perchReconcileCounters: () => resetReconcileDivergenceCounter(),
+  // An armed grant is armed against one colony's hold id. Carried across, it
+  // would leave a live second stroke pointing at a hold the next daemon has
+  // never heard of.
+  perchKeymapArming: () => resetKeymapArmingState(),
 };
 
 /**

@@ -65,8 +65,13 @@ export function WatchQueueSection({
         </span>
       </header>
       {unknown && unavailableNote ? (
+        // `data-perch-unavailable`, not a `data-perch-role`: that attribute's
+        // value set is closed at thirteen (17-COMPONENT-SPECS.md §1.4) and
+        // `tools/check-perch-grant-affordance.sh` R1 enforces it. An
+        // unavailable count is not one of the thirteen and inventing a
+        // fourteenth would make the closed set advisory.
         <p
-          data-perch-role="unavailable-note"
+          data-perch-unavailable=""
           className="px-3 text-xs text-[hsl(var(--perch-foreground-muted))]"
         >
           {unavailableNote}

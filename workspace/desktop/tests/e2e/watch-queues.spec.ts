@@ -85,9 +85,9 @@ test("with the daemon unreachable the count is unavailable, never zero, and noth
     "false",
   );
   // The refusal names what failed rather than showing an empty list.
-  await expect(
-    page.locator('[data-perch-role="unavailable-note"]').first(),
-  ).toContainText("cannot say what is held");
+  await expect(page.locator("[data-perch-unavailable]").first()).toContainText(
+    "cannot say what is held",
+  );
 });
 
 test("an expired hold stays in the queue and says no action was taken", async ({

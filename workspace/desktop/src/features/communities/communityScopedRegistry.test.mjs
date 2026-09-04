@@ -53,6 +53,7 @@ test("the perch singletons are registered", () => {
       "perchWriteStates",
       "perchCaseIndex",
       "perchReconcileCounters",
+      "perchKeymapArming",
     ].every((k) => COMMUNITY_SCOPED_SINGLETONS.includes(k)),
   );
 });

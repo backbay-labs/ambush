@@ -19,6 +19,12 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        // The operator console's verdict controls. Deliberately NOT on the
+        // `bg-primary` path: `default` is the affirmative-by-styling button,
+        // and a grant that looks like the app's happy-path action is a grant
+        // an operator can press without reading. `--perch-*` tokens only (R-4).
+        verdict:
+          "border border-[hsl(var(--perch-border-strong))] bg-[hsl(var(--perch-card))] text-[hsl(var(--perch-foreground))] hover:bg-[hsl(var(--perch-surface-raised))] aria-disabled:pointer-events-none aria-disabled:opacity-50",
       },
       size: {
         default: "h-9 px-4 py-2",
