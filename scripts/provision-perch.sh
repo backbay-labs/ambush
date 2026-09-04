@@ -10,8 +10,11 @@
 #      checks the two agree and says so loudly when they do not.
 #   2. Mints the twelve lane channels named by standard_threat_classes()
 #      (crates/swarm-runtime/src/escalation.rs): open visibility, stream type,
-#      one per threat class, named `lane-<slug-with-dashes>`. Idempotent: a
-#      channel that already carries the name is reused, never duplicated.
+#      one per threat class, named `lane-<slug-with-dashes>`. The taxonomy
+#      check is fatal -- a missing or moved standard_threat_classes() aborts
+#      rather than provisioning a possibly stale hard-coded list. Idempotent:
+#      a channel that already carries the name is reused, never duplicated,
+#      including an archived one, which is unarchived and reused.
 #   3. Writes .perch-dev/lane-channels.json (threat-class slug -> channel UUID)
 #      and .perch-dev/operator.env (AMBUSH_* variables for the ambush CLI).
 #      .perch-dev/ is git-ignored.
@@ -30,7 +33,10 @@
 #
 # Requirements: the ambush CLI (`cd workspace && cargo build --release -p ambush-cli`),
 # a reachable relay (`docker compose up -d postgres redis relay`), node (the
-# Hermit one under workspace/bin is preferred), python3 and curl.
+# Hermit one under workspace/bin is preferred), python3, curl, and a full
+# checkout (crates/swarm-runtime/src/escalation.rs must be present).
+#
+# Tests: `bash scripts/provision-perch.test.sh` -- hermetic, no relay needed.
 #
 # Environment:
 #   AMBUSH_RELAY_URL    relay base URL                  [default: http://localhost:3000]
@@ -90,8 +96,16 @@ fi
 or point AMBUSH_CLI at an existing binary"
 
 # --- 0. The lane list matches the engine's taxonomy ---------------------------
-if [ -f "$ESCALATION_RS" ]; then
-  expected="$(python3 - "$ESCALATION_RS" <<'PY'
+# Hard requirement, never advisory. Provisioning lanes that no longer match the
+# engine's taxonomy is worse than not provisioning at all: frames the engine
+# routes to a class with no lane land nowhere, while the console shows a full
+# set of lanes that look right. A missing file or a moved function means the
+# list is unverifiable -- exactly when the hard-coded copy above is most likely
+# to be the stale one.
+[ -f "$ESCALATION_RS" ] \
+  || die "$ESCALATION_RS not found; the lane list cannot be checked against standard_threat_classes(). Run this from a full checkout."
+
+expected="$(python3 - "$ESCALATION_RS" <<'PYEOF'
 import re, sys
 src = open(sys.argv[1], encoding="utf-8").read()
 body = re.search(r"pub fn standard_threat_classes\(\) -> Vec<ThreatClass> \{\s*vec!\[(.*?)\]", src, re.S)
@@ -99,13 +113,11 @@ if not body:
     sys.exit("standard_threat_classes() not found")
 names = re.findall(r"ThreatClass::([A-Za-z]+)", body.group(1))
 print(" ".join(re.sub(r"(?<!^)(?=[A-Z])", "_", n).lower() for n in names))
-PY
-)"
-  [ "$expected" = "${THREAT_CLASSES[*]}" ] \
-    || die "lane list drifted from standard_threat_classes(): expected [$expected], script has [${THREAT_CLASSES[*]}]"
-else
-  echo "note: $ESCALATION_RS not present; skipping the taxonomy drift check" >&2
-fi
+PYEOF
+)" || die "could not read standard_threat_classes() from $ESCALATION_RS; the lane list is unverifiable"
+
+[ "$expected" = "${THREAT_CLASSES[*]}" ] \
+  || die "lane list drifted from standard_threat_classes(): expected [$expected], script has [${THREAT_CLASSES[*]}]"
 
 # --- 1. The dev operator identity ---------------------------------------------
 if [ -n "${AMBUSH_PRIVATE_KEY:-}" ]; then
@@ -123,9 +135,15 @@ esac
 
 # x-only secp256k1 public key (NIP-01), via OpenSSL through node: a SEC1
 # ECPrivateKey DER wrapper around the 32-byte scalar, then the JWK `x`.
-OPERATOR_PUBKEY="$("$NODE" -e '
+#
+# The secret goes in on **stdin**, never in argv: an argv element is readable
+# by every local process for the life of the call (`ps -ef`,
+# /proc/<pid>/cmdline), so passing a 64-hex private key that way publishes it
+# to every user on the box.
+OPERATOR_PUBKEY="$(printf '%s' "$OPERATOR_SECRET" | "$NODE" -e '
 const crypto = require("node:crypto");
-const d = Buffer.from(process.argv[1], "hex");
+const fs = require("node:fs");
+const d = Buffer.from(fs.readFileSync(0, "utf8").trim(), "hex");
 const order = BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
 const s = BigInt("0x" + d.toString("hex"));
 if (s === 0n || s >= order) { console.error("secret is not a valid secp256k1 scalar"); process.exit(1); }
@@ -133,7 +151,7 @@ const der = Buffer.concat([Buffer.from("302e0201010420", "hex"), d, Buffer.from(
 const priv = crypto.createPrivateKey({ key: der, format: "der", type: "sec1" });
 const jwk = crypto.createPublicKey(priv).export({ format: "jwk" });
 process.stdout.write(Buffer.from(jwk.x, "base64url").toString("hex"));
-' "$OPERATOR_SECRET")"
+')"
 
 echo "operator identity: $KEY_SOURCE"
 echo "operator pubkey:   $OPERATOR_PUBKEY"
@@ -164,10 +182,19 @@ export AMBUSH_PRIVATE_KEY="$OPERATOR_SECRET"
 # --- 3. The twelve lanes ------------------------------------------------------
 mkdir -p "$OUT_DIR"
 
-# Print the channel_id of the first exact-name match, or nothing.
-existing_channel_id() {
-  "$CLI" --format json channels search --query "$1" --exact \
-    | python3 -c 'import json,sys; rows=json.load(sys.stdin); print(rows[0]["channel_id"] if rows else "")'
+# Print "<channel_id> <archived|active>" for the first exact-name match, or
+# nothing. `--include-archived` is load-bearing: the CLI hides archived channels
+# by default, so without it an archived lane is invisible here and the run below
+# creates a second channel with the same name -- the exact duplication this
+# function exists to prevent.
+existing_channel() {
+  "$CLI" --format json channels search --query "$1" --exact --include-archived \
+    | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)
+if rows:
+    print(rows[0]["channel_id"], "archived" if rows[0]["archived"] else "active")
+'
 }
 
 # Create the channel; print its channel_id or fail with the relay's message.
@@ -184,15 +211,31 @@ print(resp["channel_id"])
 '
 }
 
+# Bring an archived lane back into service. Reusing it archived would hand the
+# console a lane that accepts nothing.
+unarchive_channel() {
+  "$CLI" --format json channels unarchive --channel "$1" \
+    | python3 -c '
+import json, sys
+resp = json.load(sys.stdin)
+if not resp.get("accepted"):
+    sys.exit("relay refused the unarchive: " + json.dumps(resp))
+'
+}
+
 declare -a LANE_IDS=()
 for slug in "${THREAT_CLASSES[@]}"; do
   name="lane-${slug//_/-}"
-  channel_id="$(existing_channel_id "$name")"
-  if [ -n "$channel_id" ]; then
-    echo "lane $name: exists $channel_id"
-  else
+  read -r channel_id channel_state <<<"$(existing_channel "$name")"
+  if [ -z "$channel_id" ]; then
     channel_id="$(create_channel "$name" "Lane for the ${slug//_/ } threat class (swarm engine)")"
     echo "lane $name: created $channel_id"
+  elif [ "$channel_state" = "archived" ]; then
+    unarchive_channel "$channel_id" \
+      || die "lane $name exists as archived channel $channel_id and could not be unarchived"
+    echo "lane $name: reused $channel_id (unarchived)"
+  else
+    echo "lane $name: exists $channel_id"
   fi
   LANE_IDS+=("$slug=$channel_id")
 done
