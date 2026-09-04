@@ -404,6 +404,21 @@ pub use event_batch::{get_event, get_events};
 mod thread_ref;
 use thread_ref::{resolve_thread_ref, thread_ref};
 
+/// The kind `send_channel_message`'s builder actually signs for a requested kind.
+///
+/// Its match keeps the two forum kinds and routes everything else to
+/// [`events::build_message`], which signs kind 9. INV-29 gates on this value:
+/// gating the caller's requested kind instead let any value outside the forum
+/// pair skip the swarm-marker check while still producing a signed kind 9
+/// event that the console's card router would read.
+pub(crate) fn signed_message_kind(requested: u32) -> u32 {
+    match requested {
+        ambush_core_pkg::kind::KIND_FORUM_POST => ambush_core_pkg::kind::KIND_FORUM_POST,
+        ambush_core_pkg::kind::KIND_FORUM_COMMENT => ambush_core_pkg::kind::KIND_FORUM_COMMENT,
+        _ => ambush_core_pkg::kind::KIND_STREAM_MESSAGE,
+    }
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn send_channel_message(
@@ -432,8 +447,13 @@ pub async fn send_channel_message(
     let link_previews = link_preview_tags.unwrap_or_default();
     let kind_num = kind.unwrap_or(ambush_core_pkg::kind::KIND_STREAM_MESSAGE);
     // INV-29: gate the exact string every builder arm below signs (trimmed)
-    // before any signing identity is resolved.
-    let gate_kind = u16::try_from(kind_num).map_err(|_| "invalid kind".to_string())?;
+    // before any signing identity is resolved, against the kind that arm
+    // actually signs -- never the caller's requested value. The builder match
+    // below routes every kind except the two forum kinds to
+    // `events::build_message`, which signs kind 9, so gating the request let
+    // `kind = 40002` carry a governance marker into a signed kind 9 card.
+    let gate_kind =
+        u16::try_from(signed_message_kind(kind_num)).map_err(|_| "invalid kind".to_string())?;
     crate::perch_sign_gate::perch_sign_gate(gate_kind, content.trim())?;
     // Resolve the relay AND the signing identity once and use them for every
     // read and the submission. Callers that captured a tenant scope before an

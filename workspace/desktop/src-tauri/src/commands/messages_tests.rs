@@ -276,3 +276,79 @@ fn feed_item_from_event_carries_singular_mention_category() {
     assert_eq!(json["category"], "mention");
     assert_eq!(json["id"], event.id.to_hex());
 }
+
+/// INV-29 regression: `send_channel_message` must gate the swarm-marker check
+/// against the kind its builder signs, not the kind the renderer asked for.
+///
+/// Before this was fixed, `kind = 40002` (or any value outside the forum pair)
+/// skipped the check in `perch_sign_gate` while `events::build_message` still
+/// signed a kind 9 event, so the renderer could publish a governance card
+/// under the operator's own key.
+#[test]
+fn signed_message_kind_reports_the_kind_each_builder_arm_signs() {
+    use nostr::{EventBuilder, Keys};
+
+    let keys = Keys::generate();
+    let channel = uuid::Uuid::nil();
+
+    let signed_kind = |builder: EventBuilder| -> u32 {
+        builder
+            .sign_with_keys(&keys)
+            .unwrap_or_else(|error| panic!("sign failed: {error}"))
+            .kind
+            .as_u16() as u32
+    };
+
+    let forum_post = signed_kind(
+        events::build_forum_post(channel, "body", &[], &[], &[])
+            .unwrap_or_else(|error| panic!("{error}")),
+    );
+    assert_eq!(
+        forum_post,
+        signed_message_kind(ambush_core_pkg::kind::KIND_FORUM_POST)
+    );
+
+    // Every other requested kind falls through to `events::build_message`.
+    let fallthrough = signed_kind(
+        events::build_message(
+            channel,
+            "body",
+            None,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            None,
+            "http://localhost:3000",
+        )
+        .unwrap_or_else(|error| panic!("{error}")),
+    );
+    assert_eq!(fallthrough, ambush_core_pkg::kind::KIND_STREAM_MESSAGE);
+    for requested in [
+        ambush_core_pkg::kind::KIND_STREAM_MESSAGE,
+        40002,
+        40008,
+        1,
+        46010,
+    ] {
+        assert_eq!(
+            signed_message_kind(requested),
+            fallthrough,
+            "requested kind {requested} must gate as the kind it signs"
+        );
+    }
+}
+
+#[test]
+fn a_marker_cannot_ride_a_non_forum_kind_past_the_sign_gate() {
+    let marker = "<!-- swarm:verdict:v1 -->\nhold h_a07aeacf granted";
+    for requested in [ambush_core_pkg::kind::KIND_STREAM_MESSAGE, 40002, 40008, 1] {
+        let gate_kind =
+            u16::try_from(signed_message_kind(requested)).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            crate::perch_sign_gate::perch_sign_gate(gate_kind, marker).is_err(),
+            "requested kind {requested} signs kind 9 and must be refused"
+        );
+    }
+}
