@@ -2141,7 +2141,25 @@ git commit -s -m "feat(bridge): swarm:rollback:v1 from ContainmentReleased, repl
 
 ---
 
-### Task 10: Containments — `/leases`
+#### Tasks 8 and 9 status — 2026-09-04
+
+**Task 8's read half landed**: `LeaseWatcher` reports transitions rather than state, distinguishes
+"no store" from "an empty store", and leaves its view untouched when a read fails so a transient
+error does not report every lease as disappeared. `lease_card_body` reads no clock.
+
+**Task 9's card landed**: `rollback_card_body` and `rollback_tags`, with `release_response` riding
+only on a manual release — an expiry comes from the sweep with no request behind it, and a card
+that invented one would describe a request nobody made. `fully_reversed` is passed through
+rather than recomputed, so "we undid it" and "we went through the motions" stay distinguishable.
+
+**Not landed, and both blocked on the same missing piece:** the receive-side arms that PUBLISH
+these cards. Task 8 step 0 requires a `receipt_id → hunt_id` map recorded on acknowledgement and
+`CaseRouting::case_for_receipt`, and Task 9's arm needs a `LeaseCardIndex` keyed on `lease_id` to
+supply the `e` tag's parent. Both are routing state that has to be written on ACK for the same
+reason the chain head is (Task 7): a card the relay did not take must not leave a route behind
+pointing at it. The card bodies above are complete and tested; wiring them is the routing work.
+
+## Task 10: Containments — `/leases`
 
 **Files:**
 - Create: `workspace/desktop/src/shared/ui/perch/ContainmentTimer.tsx`, `containmentTimer.test.mjs`
