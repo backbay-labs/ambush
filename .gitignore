@@ -118,6 +118,10 @@ id_ed25519
 !workspace/.vscode/
 !workspace/crates/ambush-push-gateway/tests/fixtures/*.pem
 
-# scripts/provision-perch.sh output: the dev operator identity and the lane
-# channel map for the local relay stack (docs/plans/ambush-ui/integration/11-PLAN-GROUND.md Task 10).
+# scripts/provision-perch.sh output: the dev operator identity (its secret key
+# among them) and the bridge identity list it reads back from the daemon
+# (11-PLAN-GROUND.md Task 10, amended by 12-PLAN-FIRST-CARD.md D-FC-5).
 .perch-dev/
+# The dev stack's environment file: the bridge's key-derivation seed and the
+# operator bearer (.env.perch.example is the tracked template).
+.env.perch

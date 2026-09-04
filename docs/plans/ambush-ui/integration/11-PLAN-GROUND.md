@@ -568,7 +568,11 @@
       restart: unless-stopped
   ```
   The relay applies its own migrations on start (`workspace/CLAUDE.md`). `swarm-detect` gains `depends_on: relay`.
+<<<<<<< HEAD
 - [x] **Step 2: Provisioning.** `scripts/provision-perch.sh` uses `workspace/target/release/ambush` (the CLI) with a generated dev operator key to: mint the twelve lane channels named by `standard_threat_classes()` (open visibility), print the operator pubkey (for Task 9's `nostr_pubkey`), and write `.perch-dev/lane-channels.json` (git-ignored) mapping threat-class slug → channel UUID. Membership for the bridge identities is First card's job (it derives them).
+=======
+- [ ] **Step 2: Provisioning.** `scripts/provision-perch.sh` uses `workspace/target/release/ambush` (the CLI) with a generated dev operator key to: mint the twelve lane channels named by `standard_threat_classes()` (open visibility), print the operator pubkey (for Task 9's `nostr_pubkey`), and write `.perch-dev/lane-channels.json` (git-ignored) mapping threat-class slug → channel UUID. Membership for the bridge identities is First card's job (it derives them). (Amended by 12-PLAN-FIRST-CARD.md D-FC-5: the lanes are created by the bridge; this script only prints the dev operator key and writes .perch-dev/.)
+>>>>>>> 290c46ea9 (feat(dev): perch block, seed plumbing, bridge-created lanes, and the PERCH-DEV walking-skeleton script)
 - [ ] **Step 3: Run.** `docker compose up -d postgres redis relay && curl -sf -H 'Accept: application/nostr+json' http://localhost:3000 | head -c 200` → the NIP-11 document; `bash scripts/provision-perch.sh` → twelve channel ids.
   - *Unticked at exit (2026-09-03):* the compose half was not run — the local Docker daemon (colima) has filesystem I/O errors, so only `docker compose config --quiet` validated the model. The provisioning half ran twice against a native relay built from this tree. See `evidence/ground.md` → Known limitations.
 - [x] **Step 4: Commit.** `feat(dev): compose the relay stack beside swarm-detect, and provision the lanes`.
