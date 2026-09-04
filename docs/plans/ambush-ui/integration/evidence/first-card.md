@@ -100,6 +100,31 @@ cards where 1 was expected.
   chain that filters everything returns 1 under `pipefail`. An expectations file holding only its
   header was indistinguishable from a crash. Found by forcing the mismatch path.
 
+## One commit is not independently verified
+
+`eaed042e6` (Task 22) was assembled at commit time from a scratchpad copy of the finding-card
+spec while the worktree still held Task 23's files, so that commit was never produced from a tree
+the suite had been run against in that exact state. Its content is what the full suite validated,
+and the branch is what merges, so this costs bisectability rather than correctness — but nobody
+should later treat that single commit as independently verified. History was deliberately not
+rewritten to hide it.
+
+## Two near-misses worth carrying forward
+
+Both are the same failure shape: a check that produces no output looks like a check that passed.
+
+- The copy gate's parity comparison exited 1 with no output when a `grep -v` chain filtered
+  everything under `pipefail`, so an expectations file holding only its header was
+  indistinguishable from a crash. Found by forcing the mismatch path rather than trusting the
+  green one.
+- A negative control for the adversary-text rail produced no output at all and briefly read as a
+  pass: removing the JSX usage left an unused import, `tsc` failed, and `build:e2e`
+  short-circuited before Playwright ran. The control was redone properly and fails with 0 rails
+  where 1 was expected.
+
+**When a control produces nothing, that is not evidence of anything.** Every negative control in
+this milestone was required to fail with a specific observed message.
+
 ## Known limitations
 
 - **`docker compose up` was never exercised**, on any task, because the local Docker daemon has
