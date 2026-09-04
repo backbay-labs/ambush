@@ -469,7 +469,10 @@ async fn feedback_requires_the_approve_scope() {
 
 #[test]
 fn perch_paths_are_disjoint_from_the_containment_router() {
-    assert_eq!(PERCH_ROUTER_PATHS.len(), 6);
+    // Seven since B4 mounted the deposits read (W3-28). The count is written
+    // down so a route added without a path entry, or a path entry without a
+    // route, fails here rather than at the first request that misses.
+    assert_eq!(PERCH_ROUTER_PATHS.len(), 7);
     for path in PERCH_ROUTER_PATHS {
         // Two prefixes now: the operator surface, and the hold reads B2r
         // mounts under `/v1/response/` because they are the daemon's answer
@@ -852,7 +855,9 @@ fn perch_router_paths_are_disjoint_from_the_local_operator_surface() {
     );
     let overlap: Vec<_> = perch.intersection(&local).collect();
     assert!(overlap.is_empty(), "same path on two ports: {overlap:?}");
-    assert_eq!(perch.len(), 6);
+    // Seven after B4. The `threat-class-configs` path on 7766 is a sibling in
+    // spelling only and must never join this set.
+    assert_eq!(perch.len(), 7);
 }
 
 // ── B2: the decide route ───────────────────────────────────────────────────

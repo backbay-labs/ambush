@@ -15,6 +15,7 @@
 //! the handler it names, and `tests::perch_paths_are_disjoint_from_the_containment_router`
 //! asserts its exact length after every change; no future path is predeclared.
 
+pub mod deposits;
 mod feedback;
 pub mod holds;
 mod incidents;
@@ -44,13 +45,14 @@ pub(super) struct PerchHttpState {
 
 /// The paths this router declares — mounted routes only — for the disjointness
 /// test against the other operator router.
-pub const PERCH_ROUTER_PATHS: [&str; 6] = [
+pub const PERCH_ROUTER_PATHS: [&str; 7] = [
     "/v1/response/holds",
     "/v1/response/holds/{hold_id}",
     "/v1/response/holds/{hold_id}/decide",
     "/v1/operator/findings/reviewed",
     "/v1/operator/findings/{finding_id}/feedback",
     "/v1/operator/incidents",
+    "/v1/operator/pheromone/deposits",
 ];
 
 /// Build the perch operator router over the daemon's live [`IngestState`].
@@ -99,6 +101,7 @@ fn perch_operator_router_with_auth(
             PERCH_ROUTER_PATHS[5],
             post(incidents::mint_incident_handler),
         )
+        .route(PERCH_ROUTER_PATHS[6], get(deposits::deposit_list_handler))
         .with_state(PerchHttpState { ingest })
         .layer(middleware::from_fn_with_state(
             OperatorRequestGuardState { auth, rate_limiter },

@@ -1277,7 +1277,7 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
 ///
 /// `marker_timestamp` is in SECONDS, the unit `PheromoneDeposit::timestamp`
 /// carries, and is the marker's own instant rather than the removed deposits'.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PerchSuppressionRecord {
     /// The event the marker names.
     pub event_id: String,
