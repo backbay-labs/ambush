@@ -323,7 +323,6 @@ fn the_verdict_signature_verifies_under_the_daemon_s_own_rule() {
     use ed25519_dalek::{Signature, Verifier as _};
 
     let key = SigningKey::from_bytes(&[7u8; 32]);
-    let public_key_hex = hex::encode(key.verifying_key().to_bytes());
     let preimage = verdict_preimage(1_700_000_000_000, "dismiss", "f-1", Some("noise"));
     assert!(!preimage.is_empty());
 
