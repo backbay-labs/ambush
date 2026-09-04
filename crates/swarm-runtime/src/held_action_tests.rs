@@ -198,3 +198,401 @@ fn decidable_is_created_notified_or_armed_and_not_expired() {
         NotDecidable::Terminal
     );
 }
+
+fn memory_store_with_hold(state: HoldState) -> (MemoryHeldActionStore, String) {
+    let store = MemoryHeldActionStore::default();
+    let mut hold = fixture_hold(
+        ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        T0,
+    );
+    hold.state = state;
+    if state == HoldState::Notified {
+        hold.notified_at_ms = Some(T0 + 10);
+    }
+    let id = hold.hold_id.clone();
+    store.create(hold).unwrap();
+    (store, id)
+}
+
+fn refused_record(intent: &str) -> HoldDecisionRecord {
+    HoldDecisionRecord {
+        decision: HoldDecision::Refuse,
+        operator_id: "perch-dev-operator".into(),
+        voter_id: format!("swarm:ed25519:{}", "ab".repeat(32)),
+        rationale_sha256: None,
+        hold_notice_published: false,
+        governance_clearance: GovernanceClearance::NotRequired,
+        decided_at_ms: T0 + 100,
+        nostr_intent_event_id: intent.to_string(),
+        signature: None,
+        rationale: None,
+        outcome: HoldOutcome::RefusedByOperator,
+        dispatched: false,
+        receipt_id: None,
+        audit_trail_id: None,
+        refusal: None,
+    }
+}
+
+const INTENT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const INTENT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+#[test]
+fn created_is_decidable_and_the_cas_records_the_prior_state() {
+    let (store, id) = memory_store_with_hold(HoldState::Created);
+    let claimed = store.begin_decision(&id, INTENT_A, T0 + 100).unwrap();
+    assert_eq!(claimed.state, HoldState::Deciding);
+    assert_eq!(claimed.prior_state, Some(HoldState::Created));
+    assert_eq!(claimed.deciding_intent_event_id.as_deref(), Some(INTENT_A));
+    assert_eq!(claimed.cas_instant_ms, Some(T0 + 100));
+}
+
+#[test]
+fn a_second_decision_on_a_deciding_hold_is_refused_with_the_current_record() {
+    let (store, id) = memory_store_with_hold(HoldState::Notified);
+    store.begin_decision(&id, INTENT_A, T0 + 100).unwrap();
+    let error = store.begin_decision(&id, INTENT_B, T0 + 101).unwrap_err();
+    match error {
+        HeldActionStoreError::NotDecidable { current, .. } => {
+            assert_eq!(current.state, HoldState::Deciding);
+            assert_eq!(current.deciding_intent_event_id.as_deref(), Some(INTENT_A));
+        }
+        other => panic!("expected NotDecidable, got {other:?}"),
+    }
+}
+
+/// The double-grant proof. Sixteen threads race one compare-and-set on one
+/// hold; exactly one may win, and the loser count must equal the thread count
+/// minus one. A store that read-then-wrote outside the lock would let two
+/// callers past here and dispatch the same destructive action twice.
+#[test]
+fn concurrent_claims_on_one_hold_produce_exactly_one_winner() {
+    for round in 0..25 {
+        let store = std::sync::Arc::new(MemoryHeldActionStore::default());
+        let mut hold = fixture_hold(
+            ResponseAction::IsolateHost {
+                host_id: "host-ops-1".into(),
+            },
+            T0,
+        );
+        hold.state = HoldState::Notified;
+        let id = hold.hold_id.clone();
+        store.create(hold).unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let winners = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let losers = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for slot in 0..16u8 {
+            let store = std::sync::Arc::clone(&store);
+            let barrier = std::sync::Arc::clone(&barrier);
+            let winners = std::sync::Arc::clone(&winners);
+            let losers = std::sync::Arc::clone(&losers);
+            let id = id.clone();
+            handles.push(std::thread::spawn(move || {
+                let intent = format!("{slot:02x}").repeat(32);
+                barrier.wait();
+                match store.begin_decision(&id, &intent, T0 + 100) {
+                    Ok(claimed) => {
+                        assert_eq!(claimed.deciding_intent_event_id.as_deref(), Some(&*intent));
+                        winners.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    Err(HeldActionStoreError::NotDecidable { current, .. }) => {
+                        assert_eq!(current.state, HoldState::Deciding);
+                        losers.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    Err(other) => panic!("unexpected error {other:?}"),
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(
+            winners.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "round {round}: more than one claim won the compare-and-set"
+        );
+        assert_eq!(losers.load(std::sync::atomic::Ordering::SeqCst), 15);
+        // And the record names exactly one winner.
+        let hold = store.get(&id).unwrap().unwrap();
+        assert_eq!(hold.state, HoldState::Deciding);
+        assert!(hold.deciding_intent_event_id.is_some());
+    }
+}
+
+/// Concurrent claims followed by concurrent completions: one hold, sixteen
+/// racing decisions, and only the claim holder may write a terminal record.
+#[test]
+fn only_the_claim_holder_can_complete_a_decision() {
+    let store = std::sync::Arc::new(MemoryHeldActionStore::default());
+    let mut hold = fixture_hold(
+        ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        T0,
+    );
+    hold.state = HoldState::Notified;
+    let id = hold.hold_id.clone();
+    store.create(hold).unwrap();
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+    let dispatched = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut handles = Vec::new();
+    for slot in 0..16u8 {
+        let store = std::sync::Arc::clone(&store);
+        let barrier = std::sync::Arc::clone(&barrier);
+        let dispatched = std::sync::Arc::clone(&dispatched);
+        let id = id.clone();
+        handles.push(std::thread::spawn(move || {
+            let intent = format!("{slot:02x}").repeat(32);
+            barrier.wait();
+            let store_ref: &dyn HeldActionStore = &*store;
+            if let Ok(claim) = DecisionClaim::begin(store_ref, &id, &intent, T0 + 100) {
+                // Only the winner reaches the dispatch site.
+                dispatched.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                claim
+                    .complete(refused_record(&intent), HoldState::Refused)
+                    .unwrap();
+            }
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(dispatched.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let hold = store.get(&id).unwrap().unwrap();
+    assert_eq!(hold.state, HoldState::Refused);
+    assert_eq!(
+        hold.decision.as_ref().unwrap().outcome,
+        HoldOutcome::RefusedByOperator
+    );
+}
+
+#[test]
+fn the_cas_rechecks_expiry_inside_the_lock() {
+    let (store, id) = memory_store_with_hold(HoldState::Notified);
+    let error = store
+        .begin_decision(&id, INTENT_A, T0 + 3_600_000)
+        .unwrap_err();
+    assert!(matches!(error, HeldActionStoreError::NotDecidable { .. }));
+    assert_eq!(store.get(&id).unwrap().unwrap().state, HoldState::Notified);
+}
+
+#[test]
+fn abandon_restores_the_prior_state_and_is_idempotent() {
+    let (store, id) = memory_store_with_hold(HoldState::Armed);
+    store.begin_decision(&id, INTENT_A, T0 + 100).unwrap();
+    store.abandon_decision(&id, INTENT_A).unwrap();
+    let hold = store.get(&id).unwrap().unwrap();
+    assert_eq!(hold.state, HoldState::Armed);
+    assert_eq!(hold.deciding_intent_event_id, None);
+    assert_eq!(hold.prior_state, None);
+    // Abandoning again, or with the wrong id, is a no-op and not an error.
+    store.abandon_decision(&id, INTENT_A).unwrap();
+    store.abandon_decision(&id, INTENT_B).unwrap();
+    assert_eq!(store.get(&id).unwrap().unwrap().state, HoldState::Armed);
+}
+
+#[test]
+fn every_pre_dispatch_refusal_leaves_the_hold_decidable() {
+    // The Drop guard is the load-bearing half: every early return between the
+    // CAS and complete_decision abandons, including ones nobody has written.
+    let (store, id) = memory_store_with_hold(HoldState::Notified);
+    fn early_return(store: &dyn HeldActionStore, id: &str) -> Result<(), HeldActionStoreError> {
+        let claim = DecisionClaim::begin(store, id, INTENT_A, T0 + 100)?;
+        let _ = claim.claimed();
+        Err(HeldActionStoreError::Poisoned) // an injected pre-dispatch failure
+    }
+    let _ = early_return(&store, &id);
+    assert_eq!(
+        store.get(&id).unwrap().unwrap().state,
+        HoldState::Notified,
+        "the guard parked the hold in deciding"
+    );
+}
+
+/// A panic between the compare-and-set and the terminal write must also
+/// release the claim: `Drop` runs while unwinding, so an injected panic proves
+/// the guard covers the paths no `?` can reach.
+#[test]
+fn a_panic_between_the_cas_and_the_write_also_releases_the_claim() {
+    let (store, id) = memory_store_with_hold(HoldState::Armed);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let store_ref: &dyn HeldActionStore = &store;
+        let _claim = DecisionClaim::begin(store_ref, &id, INTENT_A, T0 + 100).unwrap();
+        panic!("an injected fault between the claim and the dispatch");
+    }));
+    assert!(outcome.is_err());
+    let hold = store.get(&id).unwrap().unwrap();
+    assert_eq!(hold.state, HoldState::Armed);
+    assert_eq!(hold.deciding_intent_event_id, None);
+    assert!(hold.decision.is_none(), "a panic must not write a decision");
+}
+
+#[test]
+fn complete_disarms_the_guard_and_writes_the_terminal_record() {
+    let (store, id) = memory_store_with_hold(HoldState::Notified);
+    let claim = DecisionClaim::begin(&store, &id, INTENT_A, T0 + 100).unwrap();
+    claim
+        .complete(refused_record(INTENT_A), HoldState::Refused)
+        .unwrap();
+    let hold = store.get(&id).unwrap().unwrap();
+    assert_eq!(hold.state, HoldState::Refused);
+    assert_eq!(
+        hold.decision.as_ref().unwrap().nostr_intent_event_id,
+        INTENT_A
+    );
+    assert_eq!(hold.deciding_intent_event_id.as_deref(), Some(INTENT_A));
+    assert_eq!(hold.prior_state, None);
+    // A retry on a terminal hold with the same id sees the stored record.
+    let error = store.begin_decision(&id, INTENT_A, T0 + 200).unwrap_err();
+    assert!(matches!(error, HeldActionStoreError::NotDecidable { .. }));
+}
+
+/// A refusal is terminal and dispatches nothing, and no later call -- retry,
+/// sweep or expiry -- can turn it into a grant.
+#[test]
+fn a_refusal_is_terminal_and_no_later_sweep_can_reopen_it() {
+    let (store, id) = memory_store_with_hold(HoldState::Notified);
+    let claim = DecisionClaim::begin(&store, &id, INTENT_A, T0 + 100).unwrap();
+    claim
+        .complete(refused_record(INTENT_A), HoldState::Refused)
+        .unwrap();
+    let stored = store.get(&id).unwrap().unwrap();
+    assert!(!stored.decision.as_ref().unwrap().dispatched);
+
+    // Past the TTL, and past the stall bound.
+    assert!(store.expire_due(T0 + 3_600_001).unwrap().is_empty());
+    assert!(
+        store
+            .fail_stalled_decisions(T0 + 3_600_001, 60_000)
+            .unwrap()
+            .is_empty()
+    );
+    // A retry cannot claim it, and the record is unchanged.
+    assert!(store.begin_decision(&id, INTENT_B, T0 + 200).is_err());
+    let after = store.get(&id).unwrap().unwrap();
+    assert_eq!(after.state, HoldState::Refused);
+    assert_eq!(
+        after.decision.as_ref().unwrap().decision,
+        HoldDecision::Refuse
+    );
+    assert!(!after.decision.as_ref().unwrap().dispatched);
+}
+
+#[test]
+fn list_is_sorted_by_expiry_then_id_and_hides_terminal_by_default() {
+    let store = MemoryHeldActionStore::default();
+    let mut late = fixture_hold(ResponseAction::BlockEgress { target: "a".into() }, T0 + 5);
+    late.hold_id = "hold_zzzzzzzz-0000-4000-8000-000000000000".into();
+    let mut early = fixture_hold(ResponseAction::BlockEgress { target: "b".into() }, T0);
+    early.hold_id = "hold_aaaaaaaa-0000-4000-8000-000000000000".into();
+    let mut done = fixture_hold(ResponseAction::BlockEgress { target: "c".into() }, T0);
+    done.hold_id = "hold_bbbbbbbb-0000-4000-8000-000000000000".into();
+    done.state = HoldState::Refused;
+    for hold in [late.clone(), early.clone(), done.clone()] {
+        store.create(hold).unwrap();
+    }
+    let open: Vec<String> = store
+        .list(false, 10)
+        .unwrap()
+        .into_iter()
+        .map(|hold| hold.hold_id)
+        .collect();
+    assert_eq!(open, vec![early.hold_id.clone(), late.hold_id.clone()]);
+    assert_eq!(store.list(true, 10).unwrap().len(), 3);
+    assert_eq!(store.list(true, 1).unwrap().len(), 1);
+}
+
+#[test]
+fn mark_case_channel_and_mark_notified_move_created_to_notified() {
+    let (store, id) = memory_store_with_hold(HoldState::Created);
+    store
+        .mark_case_channel(&id, "27799e23-ab25-4659-b381-3de47ea7ca4d")
+        .unwrap();
+    assert_eq!(store.get(&id).unwrap().unwrap().state, HoldState::Created);
+    store
+        .mark_notified(&id, T0 + 50, &"cd".repeat(32), Some(&"ef".repeat(32)))
+        .unwrap();
+    let hold = store.get(&id).unwrap().unwrap();
+    assert_eq!(hold.state, HoldState::Notified);
+    assert_eq!(hold.notified_at_ms, Some(T0 + 50));
+    assert_eq!(
+        hold.case_channel.as_deref(),
+        Some("27799e23-ab25-4659-b381-3de47ea7ca4d")
+    );
+    assert_eq!(
+        hold.notice_event_id.as_deref(),
+        Some("cd".repeat(32).as_str())
+    );
+}
+
+#[test]
+fn a_duplicate_hold_id_is_refused_and_leaves_the_first_record_intact() {
+    let (store, id) = memory_store_with_hold(HoldState::Notified);
+    let mut second = fixture_hold(
+        ResponseAction::BlockEgress {
+            target: "203.0.113.10".into(),
+        },
+        T0 + 1,
+    );
+    second.hold_id = id.clone();
+    let error = store.create(second).unwrap_err();
+    assert!(matches!(error, HeldActionStoreError::Duplicate { .. }));
+    let stored = store.get(&id).unwrap().unwrap();
+    assert_eq!(stored.action_request.action.kind(), "isolate_host");
+    assert_eq!(stored.state, HoldState::Notified);
+}
+
+#[test]
+fn a_store_operation_on_an_unknown_hold_is_not_found_and_creates_nothing() {
+    let store = MemoryHeldActionStore::default();
+    assert!(store.get("hold_missing0").unwrap().is_none());
+    for error in [
+        store.mark_case_channel("hold_missing0", "c").unwrap_err(),
+        store
+            .mark_notified("hold_missing0", T0, "e", None)
+            .unwrap_err(),
+        store.mark_armed("hold_missing0", T0).unwrap_err(),
+        store
+            .begin_decision("hold_missing0", INTENT_A, T0)
+            .unwrap_err(),
+        store
+            .complete_decision(
+                "hold_missing0",
+                refused_record(INTENT_A),
+                HoldState::Refused,
+            )
+            .unwrap_err(),
+    ] {
+        assert!(matches!(error, HeldActionStoreError::NotFound { .. }));
+    }
+    // abandon is deliberately idempotent, so an unknown id is not an error.
+    store.abandon_decision("hold_missing0", INTENT_A).unwrap();
+    assert!(store.list(true, 10).unwrap().is_empty());
+}
+
+#[test]
+fn health_reports_the_memory_backend_as_not_durable_and_counts_stalled_claims() {
+    let (store, id) = memory_store_with_hold(HoldState::Notified);
+    let health = store.health(T0, 60_000).unwrap();
+    assert!(!health.durable);
+    assert_eq!(health.backend, "memory");
+    assert_eq!(health.open_holds, 1);
+    assert_eq!(health.deciding_stalled, 0);
+
+    store.begin_decision(&id, INTENT_A, T0 + 100).unwrap();
+    let health = store.health(T0 + 100, 60_000).unwrap();
+    assert_eq!(health.open_holds, 0, "deciding is not open");
+    assert_eq!(health.deciding_stalled, 0);
+    assert_eq!(
+        store
+            .health(T0 + 100 + 60_000, 60_000)
+            .unwrap()
+            .deciding_stalled,
+        1
+    );
+}
