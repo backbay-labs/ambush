@@ -74,6 +74,19 @@ yet: Ground renders no card.
 
 ## Known limitations
 
+- **RF-D1 is not enforced by the relay.** The rule that a kind:46010 hold notice never
+  carries an `e` tag has no admission check: `required_scope_for_kind(46010, event)` ignores
+  tags and there is no per-kind tag validation in `ambush-relay` or `ambush-core`. Because
+  `requires_h_channel_scope(46010)` doubles as the NIP-10 thread gate, an `e`-tagged hold
+  notice naming a parent in the same channel is admitted **and threaded**: it mutates
+  `reply_count` and `descendant_count` on that root inside the insert transaction and makes
+  the relay emit a signed kind:39005 summary. One naming a missing parent is refused as
+  `invalid: reply parent not found`, the right outcome for the wrong reason. Producers hold
+  the line today — the wire crate's tag builder refuses an `e` on 46010 — and
+  `workflow_approval_e_tag_is_admitted_today_rf_d1_gap` pins the current behaviour with an
+  instruction to replace it with a refusal assertion when the relay enforces the rule.
+  Enforcement is not in Ground's scope and is not claimed.
+
 - `docker compose up` for the relay stack was not run: the local Docker daemon (colima) has
   filesystem I/O errors. The compose model validates and the provisioning script was proven
   against a native relay; the hosted checks do not exercise the compose stack either.
