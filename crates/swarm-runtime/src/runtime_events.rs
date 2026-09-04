@@ -7,7 +7,9 @@ use swarm_core::agent::{AgentHealth, AgentRole, SwarmMode};
 use swarm_core::pheromone::{PheromoneConcentration, ThreatClass};
 use swarm_core::types::Severity;
 use swarm_policy::PolicyVerdict;
+use swarm_policy::governance::PartitionState;
 use swarm_response::SwarmFindingEnvelope;
+use swarm_response::rollback::{RollbackReceipt, RollbackTrigger};
 use swarm_spine::IncidentGraphDimension;
 use tokio::sync::broadcast;
 
@@ -141,6 +143,8 @@ pub enum RuntimeEventKind {
     CasePromoted,
     /// A destructive action was held for a human decision (13-PLAN-THE-HOLD.md, B1).
     ResponseHeld,
+    /// A containment lease was released and its rollback ran (B1c).
+    ContainmentReleased,
 }
 
 impl RuntimeEventKind {
@@ -159,6 +163,7 @@ impl RuntimeEventKind {
             Self::ModeTransition => "mode_transition",
             Self::CasePromoted => "case_promoted",
             Self::ResponseHeld => "response_held",
+            Self::ContainmentReleased => "containment_released",
         }
     }
 
@@ -177,6 +182,7 @@ impl RuntimeEventKind {
             "mode_transition" => Some(Self::ModeTransition),
             "case_promoted" => Some(Self::CasePromoted),
             "response_held" => Some(Self::ResponseHeld),
+            "containment_released" => Some(Self::ContainmentReleased),
             _ => None,
         }
     }
@@ -380,6 +386,31 @@ pub enum RuntimeEvent {
         /// The state this event announces.
         state: crate::held_action::HoldState,
     },
+    /// B1c. A containment lease was released and its rollback ran.
+    ///
+    /// Every field the console needs to say what actually happened, because a
+    /// release that CLAIMS to have undone something is exactly the claim an
+    /// operator cannot take on trust. `lease_closed` is re-listed after the
+    /// release rather than assumed from a successful call, and a failed
+    /// attestation is carried as a reason rather than swallowed.
+    ContainmentReleased {
+        /// When the release was published (unix ms).
+        emitted_at_ms: i64,
+        /// The lease that was released.
+        lease_id: String,
+        /// Whether a human asked or the lease simply expired.
+        trigger: RollbackTrigger,
+        /// The rollback's own record: its steps, status and summary.
+        receipt: RollbackReceipt,
+        /// Re-listed after the release. Never inferred from the call returning.
+        lease_closed: bool,
+        /// Whether the governance attestation on the receipt verified.
+        attestation_verified: bool,
+        /// Why it did not, when it did not.
+        attestation_error: Option<String>,
+        /// The partition the daemon was in when the rollback ran.
+        partition_state_at_execution: Option<PartitionState>,
+    },
 }
 
 impl RuntimeEvent {
@@ -397,7 +428,8 @@ impl RuntimeEvent {
             | Self::Escalation { emitted_at_ms, .. }
             | Self::ModeTransition { emitted_at_ms, .. }
             | Self::CasePromoted { emitted_at_ms, .. }
-            | Self::ResponseHeld { emitted_at_ms, .. } => *emitted_at_ms,
+            | Self::ResponseHeld { emitted_at_ms, .. }
+            | Self::ContainmentReleased { emitted_at_ms, .. } => *emitted_at_ms,
         }
     }
 
@@ -416,6 +448,7 @@ impl RuntimeEvent {
             Self::ModeTransition { .. } => RuntimeEventKind::ModeTransition,
             Self::CasePromoted { .. } => RuntimeEventKind::CasePromoted,
             Self::ResponseHeld { .. } => RuntimeEventKind::ResponseHeld,
+            Self::ContainmentReleased { .. } => RuntimeEventKind::ContainmentReleased,
         }
     }
 }
@@ -571,5 +604,48 @@ mod tests {
         for kind in kinds {
             assert_eq!(RuntimeEventKind::parse(kind.as_str()), Some(kind));
         }
+    }
+
+    /// The wire spelling is the filter grammar. A variant whose `event_type`
+    /// and whose `parse` disagree is a stream nobody can subscribe to.
+    #[test]
+    fn containment_released_kind_round_trips_through_the_filter_grammar() {
+        assert_eq!(
+            RuntimeEventKind::ContainmentReleased.as_str(),
+            "containment_released"
+        );
+        assert_eq!(
+            RuntimeEventKind::parse("containment_released"),
+            Some(RuntimeEventKind::ContainmentReleased)
+        );
+        let receipt = swarm_response::rollback::RollbackReceipt {
+            rollback_id: "rb_test".into(),
+            lease_id: "cl_test".into(),
+            origin_receipt_id: "resp_test".into(),
+            governance_receipt_id: None,
+            trigger: swarm_response::rollback::RollbackTrigger::Expiry,
+            mode: swarm_response::ExecutionMode::Enforced,
+            status: swarm_response::ResponseStatus::Executed,
+            steps: Vec::new(),
+            completed_at_ms: 7,
+            summary: "0 of 0 steps reversed".into(),
+            governance_attestation: None,
+        };
+        let event = RuntimeEvent::ContainmentReleased {
+            emitted_at_ms: 7,
+            lease_id: "cl_test".into(),
+            trigger: swarm_response::rollback::RollbackTrigger::Expiry,
+            receipt,
+            lease_closed: true,
+            attestation_verified: false,
+            attestation_error: Some("unattested".into()),
+            partition_state_at_execution: Some(swarm_policy::governance::PartitionState::Healthy),
+        };
+        assert_eq!(event.emitted_at_ms(), 7);
+        assert_eq!(event.kind(), RuntimeEventKind::ContainmentReleased);
+        let json = serde_json::to_value(&event).expect("the event serialises");
+        assert_eq!(json["event_type"], "containment_released");
+        assert_eq!(json["trigger"], "expiry");
+        assert_eq!(json["partition_state_at_execution"], "healthy");
     }
 }

@@ -109,6 +109,9 @@ pub fn classify(event: &RuntimeEvent) -> Stream {
         // action is exactly the event an operator is waiting on, and the
         // 26006 frame it drives must never be coalesced or shed (R-1).
         RuntimeEvent::ResponseHeld { .. } => Stream::Alarm,
+        // B1c. A rollback receipt is durable evidence: never coalesced,
+        // spooled to disk, and the only record that a containment was undone.
+        RuntimeEvent::ContainmentReleased { .. } => Stream::Evidence,
         RuntimeEvent::ModeTransition { .. } => Stream::Alarm,
         RuntimeEvent::TamperAlert { .. } => Stream::Alarm,
 
@@ -661,6 +664,39 @@ mod tests {
             "summary": "promoted"
         }));
         assert_eq!(classify(&promoted), Stream::Alarm);
+    }
+
+    /// A release is EVIDENCE, not an alarm.
+    ///
+    /// The compiler forces an arm to exist; this pins which one. An alarm
+    /// bypasses the pacer and is never shed, which is right for a hold waiting
+    /// on a human and wrong for a receipt that records something already done.
+    #[test]
+    fn a_containment_release_is_durable_evidence_and_not_an_alarm() {
+        let released = event(serde_json::json!({
+            "event_type": "containment_released",
+            "emitted_at_ms": 7,
+            "lease_id": "cl_test",
+            "trigger": "expiry",
+            "receipt": {
+                "rollback_id": "rb_test",
+                "lease_id": "cl_test",
+                "origin_receipt_id": "resp_test",
+                "governance_receipt_id": null,
+                "trigger": "expiry",
+                "mode": "enforced",
+                "status": "executed",
+                "steps": [],
+                "completed_at_ms": 7,
+                "summary": "0 of 0 steps reversed",
+                "governance_attestation": null
+            },
+            "lease_closed": true,
+            "attestation_verified": false,
+            "attestation_error": "unattested",
+            "partition_state_at_execution": "healthy"
+        }));
+        assert_eq!(classify(&released), Stream::Evidence);
     }
 
     #[test]

@@ -815,7 +815,11 @@ fn runtime_event_matches_scope(event: &RuntimeEvent, scope: &ProvidenceContextSc
         // guard at the top of this function already returned -- and kept
         // because this match has no `_` arm, so the compiler, not review, is
         // what notices a new variant.
-        | RuntimeEvent::ResponseHeld { .. } => false,
+        | RuntimeEvent::ResponseHeld { .. }
+        // B1c. A rollback receipt names a host and a governance attestation, so
+        // it belongs on no Providence-scoped stream and, until B5, no anonymous
+        // one either.
+        | RuntimeEvent::ContainmentReleased { .. } => false,
     }
 }
 
