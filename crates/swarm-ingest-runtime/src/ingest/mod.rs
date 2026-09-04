@@ -1934,6 +1934,57 @@ impl IngestState {
             .unwrap_or_default()
     }
 
+    /// Whether `voter_id` (`swarm:ed25519:{hex}`) is the verdict key configured
+    /// for `operator_id`.
+    ///
+    /// A principal with no `verdict_public_key_hex` binds to NOTHING, so every
+    /// decision it submits is refused. That is the fail-closed direction: an
+    /// unconfigured principal must not be able to decide, and "no key
+    /// configured" must not read as "any key accepted".
+    pub fn operator_binds_voter_id(&self, operator_id: &str, voter_id: &str) -> bool {
+        self.config_template
+            .load_full()
+            .operator
+            .auth
+            .effective_principals()
+            .iter()
+            .any(|principal| {
+                principal.operator_id == operator_id
+                    && principal
+                        .verdict_public_key_hex
+                        .as_deref()
+                        .is_some_and(|hex| format!("swarm:ed25519:{hex}") == voter_id)
+            })
+    }
+
+    /// Insert one principal carrying a verdict key into the config template.
+    ///
+    /// Behind `test-fixtures` as well as `cfg(test)` so the HTTP crate's route
+    /// tests can build the same bound principal the engine tests do; a
+    /// `#[cfg(test)]` item is invisible across a crate line, and a hand-rolled
+    /// second copy would drift from the binding rule it is meant to exercise.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_verdict_key_for_test(self, operator_id: &str, public_key_hex: &str) -> Self {
+        let mut config = self.config_template.load_full().as_ref().clone();
+        config
+            .operator
+            .auth
+            .principals
+            .push(swarm_core::config::OperatorPrincipalConfig {
+                operator_id: operator_id.to_string(),
+                token_env: format!("SWARM_TEST_TOKEN_{}", operator_id.to_uppercase()),
+                token_expires_at_ms: None,
+                scopes: vec![
+                    swarm_core::config::OperatorScope::Read,
+                    swarm_core::config::OperatorScope::Approve,
+                ],
+                nostr_pubkey: None,
+                verdict_public_key_hex: Some(public_key_hex.to_string()),
+            });
+        self.config_template.store(Arc::new(config));
+        self
+    }
+
     /// The governance authority the dispatcher holds, for the decide path's
     /// partition re-evaluation (B2g).
     ///

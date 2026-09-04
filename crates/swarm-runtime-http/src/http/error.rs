@@ -99,6 +99,36 @@ impl OperatorApiError {
         }
     }
 
+    /// 409 with one of the four decide slugs; `Retry-After: 1` when the
+    /// conflict will resolve on its own.
+    ///
+    /// The body stays `{error, message}` and never names the winner: the
+    /// caller learns who won by RE-READING the hold (00-DECISIONS W3-17), so
+    /// there is one authority for that answer rather than two that can differ.
+    pub(super) fn conflict(
+        error: &'static str,
+        message: impl Into<String>,
+        retry_after_seconds: Option<u64>,
+    ) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            error,
+            message: message.into(),
+            retry_after_seconds,
+        }
+    }
+
+    /// 422 with the `bad_request` slug: the body parsed and the signature did
+    /// not verify. Nothing was written.
+    pub(super) fn unprocessable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            error: "bad_request",
+            message: message.into(),
+            retry_after_seconds: None,
+        }
+    }
+
     fn too_many_requests(message: impl Into<String>, retry_after_seconds: u64) -> Self {
         Self {
             status: StatusCode::TOO_MANY_REQUESTS,

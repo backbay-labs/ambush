@@ -2378,6 +2378,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Read],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
             OperatorPrincipalConfig {
                 operator_id: "rehearser-1".to_string(),
@@ -2385,6 +2386,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Rehearse],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
             OperatorPrincipalConfig {
                 operator_id: approver_id.clone(),
@@ -2392,6 +2394,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Approve],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
             OperatorPrincipalConfig {
                 operator_id: second_approver_id.clone(),
@@ -2399,6 +2402,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Approve],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
             OperatorPrincipalConfig {
                 operator_id: maintainer_id.clone(),
@@ -2406,6 +2410,7 @@ async fn scoped_operator_principals_gate_actions_and_preserve_actor_identity() {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Maintenance],
                 nostr_pubkey: None,
+                verdict_public_key_hex: None,
             },
         ],
     );
@@ -3546,6 +3551,7 @@ mod qrt_04 {
                         OperatorScope::Approve,
                     ],
                     nostr_pubkey: None,
+                    verdict_public_key_hex: None,
                 }],
             ),
             Arc::clone(&harness.sweep),

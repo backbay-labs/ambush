@@ -79,6 +79,9 @@ pub mod marker;
 /// Tag builders, the opaque hold id, and the assertions that run before a card is signed.
 pub mod tags;
 
+/// The four-member decision preimage both verdict legs sign and verify.
+pub mod verdict;
+
 pub use cards::{
     Card, ConcentrationCrossing, Decision, EscalationBody, EscalationCard, EscalationLocator,
     EvidenceTruncated, FindingCard, FindingLocator, FindingVerdictWord, GapBlock, GapBlockCause,

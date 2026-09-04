@@ -693,6 +693,32 @@ fn test_ingest_state() -> IngestState {
     IngestState::from_config(temp_path("inline"), test_config("suspicious_process_tree")).unwrap()
 }
 
+/// `test_ingest_state()` in `live_response` with a permissive policy rule for
+/// `execution` and the sandbox response adapter, so a granted hold actually
+/// reaches the executor instead of being skipped by the mode.
+pub(crate) fn test_ingest_state_live_response() -> IngestState {
+    let mut config = test_config("suspicious_process_tree");
+    config.runtime.mode = RuntimeMode::LiveResponse;
+    config.runtime.require_durable_live_response = false;
+    config.response_adapter = ResponseAdapterConfig::Sandbox;
+    config.policy.rules = vec![PolicyRuleConfig {
+        name: "hold-decide-allow-execution".to_string(),
+        decision: PolicyRuleDecision::Allow,
+        threat_class: ThreatClass::Execution,
+        actions: Vec::new(),
+        min_severity: Severity::Low,
+        max_severity: Severity::Critical,
+        time_window_utc: None,
+        max_actions_per_agent_per_minute: None,
+        reason: Some("hold decide tests allow execution responses".to_string()),
+    }];
+    IngestState::from_config(temp_path("inline"), config)
+        .unwrap()
+        .with_runtime_events(swarm_runtime::runtime_events::RuntimeEventBroadcaster::new(
+            swarm_runtime::runtime_events::DEFAULT_RUNTIME_EVENT_CAPACITY,
+        ))
+}
+
 fn failed_startup_attestation_report() -> StartupAttestationReport {
     StartupAttestationReport {
         ready: false,
@@ -2053,6 +2079,7 @@ async fn platform_api_bearer_requires_read_scoped_operator_principal() {
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Read],
             nostr_pubkey: None,
+            verdict_public_key_hex: None,
         },
         OperatorPrincipalConfig {
             operator_id: "maintainer-1".to_string(),
@@ -2060,6 +2087,7 @@ async fn platform_api_bearer_requires_read_scoped_operator_principal() {
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Maintenance],
             nostr_pubkey: None,
+            verdict_public_key_hex: None,
         },
     ];
     let app = detect_http_router(

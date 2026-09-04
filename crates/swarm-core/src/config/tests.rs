@@ -445,6 +445,7 @@ fn operator_surface_principals_require_scopes() {
         token_expires_at_ms: None,
         scopes: Vec::new(),
         nostr_pubkey: None,
+        verdict_public_key_hex: None,
     }];
 
     let error = config.validate().unwrap_err();
@@ -466,6 +467,7 @@ fn operator_surface_rejects_duplicate_principal_token_envs() {
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Read],
             nostr_pubkey: None,
+            verdict_public_key_hex: None,
         },
         OperatorPrincipalConfig {
             operator_id: "approver".to_string(),
@@ -473,6 +475,7 @@ fn operator_surface_rejects_duplicate_principal_token_envs() {
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Approve],
             nostr_pubkey: None,
+            verdict_public_key_hex: None,
         },
     ];
 
@@ -498,6 +501,7 @@ fn operator_surface_requires_read_scope_when_platform_api_is_enabled() {
         token_expires_at_ms: None,
         scopes: vec![OperatorScope::Maintenance],
         nostr_pubkey: None,
+        verdict_public_key_hex: None,
     }];
 
     let error = config.validate().unwrap_err();
@@ -518,12 +522,13 @@ fn operator_surface_rejects_malformed_principal_nostr_pubkey() {
         token_expires_at_ms: None,
         scopes: vec![OperatorScope::Read, OperatorScope::Approve],
         nostr_pubkey: Some("npub1notahexkey".to_string()),
+        verdict_public_key_hex: None,
     }];
 
     let error = config.validate().unwrap_err();
     assert_eq!(
         error.to_string(),
-        "invalid field `operator_surface.auth.principals.nostr_pubkey`: principal 0 (`console`) nostr_pubkey must be exactly 64 lowercase hex characters"
+        "invalid field `operator_surface.auth.principals.nostr_pubkey`: principal `console` nostr_pubkey must be exactly 64 lowercase hex characters"
     );
 
     config.operator.auth.principals[0].nostr_pubkey = Some("c".repeat(64));
@@ -603,6 +608,7 @@ fn operator_surface_rejects_non_positive_token_expiry() {
         token_expires_at_ms: Some(0),
         scopes: vec![OperatorScope::Read],
         nostr_pubkey: None,
+        verdict_public_key_hex: None,
     }];
 
     let error = config.validate().unwrap_err();
@@ -1822,4 +1828,48 @@ fn a_runtime_block_with_no_response_keys_loads_with_bounded_defaults() {
     assert_eq!(settings.response.governance_receipt_max_age_ms, 86_400_000);
     assert_eq!(settings.response.hold_store_path, None);
     assert!(settings.response.hold_ttl_ms_by_threat_class.is_empty());
+}
+
+/// The verdict key is validated on its own terms, and the error names IT
+/// rather than `nostr_pubkey`. The two keys are different curves for different
+/// jobs, so sending an operator to the wrong one wastes the whole debugging
+/// session.
+#[test]
+fn operator_surface_rejects_a_malformed_principal_verdict_key_by_name() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.operator.enabled = true;
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "console".to_string(),
+        token_env: "SWARM_OPERATOR_CONSOLE_TOKEN".to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        nostr_pubkey: Some("a".repeat(64)),
+        verdict_public_key_hex: Some("NOTHEX".to_string()),
+    }];
+
+    let error = config.validate().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid field `operator_surface.auth.principals.verdict_public_key_hex`: principal \
+         `console` verdict_public_key_hex must be exactly 64 lowercase hex characters"
+    );
+}
+
+/// The key is optional, and its absence is a valid config: a principal with no
+/// verdict key simply cannot decide a hold.
+#[test]
+fn a_principal_with_no_verdict_key_is_valid_config() {
+    let mut config = valid_config(PheromoneBackendConfig::InMemory);
+    config.runtime.require_durable_live_response = false;
+    config.operator.enabled = true;
+    config.operator.auth.principals = vec![OperatorPrincipalConfig {
+        operator_id: "console".to_string(),
+        token_env: "SWARM_OPERATOR_CONSOLE_TOKEN".to_string(),
+        token_expires_at_ms: None,
+        scopes: vec![OperatorScope::Read, OperatorScope::Approve],
+        nostr_pubkey: None,
+        verdict_public_key_hex: None,
+    }];
+    assert!(config.validate().is_ok());
 }

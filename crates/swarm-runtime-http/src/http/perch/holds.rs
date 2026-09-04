@@ -14,10 +14,14 @@ use serde::{Deserialize, Serialize};
 use swarm_core::config::OperatorScope;
 use swarm_core::types::{ResponseRehearsalPreview, Severity};
 use swarm_ingest_runtime::control::CURRENT_OPERATOR_API_SCHEMA_VERSION;
-use swarm_ingest_runtime::perch_ops::holds::{HoldReadError, get_hold, list_holds};
+use swarm_ingest_runtime::perch_ops::holds::{
+    HoldDecisionError, HoldDecisionInput, HoldReadError, decide_hold, get_hold, list_holds,
+};
 use swarm_policy::{ActionRequest, PolicyDecision};
 use swarm_response::rollback::{InverseGap, resolve_inverse};
-use swarm_runtime::held_action::{HeldAction, HoldDecisionRecord, HoldRationale, HoldState};
+use swarm_runtime::held_action::{
+    HeldAction, HoldDecision, HoldDecisionRecord, HoldRationale, HoldState,
+};
 
 use super::PerchHttpState;
 use crate::http::auth::{AuthenticatedOperatorPrincipal, require_operator_api_scope};
@@ -277,5 +281,167 @@ pub(super) async fn hold_detail_handler(
         schema_version: CURRENT_OPERATOR_API_SCHEMA_VERSION,
         observed_at_ms,
         hold: HeldActionView::from_hold(hold, observed_at_ms),
+    }))
+}
+
+/// Body of `POST /v1/response/holds/{hold_id}/decide`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HoldDecisionRequest {
+    /// Grant or refuse.
+    pub decision: HoldDecision,
+    /// The instant the console claims it decided. Signed input, not authority.
+    pub decided_at_ms: i64,
+    /// 64 lowercase hex. The idempotency key and an unsigned pointer.
+    pub nostr_intent_event_id: String,
+    /// The operator's detached signature over the four-member preimage.
+    pub signature: swarm_crypto::DetachedSignature,
+    /// The operator's free-text rationale, if any.
+    #[serde(default)]
+    pub rationale: Option<String>,
+    /// When the console reported the row armed. Informational.
+    #[serde(default)]
+    pub armed_at_ms: Option<i64>,
+}
+
+/// Response. The caller reads `decision.outcome` and `decision.dispatched`,
+/// never the status code, to learn what happened to the world: a 200 means the
+/// daemon recorded a decision, not that the action ran.
+#[derive(Debug, Clone, Serialize)]
+pub struct HoldDecisionResponse {
+    /// The operator API schema version this body follows.
+    pub schema_version: u32,
+    /// The hold that was decided.
+    pub hold_id: String,
+    /// The hold's state after the decision.
+    pub state: HoldState,
+    /// The authoritative decision record.
+    pub decision: HoldDecisionRecord,
+    /// True when this call replayed an existing record rather than deciding.
+    pub replayed: bool,
+    /// The response receipt, when the action executed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<swarm_response::ResponseReceipt>,
+    /// The audit trail the runtime wrote, when it was entered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit_trail_id: Option<String>,
+    /// The containment lease the receipt reported, when there was one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub containment_lease_id: Option<String>,
+    /// The capability lease, minted from the compare-and-set instant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_lease: Option<swarm_policy::CapabilityLease>,
+}
+
+/// Longest rationale the route accepts, in bytes.
+const MAX_RATIONALE_BYTES: usize = 4096;
+
+fn is_hex64_lower(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase() && byte <= b'f')
+}
+
+/// `POST /v1/response/holds/{hold_id}/decide` — the one route that can turn a
+/// held destructive action into a real one.
+///
+/// The console never authorizes. Everything below the scope check is
+/// re-derived by the daemon from its own stored record (ADR 0014): the
+/// signature is verified against a preimage rebuilt from the daemon's
+/// `hold_id`, the voter is bound to the authenticated principal by config, and
+/// governance is re-evaluated at the decision instant.
+pub(super) async fn hold_decide_handler(
+    Extension(principal): Extension<AuthenticatedOperatorPrincipal>,
+    State(state): State<PerchHttpState>,
+    RoutePath(hold_id): RoutePath<String>,
+    Json(request): Json<HoldDecisionRequest>,
+) -> Result<Json<HoldDecisionResponse>, OperatorApiError> {
+    require_operator_api_scope(&principal, OperatorScope::Approve, "approve")?;
+    if !swarm_runtime::held_action::is_opaque_hold_id(&hold_id) {
+        return Err(OperatorApiError::bad_request(
+            "hold_id must match ^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+        ));
+    }
+    if !is_hex64_lower(&request.nostr_intent_event_id) {
+        return Err(OperatorApiError::bad_request(
+            "nostr_intent_event_id must be 64 lowercase hex characters",
+        ));
+    }
+    if request
+        .rationale
+        .as_ref()
+        .is_some_and(|text| text.len() > MAX_RATIONALE_BYTES)
+    {
+        return Err(OperatorApiError::bad_request(
+            "rationale exceeds 4096 bytes",
+        ));
+    }
+    let input = HoldDecisionInput {
+        decision: request.decision,
+        decided_at_ms: request.decided_at_ms,
+        nostr_intent_event_id: request.nostr_intent_event_id,
+        signature: request.signature,
+        rationale: request.rationale,
+        armed_at_ms: request.armed_at_ms,
+    };
+    let outcome = decide_hold(
+        &state.ingest,
+        &hold_id,
+        principal.operator_id.as_ref(),
+        input,
+        now_ms(),
+    )
+    .await
+    .map_err(|error| match error {
+        HoldDecisionError::NoHoldStore => {
+            OperatorApiError::service_unavailable("no hold store is attached to this daemon")
+        }
+        HoldDecisionError::NotFound => OperatorApiError::not_found(format!("no hold `{hold_id}`")),
+        HoldDecisionError::InvalidSignature(reason) => OperatorApiError::unprocessable(reason),
+        HoldDecisionError::VoterMismatch {
+            operator_id,
+            voter_id,
+        } => OperatorApiError::forbidden(format!(
+            "signature key `{voter_id}` does not bind to operator `{operator_id}`"
+        )),
+        HoldDecisionError::Expired => OperatorApiError::conflict(
+            "hold_expired",
+            "the hold expired; the action was never taken",
+            None,
+        ),
+        HoldDecisionError::DecisionInFlight => OperatorApiError::conflict(
+            "decision_in_flight",
+            "this decision is still being applied",
+            Some(1),
+        ),
+        HoldDecisionError::AlreadyDeciding => OperatorApiError::conflict(
+            "hold_already_deciding",
+            "another decision holds the claim; re-read the hold",
+            Some(1),
+        ),
+        HoldDecisionError::AlreadyDecided => OperatorApiError::conflict(
+            "hold_already_decided",
+            "the hold was decided under another intent; re-read the hold",
+            None,
+        ),
+        HoldDecisionError::Store(error) => OperatorApiError::internal(error.to_string()),
+        HoldDecisionError::Runtime(reason) => OperatorApiError::internal(reason),
+    })?;
+    let decision = outcome
+        .hold
+        .decision
+        .clone()
+        .ok_or_else(|| OperatorApiError::internal("decided hold carries no decision record"))?;
+    Ok(Json(HoldDecisionResponse {
+        schema_version: CURRENT_OPERATOR_API_SCHEMA_VERSION,
+        hold_id: outcome.hold.hold_id.clone(),
+        state: outcome.hold.state,
+        audit_trail_id: decision.audit_trail_id.clone(),
+        decision,
+        replayed: outcome.replayed,
+        receipt: outcome.receipt,
+        containment_lease_id: outcome.containment_lease_id,
+        capability_lease: outcome.capability_lease,
     }))
 }

@@ -469,7 +469,7 @@ async fn feedback_requires_the_approve_scope() {
 
 #[test]
 fn perch_paths_are_disjoint_from_the_containment_router() {
-    assert_eq!(PERCH_ROUTER_PATHS.len(), 5);
+    assert_eq!(PERCH_ROUTER_PATHS.len(), 6);
     for path in PERCH_ROUTER_PATHS {
         // Two prefixes now: the operator surface, and the hold reads B2r
         // mounts under `/v1/response/` because they are the daemon's answer
@@ -852,5 +852,296 @@ fn perch_router_paths_are_disjoint_from_the_local_operator_surface() {
     );
     let overlap: Vec<_> = perch.intersection(&local).collect();
     assert!(overlap.is_empty(), "same path on two ports: {overlap:?}");
-    assert_eq!(perch.len(), 5);
+    assert_eq!(perch.len(), 6);
+}
+
+// ── B2: the decide route ───────────────────────────────────────────────────
+
+fn decide_signer() -> swarm_crypto::Ed25519Signer {
+    swarm_crypto::Ed25519Signer::from_secret_material("perch-dev-operator-verdict-seed")
+}
+
+/// The perch app over a seeded hold whose principal carries the verdict key.
+fn app_for_decide(
+    scopes: Vec<OperatorScope>,
+    token: &str,
+    hold_state: swarm_runtime::held_action::HoldState,
+    hold_id: &str,
+) -> Router {
+    use swarm_runtime::held_action::{HeldActionStore, MemoryHeldActionStore};
+    let (config, root) = perch_config();
+    let state = IngestState::from_config(root.join("inline"), config.clone()).unwrap();
+    let store = std::sync::Arc::new(MemoryHeldActionStore::default());
+    let mut hold = swarm_runtime::held_action_fixtures::fixture_hold(
+        swarm_core::types::ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        HOLD_T0,
+    );
+    hold.hold_id = hold_id.to_string();
+    hold.state = hold_state;
+    // Far enough out that wall-clock `now_ms()` in the handler is still inside
+    // the TTL: the route reads the real clock, not the fixture instant.
+    hold.expires_at_ms = i64::MAX / 2;
+    store.create(hold).unwrap();
+    let state = state
+        .with_hold_store(store)
+        .with_verdict_key_for_test("local-operator", decide_signer().public_key_hex());
+    let auth = OperatorAuthState::for_test("local-operator", scopes, token);
+    perch_operator_router_for_test(&config, state, auth)
+}
+
+fn decide_body(
+    hold_id: &str,
+    decision: &str,
+    rationale: Option<&str>,
+    intent: &str,
+) -> serde_json::Value {
+    let digest = swarm_perch_wire::verdict::rationale_sha256_hex(rationale);
+    let decided_at_ms = 1_773_739_200_100_i64;
+    let bytes = swarm_perch_wire::verdict::decision_preimage_bytes(
+        decided_at_ms,
+        decision,
+        hold_id,
+        digest.as_deref(),
+    );
+    let signature = decide_signer().sign(&bytes);
+    serde_json::json!({
+        "decision": decision,
+        "decided_at_ms": decided_at_ms,
+        "nostr_intent_event_id": intent,
+        "signature": signature,
+        "rationale": rationale,
+    })
+}
+
+const DECIDE_HOLD_ID: &str = "hold_aaaaaaaa-0000-4000-8000-000000000000";
+
+#[tokio::test]
+async fn decide_requires_the_approve_scope() {
+    let app = app_for_decide(
+        vec![OperatorScope::Read],
+        "read-only",
+        swarm_runtime::held_action::HoldState::Notified,
+        DECIDE_HOLD_ID,
+    );
+    let response = app
+        .oneshot(post_json(
+            &format!("/v1/response/holds/{DECIDE_HOLD_ID}/decide"),
+            "read-only",
+            &decide_body(DECIDE_HOLD_ID, "refuse", None, &"aa".repeat(32)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(response).await["error"], "forbidden");
+}
+
+/// A flipped signature byte is 422 and the hold is untouched: the signature is
+/// checked BEFORE any write, so a forged decision leaves nothing behind.
+#[tokio::test]
+async fn a_forged_signature_is_422_and_the_hold_stays_notified() {
+    use swarm_runtime::held_action::HoldState;
+    let app = app_for_decide(
+        vec![OperatorScope::Read, OperatorScope::Approve],
+        "secret-token",
+        HoldState::Notified,
+        DECIDE_HOLD_ID,
+    );
+    let mut body = decide_body(DECIDE_HOLD_ID, "grant", None, &"aa".repeat(32));
+    body["signature"]["signature_hex"] = serde_json::json!("00".repeat(64));
+    let response = app
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/response/holds/{DECIDE_HOLD_ID}/decide"),
+            "secret-token",
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json_body(response).await["error"], "bad_request");
+
+    let (status, read) = get(
+        app,
+        &format!("/v1/response/holds/{DECIDE_HOLD_ID}"),
+        "secret-token",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read["hold"]["state"], "notified");
+    assert_eq!(read["hold"]["decision"], serde_json::Value::Null);
+}
+
+/// The 409 body stays `{error, message}` and never names the winner: the
+/// console learns who won by re-reading the hold (00-DECISIONS W3-17).
+#[tokio::test]
+async fn a_claim_held_by_another_intent_is_409_with_retry_after_and_no_winner_in_the_body() {
+    use swarm_runtime::held_action::{HeldActionStore, HoldState, MemoryHeldActionStore};
+    let (config, root) = perch_config();
+    let state = IngestState::from_config(root.join("inline"), config.clone()).unwrap();
+    let store = std::sync::Arc::new(MemoryHeldActionStore::default());
+    let mut hold = swarm_runtime::held_action_fixtures::fixture_hold(
+        swarm_core::types::ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        HOLD_T0,
+    );
+    hold.hold_id = DECIDE_HOLD_ID.to_string();
+    hold.state = HoldState::Notified;
+    hold.expires_at_ms = i64::MAX / 2;
+    store.create(hold).unwrap();
+    store
+        .begin_decision(DECIDE_HOLD_ID, &"cc".repeat(32), HOLD_T0)
+        .unwrap();
+    let state = state
+        .with_hold_store(store)
+        .with_verdict_key_for_test("local-operator", decide_signer().public_key_hex());
+    let auth = OperatorAuthState::for_test(
+        "local-operator",
+        vec![OperatorScope::Read, OperatorScope::Approve],
+        "secret-token",
+    );
+    let app = perch_operator_router_for_test(&config, state, auth);
+
+    // Another intent id: `hold_already_deciding`.
+    let response = app
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/response/holds/{DECIDE_HOLD_ID}/decide"),
+            "secret-token",
+            &decide_body(DECIDE_HOLD_ID, "refuse", None, &"aa".repeat(32)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok()),
+        Some("1")
+    );
+    let body = json_body(response).await;
+    assert_eq!(body["error"], "hold_already_deciding");
+    let keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        ["error", "message"],
+        "the conflict body must not carry the winner; the console re-reads"
+    );
+
+    // The SAME intent id: `decision_in_flight`.
+    let response = app
+        .oneshot(post_json(
+            &format!("/v1/response/holds/{DECIDE_HOLD_ID}/decide"),
+            "secret-token",
+            &decide_body(DECIDE_HOLD_ID, "refuse", None, &"cc".repeat(32)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(response).await["error"], "decision_in_flight");
+}
+
+/// The full refuse round trip, and the replay that follows it. A 200 means the
+/// daemon recorded a decision; `dispatched` is what says whether anything ran.
+#[tokio::test]
+async fn a_refusal_records_the_decision_and_re_posting_it_replays_byte_identically() {
+    use swarm_runtime::held_action::HoldState;
+    let app = app_for_decide(
+        vec![OperatorScope::Read, OperatorScope::Approve],
+        "secret-token",
+        HoldState::Notified,
+        DECIDE_HOLD_ID,
+    );
+    let body = decide_body(DECIDE_HOLD_ID, "refuse", Some("not now"), &"aa".repeat(32));
+    let response = app
+        .clone()
+        .oneshot(post_json(
+            &format!("/v1/response/holds/{DECIDE_HOLD_ID}/decide"),
+            "secret-token",
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first = json_body(response).await;
+    assert_eq!(first["schema_version"], 1);
+    assert_eq!(first["replayed"], false);
+    assert_eq!(first["state"], "refused");
+    assert_eq!(first["decision"]["outcome"], "refused_by_operator");
+    assert_eq!(first["decision"]["dispatched"], false);
+    assert_eq!(first["decision"]["operator_id"], "local-operator");
+    assert_eq!(
+        first["decision"]["voter_id"],
+        format!("swarm:ed25519:{}", decide_signer().public_key_hex())
+    );
+    assert!(first.get("receipt").is_none());
+
+    let response = app
+        .oneshot(post_json(
+            &format!("/v1/response/holds/{DECIDE_HOLD_ID}/decide"),
+            "secret-token",
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let replay = json_body(response).await;
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(
+        replay["decision"], first["decision"],
+        "a replay returns the stored record unchanged"
+    );
+}
+
+/// A malformed `hold_id` or intent id is rejected at the route, before the
+/// engine is entered at all.
+#[tokio::test]
+async fn the_route_validates_the_hold_id_and_the_intent_id() {
+    use swarm_runtime::held_action::HoldState;
+    let app = app_for_decide(
+        vec![OperatorScope::Approve],
+        "secret-token",
+        HoldState::Notified,
+        DECIDE_HOLD_ID,
+    );
+    let response = app
+        .clone()
+        .oneshot(post_json(
+            "/v1/response/holds/hold:colon:form/decide",
+            "secret-token",
+            &decide_body("hold:colon:form", "refuse", None, &"aa".repeat(32)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        json_body(response).await["message"]
+            .as_str()
+            .unwrap()
+            .contains("hold_id")
+    );
+
+    let response = app
+        .oneshot(post_json(
+            &format!("/v1/response/holds/{DECIDE_HOLD_ID}/decide"),
+            "secret-token",
+            &decide_body(DECIDE_HOLD_ID, "refuse", None, "NOTHEX"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        json_body(response).await["message"]
+            .as_str()
+            .unwrap()
+            .contains("nostr_intent_event_id")
+    );
 }

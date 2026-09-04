@@ -132,6 +132,17 @@ pub struct OperatorPrincipalConfig {
     /// 01-DESIGN §6 B0). It is configured, not proven -- see ADR 0016.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nostr_pubkey: Option<String>,
+    /// The Ed25519 verifying key whose signature the decide route binds to this
+    /// principal, as `swarm:ed25519:{hex}`. 64 lowercase hex characters.
+    ///
+    /// A DIFFERENT key from `nostr_pubkey`, and deliberately so: that one is
+    /// secp256k1 and addresses a console over the relay, this one is Ed25519
+    /// and says which key may decide. Optional, and its absence is fail-closed:
+    /// a principal with no verdict key binds to nothing, so every decision it
+    /// submits is refused (00-DECISIONS, the operator verdict key row,
+    /// option (a)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_public_key_hex: Option<String>,
 }
 
 /// Authentication settings for the local operator surface.
@@ -177,6 +188,11 @@ impl OperatorAuthConfig {
                 OperatorScope::Maintenance,
             ],
             nostr_pubkey: self.nostr_pubkey.clone(),
+            verdict_public_key_hex: None,
+            // The legacy single-principal path has no verdict key: there is no
+            // config surface for one, so a deployment on that path cannot
+            // decide a hold until it declares a real `principals` entry. That
+            // is the fail-closed direction.
         }]
     }
 
@@ -219,6 +235,17 @@ impl OperatorPrincipalConfig {
                 field: "operator_surface.auth.principals.nostr_pubkey",
                 reason: format!(
                     "principal {index} (`{}`) nostr_pubkey must be exactly 64 lowercase hex characters",
+                    self.operator_id.trim()
+                ),
+            });
+        }
+        if let Some(key) = self.verdict_public_key_hex.as_deref()
+            && !is_nostr_pubkey_hex(key)
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "operator_surface.auth.principals.verdict_public_key_hex",
+                reason: format!(
+                    "principal `{}` verdict_public_key_hex must be exactly 64 lowercase hex characters",
                     self.operator_id.trim()
                 ),
             });
@@ -464,6 +491,7 @@ mod tests {
                 token_expires_at_ms: None,
                 scopes: vec![OperatorScope::Approve],
                 nostr_pubkey: Some(bad.to_string()),
+                verdict_public_key_hex: None,
             };
             let Err(error) = p.validate(0) else {
                 panic!("{bad}: expected the malformed key to be rejected");
@@ -501,6 +529,7 @@ mod tests {
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Read],
             nostr_pubkey: None,
+            verdict_public_key_hex: None,
         };
         let rendered = serde_yaml::to_string(&p).unwrap_or_else(|e| panic!("{e}"));
         assert!(!rendered.contains("nostr_pubkey"), "{rendered}");

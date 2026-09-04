@@ -632,6 +632,15 @@ impl<P, E> SwarmRuntime<P, E> {
         self.mode
     }
 
+    /// The approval gate this runtime authorizes through.
+    ///
+    /// The decide path needs it to mint the capability lease from the SAME
+    /// gate the execution ran under; a second gate built from config would be
+    /// a different rate-limit window and a different clock.
+    pub fn policy(&self) -> &P {
+        &self.policy
+    }
+
     /// Attach a guard pipeline that evaluates actions before execution.
     pub fn with_guard_pipeline(mut self, pipeline: GuardPipeline) -> Self {
         self.guard_pipeline = Some(pipeline);
