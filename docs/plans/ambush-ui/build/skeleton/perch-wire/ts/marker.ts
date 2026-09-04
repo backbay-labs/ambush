@@ -77,14 +77,14 @@ export type CardKind = (typeof CARD_KINDS)[number];
 /** `<!-- swarm:finding:v1 -->` and its six siblings. */
 export const CARD_MARKER: Readonly<Record<CardKind, string>> = Object.freeze(
   Object.fromEntries(
-    CARD_KINDS.map((k) => [k, `<!-- ambush:${k}:v1 -->`]),
+    CARD_KINDS.map((k) => [k, `<!-- swarm:${k}:v1 -->`]),
   ) as Record<CardKind, string>,
 );
 
 /** The fence info string, e.g. `swarm:finding:v1`. */
 export const CARD_FENCE: Readonly<Record<CardKind, string>> = Object.freeze(
   Object.fromEntries(
-    CARD_KINDS.map((k) => [k, `ambush:${k}:v1`]),
+    CARD_KINDS.map((k) => [k, `swarm:${k}:v1`]),
   ) as Record<CardKind, string>,
 );
 

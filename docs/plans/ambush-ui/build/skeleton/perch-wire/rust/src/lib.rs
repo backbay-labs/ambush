@@ -4,7 +4,7 @@
 //!
 //! ## Owns
 //!
-//! - The seven `ambush:*:v1` marker constants and the card-kind slug they encode.
+//! - The seven `swarm:*:v1` marker constants and the card-kind slug they encode.
 //! - The three-part card content grammar (marker line, human line, fenced JSON)
 //!   and the only parser for it.
 //! - The `swarm.spine.envelope.v1` wrapper as Perch publishes it, including the
@@ -64,7 +64,7 @@
 //! block in every markdown renderer, and an unfenced JSON line is a wall of text
 //! in all of them.
 
-/// Card body types, one per `ambush:*:v1` marker.
+/// Card body types, one per `swarm:*:v1` marker.
 pub mod cards;
 /// The `swarm.spine.envelope.v1` wrapper and its keyless hash.
 pub mod envelope;

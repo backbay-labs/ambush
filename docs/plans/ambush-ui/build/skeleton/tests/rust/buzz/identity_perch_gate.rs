@@ -105,7 +105,7 @@ pub const PERCH_SIGN_REFUSAL: &str =
     "refused: a governance artifact cannot be signed through the generic signer. \
      Use perch_record_verdict, which builds the card from daemon-fetched hold state.";
 
-/// True when `content`'s first line is exactly an `ambush:<slug>:v<n>` marker.
+/// True when `content`'s first line is exactly an `swarm:<slug>:v<n>` marker.
 ///
 /// This must agree, in both directions, with the renderer's
 /// `parseAmbushMarker` (17-COMPONENT-SPECS.md section 3.4): line 0 only,
@@ -127,7 +127,7 @@ fn first_line_is_ambush_marker(content: &str) -> bool {
         return false;
     };
     let inner = inner.trim();
-    let Some(rest) = inner.strip_prefix("ambush:") else {
+    let Some(rest) = inner.strip_prefix("swarm:") else {
         return false;
     };
     let Some((slug, version)) = rest.rsplit_once(":v") else {
@@ -142,7 +142,7 @@ fn first_line_is_ambush_marker(content: &str) -> bool {
 /// Refuse to sign or publish a governance artifact through a generic path.
 ///
 /// Deliberately narrow: it refuses `kind:46010` outright and refuses any kind
-/// whose first line is an `ambush:*:v<n>` marker. Every other kind and every
+/// whose first line is an `swarm:*:v<n>` marker. Every other kind and every
 /// other `kind:9` message passes exactly as before -- a gate that broke
 /// reactions or DMs would be reverted within a day, and then the hole is open
 /// again.

@@ -305,8 +305,8 @@ mod tests {
     #[test]
     fn slugs_and_markers_agree() {
         for kind in CardKind::ALL {
-            assert_eq!(kind.marker(), format!("<!-- ambush:{}:v1 -->", kind.slug()));
-            assert_eq!(kind.fence_info(), format!("ambush:{}:v1", kind.slug()));
+            assert_eq!(kind.marker(), format!("<!-- swarm:{}:v1 -->", kind.slug()));
+            assert_eq!(kind.fence_info(), format!("swarm:{}:v1", kind.slug()));
             assert_eq!(kind.fact_schema(), format!("swarm.perch.{}.v1", kind.slug()));
         }
     }

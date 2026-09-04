@@ -354,7 +354,7 @@ export async function emitPerchHoldAlarm(
 }
 
 /**
- * Emit a kind:9 card carrying an `ambush:*:v1` marker into a case channel.
+ * Emit a kind:9 card carrying an `swarm:*:v1` marker into a case channel.
  * `signerPubkey` is the RAW event signer, not a delegated display author --
  * admission is a signature question (17-COMPONENT-SPECS.md section 3.4).
  *

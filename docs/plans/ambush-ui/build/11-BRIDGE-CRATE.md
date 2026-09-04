@@ -522,7 +522,7 @@ the separator.
 `PERCH_GAP_FLUSH_TICKS = 3` — **PROPOSED**, no measurement behind it; three ticks is the smallest
 value that does not race a busy stream's own next card.
 
-> **Commitment for `13-WIRE-SCHEMAS.md`:** every `ambush:*:v1` body schema carries optional
+> **Commitment for `13-WIRE-SCHEMAS.md`:** every `swarm:*:v1` body schema carries optional
 > `gap` and `coalesced` blocks, and a card with an **empty payload array and a populated `gap`
 > block is legal and must render**. A schema that makes the payload array `minItems: 1` breaks
 > gap flushing.
@@ -601,7 +601,7 @@ returns the **scheduling** class, which is the one that governs backpressure.
 | | **Evidence** | **Telemetry** | **Alarm** | **Dropped-at-source** |
 |---|---|---|---|---|
 | Carries | `Finding`, `Escalation`, `ResponseExecution`; and the containment-lease diff (§9) | `ConcentrationSnapshot`, `AgentHealth`, `AgentAction` | `ResponseHeld`, `ModeTransition`, `TamperAlert` | `Ingest`, `Replay`, `EvolutionStatus`, plus every loss record |
-| Wire | `kind:9` + `ambush:finding\|escalation\|receipt\|lease:v1`, into a **lane** or **case** channel | ephemeral `26001`, `26002`, global, no `h` | `kind:46010` + `swarm:hold:v1` into the case channel; ephemeral `26006`/`26003`/`26005`, global | ephemeral `26000` gauge; `gap`/`coalesced` blocks on other streams' cards |
+| Wire | `kind:9` + `swarm:finding\|escalation\|receipt\|lease:v1`, into a **lane** or **case** channel | ephemeral `26001`, `26002`, global, no `h` | `kind:46010` + `swarm:hold:v1` into the case channel; ephemeral `26006`/`26003`/`26005`, global | ephemeral `26000` gauge; `gap`/`coalesced` blocks on other streams' cards |
 | Durable at the relay | **yes** | no (ephemeral kinds are never stored) | 46010 yes; 26006/26003/26005 no | no |
 | Identity | one per admitted agent (§7) | `perch-telemetry` | `perch-alarm` | `perch-telemetry` (the gauge) |
 | Coalescing | last-wins per `(threat_class, level)` for `Escalation`; batch by `(threat_class, host_id)` for `Finding`; none for `ResponseExecution` | last-wins per key, 10 Hz → 1 Hz | **none, ever** | n/a |

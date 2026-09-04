@@ -40,7 +40,7 @@
 // writes", which is neither eleven nor complete: it omitted
 // `perch_record_verdict` entirely, and `perch_record_verdict` is the ONLY way
 // leg 1 can be published. `perch_sign_gate` (16-INVARIANT-TESTS.md, INV-29)
-// refuses every `ambush:<slug>:v<n>` marker through the generic `sign_event`
+// refuses every `swarm:<slug>:v<n>` marker through the generic `sign_event`
 // command, so without this command the console as specified cannot publish
 // leg 1 at all — a two-legged write with one leg. Corrected here and in 14 §7.3.
 //
@@ -227,7 +227,7 @@ export const PERCH_READ_COMMANDS = [
  *
  * WHY THIS IS A COMMAND AND NOT RENDERER CODE. `perch_sign_gate`
  * (16-INVARIANT-TESTS.md INV-29) refuses any `kind:9` whose first line is an
- * `ambush:<slug>:v<n>` marker through the generic `sign_event` command
+ * `swarm:<slug>:v<n>` marker through the generic `sign_event` command
  * (BUZZ desktop/src-tauri/src/commands/identity.rs:107-135, Tauri Rust
  * process, signs with `state.signing_keys()` and returns the event JSON). That
  * refusal only means something if a sanctioned path exists, and this is it.

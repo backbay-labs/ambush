@@ -172,7 +172,7 @@ card.
 
 The gate is a pure function, `perch_sign_gate(kind, &content) -> Result<(), String>`
 (`16-INVARIANT-TESTS.md` INV-29), which refuses `kind:46010` outright and refuses any `kind:9`
-whose content's **line 0** (`trimEnd`, never `trimStart`) matches `^<!-- ambush:[a-z]+:v\d+ -->$`.
+whose content's **line 0** (`trimEnd`, never `trimStart`) matches `^<!-- swarm:[a-z]+:v\d+ -->$`.
 Three obligations, and the third is what makes it an invariant rather than a patch:
 
 1. It is called on the **first line** of `sign_event`, before `state.signing_keys()`.
@@ -320,7 +320,7 @@ Fact 3 together. It is the design that makes a webview compromise a host-isolati
 - `08` INV-11, INV-22, INV-28, INV-29, INV-30, INV-33 are the executable form of this ADR.
   `16-INVARIANT-TESTS.md` owns their implementations.
 - **PROPOSED** a Rust test over the Tauri command surface asserting `perch_sign_gate` rejects
-  `kind:46010` and any `kind:9` whose first line matches `^<!-- ambush:[a-z]+:v\d+ -->$`, and
+  `kind:46010` and any `kind:9` whose first line matches `^<!-- swarm:[a-z]+:v\d+ -->$`, and
   that it agrees with the renderer's `parseAmbushMarker` in **both** directions.
 - **PROPOSED, and it is the one that closes revision 1's hole:** an inventory test in the shape
   of `egress_guard_tests.rs` asserting that every `#[tauri::command]` reaching

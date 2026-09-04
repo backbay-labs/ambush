@@ -53,7 +53,7 @@ const KIND_WORKFLOW_APPROVAL_REQUESTED: u16 = 46010;
 const KIND_CHAT: u16 = 9;
 
 fn marker(slug: &str) -> String {
-    format!("<!-- ambush:{slug}:v1 -->\n{{\"hold_id\":\"h_a07aeacf\"}}")
+    format!("<!-- swarm:{slug}:v1 -->\n{{\"hold_id\":\"h_a07aeacf\"}}")
 }
 
 // ── GROUP 1: THE PREDICATE ────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ fn the_gate_matches_the_renderers_parse_exactly() {
         "the swarm:verdict:v1 card is missing from this case",
         // Uppercase in the slug is not the renderer's grammar, so it is not a
         // card and must not be refused.
-        "<!-- ambush:Verdict:v1 -->\n{}",
+        "<!-- swarm:Verdict:v1 -->\n{}",
     ];
     for content in signable {
         assert!(
@@ -124,7 +124,7 @@ fn the_gate_matches_the_renderers_parse_exactly() {
         // An unknown slug still refuses. The renderer answers it with the
         // unknown-kind refusal card, which means it is still a Perch artifact;
         // the renderer must never be the thing that decides what may be signed.
-        "<!-- ambush:teapot:v1 -->\n{}",
+        "<!-- swarm:teapot:v1 -->\n{}",
         // A future version, same reasoning.
         "<!-- swarm:verdict:v9 -->\n{}",
     ];

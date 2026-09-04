@@ -920,7 +920,7 @@ of a marker. `kind:9` is already in `CHANNEL_EVENT_KINDS` (`shared/constants/kin
 `CHANNEL_TIMELINE_CONTENT_KINDS` (`:137-149`), and in `isTimelineContentEvent`
 (`features/messages/lib/formatTimelineMessages.ts:52-66`), and `MessageRow.renderBody`'s `default:`
 arm already content-sniffs (`parseWaveMessageContent` at `MessageRow.tsx:415`) `[V]`. The seven
-`ambush:*:v1` markers cost **zero** of the four. An eighth marker costs one union member, one
+`swarm:*:v1` markers cost **zero** of the four. An eighth marker costs one union member, one
 decoder-plus-presenter file and one registry line, with `tsc` failing until the entry exists.
 
 **What the fork does cost, on the client:** all four points, plus the parity test.
@@ -989,7 +989,7 @@ reconnect-repair pair the case timeline depends on.
 **The first draft of this section was wrong twice, and the second way was blocking.** It said
 "eleven new Tauri commands: 7 reads + 5 writes" — which is not eleven — and it omitted
 `perch_record_verdict` entirely while three other files referred to it as though it existed. Since
-`perch_sign_gate` (INV-29) refuses every `ambush:<slug>:v<n>` marker through the generic
+`perch_sign_gate` (INV-29) refuses every `swarm:<slug>:v<n>` marker through the generic
 `sign_event` command, and no other command was declared, **the console as specified could not
 publish leg 1 at all**: a two-legged write with one leg. Corrected here, in `tauriPerch.ts`, and by
 the new `perch_verdict.rs`.
@@ -1087,7 +1087,7 @@ task B0. This document states only that the secret lives in that store and never
 (`BUZZ desktop/src-tauri/src/commands/messages.rs:409-...`, Tauri Rust process) takes an arbitrary
 `content: String` and an optional `kind: Option<u32>`, snapshots `state.signing_keys()` at `:447`,
 and publishes `[V]`. Gating only `sign_event` leaves a renderer able to sign a `kind:9`
-`ambush:*:v1` body through that command instead. `perch_sign_gate(kind_num, &content)` must be
+`swarm:*:v1` body through that command instead. `perch_sign_gate(kind_num, &content)` must be
 called there too, right after `kind_num` is resolved at `:452`. Handed to `16-INVARIANT-TESTS.md` as
 an INV-29 completeness finding; recorded here because this file is the sanctioned path and its value
 depends on the unsanctioned ones being closed.

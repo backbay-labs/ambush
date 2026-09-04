@@ -444,7 +444,7 @@ corroboration that does not exist.
 
 ## 3. The marker-renderer registry
 
-The extension point for all seven `kind:9` `ambush:*:v1` cards (`APPENDIX-NORMATIVE.md` §3). Its
+The extension point for all seven `kind:9` `swarm:*:v1` cards (`APPENDIX-NORMATIVE.md` §3). Its
 shape decides whether an eighth marker is a two-file change or a seven-file one. Governing sections:
 `03` §3/§4.4/§13, `04` §2.3, `05` §9, `08` §7.7 control 2, INV-13, INV-15.
 
@@ -507,7 +507,7 @@ export const AMBUSH_MARKER_KINDS = [
 ] as const satisfies readonly AmbushMarkerKind[];
 
 /** The only admitted schema version. A `v2` card renders as §3.6's refusal, never as prose. */
-export const AMBUSH_MARKER_VERSION = 1;
+export const SWARM_MARKER_VERSION = 1;
 
 /**
  * `<!-- swarm:finding:v1 -->`. Built here so no call site concatenates the
@@ -515,7 +515,7 @@ export const AMBUSH_MARKER_VERSION = 1;
  * marker literal outside this module as a failure.
  */
 export function ambushMarkerComment(kind: AmbushMarkerKind): string {
-  return `<!-- ambush:${kind}:v${AMBUSH_MARKER_VERSION} -->`;
+  return `<!-- swarm:${kind}:v${SWARM_MARKER_VERSION} -->`;
 }
 
 /** Which Perch surface is rendering. Decides `homeSurface` admission. */
@@ -535,7 +535,7 @@ export type PerchPillar = "substrate" | "authority" | "evidence";
 /** A marker that passed line-0 + admission. `rawBody` is never trimmed. */
 export type AmbushMarkerCard = {
   kind: AmbushMarkerKind;
-  version: typeof AMBUSH_MARKER_VERSION;
+  version: typeof SWARM_MARKER_VERSION;
   /** Everything after the first newline, byte-for-byte. Interior whitespace is load-bearing. */
   rawBody: string;
   /** The signer whose admission was checked. Lowercased 64-hex, asserted by the parser. */
@@ -641,12 +641,12 @@ export function defineAmbushCard<T>(spec: {
 // BUZZ desktop/src/features/perch-evidence/lib/parseAmbushMarker.ts
 import {
   AMBUSH_MARKER_KINDS,
-  AMBUSH_MARKER_VERSION,
+  SWARM_MARKER_VERSION,
   type AmbushMarkerKind,
   type AmbushMarkerParse,
 } from "./markerTypes";
 
-const MARKER_RE = /^<!--\s+ambush:([a-z][a-z-]*):v(\d{1,3})\s+-->$/;
+const MARKER_RE = /^<!--\s+swarm:([a-z][a-z-]*):v(\d{1,3})\s+-->$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
 
 /**
@@ -697,11 +697,11 @@ export function parseAmbushMarker(args: {
   }
   const kind = slug as AmbushMarkerKind;
 
-  if (version !== AMBUSH_MARKER_VERSION) {
+  if (version !== SWARM_MARKER_VERSION) {
     return { status: "unsupported-version", kind, version, card: base };
   }
 
-  return { status: "ok", card: { ...base, kind, version: AMBUSH_MARKER_VERSION } };
+  return { status: "ok", card: { ...base, kind, version: SWARM_MARKER_VERSION } };
 }
 ```
 
@@ -780,7 +780,7 @@ None uses `<AdversaryString>` for anything but the slug, which is regex-bounded 
 | Component | Fires when | Copy shape | `data-testid` |
 |---|---|---|---|
 | `UndecodableCard` | the decoder returned `ok:false` | "This `<kind>` card did not decode: `<reason>`. The daemon holds the record. [verify against the daemon]" | `perch-evidence-undecodable` |
-| `UnknownMarkerCard` | admitted issuer, unknown slug | "This console does not know how to render an `ambush:<slug>:v<n>` card. It was published by an admitted bridge at `<time>`. [open in Ledger]" | `perch-evidence-unknown-kind` |
+| `UnknownMarkerCard` | admitted issuer, unknown slug | "This console does not know how to render an `swarm:<slug>:v<n>` card. It was published by an admitted bridge at `<time>`. [open in Ledger]" | `perch-evidence-unknown-kind` |
 | `UnsupportedVersionCard` | admitted issuer, known kind, `version !== 1` | "This `<kind>` card is version `<n>`; this console reads version 1. Nothing is rendered rather than rendering it wrong. [open in Ledger]" | `perch-evidence-unsupported-version` |
 | `MisplacedCard` | `homeSurface` miss, or INV-13 channel mismatch | "A `<kind>` card arrived on a surface that does not hold them (`<surface>`). It is not rendered here. [open in Ledger]" | `perch-evidence-misplaced` |
 

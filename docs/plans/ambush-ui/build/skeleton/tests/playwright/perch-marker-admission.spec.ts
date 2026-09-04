@@ -144,7 +144,7 @@ test.describe("Perch marker admission", () => {
     await openCase(page);
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:teapot:v1",
+      marker: "swarm:teapot:v1",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: { anything: "[a link](javascript:alert(1))" },

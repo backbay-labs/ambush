@@ -133,7 +133,7 @@ test.describe("Perch provenance and honest badges", () => {
     for (const kind of UNSIGNED_CARD_KINDS) {
       await emitAmbushCard(page, {
         channelName: "case",
-        marker: `ambush:${kind}:v1`,
+        marker: `swarm:${kind}:v1`,
         signerPubkey: PERCH_ADMITTED_ISSUER,
         hTag: PERCH_CASE_CHANNEL,
         body: { id: `${kind}-1`, summary: "a summary" },

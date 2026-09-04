@@ -637,7 +637,17 @@
 
 ## Exit criteria
 
-1. `grep -rE "ambush:(finding|escalation|hold|verdict|receipt|lease|rollback):v1|ambush\.perch\." docs/plans/ambush-ui/build` returns nothing; the four validators in Task 1 step 5 pass.
+1. The marker rename is complete in substance, not just in literals:
+   ```bash
+   grep -rn "ambush:" docs/plans/ambush-ui/build \
+     | grep -vE "ambush:wave|ambush:config-nudge|q=ambush:lease|the marker namespace is"
+   ```
+   returns nothing. The literal-slug grep this criterion used to name passed while
+   interpolated (`ambush:${k}:v1`), pattern (`^<!-- ambush:[a-z]+:v\d+ -->$`) and
+   placeholder (`ambush:<slug>:v1`) forms survived in twenty-one files, including the
+   skeleton TypeScript marker module and ADR 0014's own regex. The three retained forms
+   are the chat app's own markers and the copy corpus's ledger URL fixture. The four
+   validators in Task 1 step 5 pass.
 2. `AppShell.tsx`, `MessageRow.tsx`, `HomeView.tsx` measure ≤ 800 gate-lines each and `MessageBody.tsx` carries the seam comment.
 3. A signed kind 46010 with an `h` tag is accepted by the relay and appears in the needs-action feed of its `p`-tagged pubkey; a `REQ {kinds:[26006]}` without `#p` = self is `CLOSED`.
 4. `tauri.conf.json`'s CSP equals the pinned literal and names no remote script host; the desktop builds and the smoke E2E project passes.

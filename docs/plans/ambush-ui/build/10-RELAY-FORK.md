@@ -911,7 +911,7 @@ The mitigation is not a rule about how cards are rendered. It is a rule about wh
 > ### INV-RF1 (PROPOSED, binding on Perch) — the closed write allowlist
 >
 > The `swarm-perch-bridge` process publishes exactly **nine kinds** to the relay and no others:
-> `46010`, `kind:9` (carrying exactly the seven `ambush:*:v1` markers of
+> `46010`, `kind:9` (carrying exactly the seven `swarm:*:v1` markers of
 > `APPENDIX-NORMATIVE.md` §3), and the ephemeral block `26000`–`26006`. The operator's own key
 > publishes exactly one: `kind:9` carrying `swarm:verdict:v1`, and only through
 > `perch_record_verdict` (`08` INV-29).

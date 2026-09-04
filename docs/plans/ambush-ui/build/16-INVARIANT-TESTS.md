@@ -71,7 +71,7 @@ in §9 rather than quietly corrected, because the failure mode matters more than
 | INV-26 | A receipt read back from the store is byte-identical to the bytes written; `1.0` survives as `1.0`. | Rust integration | `tests/rust/ambush/perch_hold_lifecycle.rs` | P1 | **B1** |
 | INV-27 | No route on the perch operator router names `override`/`force`/`break-glass`/`bypass`; its only non-GET route is `/decide`; no Perch source file carries an override affordance. | Rust unit + CI guard | `perch_hold_lifecycle.rs`, `check-perch-grant-affordance.sh` R6 | **P0** | B1 |
 | INV-28 | A daemon `refused_late` renders with `data-perch-register="outcome"`, quotes the rule name and reason verbatim, and offers no retry. The governance arm is drawn as not-yet-reachable. | Playwright | `perch-verdict-pane.spec.ts` #06, #07 | P1 | B2; arm needs B2g |
-| INV-29 | No path in the desktop process signs or publishes a governance artifact except `perch_record_verdict`. The guard refuses `kind:46010` and any content whose line 0 is an `ambush:*:v<n>` marker, agrees with the renderer's parse **in both directions**, and is wired at **exactly** the boundaries `egress_guard` is wired at plus `sign_event`. | Rust unit + structural test | `tests/rust/buzz/identity_perch_gate.rs` + `_tests.rs` — **4 of 6 run today, 4/4 green** | **P0** | 2 tests need B2 / the Buzz crate |
+| INV-29 | No path in the desktop process signs or publishes a governance artifact except `perch_record_verdict`. The guard refuses `kind:46010` and any content whose line 0 is an `swarm:*:v<n>` marker, agrees with the renderer's parse **in both directions**, and is wired at **exactly** the boundaries `egress_guard` is wired at plus `sign_event`. | Rust unit + structural test | `tests/rust/buzz/identity_perch_gate.rs` + `_tests.rs` — **4 of 6 run today, 4/4 green** | **P0** | 2 tests need B2 / the Buzz crate |
 | INV-30 | `security.csp` equals the pinned literal; no bare `https:`/`http:`/`wss:`/`ws:` in `connect-src`; no remote host in any fetch directive; no `<meta>` CSP in the live document. | CI guard + Playwright | `scripts/check-csp-pin.mjs`, `perch-marker-admission.spec.ts` #06 | **P0** | delete animated avatars first |
 | INV-31 | No binding carrying a `verb` has `key` lowercasing to `"a"`; `Approve`/`Approved` appears in no rendered string. | CI guard + node:test | `check-copy-banned-terms.sh` keymap pass, `copy-ban-list.tsv` row `approve`, `perchKeymapRegistry.test.mjs` + `perchKeymapRegistry.ts` | **P0** | — |
 | INV-32 | No key is bound to two different verdict verbs. Asserted over `PERCH_BINDINGS` and again over the rendered key hints in the interleaved queue. | node:test + CI guard + Playwright | `perchKeymapRegistry.test.mjs`, `check-copy-banned-terms.sh`, `perch-queue-lifecycle.spec.ts` #05 | **P0** | — |
@@ -777,7 +777,7 @@ worth making routine because it costs nothing and both were P0-row defects:
    `proof-?read` explicitly, because loosening the boundary class globally would break `bare-lane`,
    which genuinely wants a hyphen to be a boundary. Two rows, two rules, both written down.
 6. **`exclamation` fired on every marker literal.** `<!--` contains a `!`, and the seven
-   `<!-- ambush:<slug>:v1 -->` markers are wire literals a copy module must carry verbatim. The
+   `<!-- swarm:<slug>:v1 -->` markers are wire literals a copy module must carry verbatim. The
    exemption is anchored and `[^!]*`-bounded — `^<!--[^!]*-->$` — so a marker constant passes and
    `<!-- Great news! -->` still fails. Both arms are in the parity corpus.
 

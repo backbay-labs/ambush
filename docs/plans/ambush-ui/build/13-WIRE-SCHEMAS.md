@@ -113,7 +113,7 @@ was not run (`node_modules` is not installed in this checkout), and
 ### 1.1 The marker, exactly
 
 ```
-<!-- ambush:<card>:v1 -->
+<!-- swarm:<card>:v1 -->
 ```
 
 `19 + len(slug)` characters — **23 to 29**, not a fixed width: `hold` is 23,
@@ -145,7 +145,7 @@ hold h_a07aeacf · isolate_host · CRITICAL · host host-ops-1 · expires 2026-0
 
 1. **Marker.** Whole first line, nothing else.
 2. **Human fallback line.** One line, ` · `-separated. The degradation contract.
-3. **Fenced JSON**, info string `ambush:<card>:v1`, one line of JSON.
+3. **Fenced JSON**, info string `swarm:<card>:v1`, one line of JSON.
 
 **This is not the plan's ordering, and the change is the point.**
 `03` §3.2's sketch is marker / JSON / human line. Two things break under it, and

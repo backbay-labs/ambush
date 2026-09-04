@@ -16,7 +16,7 @@
 // (BUZZ desktop/src-tauri/src/commands/identity.rs:107-135 — the Tauri Rust
 // process; it takes `kind`, `content`, `created_at`, `tags`, signs with
 // `state.signing_keys()` and returns the event JSON to the renderer) and
-// REFUSES any content whose first line is an `ambush:<slug>:v<n>` marker. Its
+// REFUSES any content whose first line is an `swarm:<slug>:v<n>` marker. Its
 // refusal string names `perch_record_verdict` as the alternative. Without this
 // file that alternative does not exist and the console cannot publish leg 1 at
 // all — a two-legged write with one leg, which is how four wave-2 artifacts
@@ -26,7 +26,7 @@
 // (BUZZ desktop/src-tauri/src/commands/messages.rs:409-...) takes an arbitrary
 // `content: String` and an optional `kind: Option<u32>`, snapshots
 // `state.signing_keys()` at :447, and publishes. Gating only `sign_event`
-// leaves a renderer able to sign a `kind:9` whose body is an `ambush:*:v1`
+// leaves a renderer able to sign a `kind:9` whose body is an `swarm:*:v1`
 // marker through that command instead. `perch_sign_gate(kind_num, &content)`
 // must be called there too, immediately after `kind_num` is resolved at
 // messages.rs:452. Handed to 16-INVARIANT-TESTS.md as an INV-29 completeness

@@ -731,7 +731,7 @@ layout in a way the outlet cannot express, that is a separate 0.5.
   it the same way as P0-11: add a throwaway marker, revert.
 - The `React.memo` comparator is either unchanged or has a compile-time exhaustiveness link to the
   prop type, so a new prop cannot be added without a comparator clause.
-- Rendering an unknown `ambush:*:v9` marker produces the explicit unknown-card state from
+- Rendering an unknown `swarm:*:v9` marker produces the explicit unknown-card state from
   `17-COMPONENT-SPECS.md`, not a raw body dump and not a blank row.
 
 **Tests**
@@ -1198,7 +1198,7 @@ is the single cheapest task with the largest blast radius in the plan.
 - A Rust test asserts `security.csp` equals a checked-in literal with no bare
   `https:`/`http:`/`wss:`/`ws:` `connect-src` source and no remote `script-src` host.
 - A Rust test asserts `sign_event` **rejects** `kind:46010` and rejects any `kind:9` whose first
-  content line is an `ambush:*:v1` marker, with a typed error naming `perch_record_verdict` as the
+  content line is an `swarm:*:v1` marker, with a typed error naming `perch_record_verdict` as the
   path that exists for that purpose. A kind allowlist alone is insufficient, because the verdict
   rides `kind:9`, which is also every ordinary case message.
 - The app still functions: every fetch the bare `https:` source was silently permitting is either
