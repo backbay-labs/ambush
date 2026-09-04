@@ -127,11 +127,11 @@ export function FindingCardPresenter({
 export const findingCardEntry = defineSwarmCard<FindingPayload>({
   pillar: "substrate",
   homeSurface: ["case", "lane"],
-  // 0 until B6 seals every envelope on the publish path. A ceiling of 2 with no
-  // sealed envelope would let a card display a badge for evidence that does
-  // not exist; the plan calls tier 0 here a rendered honest state, not a
-  // fallback.
-  maxTier: 0,
+  // A CEILING, not a reading. The pacer seals every evidence envelope and
+  // `perch_verify_envelope` checks the hash, the signature and the chain link
+  // — so this card MAY reach tier 2, and renders whatever the verifier
+  // actually concluded, which is tier 1 for an unsigned or unchained envelope.
+  maxTier: 2,
   decode: decodeFinding,
   Presenter: FindingCardPresenter,
 });

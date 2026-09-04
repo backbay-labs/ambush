@@ -209,6 +209,16 @@ export type PerchMockFixture = {
   feedbackDelayMs?: number;
 };
 
+/** What `perch_verify_envelope` answers. Mirrors `PerchEnvelopeVerification`. */
+type MockVerification = {
+  hash_matches: boolean;
+  signature_present: boolean;
+  signature_valid: boolean | null;
+  chain: string | null;
+  tier: number;
+  reason: string;
+};
+
 type MockState = {
   issuers: string[];
   lanes: Record<string, string>;
@@ -246,6 +256,8 @@ type MockState = {
    * `null` and a `stopped` status are different, and the panel renders them
    * differently, so the mock keeps them apart too.
    */
+  /** A scripted envelope verification, or `null` for the tier-1 default. */
+  verification: MockVerification | null;
   sidecar: {
     pid: number;
     started_at_ms: number;
@@ -284,6 +296,7 @@ function defaults(): MockState {
     feedback: new Map(),
     log: [],
     verdicts: 0,
+    verification: null,
     sidecar: null,
   };
 }
@@ -312,6 +325,9 @@ declare global {
       setDaemonError: (message: string | null) => void;
       setDecide: (outcome: MockDecideOutcome | null, delayMs?: number) => void;
       setLegOneError: (message: string | null) => void;
+      /** Script the envelope verification a spec needs; `null` restores the
+          tier-1 default, which is this fixture's honest steady state. */
+      setVerification: (verification: MockVerification | null) => void;
       reset: () => void;
     };
   }
@@ -496,6 +512,7 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_list_containments",
   "perch_release_containment",
   "perch_evasion_coverage",
+  "perch_verify_envelope",
   "perch_sidecar_start",
   "perch_sidecar_stop",
   "perch_sidecar_status",
@@ -894,6 +911,23 @@ export function handlePerchMockCommand(
     case "perch_record_verdict":
       s.log.push(command);
       return after(s.verdictDelayMs, () => recordVerdict(payload));
+    // Envelope verification. The mock answers tier 1 by default: an unsigned
+    // envelope whose hash matches is the honest steady state of this fixture,
+    // and a mock that answered tier 2 would let a spec assert a badge the
+    // product cannot yet render.
+    case "perch_verify_envelope":
+      s.log.push(command);
+      return (
+        s.verification ?? {
+          hash_matches: true,
+          signature_present: false,
+          signature_valid: null,
+          chain: null,
+          tier: 1,
+          reason:
+            "attestation matches this body; the envelope carries no signature",
+        }
+      );
     // The laptop sidecar. Local process control, so the mock's job is only to
     // let the settings panel render its three states without a real daemon.
     // The default is `null` -- never started -- because a mock that reported a
@@ -965,6 +999,9 @@ export function installPerchControlSeams(target: Window): void {
     },
     setLegOneError: (message) => {
       current().legOneError = message;
+    },
+    setVerification: (verification) => {
+      current().verification = verification;
     },
     reset: () => resetPerchMock(),
   };

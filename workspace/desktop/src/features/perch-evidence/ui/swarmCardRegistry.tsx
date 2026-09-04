@@ -41,11 +41,11 @@ function notYetRendered(
 
 export const SWARM_CARD_REGISTRY = {
   finding: findingCardEntry,
-  escalation: notYetRendered("escalation", "authority", ["case", "lane"], 0),
+  escalation: notYetRendered("escalation", "authority", ["case", "lane"], 2),
   hold: holdCardEntry,
   verdict: verdictCardEntry,
-  receipt: notYetRendered("receipt", "evidence", ["case"], 0),
-  lease: notYetRendered("lease", "evidence", ["case"], 0),
+  receipt: notYetRendered("receipt", "evidence", ["case"], 2),
+  lease: notYetRendered("lease", "evidence", ["case"], 2),
   rollback: notYetRendered("rollback", "evidence", ["case"], 1),
 } satisfies Record<SwarmMarkerKind, SwarmCardEntry>;
 

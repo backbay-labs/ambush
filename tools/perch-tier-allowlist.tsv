@@ -8,15 +8,18 @@
 # directions against the `maxTier:` declarations in the desktop card registry
 # and the card modules it composes.
 #
-# WHY THE FIVE B6 ROWS ARE 0 AND NOT 2
-#   B6's signer landed, but sealing is NOT yet on the publish path: the pacer
-#   restores `prev_envelope_hash` on a non-acknowledged frame, so sealing at
-#   spool-append would advance the durable head for a card the relay never
-#   took, and the next real card would chain from a link nobody can fetch.
-#   Until `seal_at` is wired to sign at append and commit the head on ACK,
-#   there is no sealed envelope for any of these cards to carry. A ceiling of 2
-#   would let one display a tier-2 badge for evidence that does not exist.
-#   Tier 0 here is a rendered honest state, not a fallback -- the plan says so.
+# WHY THE FIVE B6 ROWS ARE 2
+#   Both halves now hold. The pacer seals every evidence envelope under its
+#   slot's spine identity, and `commit_chain_head` advances the durable head
+#   ONLY on the relay's acknowledgement -- so a card the relay never took
+#   cannot advance a chain that survives restart. And the console can check the
+#   result: `perch_verify_envelope` recomputes the RFC 8785 hash, verifies the
+#   Ed25519 signature over the same bytes, and reports the chain link, deriving
+#   the tier from all three.
+#
+#   A ceiling is not a reading. An envelope that is unsigned, or whose chain
+#   this console has not yet established, still renders tier 1 -- the verifier
+#   decides, and these numbers only bound what it may conclude.
 #
 # COLUMNS, tab-separated:
 #   card         the SwarmMarkerKind
@@ -25,8 +28,8 @@
 card	maxTier	precondition
 rollback	1	holds -- verify_release_attestation ships today
 verdict	1	holds -- B2 landed and provisions the operator's Ed25519 key
-finding	0	needs B6 on the publish path (Task 7 signer landed; seal is not wired to ACK)
-escalation	0	needs B6 on the publish path
-hold	0	needs B6 on the publish path
-receipt	0	needs B6 on the publish path
-lease	0	needs B6 on the publish path
+finding	2	holds -- the pacer seals on publish and the console verifies
+escalation	2	holds -- as finding
+hold	2	holds -- as finding
+receipt	2	holds -- as finding
+lease	2	holds -- as finding

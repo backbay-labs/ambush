@@ -549,6 +549,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::perch_verify_envelope,
             commands::perch_sidecar_start,
             commands::perch_sidecar_stop,
             commands::perch_sidecar_status,

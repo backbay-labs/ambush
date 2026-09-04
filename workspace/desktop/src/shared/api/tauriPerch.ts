@@ -287,10 +287,58 @@ export const PERCH_DAEMON_WRITE_COMMANDS = [
  * routes when the claim it carries is about five.
  */
 export const PERCH_LOCAL_COMMANDS = [
+  "perch_verify_envelope",
   "perch_sidecar_start",
   "perch_sidecar_stop",
   "perch_sidecar_status",
 ] as const;
+
+/** Why a link did or did not continue its chain. Four outcomes, never a bool. */
+export type PerchChainLinkVerdict =
+  | "valid"
+  | "issuer_mismatch"
+  | "sequence_gap"
+  | "hash_mismatch";
+
+/** The last envelope this console saw from one issuer. */
+export type PerchIssuerChainHead = {
+  readonly issuer: string;
+  readonly seq: number;
+  readonly envelope_hash: string;
+};
+
+/**
+ * What the console learned about one envelope.
+ *
+ * Three independent facts rather than a boolean, because there are three ways
+ * reliance can fail and they need different responses: re-fetch the body,
+ * distrust the issuer, or go looking for a missing card. `tier` is derived in
+ * Rust so a renderer cannot compute one that disagrees with the badge.
+ */
+export type PerchEnvelopeVerification = {
+  readonly hash_matches: boolean;
+  readonly signature_present: boolean;
+  /** `null` when there is no signature: absent and failed stay apart. */
+  readonly signature_valid: boolean | null;
+  /** `null` when no earlier card from this issuer has been seen. */
+  readonly chain: PerchChainLinkVerdict | null;
+  readonly tier: 0 | 1 | 2;
+  readonly reason: string;
+};
+
+/**
+ * Verify a spine envelope in this process. Local computation, no host request,
+ * so it is outside INV-01.
+ */
+export function perchVerifyEnvelope(
+  envelope: unknown,
+  head?: PerchIssuerChainHead,
+) {
+  return invokeTauri<PerchEnvelopeVerification>("perch_verify_envelope", {
+    envelope,
+    head,
+  });
+}
 
 export const PERCH_TAURI_COMMANDS = [
   ...PERCH_READ_COMMANDS,
