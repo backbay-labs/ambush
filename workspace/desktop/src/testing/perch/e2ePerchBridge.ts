@@ -123,7 +123,25 @@ const PERCH_OPERATOR_PUBLIC_KEY =
  * point after it. Every field is optional; the defaults are an honest daemon
  * with one admitted bridge and an empty review window.
  */
+/** One hold as the daemon's list route reports it. */
+export type MockPerchHold = Record<string, unknown> & { hold_id: string };
+
 export type PerchMockFixture = {
+  /** The holds `perch_list_holds` reports, newest-first as the daemon sends. */
+  holds?: readonly MockPerchHold[];
+  /**
+   * The STORE's open-hold depth. Defaults to the number of open holds in
+   * `holds`, which is the honest shape: `open_count` counts the store and not
+   * the page, so a spec wanting the queue-depth alarm states the depth
+   * directly rather than seeding twelve fixtures.
+   */
+  openCount?: number;
+  /**
+   * Fail every daemon read with exactly this message. `daemonReachable: false`
+   * is the transport-level refusal with the Rust prefix; this is the
+   * message-carrying variant, for a daemon that answered with its own words.
+   */
+  daemonError?: string | null;
   /** The admitted bridge identities (INV-15). `[]` admits nobody. */
   issuers?: readonly string[];
   /** Threat-class slug to lane channel id. */
@@ -178,6 +196,9 @@ type MockState = {
   nowMs: number;
   findings: Record<string, string>;
   daemonReachable: boolean;
+  holds: MockPerchHold[];
+  openCount: number | null;
+  daemonError: string | null;
   feedbackNotCorrelated: boolean;
   feedbackFailureMessage: string | null;
   verdictDelayMs: number;
@@ -203,6 +224,9 @@ function defaults(): MockState {
     nowMs: PERCH_NOW_MS,
     findings: { [PERCH_FINDING_CARD_EVENT_ID]: PERCH_FINDING_ID },
     daemonReachable: true,
+    holds: [],
+    openCount: null,
+    daemonError: null,
     feedbackNotCorrelated: false,
     feedbackFailureMessage: null,
     verdictDelayMs: 0,
@@ -227,6 +251,15 @@ declare global {
     __AMBUSH_E2E_PERCH_LOG__?: () => string[];
     __AMBUSH_E2E_PERCH_RESET__?: () => void;
     __AMBUSH_E2E_PERCH_COUNTER__?: (name: PerchCounterName) => number;
+    __AMBUSH_E2E_PERCH_CONTROL__?: {
+      setHolds: (
+        holds: readonly MockPerchHold[],
+        options?: { storeDurable?: boolean; openCount?: number },
+      ) => void;
+      setIssuers: (issuers: readonly string[]) => void;
+      setDaemonError: (message: string | null) => void;
+      reset: () => void;
+    };
   }
 }
 
@@ -257,6 +290,11 @@ function applyFixture(target: MockState, fixture: PerchMockFixture): void {
   }
   if (fixture.daemonReachable !== undefined) {
     target.daemonReachable = fixture.daemonReachable;
+  }
+  if (fixture.holds) target.holds = fixture.holds.map((hold) => ({ ...hold }));
+  if (fixture.openCount !== undefined) target.openCount = fixture.openCount;
+  if (fixture.daemonError !== undefined) {
+    target.daemonError = fixture.daemonError;
   }
   if (fixture.feedbackNotCorrelated !== undefined) {
     target.feedbackNotCorrelated = fixture.feedbackNotCorrelated;
@@ -381,6 +419,9 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_record_verdict",
   "perch_finding_feedback",
   "perch_mint_incident",
+  "perch_list_holds",
+  "perch_get_hold",
+  "perch_configure_daemon",
 ]);
 
 /**
@@ -424,6 +465,49 @@ function unreachable(): never {
   throw new Error(
     `${PERCH_DAEMON_UNREACHABLE_PREFIX} error sending request for url (http://127.0.0.1:9090)`,
   );
+}
+
+/** The open states `open_count` counts, mirroring `HoldState::is_open`. */
+const MOCK_OPEN_STATES = new Set(["created", "notified", "armed", "deciding"]);
+
+/**
+ * Refuse a daemon read the way the fixture asked.
+ *
+ * Two refusals, deliberately distinct: `daemonReachable: false` is a transport
+ * failure carrying the Rust client's own prefix, and `daemonError` is a daemon
+ * that answered in its own words. The queue must render either as unreachable
+ * and NEVER as an empty list, which is the whole point of the seam.
+ */
+function refuseIfAsked(s: MockState): void {
+  if (s.daemonError !== null) throw new Error(s.daemonError);
+  if (!s.daemonReachable) unreachable();
+}
+
+function listHolds(): unknown {
+  const s = current();
+  refuseIfAsked(s);
+  return {
+    schema_version: 1,
+    observed_at_ms: Date.now(),
+    holds: s.holds.map((hold) => ({ ...hold })),
+    open_count:
+      s.openCount ??
+      s.holds.filter((hold) => MOCK_OPEN_STATES.has(String(hold.state))).length,
+    truncated: false,
+    deciding_stalled_count: 0,
+    store_durable: s.storeDurable,
+  };
+}
+
+function getHold(payload: unknown): unknown {
+  const s = current();
+  refuseIfAsked(s);
+  const holdId = (payload as { holdId?: string } | null)?.holdId;
+  const hold = s.holds.find((entry) => entry.hold_id === holdId);
+  if (!hold) {
+    throw new Error(`daemon answered 404 not_found: no hold \`${holdId}\``);
+  }
+  return { schema_version: 1, observed_at_ms: Date.now(), hold: { ...hold } };
 }
 
 function admittedIssuers(): PerchAdmittedIssuers {
@@ -585,6 +669,15 @@ export function handlePerchMockCommand(
     case "perch_mint_incident":
       s.log.push(command);
       return mintIncident(payload);
+    case "perch_list_holds":
+      s.log.push(command);
+      return listHolds();
+    case "perch_get_hold":
+      s.log.push(command);
+      return getHold(payload);
+    case "perch_configure_daemon":
+      s.log.push(command);
+      return null;
     case "perch_record_verdict":
       s.log.push(command);
       return after(s.verdictDelayMs, () => recordVerdict(payload));
@@ -609,6 +702,24 @@ export function installPerchControlSeams(target: Window): void {
   // the number INV-15 requires a refused marker to be counted in, and a spec
   // that asserted only "the notice rendered" would not be asserting it.
   target.__AMBUSH_E2E_PERCH_COUNTER__ = readPerchCounter;
+  // Mid-spec control. Seeding through the fixture covers the load-time state;
+  // this is for the transitions a spec has to drive AFTER mount, such as a
+  // daemon that goes away between two reconciliations.
+  target.__AMBUSH_E2E_PERCH_CONTROL__ = {
+    setHolds: (holds, options) => {
+      const s = current();
+      s.holds = holds.map((hold) => ({ ...hold }));
+      s.storeDurable = options?.storeDurable ?? s.storeDurable;
+      s.openCount = options?.openCount ?? null;
+    },
+    setIssuers: (issuers) => {
+      current().issuers = [...issuers];
+    },
+    setDaemonError: (message) => {
+      current().daemonError = message;
+    },
+    reset: () => resetPerchMock(),
+  };
 }
 
 if (typeof window !== "undefined") {

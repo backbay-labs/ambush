@@ -52,6 +52,7 @@ test("the perch singletons are registered", () => {
       "perchAdmittedIssuers",
       "perchWriteStates",
       "perchCaseIndex",
+      "perchReconcileCounters",
     ].every((k) => COMMUNITY_SCOPED_SINGLETONS.includes(k)),
   );
 });

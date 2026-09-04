@@ -11,6 +11,7 @@ import { resetPerchAdmittedIssuers } from "@/features/perch-evidence/lib/admitte
 import { resetFindingVerdictFlow } from "@/features/perch-evidence/lib/findingVerdictFlow";
 import { resetPerchCaseIndex } from "@/features/perch-evidence/lib/perchCaseIndex";
 import { resetPerchWriteStates } from "@/features/perch-evidence/lib/verdictWriteState";
+import { resetReconcileDivergenceCounter } from "@/features/perch-watch/lib/reconcileCounters";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
@@ -88,6 +89,7 @@ export const COMMUNITY_SCOPED_SINGLETONS = [
   "perchWriteStates",
   "perchCaseIndex",
   "perchFindingVerdictFlow",
+  "perchReconcileCounters",
 ] as const;
 
 /** The name of one community-scoped singleton in {@link COMMUNITY_SCOPED_SINGLETONS}. */
@@ -178,6 +180,8 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
   // whose relay carries its card; retrying it against another one would send
   // a decision about a finding this community has never seen.
   perchFindingVerdictFlow: () => resetFindingVerdictFlow(),
+  // A divergence belongs to the colony whose daemon and relay disagreed.
+  perchReconcileCounters: () => resetReconcileDivergenceCounter(),
 };
 
 /**

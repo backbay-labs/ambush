@@ -4,11 +4,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { HomeScreen } from "@/features/home/ui/HomeScreen";
+import { WatchScreen } from "@/features/perch-watch/ui/WatchScreen";
 import {
   consumePendingWelcomeChannel,
   WELCOME_CHANNEL_READY_EVENT,
 } from "@/features/onboarding/welcome";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { useFeatureEnabled } from "@/shared/features";
 
 type HomeRouteSearch = {
   item?: string;
@@ -44,6 +46,7 @@ export const Route = createFileRoute("/")({
 });
 
 function HomeRouteComponent() {
+  const perchEnabled = useFeatureEnabled("perch");
   const { goChannel } = useAppNavigation();
   const channelsQuery = useChannelsQuery();
   const identityQuery = useIdentityQuery();
@@ -89,6 +92,21 @@ function HomeRouteComponent() {
   React.useEffect(() => {
     openPendingWelcomeChannel(availableChannelIds);
   }, [availableChannelIds, openPendingWelcomeChannel]);
+
+  // The operator console replaces Home rather than sitting beside it: an
+  // operator on shift has one queue, and a second inbox next to it is a second
+  // place for a held action to go unread. Every hook above still runs, so the
+  // flag can be toggled at runtime without changing hook order.
+  if (perchEnabled) {
+    return (
+      <WatchScreen
+        currentPubkey={identityQuery.data?.pubkey}
+        onOpenCase={(caseId) => {
+          void goChannel(caseId);
+        }}
+      />
+    );
+  }
 
   return (
     <HomeScreen
