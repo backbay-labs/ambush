@@ -7,7 +7,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isDisabledOnRow, resolvePerchKey } from "./usePerchKeymap.ts";
+import {
+  isDisabledOnRow,
+  isVerbOwnedElsewhere,
+  resolvePerchKey,
+} from "./usePerchKeymap.ts";
 
 const press = (key, extra = {}) => ({ key, ...extra });
 
@@ -131,4 +135,30 @@ test("an unbound key resolves to nothing rather than to the nearest match", () =
   for (const key of ["x", "z", "1", "F5", "Tab", " "]) {
     assert.equal(resolvePerchKey(press(key), "hold"), null, key);
   }
+});
+
+test("a verb another control owns is left untouched, not swallowed", () => {
+  // The bug this exists for: the hook calls `preventDefault()` on every key it
+  // answers, and `GrantControl` re-registers its own `window` listener when
+  // the dwell completes. That moved the control behind the hook, the hook
+  // consumed `G`, and arming silently stopped working at the exact moment the
+  // gate opened. `ignoreVerbs` makes ownership declarative instead of
+  // depending on which listener registered first.
+  assert.deepEqual(resolvePerchKey(press("g"), "hold"), {
+    kind: "verb",
+    verb: "grant",
+  });
+  assert.equal(
+    isVerbOwnedElsewhere(resolvePerchKey(press("g"), "hold"), ["grant"]),
+    true,
+  );
+  assert.equal(
+    isVerbOwnedElsewhere(resolvePerchKey(press("r"), "hold"), ["grant"]),
+    false,
+  );
+  assert.equal(
+    isVerbOwnedElsewhere(resolvePerchKey(press("j"), "hold"), ["grant"]),
+    false,
+    "a non-verb action is never owned elsewhere",
+  );
 });

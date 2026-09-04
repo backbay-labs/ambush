@@ -181,8 +181,21 @@ export function perchRecordVerdict(input: {
   }>("perch_record_verdict", { input });
 }
 
-/** The relay-published set: one command, one kind, one marker. */
-export const PERCH_RELAY_WRITE_COMMANDS = ["perch_record_verdict"] as const;
+/**
+ * The relay-published set: three commands, one kind, one marker.
+ *
+ * All three publish the SAME marker — a `swarm:verdict:v1` card. Leg 1 of a
+ * FINDING verdict and leg 1 of a HOLD decision are separate commands because
+ * they take different inputs and read different daemon records, and
+ * `perch_publish_verdict_update` replies to its own leg-1 card. The set of
+ * commands grew; the set of markers the operator's key can publish did not,
+ * and a Rust test asserts that.
+ */
+export const PERCH_RELAY_WRITE_COMMANDS = [
+  "perch_record_verdict",
+  "perch_record_hold_verdict",
+  "perch_publish_verdict_update",
+] as const;
 
 // ===========================================================================
 // DAEMON WRITES. INV-01 asserts the set is closed at five; First card
@@ -222,6 +235,7 @@ export function perchMintIncident(input: PerchMintIncidentInput) {
 export const PERCH_DAEMON_WRITE_COMMANDS = [
   "perch_finding_feedback",
   "perch_mint_incident",
+  "perch_decide_hold",
 ] as const;
 
 /**
@@ -555,4 +569,107 @@ export function perchGetHold(holdId: string) {
  */
 export function perchConfigureDaemon(base_url: string, credential: string) {
   return invokeTauri<void>("perch_configure_daemon", { base_url, credential });
+}
+
+// ===========================================================================
+// LEG 2 — THE DAEMON DECIDE, and the supersession card leg 1 gets when it
+// loses. `perch_decide_hold` and the hold arm of `perch_record_verdict` are
+// implemented by the decide/verdict track (plan Tasks 20 and 21); the shapes
+// below are the plan's documented interface, which the write reducer and the
+// mock bridge are both built against.
+// ===========================================================================
+
+/** `grant | refuse`. Never `deny`: `refuse` is the operator's word. */
+export type PerchHoldVerdict = "grant" | "refuse";
+
+/**
+ * What leg 2 reports. Six outcomes; a seventh is a wire change.
+ *
+ * `superseded` carries `superseded_by` and `winning_decision` as TYPED fields.
+ * The daemon's 409 body is `{error, message}` and nothing else (W3-17), so the
+ * Tauri command fills these by RE-READING `GET /v1/response/holds/{id}` — the
+ * error body says which KIND of conflict happened, and only the re-read says
+ * what is true.
+ */
+export type PerchDecideOutcome = {
+  readonly outcome:
+    | "dispatched"
+    | "refused_late"
+    | "refused_late_governance"
+    | "superseded"
+    | "expired"
+    | "unknown_hold";
+  readonly rule: string | null;
+  readonly reason: string | null;
+  readonly receipt_id: string | null;
+  readonly decided_at_ms: number;
+  /** The winning intent's event id, from the re-read. */
+  readonly superseded_by: string | null;
+  /** The winning decision, from the re-read. Never parsed out of `reason`. */
+  readonly winning_decision: PerchHoldVerdict | "unknown" | null;
+  /** True when this call replayed an existing record rather than deciding. */
+  readonly replayed: boolean;
+};
+
+/**
+ * Leg 2. The one route that can turn a held destructive action into a real one.
+ *
+ * `nostr_intent_event_id` is leg 1's card id and is the daemon's idempotency
+ * key, so a retry re-sends THIS call unchanged and never re-signs leg 1.
+ */
+export function perchDecideHold(input: {
+  holdId: string;
+  decision: PerchHoldVerdict;
+  /** Verbatim from `perchRecordVerdict`. */
+  nostrIntentEventId: string;
+  rationale: string | null;
+  armedAtMs: number | null;
+}) {
+  return invokeTauri<PerchDecideOutcome>("perch_decide_hold", input);
+}
+
+/**
+ * Publish the supersession update: a NIP-10 reply to this console's OWN leg-1
+ * card, marking it `leg2.state: "superseded"`.
+ *
+ * Published rather than left silent because the losing card is a genuine
+ * signed decision that will sit in the case channel forever. A reader who finds
+ * it later must be able to see, from the channel alone, that it did not run.
+ * The case channel comes from the daemon's hold record, never from the
+ * renderer.
+ */
+export function perchPublishVerdictUpdate(input: {
+  holdId: string;
+  ownIntentEventId: string;
+  supersededBy: string;
+  supersededAtMs: number;
+}) {
+  return invokeTauri<{ readonly nostr_intent_event_id: string }>(
+    "perch_publish_verdict_update",
+    { input },
+  );
+}
+
+/**
+ * Leg 1 for a HOLD subject (D-FC-3's `subject: "hold"` discriminator).
+ *
+ * The same command as the finding verdict, with a hold-shaped input. The Rust
+ * side re-reads the hold from the daemon and builds the card body from THAT
+ * answer, so the renderer chooses the decision and types the rationale and
+ * supplies no other content.
+ */
+export function perchRecordHoldVerdict(input: {
+  holdId: string;
+  decision: PerchHoldVerdict;
+  /** Free text the operator typed. Hashed into the signature preimage. */
+  rationale: string | null;
+}) {
+  return invokeTauri<{
+    /** The published card's event id — leg 2's idempotency key. */
+    readonly nostr_intent_event_id: string;
+    readonly decided_at_ms: number;
+    readonly signature: PerchDetachedSignature;
+    /** Read from the daemon's own hold record, not from the input. */
+    readonly hold_id: string;
+  }>("perch_record_hold_verdict", { input });
 }

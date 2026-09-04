@@ -12,7 +12,7 @@ import {
   type PerchQueueId,
 } from "../lib/watchQueues";
 import { useHoldQueue } from "../useHoldQueue";
-import { VerdictPane } from "./VerdictPane";
+import { HoldVerdictBar } from "./HoldVerdictBar";
 import { VerdictQueueRow } from "./VerdictQueueRow";
 import { WatchQueueSection } from "./WatchQueueSection";
 
@@ -146,7 +146,7 @@ export function WatchScreen({ currentPubkey, onOpenCase }: WatchScreenProps) {
         hidden={selected === null}
       >
         {selectedHold ? (
-          <VerdictPane hold={selectedHold} writeState={{ phase: "idle" }} />
+          <HoldVerdictBar hold={selectedHold} />
         ) : selected !== null ? (
           <p
             data-testid="perch-detail-unreconciled"

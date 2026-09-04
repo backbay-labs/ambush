@@ -651,3 +651,93 @@ fn the_operator_key_has_exactly_one_loader() {
         "and minted in one place"
     );
 }
+
+#[test]
+fn the_operator_key_gains_a_second_publisher_and_no_second_marker() {
+    // The plan's preamble called `perch_record_verdict` the sole producer of a
+    // governance marker; Task 27 adds a second command deliberately. What must
+    // not widen is WHAT they publish, so the marker set stays at one and the
+    // publisher set is written down rather than implied.
+    assert_eq!(PERCH_RELAY_PUBLISHED_MARKERS.len(), 1);
+    assert_eq!(PERCH_RELAY_PUBLISHED_MARKERS[0], "swarm:verdict:v1");
+    assert_eq!(PERCH_RELAY_PUBLISHED_KINDS.len(), 1);
+    let mut publishers = PERCH_RELAY_PUBLISHING_COMMANDS.to_vec();
+    publishers.sort_unstable();
+    assert_eq!(
+        publishers,
+        vec![
+            "perch_publish_verdict_update",
+            "perch_record_hold_verdict",
+            "perch_record_verdict"
+        ]
+    );
+}
+
+#[test]
+fn every_publishing_command_named_in_the_set_exists_in_this_file() {
+    let source = include_str!("perch_verdict.rs");
+    for command in PERCH_RELAY_PUBLISHING_COMMANDS {
+        assert!(
+            source.contains(&format!("pub async fn {command}(")),
+            "{command} is in the publisher set and is not defined here"
+        );
+    }
+    // The inverse: every `#[tauri::command]` in this file is accounted for as
+    // either a publisher or an explicit non-publisher. A new publisher added
+    // without a set entry is the drift the set exists to catch, and it still
+    // fails here — but a read command no longer has to be miscounted as a
+    // publisher to keep the arithmetic true.
+    for command in PERCH_NON_PUBLISHING_COMMANDS {
+        assert!(
+            !PERCH_RELAY_PUBLISHING_COMMANDS.contains(&command),
+            "{command} is in both lists"
+        );
+        assert!(
+            source.contains(&format!("pub async fn {command}(")),
+            "{command} is named as a non-publisher and is not defined here"
+        );
+    }
+    let declared = source.matches("#[tauri::command]").count();
+    let accounted = PERCH_RELAY_PUBLISHING_COMMANDS.len() + PERCH_NON_PUBLISHING_COMMANDS.len();
+    assert_eq!(
+        declared, accounted,
+        "this file declares {declared} commands and the two lists account for {accounted}"
+    );
+}
+
+#[test]
+fn the_update_never_re_signs_the_decision_preimage() {
+    // One act, one signature. The update restates the original card's
+    // `decision` and `signature` verbatim; a second `key.sign(` inside the
+    // update path would mint a second signature for one decision, and two
+    // signatures over one act is how a case timeline stops being a record.
+    let source = include_str!("perch_verdict.rs");
+    let update = source
+        .split("pub async fn perch_publish_verdict_update(")
+        .nth(1)
+        .expect("the update command is defined");
+    assert!(
+        !update.contains("verdict_preimage("),
+        "the supersession update rebuilds the decision preimage"
+    );
+    assert!(
+        !update.contains("key.sign("),
+        "the supersession update signs a decision of its own"
+    );
+}
+
+#[test]
+fn the_update_reads_its_own_card_and_takes_no_channel_from_the_renderer() {
+    let source = include_str!("perch_verdict.rs");
+    // The input shape is the assertion: a `case_channel` field would be a
+    // channel the webview chose, and an `e` tag into a channel the webview
+    // chose is a reply that mutates a foreign thread's counters.
+    let input = source
+        .split("pub struct VerdictUpdateInput {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("the update input is declared");
+    assert!(!input.contains("case_channel"), "{input}");
+    assert!(!input.contains("content"), "{input}");
+    assert!(source.contains("own_verdict_card(&state,"));
+}

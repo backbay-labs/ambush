@@ -27,17 +27,27 @@ import {
  * strokes are inseparable from the dwell that gates the second one, and only
  * the control watching the blast radius can know whether that gate is open, so
  * `GrantControl` owns both. The registry is the ratified KEYMAP; it does not
- * dictate which module listens. A caller wires `onVerb` to ignore `grant` for
- * that reason, and the JSDoc on `onVerb` says so at the call site.
+ * dictate which module listens.
+ *
+ * A caller says so with `ignoreVerbs`, and that has to be declarative rather
+ * than an `onVerb` that quietly does nothing: this hook calls
+ * `preventDefault()` on every key it answers, and a swallowed `G` would make
+ * the grant work or not work depending on which of two `window` listeners
+ * happened to register first. It did exactly that — `GrantControl` re-registers
+ * its listener when the dwell completes, which moved it behind this one, and
+ * `G` silently stopped arming at the moment the gate opened.
  */
 export type PerchKeymapHandlers = {
   /** The selected row's type, or null when nothing is selected. */
   rowType: PerchRowType | null;
-  /**
-   * A verdict verb was pressed. `grant` arrives here too, and a caller that
-   * renders `GrantControl` must ignore it: the control dispatches its own.
-   */
+  /** A verdict verb was pressed. Never called for a verb in `ignoreVerbs`. */
   onVerb?: (verb: PerchVerdictVerb) => void;
+  /**
+   * Verbs another control owns. This hook neither dispatches them nor calls
+   * `preventDefault()` for them, so the owning control sees the key whatever
+   * order the listeners registered in.
+   */
+  ignoreVerbs?: readonly PerchVerdictVerb[];
   onMove?: (delta: 1 | -1) => void;
   onOpen?: () => void;
   onPromote?: () => void;
@@ -152,6 +162,19 @@ export function isDisabledOnRow(key: string, rowType: PerchRowType): boolean {
   );
 }
 
+/**
+ * Whether `action` is a verdict verb another control owns.
+ *
+ * Exported so the ownership rule is testable on its own: it is the difference
+ * between a grant that works and one that works depending on listener order.
+ */
+export function isVerbOwnedElsewhere(
+  action: PerchKeyAction | null,
+  ignoreVerbs: readonly PerchVerdictVerb[],
+): boolean {
+  return action?.kind === "verb" && ignoreVerbs.includes(action.verb);
+}
+
 export function usePerchKeymap(handlers: PerchKeymapHandlers): void {
   const handlersRef = React.useRef(handlers);
   handlersRef.current = handlers;
@@ -171,6 +194,12 @@ export function usePerchKeymap(handlers: PerchKeymapHandlers): void {
         current.rowType,
       );
       if (!action) return;
+      if (isVerbOwnedElsewhere(action, current.ignoreVerbs ?? [])) {
+        // Not ours. Leaving the event untouched is the whole point: consuming
+        // it would make the owning control's behaviour depend on registration
+        // order.
+        return;
+      }
       switch (action.kind) {
         case "verb":
           current.onVerb?.(action.verb);

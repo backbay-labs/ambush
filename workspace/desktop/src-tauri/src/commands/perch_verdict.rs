@@ -949,3 +949,217 @@ pub async fn perch_record_hold_verdict(
 #[cfg(test)]
 #[path = "perch_verdict_tests.rs"]
 mod tests;
+
+// ── B2 supersession: publish an update when another console wins ──────
+
+/// Every command in this file that publishes to the relay.
+///
+/// `#[cfg(test)]` because nothing in the production path consults it: it is an
+/// inventory the tests below compare against the file's actual
+/// `#[tauri::command]` declarations, so a new publisher cannot land without
+/// being named here. Unlike `PERCH_RELAY_PUBLISHED_KINDS`, which the signing
+/// path itself reads, this one asserts about the source rather than gating it.
+#[cfg(test)]
+pub const PERCH_RELAY_PUBLISHING_COMMANDS: [&str; 3] = [
+    "perch_record_verdict",
+    "perch_record_hold_verdict",
+    "perch_publish_verdict_update",
+];
+
+/// The commands in this file that publish NOTHING. Written down so the
+/// inverse assertion below can be exact: a new command lands in one list or
+/// the other, and a new publisher that lands in neither fails the test.
+#[cfg(test)]
+pub const PERCH_NON_PUBLISHING_COMMANDS: [&str; 1] = ["perch_operator_identity"];
+
+/// Everything the supersession update needs. The case channel is deliberately
+/// absent: it is read from the daemon's own hold record, never from the
+/// renderer.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerdictUpdateInput {
+    /// The hold whose decision was lost.
+    pub hold_id: String,
+    /// This console's own leg-1 card. The update is a NIP-10 reply to it.
+    pub own_intent_event_id: String,
+    /// The winning intent's event id, learned by RE-READING the hold (W3-17).
+    pub superseded_by: String,
+    /// When the console learned it had lost.
+    pub superseded_at_ms: i64,
+}
+
+/// What `perch_publish_verdict_update` returns.
+#[derive(Debug, Serialize)]
+pub struct VerdictUpdateOutput {
+    /// The update card's own event id.
+    pub nostr_intent_event_id: String,
+}
+
+/// This console's own leg-1 verdict card, read back off the relay.
+struct OwnVerdictCard {
+    /// The card's whole `fact` object, so the update restates it verbatim.
+    fact: serde_json::Value,
+    /// The case channel the card was published into.
+    case_channel: String,
+}
+
+/// Read this console's own leg-1 card off the relay and refuse anything else.
+///
+/// Read back rather than taken from the renderer for the same reason
+/// `admitted_finding_card` exists: every factual field in the update comes from
+/// an event that was actually published, so a compromised webview cannot make
+/// this console sign a statement about a decision it never recorded. The signer
+/// check is the sharp one — a card this console did not publish is not this
+/// console's to supersede, and marking somebody else's verdict superseded is
+/// exactly the forgery the two-console rule has to survive.
+async fn own_verdict_card(
+    state: &AppState,
+    own_intent_event_id: &str,
+    hold_id: &str,
+) -> Result<OwnVerdictCard, String> {
+    let keys = state.signing_keys()?;
+    let events = crate::relay::query_relay(
+        state,
+        &[serde_json::json!({ "ids": [own_intent_event_id], "kinds": [9], "limit": 1 })],
+    )
+    .await?;
+    let [event] = events.as_slice() else {
+        return Err("the leg-1 verdict card was not found on the relay".to_string());
+    };
+    if event.pubkey.to_hex() != keys.public_key().to_hex() {
+        return Err(
+            "that verdict card was published by another key; a console supersedes only its own"
+                .to_string(),
+        );
+    }
+    if event.content.lines().next() != Some(CardKind::Verdict.marker()) {
+        return Err("the named event is not a swarm:verdict:v1 card".to_string());
+    }
+    let parts = parse_content(&event.content).map_err(|e| format!("verdict card body: {e}"))?;
+    let envelope: serde_json::Value =
+        serde_json::from_str(parts.json).map_err(|e| format!("verdict card body: {e}"))?;
+    let fact = envelope["fact"].clone();
+    if fact["schema"] != VERDICT_FACT_SCHEMA {
+        return Err(format!(
+            "verdict card fact.schema is {}, expected {VERDICT_FACT_SCHEMA}",
+            fact["schema"]
+        ));
+    }
+    if fact["locator"]["subject"] != "hold" {
+        return Err("that verdict card is not about a hold".to_string());
+    }
+    if fact["locator"]["hold_id"] != hold_id {
+        return Err("that verdict card is about a different hold".to_string());
+    }
+    let case_channel = fact["locator"]["case_channel"]
+        .as_str()
+        .ok_or_else(|| "the verdict card carries no locator.case_channel".to_string())?
+        .to_string();
+    Ok(OwnVerdictCard { fact, case_channel })
+}
+
+/// Publish the supersession update: a NIP-10 reply to this console's own leg-1
+/// card, marking it `leg2.state: "superseded"`.
+///
+/// Published rather than left silent because the losing card is a genuine,
+/// correctly signed decision that will sit in the case channel forever. Somebody
+/// reading that channel next month must be able to see from the channel alone
+/// that it did not run. Nothing here re-signs the decision preimage: the update
+/// restates the original card's `decision` and `signature` verbatim, so one act
+/// keeps one signature.
+///
+/// The `e` tag points at this console's OWN card in the SAME channel. It never
+/// points across channels: an `e` to an event elsewhere would make the relay's
+/// NIP-10 resolver mutate a foreign root's reply counters (D-FC-3).
+///
+/// # Errors
+///
+/// When an id is malformed, when the leg-1 card is missing, was published by
+/// another key, or is about another hold, or when the relay refuses the event.
+#[tauri::command]
+pub async fn perch_publish_verdict_update(
+    input: VerdictUpdateInput,
+    state: State<'_, AppState>,
+) -> Result<VerdictUpdateOutput, String> {
+    if !swarm_perch_wire::tags::is_opaque_hold_id(&input.hold_id) {
+        return Err("holdId must match ^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$".to_string());
+    }
+    if !is_hex64_lower(&input.own_intent_event_id) {
+        return Err("ownIntentEventId must be 64 lowercase hex".to_string());
+    }
+    if !is_hex64_lower(&input.superseded_by) {
+        return Err("supersededBy must be 64 lowercase hex".to_string());
+    }
+    if input.superseded_by == input.own_intent_event_id {
+        return Err("a card cannot supersede itself".to_string());
+    }
+
+    let own = own_verdict_card(&state, &input.own_intent_event_id, &input.hold_id).await?;
+    let mut fact = own.fact;
+    fact["emitted_at_ms"] = serde_json::json!(input.superseded_at_ms);
+    fact["leg2"] = serde_json::json!({
+        "state": "superseded",
+        "receipt_id": serde_json::Value::Null,
+        "refusal_check": serde_json::Value::Null,
+        "superseded_by": input.superseded_by,
+        "superseded_at_ms": input.superseded_at_ms,
+    });
+
+    let operator = operator_id()?;
+    let keys = state.signing_keys()?;
+    let key = operator_signing_key()?;
+    let public_key_hex = hex::encode(key.verifying_key().to_bytes());
+    let envelope = swarm_perch_wire::envelope::CardEnvelope::seal_unsigned(
+        CardKind::Verdict,
+        &format!("swarm:ed25519:{public_key_hex}"),
+        1,
+        None,
+        iso_seconds(input.superseded_at_ms),
+        fact,
+    )
+    .map_err(|e| format!("verdict update envelope: {e}"))?;
+    let human = format!(
+        "superseded · hold {} · by {operator} · {}",
+        input.hold_id,
+        iso_seconds(input.superseded_at_ms)
+    );
+    let body = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
+    let content = build_content(CardKind::Verdict, &human, &body)
+        .map_err(|e| format!("verdict update card: {e}"))?;
+    let published_marker = format!("<!-- {} -->", PERCH_RELAY_PUBLISHED_MARKERS[0]);
+    if content.lines().next() != Some(published_marker.as_str()) {
+        return Err("the verdict update does not carry the one published marker".to_string());
+    }
+
+    let mut tags = TagSet::card(CardKind::Verdict, own.case_channel, None, None);
+    tags.e = Some(input.own_intent_event_id.clone());
+    tags.assert_publishable(KIND_CARD)
+        .map_err(|e| format!("verdict update tags: {e}"))?;
+    let nostr_tags: Vec<nostr::Tag> = tags
+        .to_tags()
+        .into_iter()
+        .map(nostr::Tag::parse)
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("verdict update tags: {e}"))?;
+
+    let event = nostr::EventBuilder::new(nostr::Kind::Custom(KIND_CARD), content)
+        .tags(nostr_tags)
+        .sign_with_keys(&keys)
+        .map_err(|e| format!("signing the verdict update: {e}"))?;
+    let submitted = crate::relay::submit_signed_event_at_with_keys(
+        &event,
+        &state,
+        &crate::relay::relay_api_base_url_with_override(&state),
+        &keys,
+    )
+    .await?;
+    if !submitted.accepted {
+        return Err(format!(
+            "relay refused the verdict update: {}",
+            submitted.message
+        ));
+    }
+    Ok(VerdictUpdateOutput {
+        nostr_intent_event_id: event.id.to_hex(),
+    })
+}

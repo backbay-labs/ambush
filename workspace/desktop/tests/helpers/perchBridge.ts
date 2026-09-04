@@ -296,7 +296,14 @@ export async function installPerchWatchBridge(
   page: Page,
   seed: Pick<
     PerchMockFixture,
-    "holds" | "storeDurable" | "openCount" | "issuers" | "daemonError"
+    | "holds"
+    | "storeDurable"
+    | "openCount"
+    | "issuers"
+    | "daemonError"
+    | "decide"
+    | "decideDelayMs"
+    | "legOneError"
   > = {},
   mock?: Parameters<typeof installMockBridge>[1],
 ): Promise<void> {
@@ -342,4 +349,42 @@ export async function waitForPerchQueue(page: Page): Promise<void> {
   await page
     .getByTestId("perch-queue-count-holds")
     .waitFor({ state: "visible" });
+}
+
+/** The leg-1 cards the mock console published, in order. */
+export async function perchRecordedVerdicts(page: Page): Promise<
+  ReadonlyArray<{
+    holdId: string;
+    decision: string;
+    nostrIntentEventId: string;
+    supersededBy?: string;
+  }>
+> {
+  return page.evaluate(
+    () =>
+      (
+        window as {
+          __AMBUSH_E2E_PERCH_RECORDED__?: () => readonly {
+            holdId: string;
+            decision: string;
+            nostrIntentEventId: string;
+            supersededBy?: string;
+          }[];
+        }
+      ).__AMBUSH_E2E_PERCH_RECORDED__?.() ?? [],
+  );
+}
+
+/**
+ * Bring the BLAST RADIUS block fully into view and hold it there long enough
+ * for the dwell to complete.
+ */
+export async function readBlastRadius(page: Page): Promise<void> {
+  await page
+    .getByTestId("perch-verdict-slot-blast-radius")
+    .scrollIntoViewIfNeeded();
+  await page
+    .getByTestId("perch-grant-record")
+    .and(page.locator('[data-perch-dwell-percent="100"]'))
+    .waitFor({ state: "visible", timeout: 10_000 });
 }

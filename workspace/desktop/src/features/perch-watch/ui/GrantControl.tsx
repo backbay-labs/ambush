@@ -8,7 +8,7 @@ import {
 } from "@/features/perch/lib/keymapArmingState";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { Button } from "@/shared/ui/button";
-import type { VerdictWriteState } from "@/shared/ui/perch/WriteStateRow";
+import type { DecisionWriteState } from "@/shared/ui/perch/DecisionStateRow";
 
 import {
   dwellComplete,
@@ -48,7 +48,7 @@ export type GrantControlProps = {
   blastRadiusEl: HTMLElement | null;
   /** How many rows the operator has selected. The control hides unless it is 1. */
   selectionCount: number;
-  writeState: VerdictWriteState;
+  writeState: DecisionWriteState;
   onRecord: () => void;
   /** A reason the grant is unavailable for reasons other than the dwell. */
   disabledReason?: string | null;
@@ -102,26 +102,31 @@ export function GrantControl({
   }, [holdId]);
 
   // Mechanism 2 and 3: the observer reports the edges, the sampler covers the
-  // frames the observer can miss. Both feed the one reducer.
+  // frames the observer can miss. Both feed the one reducer, through one
+  // transition function.
+  //
+  // `visible` is dispatched only on a CHANGE. The reducer re-bases
+  // `lastTickMs` on every `visible`, so a sampler that re-announced the same
+  // state each tick would reset the reference 10 times a second and the
+  // accrual would sit at zero forever while looking perfectly correct.
+  const visibleRef = React.useRef<boolean | null>(null);
   React.useEffect(() => {
     if (!blastRadiusEl) return;
+    visibleRef.current = null;
+    const report = (next: boolean) => {
+      if (visibleRef.current === next) return;
+      visibleRef.current = next;
+      dispatch({ type: next ? "visible" : "hidden", atMs: Date.now() });
+    };
     const observer = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          dispatch({
-            type: entry.intersectionRatio >= 1 ? "visible" : "hidden",
-            atMs: Date.now(),
-          });
-        }
+        for (const entry of entries) report(entry.intersectionRatio >= 1);
       },
       { threshold: 1.0 },
     );
     observer.observe(blastRadiusEl);
     const timer = window.setInterval(() => {
-      dispatch({
-        type: isFullyVisible(blastRadiusEl) ? "visible" : "hidden",
-        atMs: Date.now(),
-      });
+      report(isFullyVisible(blastRadiusEl));
       dispatch({ type: "tick", atMs: Date.now() });
     }, DWELL_SAMPLE_MS);
     return () => {

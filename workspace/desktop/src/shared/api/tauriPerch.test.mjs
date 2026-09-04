@@ -8,8 +8,17 @@
 // on one side and not the other fails here rather than at 3am on a hold
 // nobody can read.
 
+import { readFileSync } from "node:fs";
+
 import assert from "node:assert/strict";
 import test from "node:test";
+
+/** The Rust files that register perch Tauri commands, relative to this one. */
+const PERCH_RUST_COMMAND_FILES = [
+  "../../../src-tauri/src/commands/perch_reads.rs",
+  "../../../src-tauri/src/commands/perch_writes.rs",
+  "../../../src-tauri/src/commands/perch_verdict.rs",
+];
 
 import fixture from "../../testing/perch/daemonHoldFixture.json" with {
   type: "json",
@@ -158,4 +167,85 @@ test("the two hold reads are registered read commands, not writes", () => {
     PERCH_TAURI_COMMANDS.length,
     "a command listed twice would let the E2E bridge answer one and miss one",
   );
+});
+
+// Every command name this client sends must be a command the Rust side
+// actually registers.
+//
+// This exists because it caught a live one during integration: the hold's
+// leg-1 wrapper `perchRecordHoldVerdict` invoked `perch_record_verdict`, the
+// FINDING command, whose input requires `finding_card_id`, `case_channel` and
+// `incident_id`. Serde would have refused the hold payload at runtime. It went
+// unnoticed because the E2E mock answered whatever name it was handed, so the
+// mock proved the console talked to the mock and nothing about the product.
+// A name is not a contract until something compares the two sides.
+test("every perch command the client sends is registered in Rust", () => {
+  const client = readFileSync(
+    new URL("./tauriPerch.ts", import.meta.url),
+    "utf8",
+  );
+  const registered = new Set();
+  for (const file of PERCH_RUST_COMMAND_FILES) {
+    const source = readFileSync(new URL(file, import.meta.url), "utf8");
+    for (const m of source.matchAll(
+      /#\[tauri::command\][\s\S]{0,120}?(?:pub )?(?:async )?fn (perch_\w+)/g,
+    )) {
+      registered.add(m[1]);
+    }
+  }
+  assert.ok(registered.size >= 10, `found only ${registered.size} commands`);
+
+  const invoked = [
+    ...client.matchAll(/invokeTauri<[\s\S]*?>\(\s*"(perch_\w+)"/g),
+    ...client.matchAll(/invokeTauri\(\s*"(perch_\w+)"/g),
+  ].map((m) => m[1]);
+  assert.ok(invoked.length >= 10, `found only ${invoked.length} invocations`);
+  for (const name of new Set(invoked)) {
+    assert.ok(
+      registered.has(name),
+      `the client invokes ${name}, which no #[tauri::command] registers`,
+    );
+  }
+});
+
+// The declared list drives the E2E mock's closed set, so a command that is
+// invoked but not declared would ship with no mock and no failure until a spec
+// happened to reach it. Both directions are asserted.
+test("the declared command list is exactly what the client invokes", async () => {
+  const client = readFileSync(
+    new URL("./tauriPerch.ts", import.meta.url),
+    "utf8",
+  );
+  const invoked = new Set(
+    [...client.matchAll(/invokeTauri(?:<[\s\S]*?>)?\(\s*"(perch_\w+)"/g)].map(
+      (m) => m[1],
+    ),
+  );
+  const { PERCH_TAURI_COMMANDS } = await import("./tauriPerch.ts");
+  assert.deepEqual(
+    [...invoked].sort(),
+    [...PERCH_TAURI_COMMANDS].sort(),
+    "PERCH_TAURI_COMMANDS and the invocations in this file disagree",
+  );
+});
+
+// The inverse for the two record commands specifically: they take different
+// inputs, so sending one where the other is meant fails at deserialisation.
+// Pinning the wrapper-to-command mapping keeps them from being swapped again.
+test("each record wrapper invokes its own command", () => {
+  const client = readFileSync(
+    new URL("./tauriPerch.ts", import.meta.url),
+    "utf8",
+  );
+  for (const [fn, command] of [
+    ["perchRecordVerdict", "perch_record_verdict"],
+    ["perchRecordHoldVerdict", "perch_record_hold_verdict"],
+  ]) {
+    const body = client.split(
+      new RegExp(`export (?:async )?function ${fn}\\b`),
+    )[1];
+    assert.ok(body, `${fn} is not exported from tauriPerch.ts`);
+    const sent = body.match(/"(perch_\w+)"/)?.[1];
+    assert.equal(sent, command, `${fn} invokes ${sent}`);
+  }
 });

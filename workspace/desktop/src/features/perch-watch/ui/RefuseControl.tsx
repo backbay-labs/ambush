@@ -1,5 +1,5 @@
 import { Button } from "@/shared/ui/button";
-import type { VerdictWriteState } from "@/shared/ui/perch/WriteStateRow";
+import type { DecisionWriteState } from "@/shared/ui/perch/DecisionStateRow";
 
 /**
  * Refuse. One keypress, no dialog, no dwell, no undo.
@@ -16,7 +16,7 @@ import type { VerdictWriteState } from "@/shared/ui/perch/WriteStateRow";
  * deposits, and holds and findings interleave in the same queue.
  */
 export type RefuseControlProps = {
-  writeState: VerdictWriteState;
+  writeState: DecisionWriteState;
   selectionCount: number;
   onRefuse: () => void;
 };

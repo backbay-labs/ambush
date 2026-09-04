@@ -35,7 +35,11 @@ export type DecisionWriteState =
   | {
       phase: "superseded";
       winningIntentEventId: string;
-      winningDecision: "grant" | "refuse";
+      /**
+       * `unknown` when the daemon named a winner it could not classify. The
+       * console does not guess which way another operator decided.
+       */
+      winningDecision: "grant" | "refuse" | "unknown";
       decidedAtMs: number;
     };
 
@@ -73,11 +77,7 @@ function formatTime(atMs: number): string {
   return new Date(atMs).toLocaleTimeString();
 }
 
-export function DecisionStateRow({
-  state,
-}: {
-  state: DecisionWriteState;
-}) {
+export function DecisionStateRow({ state }: { state: DecisionWriteState }) {
   const decision = decisionState(state);
   if (state.phase === "idle" || decision === null) return null;
   // A refusal is announced; progress is not. A screen reader that interrupted
@@ -174,9 +174,11 @@ function DecisionStateBody({ state }: { state: DecisionWriteState }) {
       return (
         <>
           <span>
-            Another operator's decision was the one that ran:{" "}
-            {state.winningDecision} at {formatTime(state.decidedAtMs)}. Your
-            decision is recorded on this case and did not run.
+            {state.winningDecision === "unknown"
+              ? "Another operator's decision was the one that ran"
+              : `Another operator's decision was the one that ran: ${state.winningDecision}`}{" "}
+            at {formatTime(state.decidedAtMs)}. Your decision is recorded on
+            this case and did not run.
           </span>
           <span
             data-testid="perch-write-state-superseded-winner"
