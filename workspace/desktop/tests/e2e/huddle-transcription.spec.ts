@@ -815,12 +815,24 @@ test("assigns distinct agent voices and exposes compact per-agent controls", asy
   });
   expect(new Set(assignedVoices).size).toBe(2);
 
-  await page.getByRole("button", { name: "Voice settings for alice" }).click();
-  await waitForAnimations(page);
+  // The click is RETRIED until the popover reports open.
+  //
+  // Measured, not guessed: the trigger node is stable from first paint (it
+  // survives a tag across two seconds), and once the popover opens it stays
+  // open — but a click fired immediately after the participant list renders
+  // does nothing at all, while the same click a second later works. The window
+  // is a readiness race at load, so the honest wait is for the state this test
+  // needs rather than a fixed sleep that would be too short on a loaded runner.
   const voiceMenu = page.locator(
     '[data-testid="huddle-agent-voice-menu-content"][data-state="open"]',
   );
-  await expect(voiceMenu).toBeVisible();
+  await expect(async () => {
+    await page
+      .getByRole("button", { name: "Voice settings for alice" })
+      .click();
+    await expect(voiceMenu).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+  await waitForAnimations(page);
   await expect(
     voiceMenu.getByText("Agent text-to-speech", { exact: true }),
   ).toBeVisible();
