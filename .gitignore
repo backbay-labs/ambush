@@ -140,3 +140,8 @@ rulesets-dev/data/
 # build`. They are build artifacts of Chart.lock, which IS tracked; committing
 # them would pin a byte-for-byte copy of another chart in this history.
 deploy/helm/*/charts/*.tgz
+
+# helm-unittest writes a snapshot directory beside the chart tests. Empty
+# unless a test uses `matchSnapshot`, and the worktree-clean gate refuses an
+# empty directory a test run created.
+deploy/helm/*/tests/__snapshot__/
