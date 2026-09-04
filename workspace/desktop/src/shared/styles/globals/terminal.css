@@ -27,6 +27,23 @@
     padding: 4px 1.25rem;
   }
 
+  /*
+   * The non-fiction line. It states that this is a real shell on the host and,
+   * when a case is open, which case its artifacts land under. Truncated rather
+   * than wrapped: the bar is a fixed 40px, and a wrapping line would push the
+   * tab strip out of the bar rather than shorten itself.
+   */
+  .ambush-terminal-banner {
+    color: hsl(var(--muted-foreground));
+    flex: 1 1 auto;
+    font-size: 0.6875rem;
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .ambush-terminal-tabs,
   .ambush-terminal-readout {
     align-items: center;

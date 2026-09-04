@@ -13,6 +13,10 @@ export type TerminalAttachRequest = {
   rows: number;
   pixelWidth: number;
   pixelHeight: number;
+  /** The case this shell is pinned to, when one is open. */
+  caseId?: string;
+  /** The case's display slug. Replaced by the id when it is not shell-safe. */
+  caseSlug?: string;
 };
 
 export type TerminalViewport = TerminalFrame["viewport"];

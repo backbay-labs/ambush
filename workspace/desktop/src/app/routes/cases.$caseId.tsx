@@ -3,6 +3,7 @@ import { createFileRoute, Navigate } from "@tanstack/react-router";
 
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { SwarmCardSurfaceProvider } from "@/features/perch-evidence/ui/SwarmCardSurface";
+import { useCaseTerminalPin } from "@/features/terminal/useTerminalCaseScope";
 import {
   useFeatureEnabled,
   usePreviewFeatureWarning,
@@ -31,6 +32,11 @@ function CaseRouteComponent() {
   const { caseId } = Route.useParams();
   const enabled = useFeatureEnabled("perch");
   usePreviewFeatureWarning("perch");
+  // A shell spawned while this case is open runs under the case's own
+  // directory, so swarmctl's relative `data/…` defaults land there and every
+  // artifact is attributable to the case by path. Cleared on unmount: a banner
+  // naming a case the screen no longer shows is worse than an unpinned shell.
+  useCaseTerminalPin(enabled ? caseId : null, caseId.slice(0, 8));
   if (!enabled) {
     return (
       <Navigate to="/channels/$channelId" params={{ channelId: caseId }} />

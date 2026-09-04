@@ -17,6 +17,7 @@ import {
   toggleTerminalPanel,
   useTerminalPanel,
 } from "./terminalPanelStore";
+import { useTerminalCaseScope } from "./useTerminalCaseScope";
 
 type TerminalContext = {
   channelId: string;
@@ -72,6 +73,12 @@ export function TerminalBootstrap({
       : null;
   const contextRef = React.useRef<TerminalContext | null>(context);
   contextRef.current = context;
+  // The case the operator has open, read through a ref so `createSession` does
+  // not re-create on every route change; the value is read at spawn time,
+  // which is the only moment the pin can be applied.
+  const caseScope = useTerminalCaseScope();
+  const caseScopeRef = React.useRef(caseScope);
+  caseScopeRef.current = caseScope;
   const mountedRef = React.useRef(true);
   const sizeRef = React.useRef(INITIAL_SIZE);
   const resizeChainRef = React.useRef(Promise.resolve());
@@ -231,6 +238,7 @@ export function TerminalBootstrap({
         ...spawnContext,
         threadId: spawnContext.threadId ?? undefined,
         ...size,
+        ...caseScopeRef.current,
       },
       onMessage,
       onFrame,
@@ -362,6 +370,7 @@ export function TerminalBootstrap({
     <TerminalSubstrate
       bracketedPaste={active?.frame?.bracketedPaste ?? false}
       channelName={active?.context.channelName ?? channelName}
+      pinnedCaseLabel={caseScope.caseSlug ?? caseScope.caseId}
       enabled={available && Boolean(context)}
       mode={renderedMode}
       visible={panelVisible}
