@@ -4,15 +4,13 @@ import type { GapBlock } from "@/features/perch/wire";
 import { truncatePubkey } from "@/shared/lib/pubkey";
 
 import type { PerchPillar, SwarmMarkerKind } from "../lib/markerTypes";
+import { TIER_0_BADGE } from "./evidenceCardCopy";
 import { GapNotice } from "./GapNotice";
 
-/**
- * The only verification claim a tier-0 card may make, verbatim. It names the
- * chain that was checked (the relay's transport signature), says what was
- * not, and points at the record. Never "verified", never a check mark.
- */
-export const TIER_0_BADGE =
-  "secp256k1 · tier 0 · TRANSPORT-SIGNED ONLY · the daemon is the record";
+// Re-exported so the constant keeps the import path 12-PLAN-FIRST-CARD.md
+// Task 17 records for it. Its definition moved to the copy module beside this
+// file so the copy gate can actually read the literal; see that file's header.
+export { TIER_0_BADGE };
 
 /** The rendered heading per kind. `lease` never renders bare (appendix §7). */
 function eyebrowFor(kind: SwarmMarkerKind): string {
