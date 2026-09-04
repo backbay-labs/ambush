@@ -34,13 +34,29 @@ services:
     # This service runs the image's default command, `--config
     # /app/rulesets/default.yaml`, and default.yaml carries no `perch` block, so
     # the seed below is inert here until the config it loads has one. That is
-    # deliberate: docs/PERCH-DEV.md runs the daemon on the HOST against
-    # rulesets-dev/perch-dev.yaml, because the dev profile is debug-signed and
-    # the image builds `--release`, which refuses that signature by design.
-    # To run the dev profile in a container anyway, build a debug image and add:
+    # deliberate, and moving the dev profile in here is NOT a small change:
+    #
+    #   1. The dev profile is debug-signed and this image builds `--release`,
+    #      which refuses that signature by design. You would need a debug image.
+    #   2. `perch.relay_url` is `ws://localhost:3000`, which inside this
+    #      container is the container itself. The in-network address is
+    #      `ws://relay:3000` -- and the relay seeds ONE community, for its own
+    #      RELAY_URL host, so pointing the bridge at `relay:3000` while the relay
+    #      announces `localhost:3000` fails closed at the WebSocket upgrade with
+    #      a bare `HTTP error: 404 Not Found` and creates zero lanes. Measured
+    #      2026-09-04 by seeding a relay for `relay:3000` and connecting a bridge
+    #      as `localhost:3000`: 404, no channels.
+    #   3. Making BOTH agree on `relay:3000` then makes `localhost:3000`
+    #      unmapped, which is the address the desktop on the host adds as its
+    #      community -- so the console and the bridge would no longer share a
+    #      record. That trade is the whole reason docs/PERCH-DEV.md runs the
+    #      daemon on the HOST.
+    #
+    # If you still want it, a debug image plus:
     #   volumes:  - ./rulesets-dev:/app/rulesets-dev:ro
     #             - swarm-dev-identity:/app/rulesets-dev/data
     #   command: ["--config", "/app/rulesets-dev/perch-dev.yaml", "--serve", "--bind", "0.0.0.0:9090"]
+    # and a ruleset whose relay_url matches whatever host the relay announces.
     # (identity.agent_key_dir resolves against the CONFIG's parent --
     # resolve_agent_key_dir(&cli.config, ...) in swarm_detect.rs -- which is why
     # the writable layer moves with the config. Untested: see docs/PERCH-DEV.md.)

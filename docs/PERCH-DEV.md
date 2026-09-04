@@ -36,6 +36,28 @@ differ under compose, this document says so.
 | 8 the tuning report moves | route and auth verified; the `E`/`D` verdict half needs step 7 |
 | 9 relay outage, 10 the gap | **not run here** |
 
+**What in this document rests on a compose path that was never executed**, so no reviewer
+mistakes it for verified:
+
+- Every `docker compose` line as literally written — `up -d postgres redis relay`,
+  `stop relay` / `start relay`, `down -v`, `up -d swarm-detect`. Each was replaced by its
+  native equivalent, and the substrate differed: PostgreSQL 14 rather than the compose
+  file's `postgres:17-alpine`, and a `cargo build` relay rather than one built from
+  `workspace/Dockerfile`.
+- The `env_file: ./.env.perch` wiring on the `swarm-detect` service. The variables were
+  exported into the daemon's environment directly, which exercises the daemon's half of that
+  path but not Compose's file parsing.
+- `docker compose down -v` as a reset. The lane-recovery claim was proved by deleting the
+  relay's `channels`, `channel_members` and `events` rows and restarting the daemon; dropping
+  the named volume additionally discards the schema and makes the relay re-run its
+  migrations, which was not exercised.
+- Everything in "The daemon in a container" below, which is a warning about a path that was
+  deliberately not taken.
+
+Two things that read like compose assumptions were measured rather than assumed: the
+`localhost` versus `127.0.0.1` rule in step 2, and the in-network host trap at the end of
+this document.
+
 ---
 
 ## 1. Sign the dev ruleset
@@ -89,8 +111,12 @@ bash scripts/provision-perch.sh
 It prints the operator public key, checks it against the one the ruleset names, and writes
 `.perch-dev/operator.nsec` (mode 600, bech32, importable straight into the desktop) plus
 `.perch-dev/operator.env`. It does **not** create channels: the twelve lanes are the
-bridge's job now (`00-DECISIONS.md` D-FC-5), which is why a `docker compose down -v`
-recovers them on the next daemon start with no operator action.
+bridge's job now (`00-DECISIONS.md` D-FC-5), which is why wiping the relay's database
+recovers them on the next daemon start with no operator action. Measured by deleting the
+`channels`, `channel_members` and `events` rows and restarting: twelve lanes and
+twenty-four memberships came back with no operator action. `docker compose down -v` drops
+the named volume as well, so the relay also re-runs its migrations; that fuller reset was
+not exercised.
 
 Re-run it after step 4 and it also writes `.perch-dev/identities.json` from the running
 daemon. On a relay with `AMBUSH_REQUIRE_RELAY_MEMBERSHIP=true` in `workspace/.env` it then
@@ -297,7 +323,19 @@ so nothing stops you committing a key you first `git add -f`. Delete the directo
 
 `docker compose up -d swarm-detect` runs the **image's** default command,
 `--config /app/rulesets/default.yaml`, and `default.yaml` carries no `perch` block: that
-service will not mount a bridge no matter what `PERCH_BRIDGE_NOSTR_SEED` holds. The dev
-profile is debug-signed and the image builds `--release`, which refuses that signature by
-design. Run the daemon on the host, as step 4 does. `docker-compose.yml` records the three
-lines that would run the dev profile in a debug image if you need one.
+service will not mount a bridge no matter what `PERCH_BRIDGE_NOSTR_SEED` holds. Run the
+daemon on the host, as step 4 does.
+
+Moving it into the network is not a matter of mounting a different config, for two reasons
+beyond the debug-signature one:
+
+- `ws://localhost:3000` inside that container is the container itself. The in-network
+  address is `ws://relay:3000`, and the relay seeds exactly one community — for its own
+  `RELAY_URL` host. A bridge announcing a host the relay does not serve is refused at the
+  WebSocket upgrade. Measured: a relay seeded for `relay:3000`, a bridge arriving as
+  `localhost:3000`, `HTTP error: 404 Not Found`, zero lanes created.
+- Making both sides agree on `relay:3000` then makes `localhost:3000` unmapped, and that is
+  the address the desktop on the host adds as its community. The console and the bridge
+  would stop sharing a record, which is the whole point of the walking skeleton.
+
+`docker-compose.yml` records the rest of what such a move would take.
