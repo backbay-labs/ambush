@@ -145,19 +145,64 @@ pub enum PublishStep {
         /// The member's Nostr pubkey, 64 lowercase hex.
         pubkey: String,
     },
-    /// kind:46010 + `swarm:hold:v1`, `h` = the case channel. Durable; this is the record.
-    /// Planned only under [`CasePromotionTrigger::Held`], which The hold milestone owns.
-    PublishHold {
+    /// kind:9 `swarm:hold:v1` into the case channel. FIRST of the three hold steps, so the
+    /// notice can point at the card it describes.
+    ///
+    /// `reply_to` is the open card's Nostr event id on a TERMINAL card, and `None` on the open
+    /// one. A terminal card is a NIP-10 reply so a case timeline reads top to bottom without a
+    /// join; that `e` tag is legal here and forbidden on the notice (RF-D1).
+    PublishHoldCard {
         /// The case channel.
         channel: Uuid,
         /// The daemon-minted hold id.
         hold_id: HoldId,
+        /// The open card's event id, on a terminal card only.
+        reply_to: Option<String>,
     },
-    /// Ephemeral 26006, the hold alarm. Planned only under [`CasePromotionTrigger::Held`].
+    /// kind:46010, the hold notice: `h` + one `p` per Approve principal + `hold` + `card`, and
+    /// NEVER an `e` tag. SECOND, because `card_event_id` is the id the card step returned.
+    PublishHoldNotice {
+        /// The case channel.
+        channel: Uuid,
+        /// The daemon-minted hold id.
+        hold_id: HoldId,
+        /// The sibling card's Nostr event id, once the relay has returned one.
+        card_event_id: Option<String>,
+    },
+    /// Ephemeral 26006, the hold alarm. GLOBAL: no `h` tag, one `p` per Approve principal
+    /// (R-1). LAST, and the only step that bypasses the pacer.
     PublishAlarm {
         /// The daemon-minted hold id.
         hold_id: HoldId,
     },
+}
+
+impl PublishStep {
+    /// The snake_case name a log line, a metric and a sequence assertion use.
+    ///
+    /// `create_channel` and `add_member` keep the generic names deliberately: the same two
+    /// variants provision the twelve OPEN lane channels, where `create_case_channel` and
+    /// `add_operator` would both be false.
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::CreateChannel { .. } => "create_channel",
+            Self::AddMember { .. } => "add_member",
+            Self::PublishHoldCard { .. } => "publish_hold_card",
+            Self::PublishHoldNotice { .. } => "publish_hold_notice",
+            Self::PublishAlarm { .. } => "publish_alarm",
+        }
+    }
+
+    /// The channel this step writes into, or `None` for the global alarm frame.
+    pub const fn channel(&self) -> Option<Uuid> {
+        match self {
+            Self::CreateChannel { channel, .. }
+            | Self::AddMember { channel, .. }
+            | Self::PublishHoldCard { channel, .. }
+            | Self::PublishHoldNotice { channel, .. } => Some(*channel),
+            Self::PublishAlarm { .. } => None,
+        }
+    }
 }
 
 /// A daemon-minted, opaque hold identifier, checked at the publish seam.
@@ -232,6 +277,37 @@ struct RoutingState {
     /// channel never created — leaving a daemon incident pointing at nothing.
     #[serde(default)]
     created: BTreeSet<String>,
+    #[serde(default)]
+    hold_cards: BTreeMap<String, HoldCardLedger>,
+}
+
+/// What has already been published for one hold, keyed by `hold_id`.
+///
+/// # Why the bridge keeps its own ledger rather than reading the daemon's state
+///
+/// The store record answers "has the NOTICE been accepted" (`created -> notified`) and nothing
+/// else. It has no field for "the open card was accepted" and none for "the terminal card was
+/// accepted", and the store trait this crate consumes has no method that could set one. Two
+/// windows are open without this ledger:
+///
+/// 1. The relay accepts the `kind:9` open card, the process dies before the `46010`. The record
+///    is still `created`, so a replay of the spooled `ResponseHeld` republishes the card under a
+///    fresh `created_at` -- a NEW event id, because `created_at` is inside the Nostr signature --
+///    and the case timeline carries the same hold twice.
+/// 2. A terminal `ResponseHeld` is redelivered. Every terminal state is a legal `plan` input and
+///    the record is already terminal, so nothing in the store distinguishes "publish it" from
+///    "already published it".
+///
+/// Both are closed by writing the accepted event id here, `fsync`-durably, the instant the relay
+/// OKs it -- which is also the id the notice's `card` tag needs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct HoldCardLedger {
+    /// The `swarm:hold:v1` OPEN card's Nostr event id, once accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    open: Option<String>,
+    /// The TERMINAL card's Nostr event id, once accepted. Exactly one per hold, ever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal: Option<String>,
 }
 
 impl CaseRouting {
@@ -390,6 +466,61 @@ impl CaseRouting {
         self.case_for_hunt(&hunt_id)
     }
 
+    /// The OPEN `swarm:hold:v1` card's event id, when the relay has already accepted one.
+    ///
+    /// Also the value the `46010`'s `card` tag carries.
+    pub fn open_card_for_hold(&self, hold_id: &str) -> Option<&str> {
+        self.state.hold_cards.get(hold_id)?.open.as_deref()
+    }
+
+    /// The TERMINAL card's event id, when one has already been accepted. `Some` means the hold's
+    /// terminal card is published and MUST NOT be published again.
+    pub fn terminal_card_for_hold(&self, hold_id: &str) -> Option<&str> {
+        self.state.hold_cards.get(hold_id)?.terminal.as_deref()
+    }
+
+    /// Records the OPEN card the relay accepted. Idempotent: the first id wins, because the
+    /// second call can only be a replay of a card the relay deduplicated.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::SpoolIo`] when the sidecar write fails. The caller must treat that as a
+    /// publish failure: an unrecorded card id is the one that produces a duplicate on restart.
+    pub fn record_open_card(&mut self, hold_id: &str, event_id: &str) -> Result<(), BridgeError> {
+        let entry = self
+            .state
+            .hold_cards
+            .entry(hold_id.to_string())
+            .or_default();
+        if entry.open.is_some() {
+            return Ok(());
+        }
+        entry.open = Some(event_id.to_string());
+        self.persist()
+    }
+
+    /// Records the TERMINAL card the relay accepted. Idempotent for the same reason.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::SpoolIo`] when the sidecar write fails.
+    pub fn record_terminal_card(
+        &mut self,
+        hold_id: &str,
+        event_id: &str,
+    ) -> Result<(), BridgeError> {
+        let entry = self
+            .state
+            .hold_cards
+            .entry(hold_id.to_string())
+            .or_default();
+        if entry.terminal.is_some() {
+            return Ok(());
+        }
+        entry.terminal = Some(event_id.to_string());
+        self.persist()
+    }
+
     fn persist(&self) -> Result<(), BridgeError> {
         let bytes =
             serde_json::to_vec_pretty(&self.state).map_err(|error| BridgeError::SpoolIo {
@@ -477,10 +608,19 @@ pub fn step_to_event(
                 vec!["p".to_string(), normalize_p_tag(pubkey)?],
             ],
         ),
-        PublishStep::PublishHold { .. } | PublishStep::PublishAlarm { .. } => {
+        // The three hold steps carry a BODY, not just tags: the card is a sealed spine
+        // envelope over the store record, the notice repeats that card's human line, and the
+        // alarm is a `26006` frame. `crate::holds` builds all three, because each needs the
+        // hold record, the issuer's envelope chain and the Approve set -- none of which a
+        // tag-only builder can see.
+        PublishStep::PublishHoldCard { .. }
+        | PublishStep::PublishHoldNotice { .. }
+        | PublishStep::PublishAlarm { .. } => {
             return Err(BridgeError::InvalidConfig {
-                reason: "the hold steps are built by 13-PLAN-THE-HOLD, not by this milestone"
-                    .to_string(),
+                reason: format!(
+                    "step `{}` carries a body; build it through crate::holds, not step_to_event",
+                    step.label()
+                ),
             });
         }
     };
@@ -782,6 +922,217 @@ mod tests {
             ),
             Err(BridgeError::MalformedPTag { .. })
         ));
+    }
+
+    #[test]
+    fn hold_id_shape_is_asserted_to_the_r3_pattern() {
+        // R-3 as amended by 00-DECISIONS W3-15: `^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$`. The daemon
+        // mints `hold_` + a lowercase v4 UUID (41 characters), which is inside it.
+        for ok in [
+            "hold_3f2b7c48-9a51-4d6e-8b02-71c4ee9a5d13",
+            "h_a07aeacf",
+            "abcdefgh",
+            &swarm_runtime::held_action::mint_hold_id(),
+            &"a".repeat(64),
+        ] {
+            assert!(HoldId::parse(ok).is_ok(), "{ok} should be admitted");
+        }
+        for bad in [
+            "hold:01K3QJ7ZV9M2R4TX8N6B0DWCA5",
+            "hold:hunt-evt-1:1773739200000",
+            "short",
+            "",
+            "_x1234567",
+            "-x1234567",
+            "h/../../etc/passwd",
+            "has space",
+            &"a".repeat(65),
+        ] {
+            assert!(
+                matches!(HoldId::parse(bad), Err(BridgeError::MalformedHoldId { .. })),
+                "{bad:?} should be refused"
+            );
+        }
+        // The bridge's gate and the wire crate's gate are ONE predicate, not two that agree
+        // today: a second copy is how the frame and the notice end up disagreeing about a
+        // colon.
+        for candidate in ["h_a07aeacf", "hold:x:1", "_leading", &"z".repeat(64)] {
+            assert_eq!(
+                HoldId::parse(candidate).is_ok(),
+                swarm_perch_wire::is_opaque_hold_id(candidate),
+                "{candidate:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_trigger_on_an_unrouted_hunt_plans_create_then_operators_and_mints_the_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routing.json");
+        let mut routing = CaseRouting::open(&path).unwrap();
+        let trigger = CasePromotionTrigger::Held {
+            hunt_id: "hunt-evt-1".into(),
+            hold_id: "h_a07aeacf".into(),
+        };
+        let operators = vec!["68".repeat(32), "69".repeat(32)];
+        let (case, steps) = routing
+            .ensure_case_channel(&trigger, &operators, 2_592_000)
+            .unwrap();
+        assert!(
+            matches!(
+                steps[0],
+                PublishStep::CreateChannel {
+                    channel,
+                    visibility: "private",
+                    ttl_seconds: Some(2_592_000),
+                    ..
+                } if channel == case
+            ),
+            "{:?}",
+            steps[0]
+        );
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|s| matches!(s, PublishStep::AddMember { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            steps.len(),
+            3,
+            "the caller appends PublishHoldCard/PublishHoldNotice/PublishAlarm itself"
+        );
+        // Routed is NOT created. Until the relay accepts the create, the same hunt
+        // must re-emit the plan: a refused create that returned an empty step list
+        // let the caller's all-succeeded flag stand over zero steps and commit a
+        // record pointing at a channel that was never made.
+        let (retry, again_steps) = routing
+            .ensure_case_channel(&trigger, &operators, 2_592_000)
+            .unwrap();
+        assert_eq!(retry, case);
+        assert_eq!(
+            again_steps.len(),
+            3,
+            "a routed-but-uncreated channel must re-emit its create plan"
+        );
+
+        // Idempotent once the relay has ACCEPTED the create: same channel, no steps.
+        routing.mark_case_channel_created(case).unwrap();
+        let (again, more) = routing
+            .ensure_case_channel(&trigger, &operators, 2_592_000)
+            .unwrap();
+        assert_eq!(again, case);
+        assert!(more.is_empty());
+        // Durable across a reopen.
+        drop(routing);
+        let reopened = CaseRouting::open(&path).unwrap();
+        assert_eq!(reopened.case_for_hunt("hunt-evt-1"), Some(case));
+    }
+
+    #[test]
+    fn the_hold_card_ledger_is_write_once_and_survives_a_reopen() {
+        // The two windows the ledger closes: a crash between the accepted card and the accepted
+        // notice, and a redelivered terminal event. Both are answered by an id on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routing.json");
+        let mut routing = CaseRouting::open(&path).unwrap();
+        assert_eq!(routing.open_card_for_hold("h_a07aeacf"), None);
+        assert_eq!(routing.terminal_card_for_hold("h_a07aeacf"), None);
+        routing
+            .record_open_card("h_a07aeacf", &"03".repeat(32))
+            .unwrap();
+        routing
+            .record_terminal_card("h_a07aeacf", &"04".repeat(32))
+            .unwrap();
+        // Write-once: a replay does not overwrite the id the relay already accepted.
+        routing
+            .record_open_card("h_a07aeacf", &"ff".repeat(32))
+            .unwrap();
+        routing
+            .record_terminal_card("h_a07aeacf", &"ee".repeat(32))
+            .unwrap();
+        drop(routing);
+        let reopened = CaseRouting::open(&path).unwrap();
+        assert_eq!(
+            reopened.open_card_for_hold("h_a07aeacf"),
+            Some("03".repeat(32).as_str())
+        );
+        assert_eq!(
+            reopened.terminal_card_for_hold("h_a07aeacf"),
+            Some("04".repeat(32).as_str())
+        );
+        assert_eq!(reopened.open_card_for_hold("h_other01"), None);
+    }
+
+    #[test]
+    fn a_step_that_carries_a_body_is_refused_by_the_tag_only_builder() {
+        let keys = nostr::Keys::generate();
+        let hold = HoldId::parse("h_a07aeacf").unwrap();
+        for step in [
+            PublishStep::PublishHoldCard {
+                channel: uuid::Uuid::nil(),
+                hold_id: hold.clone(),
+                reply_to: None,
+            },
+            PublishStep::PublishHoldNotice {
+                channel: uuid::Uuid::nil(),
+                hold_id: hold.clone(),
+                card_event_id: None,
+            },
+            PublishStep::PublishAlarm {
+                hold_id: hold.clone(),
+            },
+        ] {
+            let error = step_to_event(&step, &keys, 1).unwrap_err();
+            assert!(
+                matches!(error, BridgeError::InvalidConfig { ref reason } if reason.contains(step.label())),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_step_names_itself_and_its_channel() {
+        let hold = HoldId::parse("h_a07aeacf").unwrap();
+        let case = uuid::Uuid::nil();
+        let labels: Vec<(&str, Option<uuid::Uuid>)> = [
+            PublishStep::CreateChannel {
+                channel: case,
+                name: "case-00000000".into(),
+                visibility: "private",
+                ttl_seconds: Some(60),
+            },
+            PublishStep::AddMember {
+                channel: case,
+                pubkey: "a".repeat(64),
+            },
+            PublishStep::PublishHoldCard {
+                channel: case,
+                hold_id: hold.clone(),
+                reply_to: None,
+            },
+            PublishStep::PublishHoldNotice {
+                channel: case,
+                hold_id: hold.clone(),
+                card_event_id: None,
+            },
+            PublishStep::PublishAlarm { hold_id: hold },
+        ]
+        .iter()
+        .map(|step| (step.label(), step.channel()))
+        .collect();
+        assert_eq!(
+            labels,
+            vec![
+                ("create_channel", Some(case)),
+                ("add_member", Some(case)),
+                ("publish_hold_card", Some(case)),
+                ("publish_hold_notice", Some(case)),
+                // R-1: the alarm is community-global and carries no `h` tag at all.
+                ("publish_alarm", None),
+            ]
+        );
     }
 
     #[test]

@@ -98,6 +98,7 @@ pub struct BridgeMetrics {
     spool_bytes: Family<StreamLabel, Gauge<u64, AtomicU64>>,
     dropped_events: Family<DropLabel, Counter>,
     alarm_spool_full: Counter<u64>,
+    alarm_deferred: Counter<u64>,
     publish_latency: Histogram,
     admission_rejections: Family<ReasonLabel, Counter>,
     late_published: Histogram,
@@ -111,7 +112,7 @@ pub struct BridgeMetrics {
     connection_state: Family<IdentityLabel, Gauge>,
     case_channel_conflict: Counter<u64>,
     case_channels_created: Family<ClauseLabel, Counter>,
-    hold_undeliverable: Counter<u64>,
+    hold_undeliverable: Family<ReasonLabel, Counter>,
     lease_store_absent: Counter<u64>,
     unknown_action_kind: Counter<u64>,
 }
@@ -256,11 +257,22 @@ impl BridgeMetrics {
             case_channels_created.clone(),
         );
 
-        let hold_undeliverable = Counter::<u64>::default();
+        // Broken down by reason, because the four ways a hold reaches nobody need four
+        // different repairs: `no_operator_pubkey` is a config edit, `no_hold_store` is a daemon
+        // with no `runtime.response` block, `hold_not_found` is a store that lost a record the
+        // event announced, and `no_case_channel` is a terminal hold whose open sequence never
+        // ran. One undifferentiated counter says only "something is wrong".
+        let hold_undeliverable = Family::<ReasonLabel, Counter>::default();
         registry.register(
-            "bridge_hold_undeliverable",
-            "Times no operator principal holding OperatorScope::Approve carried a nostr pubkey",
+            "bridge_hold_undeliverable", // -> perch_bridge_hold_undeliverable_total
+            "Holds the bridge refused to publish, by reason",
             hold_undeliverable.clone(),
+        );
+        let alarm_deferred = Counter::<u64>::default();
+        registry.register(
+            "bridge_alarm_deferred", // -> perch_bridge_alarm_deferred_total
+            "26006 hold alarms held back by the per-minute burst cap. DEFERRED, NEVER DROPPED",
+            alarm_deferred.clone(),
         );
         let lease_store_absent = Counter::<u64>::default();
         registry.register(
@@ -281,6 +293,7 @@ impl BridgeMetrics {
                 spool_bytes,
                 dropped_events,
                 alarm_spool_full,
+                alarm_deferred,
                 publish_latency,
                 admission_rejections,
                 late_published,
@@ -423,9 +436,32 @@ impl BridgeMetrics {
             .inc();
     }
 
-    /// No operator principal holding `OperatorScope::Approve` carried a Nostr pubkey.
-    pub fn hold_undeliverable(&self) {
-        self.hold_undeliverable.inc();
+    /// A hold the bridge refused to publish, by reason.
+    ///
+    /// `reason` is one of `no_operator_pubkey`, `no_hold_store`, `hold_not_found`,
+    /// `no_case_channel`. A `&'static str` rather than a `String`: the label set is closed and
+    /// the type says so.
+    pub fn hold_undeliverable(&self, reason: &'static str) {
+        self.hold_undeliverable
+            .get_or_create(&ReasonLabel {
+                reason: reason.to_string(),
+            })
+            .inc();
+    }
+
+    /// A `26006` alarm the burst cap held back for a later tick. Deferred, never dropped.
+    pub fn alarm_deferred(&self) {
+        self.alarm_deferred.inc();
+    }
+
+    /// A metrics handle for a test, without the registry the caller would drop anyway.
+    ///
+    /// The registry is still built and still owns the metric families — this only spares every
+    /// test the `let (metrics, _registry) = ...` destructuring, and it means a test that later
+    /// wants the scrape text can call [`BridgeMetrics::new`] instead.
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self::new().0
     }
 
     /// The containment lease poll found no sweep to read.
@@ -547,7 +583,8 @@ mod tests {
         metrics.connection_state("perch-alarm", true);
         metrics.case_channel_conflict();
         metrics.case_channel_created("manual");
-        metrics.hold_undeliverable();
+        metrics.hold_undeliverable("no_operator_pubkey");
+        metrics.alarm_deferred();
         metrics.lease_store_absent();
         metrics.unknown_action_kind();
         let mut out = String::new();
@@ -600,6 +637,24 @@ mod tests {
             assert_encoded_once(&out, name);
         }
         assert!(!out.contains("_total_total"));
+    }
+
+    #[test]
+    fn the_hold_path_metrics_encode_under_their_own_names() {
+        // The hold path adds two counters a dashboard splits on: the refusal reason, and the
+        // alarms the burst cap deferred. Both are named here so a rename is a test failure
+        // rather than a silently empty panel.
+        let out = encoded();
+        for name in [
+            "perch_bridge_hold_undeliverable_total",
+            "perch_bridge_alarm_deferred_total",
+        ] {
+            assert_encoded_once(&out, name);
+        }
+        assert!(
+            out.contains("reason=\"no_operator_pubkey\""),
+            "the refusal reason is a label, not four counters\n{out}"
+        );
     }
 
     #[test]

@@ -199,13 +199,7 @@ async fn publish_step<P: FramePublisher>(
 ) -> Result<(), BridgeError> {
     let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
     let signed = step_to_event(step, keys, now_secs)?;
-    let channel = match step {
-        PublishStep::CreateChannel { channel, .. } | PublishStep::AddMember { channel, .. } => {
-            Some(*channel)
-        }
-        PublishStep::PublishHold { channel, .. } => Some(*channel),
-        PublishStep::PublishAlarm { .. } => None,
-    };
+    let channel = step.channel();
     let frame = Frame {
         identity,
         channel,

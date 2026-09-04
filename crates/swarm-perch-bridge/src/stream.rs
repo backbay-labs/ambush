@@ -11,12 +11,29 @@
 
 use swarm_core::agent::AgentRole;
 use swarm_core::pheromone::ThreatClass;
-use swarm_core::types::{ResponseAction, Severity};
-use swarm_perch_wire::{
-    WireAgentRole, WireFindingEnvelope, WireResponseActionKind, WireSeverity, WireThreatClass,
+use swarm_core::types::{
+    ResponseAction, ResponseBlastRadiusImpact, ResponseBlastRadiusPreview,
+    ResponseRehearsalPreview, ResponseRehearsalScopeKind, ResponseRollbackPreview,
+    ResponseRollbackStep, ResponseRollbackStepKind, Severity,
 };
+use swarm_crypto::DetachedSignature;
+use swarm_perch_wire::{
+    Decision as WireDecision, EscalationLevel as WireEscalationLevel,
+    HoldDecisionRecord as WireHoldDecisionRecord, HoldRationale as WireHoldRationale,
+    HoldState as WireHoldState, WireActionRequest, WireAgentRole, WireBlastRadiusImpact,
+    WireBlastRadiusPreview, WireDetachedSignature, WireFindingEnvelope, WirePolicyDecision,
+    WirePolicyVerdict, WireRehearsalPreview, WireRehearsalScopeKind, WireResponseAction,
+    WireResponseActionKind, WireRollbackPreview, WireRollbackStep, WireRollbackStepKind,
+    WireSeverity, WireThreatClass,
+};
+use swarm_policy::{ActionRequest, PolicyDecision, PolicyVerdict};
 use swarm_response::SwarmFindingEnvelope;
-use swarm_runtime::runtime_events::RuntimeEvent;
+use swarm_runtime::held_action::{HoldDecision, HoldDecisionRecord, HoldRationale, HoldState};
+use swarm_runtime::runtime_events::{
+    EscalationLevel as RuntimeEscalationLevel, RuntimeEvent, RuntimeThreatConcentration,
+};
+
+use crate::error::BridgeError;
 
 /// The four transport classes. Each `RuntimeEvent` variant maps to exactly one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -249,6 +266,361 @@ pub fn finding_to_wire(finding: &SwarmFindingEnvelope) -> WireFindingEnvelope {
         severity: severity_to_wire(*severity),
         confidence: *confidence,
         evidence: evidence.clone(),
+    }
+}
+
+// ────────────────────────────────────────────────── the hold record, projected
+
+/// The wire policy verdict for an engine one. Exhaustive.
+pub fn policy_verdict_to_wire(verdict: PolicyVerdict) -> WirePolicyVerdict {
+    match verdict {
+        PolicyVerdict::Deny => WirePolicyVerdict::Deny,
+        PolicyVerdict::Allow => WirePolicyVerdict::Allow,
+        PolicyVerdict::RequireHuman => WirePolicyVerdict::RequireHuman,
+    }
+}
+
+/// The wire form of a `PolicyDecision`: three fields, destructured so a fourth is a compile
+/// error here rather than an absent key on the wire.
+pub fn policy_decision_to_wire(decision: &PolicyDecision) -> WirePolicyDecision {
+    let PolicyDecision {
+        verdict,
+        rule_name,
+        reason,
+    } = decision;
+    WirePolicyDecision {
+        verdict: policy_verdict_to_wire(*verdict),
+        rule_name: rule_name.clone(),
+        reason: reason.clone(),
+    }
+}
+
+/// The wire form of a `ResponseAction`.
+///
+/// The kind comes from [`response_action_kind_to_wire`], which is exhaustive over the fifteen
+/// variants and therefore compile-checked. The PAYLOAD is carried verbatim through the action's
+/// own serde form, which is what
+/// [`swarm_perch_wire::WireResponseAction`]'s `#[serde(flatten)]` map is for: Perch is a reader
+/// of the action and never an author, and the schema is `additionalProperties: true`.
+/// `every_action_kind_round_trips_through_the_wire_action` asserts the two halves reassemble
+/// into the engine's own bytes for all fifteen.
+///
+/// # Errors
+///
+/// [`BridgeError::Encode`] when the action does not serialize to a JSON object — which would
+/// mean the engine had stopped tagging `ResponseAction` internally on `type`.
+pub fn response_action_to_wire(action: &ResponseAction) -> Result<WireResponseAction, BridgeError> {
+    let value =
+        serde_json::to_value(action).map_err(|error| BridgeError::Encode(error.to_string()))?;
+    let serde_json::Value::Object(map) = value else {
+        return Err(BridgeError::Encode(
+            "ResponseAction did not serialize to a JSON object".to_string(),
+        ));
+    };
+    Ok(WireResponseAction {
+        kind: response_action_kind_to_wire(action),
+        fields: map.into_iter().filter(|(key, _)| key != "type").collect(),
+    })
+}
+
+/// The wire form of an `ActionRequest`. Carried VERBATIM, including `evidence`, which is
+/// adversary-shaped: the card is channel-compartmented and the hold pane has to show the
+/// operator what the requesting agent actually claimed.
+///
+/// # Errors
+///
+/// [`BridgeError::Encode`] from [`response_action_to_wire`].
+pub fn action_request_to_wire(request: &ActionRequest) -> Result<WireActionRequest, BridgeError> {
+    let ActionRequest {
+        hunt_id,
+        requested_by,
+        action,
+        severity,
+        evidence,
+    } = request;
+    Ok(WireActionRequest {
+        hunt_id: hunt_id.0.clone(),
+        requested_by: requested_by.0.clone(),
+        action: response_action_to_wire(action)?,
+        severity: severity_to_wire(*severity),
+        evidence: evidence.clone(),
+    })
+}
+
+/// The wire form of a runtime threat concentration.
+pub fn concentration_to_wire(
+    concentration: &RuntimeThreatConcentration,
+) -> swarm_perch_wire::ThreatConcentration {
+    let RuntimeThreatConcentration {
+        threat_class,
+        total_strength,
+        distinct_sources,
+        peak_confidence,
+    } = concentration;
+    swarm_perch_wire::ThreatConcentration {
+        threat_class: threat_class_to_wire(threat_class),
+        total_strength: *total_strength,
+        distinct_sources: *distinct_sources,
+        peak_confidence: *peak_confidence,
+    }
+}
+
+/// The wire escalation level for a runtime one. Exhaustive.
+pub fn escalation_level_to_wire(level: RuntimeEscalationLevel) -> WireEscalationLevel {
+    match level {
+        RuntimeEscalationLevel::Alert => WireEscalationLevel::Alert,
+        RuntimeEscalationLevel::Incident => WireEscalationLevel::Incident,
+    }
+}
+
+/// The wire form of the hold's rationale — render law 1's WHY WE ARE ASKING slot.
+pub fn hold_rationale_to_wire(rationale: &HoldRationale) -> WireHoldRationale {
+    let HoldRationale {
+        rule_name,
+        reason,
+        threat_class,
+        severity,
+        request_carried_fields,
+        concentration_at_hold,
+        escalation_level,
+        governance_receipt_present,
+    } = rationale;
+    WireHoldRationale {
+        rule_name: rule_name.clone(),
+        reason: reason.clone(),
+        threat_class: threat_class_to_wire(threat_class),
+        severity: severity_to_wire(*severity),
+        request_carried_fields: request_carried_fields.clone(),
+        concentration_at_hold: concentration_at_hold.as_ref().map(concentration_to_wire),
+        escalation_level: escalation_level.map(escalation_level_to_wire),
+        governance_receipt_present: *governance_receipt_present,
+    }
+}
+
+/// The wire rehearsal scope kind. Exhaustive over the ten.
+pub fn rehearsal_scope_kind_to_wire(kind: ResponseRehearsalScopeKind) -> WireRehearsalScopeKind {
+    match kind {
+        ResponseRehearsalScopeKind::NetworkTarget => WireRehearsalScopeKind::NetworkTarget,
+        ResponseRehearsalScopeKind::Host => WireRehearsalScopeKind::Host,
+        ResponseRehearsalScopeKind::Credential => WireRehearsalScopeKind::Credential,
+        ResponseRehearsalScopeKind::UserSession => WireRehearsalScopeKind::UserSession,
+        ResponseRehearsalScopeKind::File => WireRehearsalScopeKind::File,
+        ResponseRehearsalScopeKind::Process => WireRehearsalScopeKind::Process,
+        ResponseRehearsalScopeKind::UserAccount => WireRehearsalScopeKind::UserAccount,
+        ResponseRehearsalScopeKind::ScheduledTask => WireRehearsalScopeKind::ScheduledTask,
+        ResponseRehearsalScopeKind::Zone => WireRehearsalScopeKind::Zone,
+        ResponseRehearsalScopeKind::OperatorQueue => WireRehearsalScopeKind::OperatorQueue,
+    }
+}
+
+/// The wire blast-radius impact. Exhaustive over the fifteen, one per action.
+pub fn blast_radius_impact_to_wire(impact: ResponseBlastRadiusImpact) -> WireBlastRadiusImpact {
+    match impact {
+        ResponseBlastRadiusImpact::NetworkEgressBlocked => {
+            WireBlastRadiusImpact::NetworkEgressBlocked
+        }
+        ResponseBlastRadiusImpact::HostConnectivityIsolated => {
+            WireBlastRadiusImpact::HostConnectivityIsolated
+        }
+        ResponseBlastRadiusImpact::CredentialAccessRevoked => {
+            WireBlastRadiusImpact::CredentialAccessRevoked
+        }
+        ResponseBlastRadiusImpact::DnsResolutionSinkholed => {
+            WireBlastRadiusImpact::DnsResolutionSinkholed
+        }
+        ResponseBlastRadiusImpact::UserSessionTerminated => {
+            WireBlastRadiusImpact::UserSessionTerminated
+        }
+        ResponseBlastRadiusImpact::HostScanTriggered => WireBlastRadiusImpact::HostScanTriggered,
+        ResponseBlastRadiusImpact::HostFirewallPolicyChanged => {
+            WireBlastRadiusImpact::HostFirewallPolicyChanged
+        }
+        ResponseBlastRadiusImpact::FileQuarantined => WireBlastRadiusImpact::FileQuarantined,
+        ResponseBlastRadiusImpact::ProcessTerminated => WireBlastRadiusImpact::ProcessTerminated,
+        ResponseBlastRadiusImpact::ProcessSuspended => WireBlastRadiusImpact::ProcessSuspended,
+        ResponseBlastRadiusImpact::UserAccountDisabled => {
+            WireBlastRadiusImpact::UserAccountDisabled
+        }
+        ResponseBlastRadiusImpact::PasswordResetEnforced => {
+            WireBlastRadiusImpact::PasswordResetEnforced
+        }
+        ResponseBlastRadiusImpact::ScheduledTaskRemoved => {
+            WireBlastRadiusImpact::ScheduledTaskRemoved
+        }
+        ResponseBlastRadiusImpact::DeceptionCoverageChanged => {
+            WireBlastRadiusImpact::DeceptionCoverageChanged
+        }
+        ResponseBlastRadiusImpact::OperatorEscalationOnly => {
+            WireBlastRadiusImpact::OperatorEscalationOnly
+        }
+    }
+}
+
+/// The wire rollback step kind. Exhaustive over the fifteen.
+pub fn rollback_step_kind_to_wire(kind: ResponseRollbackStepKind) -> WireRollbackStepKind {
+    match kind {
+        ResponseRollbackStepKind::RemoveNetworkBlock => WireRollbackStepKind::RemoveNetworkBlock,
+        ResponseRollbackStepKind::RestoreHostConnectivity => {
+            WireRollbackStepKind::RestoreHostConnectivity
+        }
+        ResponseRollbackStepKind::RestoreCredential => WireRollbackStepKind::RestoreCredential,
+        ResponseRollbackStepKind::RemoveDnsSinkhole => WireRollbackStepKind::RemoveDnsSinkhole,
+        ResponseRollbackStepKind::ReauthenticateUserSession => {
+            WireRollbackStepKind::ReauthenticateUserSession
+        }
+        ResponseRollbackStepKind::CancelHostScan => WireRollbackStepKind::CancelHostScan,
+        ResponseRollbackStepKind::RemoveFirewallRule => WireRollbackStepKind::RemoveFirewallRule,
+        ResponseRollbackStepKind::ReleaseQuarantinedFile => {
+            WireRollbackStepKind::ReleaseQuarantinedFile
+        }
+        ResponseRollbackStepKind::RestartProcess => WireRollbackStepKind::RestartProcess,
+        ResponseRollbackStepKind::ResumeProcess => WireRollbackStepKind::ResumeProcess,
+        ResponseRollbackStepKind::ReenableUserAccount => WireRollbackStepKind::ReenableUserAccount,
+        ResponseRollbackStepKind::ClearPasswordResetRequirement => {
+            WireRollbackStepKind::ClearPasswordResetRequirement
+        }
+        ResponseRollbackStepKind::RestoreScheduledTask => {
+            WireRollbackStepKind::RestoreScheduledTask
+        }
+        ResponseRollbackStepKind::WithdrawDecoy => WireRollbackStepKind::WithdrawDecoy,
+        ResponseRollbackStepKind::CloseEscalation => WireRollbackStepKind::CloseEscalation,
+    }
+}
+
+/// The wire form of the daemon's rehearsal preview — render law 1's BLAST RADIUS and IF YOU
+/// UNDO slots.
+pub fn rehearsal_to_wire(preview: &ResponseRehearsalPreview) -> WireRehearsalPreview {
+    let ResponseRehearsalPreview {
+        rehearsal_id,
+        source_bundle_id,
+        prepared_at_ms,
+        simulated_only,
+        blast_radius,
+        rollback,
+    } = preview;
+    let ResponseBlastRadiusPreview {
+        scope_kind,
+        scope_value,
+        impact,
+        max_affected_scopes,
+        affected_capabilities,
+        summary: blast_summary,
+    } = blast_radius;
+    let ResponseRollbackPreview {
+        required,
+        summary: rollback_summary,
+        steps,
+    } = rollback;
+    WireRehearsalPreview {
+        rehearsal_id: rehearsal_id.clone(),
+        source_bundle_id: source_bundle_id.clone(),
+        prepared_at_ms: *prepared_at_ms,
+        simulated_only: *simulated_only,
+        blast_radius: WireBlastRadiusPreview {
+            scope_kind: rehearsal_scope_kind_to_wire(*scope_kind),
+            scope_value: scope_value.clone(),
+            impact: blast_radius_impact_to_wire(*impact),
+            max_affected_scopes: *max_affected_scopes,
+            affected_capabilities: affected_capabilities.clone(),
+            summary: blast_summary.clone(),
+        },
+        rollback: WireRollbackPreview {
+            required: *required,
+            summary: rollback_summary.clone(),
+            steps: steps
+                .iter()
+                .map(|step| {
+                    let ResponseRollbackStep { kind, summary } = step;
+                    WireRollbackStep {
+                        kind: rollback_step_kind_to_wire(*kind),
+                        summary: summary.clone(),
+                    }
+                })
+                .collect(),
+        },
+    }
+}
+
+/// The wire hold state. Exhaustive over the nine.
+pub fn hold_state_to_wire(state: HoldState) -> WireHoldState {
+    match state {
+        HoldState::Created => WireHoldState::Created,
+        HoldState::Notified => WireHoldState::Notified,
+        HoldState::Armed => WireHoldState::Armed,
+        HoldState::Deciding => WireHoldState::Deciding,
+        HoldState::Granted => WireHoldState::Granted,
+        HoldState::Refused => WireHoldState::Refused,
+        HoldState::Expired => WireHoldState::Expired,
+        HoldState::Executed => WireHoldState::Executed,
+        HoldState::Failed => WireHoldState::Failed,
+    }
+}
+
+/// The wire form of a detached Ed25519 signature.
+pub fn detached_signature_to_wire(signature: &DetachedSignature) -> WireDetachedSignature {
+    let DetachedSignature {
+        algorithm,
+        key_id,
+        public_key_hex,
+        signature_hex,
+    } = signature;
+    WireDetachedSignature {
+        algorithm: algorithm.clone(),
+        key_id: key_id.clone(),
+        public_key_hex: public_key_hex.clone(),
+        signature_hex: signature_hex.clone(),
+    }
+}
+
+/// The wire operator decision word. Exhaustive; NEVER `deny`.
+pub fn hold_decision_to_wire(decision: HoldDecision) -> WireDecision {
+    match decision {
+        HoldDecision::Grant => WireDecision::Grant,
+        HoldDecision::Refuse => WireDecision::Refuse,
+    }
+}
+
+/// The wire form of a stored decision.
+///
+/// NARROWING, and every dropped field is a daemon-side fact with no place on a card that
+/// reaches an operator's timeline: `voter_id` and `rationale_sha256` belong to the decide
+/// route's signature check, `hold_notice_published` and `governance_clearance` are the
+/// daemon's own account of what it re-derived, and `audit_trail_id` names a record no console
+/// can fetch. The card carries what a human reads: who, when, what happened, and why not.
+pub fn hold_decision_record_to_wire(record: &HoldDecisionRecord) -> WireHoldDecisionRecord {
+    let HoldDecisionRecord {
+        decision,
+        operator_id,
+        voter_id: _,
+        rationale_sha256: _,
+        hold_notice_published: _,
+        governance_clearance: _,
+        decided_at_ms,
+        nostr_intent_event_id,
+        signature,
+        rationale,
+        outcome,
+        dispatched,
+        receipt_id,
+        audit_trail_id: _,
+        refusal,
+    } = record;
+    WireHoldDecisionRecord {
+        decision: hold_decision_to_wire(*decision),
+        operator_id: operator_id.clone(),
+        decided_at_ms: *decided_at_ms,
+        nostr_intent_event_id: nostr_intent_event_id.clone(),
+        signature: signature.as_ref().map(detached_signature_to_wire),
+        rationale: rationale.clone(),
+        outcome: serde_json::to_value(outcome)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string()),
+        dispatched: *dispatched,
+        receipt_id: receipt_id.clone(),
+        refusal: refusal
+            .as_ref()
+            .and_then(|refusal| serde_json::to_value(refusal).ok()),
     }
 }
 

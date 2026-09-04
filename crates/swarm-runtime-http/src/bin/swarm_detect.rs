@@ -1140,6 +1140,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ingest_identity: ingest_identity.id.clone(),
             operator_principals: config.operator.auth.effective_principals(),
             containment: containment_sweep.as_ref().map(Arc::clone),
+            // The SAME `Arc` the decide route and the sweep hold, not a second store: the
+            // bridge's `mark_case_channel` / `mark_notified` callbacks have to land on the
+            // record the operator's decision will compare-and-set.
+            hold_store: Some(Arc::clone(&hold_store)),
             shutdown: shutdown_rx.clone(),
         }) {
             Ok(Some(bridge)) => {
