@@ -304,3 +304,54 @@ async fn a_probe_error_ends_the_wait_at_once() {
     assert!(!error.starts_with(CASE_CHANNEL_PENDING_PREFIX));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+/// The verdict signature must actually verify, not merely be present.
+///
+/// `swarm_crypto::verify_detached_signature` refuses any `key_id` that is not
+/// `sha256(public_key_hex)`. This command set `key_id` to the operator's id, so
+/// every verdict card it produced carried a signature that verified nowhere.
+/// Nothing caught it because the finding-feedback route records
+/// `operator-bearer:{operator_id}` and never checks the signature — only the
+/// hold decide route and tier-2 verification do, and neither existed yet.
+///
+/// The desktop crate cannot depend on `swarm-crypto` (W3-27 keeps the Tauri
+/// process off every engine crate but the wire one), so this reproduces the
+/// verifier's two rules with the crates the console already has: the key_id
+/// hash, then the Ed25519 signature over the same preimage.
+#[test]
+fn the_verdict_signature_verifies_under_the_daemon_s_own_rule() {
+    use ed25519_dalek::{Signature, Verifier as _};
+
+    let key = SigningKey::from_bytes(&[7u8; 32]);
+    let public_key_hex = hex::encode(key.verifying_key().to_bytes());
+    let preimage = verdict_preimage(1_700_000_000_000, "dismiss", "f-1", Some("noise"));
+    assert!(!preimage.is_empty());
+
+    // THE PRODUCTION CONSTRUCTION, not a copy of it. Rebuilding the struct here
+    // would assert the rule while passing over a command that breaks it — which
+    // is exactly what the first version of this test did.
+    let signature = sign_verdict(&key, &preimage);
+
+    // Rule 1, the one that was wrong: the id names the key, not the operator.
+    assert_eq!(
+        signature.key_id,
+        sha256_hex(signature.public_key_hex.as_bytes()),
+        "key_id must be sha256(public_key_hex); an operator id verifies nowhere"
+    );
+
+    // Rule 2: the signature is over the preimage under that key.
+    let bytes: [u8; 64] = hex::decode(&signature.signature_hex)
+        .unwrap_or_else(|error| panic!("signature hex: {error}"))
+        .try_into()
+        .unwrap_or_else(|_| panic!("an ed25519 signature is 64 bytes"));
+    key.verifying_key()
+        .verify(&preimage, &Signature::from_bytes(&bytes))
+        .unwrap_or_else(|error| panic!("the signature must verify: {error}"));
+
+    // And the operator id specifically is NOT a valid key_id, which is what the
+    // regression was.
+    assert_ne!(
+        signature.key_id, "local-operator",
+        "the operator id must never be used as a key_id"
+    );
+}

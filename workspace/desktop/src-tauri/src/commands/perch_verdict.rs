@@ -108,6 +108,28 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Builds the detached signature a verdict card carries.
+///
+/// Extracted so a test can exercise THIS construction rather than rebuild one
+/// beside it: a test that assembles its own `DetachedSignature` asserts a rule,
+/// not the code, and passes even when the command is wrong.
+///
+/// `key_id` is `sha256(public_key_hex)`, never the operator's id.
+/// `swarm_crypto::verify_detached_signature` refuses any other value, so naming
+/// the operator here made every verdict signature this console produced verify
+/// nowhere. It stayed invisible because the finding-feedback route records
+/// `operator-bearer:{operator_id}` and never checks the signature; the hold
+/// decide route does, and tier-2 verification will.
+fn sign_verdict(key: &SigningKey, preimage: &[u8]) -> DetachedSignature {
+    let public_key_hex = hex::encode(key.verifying_key().to_bytes());
+    DetachedSignature {
+        algorithm: "ed25519".to_string(),
+        key_id: sha256_hex(public_key_hex.as_bytes()),
+        public_key_hex,
+        signature_hex: hex::encode(key.sign(preimage).to_bytes()),
+    }
+}
+
 /// The exact bytes the operator's Ed25519 key signs.
 ///
 /// Four members, RFC 8785 canonical: `{decided_at_ms, decision, finding_id,
@@ -420,12 +442,7 @@ pub async fn perch_record_verdict(
     if preimage.is_empty() {
         return Err("could not canonicalize the verdict preimage".to_string());
     }
-    let signature = DetachedSignature {
-        algorithm: "ed25519".to_string(),
-        key_id: operator.clone(),
-        public_key_hex: public_key_hex.clone(),
-        signature_hex: hex::encode(key.sign(&preimage).to_bytes()),
-    };
+    let signature = sign_verdict(&key, &preimage);
 
     let fact = serde_json::json!({
         "schema": VERDICT_FACT_SCHEMA,
