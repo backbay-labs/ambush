@@ -25,7 +25,7 @@
 //! not `"open"`. Case channels are private by construction (ADR 0018 C7), so there is no
 //! open-channel fallback. The creator must be the party that later publishes into it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -222,6 +222,16 @@ struct RoutingState {
     hunts: BTreeMap<String, String>,
     #[serde(default)]
     receipts: BTreeMap<String, String>,
+    /// Channels whose `CreateChannel` step the relay ACCEPTED.
+    ///
+    /// Distinct from `hunts`, which records only that a channel id was chosen. A hunt is routed
+    /// the moment an id is minted, but the channel does not exist until the relay says so, and
+    /// the two must not be conflated: `ensure_case_channel` used to return no steps for any
+    /// routed hunt, so a refused create was retried into an empty step list, the caller's
+    /// all-succeeded flag stayed true over zero steps, and the record was committed with the
+    /// channel never created — leaving a daemon incident pointing at nothing.
+    #[serde(default)]
+    created: BTreeSet<String>,
 }
 
 impl CaseRouting {
@@ -295,7 +305,17 @@ impl CaseRouting {
                         incoming: case_id.to_string(),
                     });
                 }
-                return Ok((existing, Vec::new()));
+                if self.state.created.contains(&existing.to_string()) {
+                    return Ok((existing, Vec::new()));
+                }
+                // Routed but never confirmed created: re-plan the steps. Both are idempotent
+                // (the relay answers a duplicate 9007 with `duplicate: channel already exists`,
+                // which the publisher treats as success), so replanning is safe and skipping it
+                // is not.
+                return Ok((
+                    existing,
+                    self.case_channel_steps(existing, operators, ttl_seconds),
+                ));
             }
             (CasePromotionTrigger::Held { .. }, None) => Uuid::new_v4(),
             (CasePromotionTrigger::Promoted { case_id, .. }, None) => *case_id,
@@ -304,6 +324,22 @@ impl CaseRouting {
         self.state.hunts.insert(hunt_id, channel.to_string());
         self.persist()?;
 
+        Ok((
+            channel,
+            self.case_channel_steps(channel, operators, ttl_seconds),
+        ))
+    }
+
+    /// The steps that make one case channel exist: create it, then admit each operator.
+    ///
+    /// Both are idempotent at the relay, so replanning them for a routed-but-unconfirmed channel
+    /// is safe.
+    fn case_channel_steps(
+        &self,
+        channel: Uuid,
+        operators: &[String],
+        ttl_seconds: i32,
+    ) -> Vec<PublishStep> {
         let mut steps = Vec::with_capacity(1 + operators.len());
         steps.push(PublishStep::CreateChannel {
             channel,
@@ -317,7 +353,22 @@ impl CaseRouting {
                 pubkey: pubkey.clone(),
             });
         }
-        Ok((channel, steps))
+        steps
+    }
+
+    /// Records that the relay accepted this channel's `CreateChannel` step.
+    ///
+    /// Until this is called the channel is routed but not known to exist, and
+    /// [`Self::ensure_case_channel`] keeps replanning its steps.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::SpoolIo`] when the sidecar cannot be written.
+    pub fn mark_case_channel_created(&mut self, channel: Uuid) -> Result<(), BridgeError> {
+        if self.state.created.insert(channel.to_string()) {
+            self.persist()?;
+        }
+        Ok(())
     }
 
     /// Recorded when a `RuntimeEvent::ResponseExecution` carries `receipt_id: Some(_)`. It is the
@@ -494,8 +545,19 @@ mod tests {
             steps[0]
         );
         assert_eq!(steps.len(), 3);
-        // Replay: same hunt, same case → no steps. Different case → conflict, never a second
-        // channel.
+        // Replay BEFORE the relay accepted the create: the steps must come back, because the
+        // channel is routed but does not exist yet.
+        assert_eq!(
+            routing
+                .ensure_case_channel(&trigger, &ops, 1)
+                .unwrap()
+                .1
+                .len(),
+            3,
+            "a routed-but-unconfirmed channel must replan its steps, not return none"
+        );
+        // Replay AFTER acceptance: no steps.
+        routing.mark_case_channel_created(case).unwrap();
         assert!(
             routing
                 .ensure_case_channel(&trigger, &ops, 1)
@@ -528,18 +590,95 @@ mod tests {
         let (channel, steps) = routing.ensure_case_channel(&trigger, &[], 60).unwrap();
         assert_eq!(steps.len(), 1);
         assert_eq!(routing.case_for_hunt("hunt-2"), Some(channel));
-        // A later promotion naming the same channel is a no-op, not a conflict.
+        // A later promotion naming the same channel is a no-op, not a conflict -- but only once
+        // the relay has accepted the create. Before that the steps must come back, or a refused
+        // create would be retried into an empty list and committed as a success.
         let promoted = CasePromotionTrigger::Promoted {
             hunt_id: "hunt-2".into(),
             case_id: channel,
             clause: PromotionClause::HeldAction,
         };
+        assert_eq!(
+            routing
+                .ensure_case_channel(&promoted, &[], 60)
+                .unwrap()
+                .1
+                .len(),
+            1,
+            "unconfirmed: the create must still be planned"
+        );
+        routing.mark_case_channel_created(channel).unwrap();
         assert!(
             routing
                 .ensure_case_channel(&promoted, &[], 60)
                 .unwrap()
                 .1
                 .is_empty()
+        );
+    }
+
+    /// A refused `9007` must not be committed as a success.
+    ///
+    /// `ensure_case_channel` recorded the hunt before anything was published and then returned
+    /// no steps for any routed hunt. The alarm loop iterates the steps and commits when none
+    /// failed, so a retry after a refused create iterated an EMPTY list, kept its
+    /// all-succeeded flag, and committed — leaving a daemon incident record pointing at a
+    /// channel the relay never created, with no further retry.
+    #[test]
+    fn a_refused_create_replans_its_steps_instead_of_committing_silently() {
+        let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let mut routing = CaseRouting::open(&dir.path().join("routing.json"))
+            .unwrap_or_else(|error| panic!("open: {error}"));
+        let case = Uuid::new_v4();
+        let trigger = CasePromotionTrigger::Promoted {
+            hunt_id: "hunt-refused".into(),
+            case_id: case,
+            clause: PromotionClause::Manual,
+        };
+        let ops = vec!["a".repeat(64)];
+
+        let (_, first) = routing
+            .ensure_case_channel(&trigger, &ops, 60)
+            .unwrap_or_else(|error| panic!("first: {error}"));
+        assert_eq!(first.len(), 2, "create + one operator");
+
+        // The publish is refused, so nothing marks the channel created. Every later tick must
+        // still offer the work.
+        for attempt in 0..3 {
+            let (_, retry) = routing
+                .ensure_case_channel(&trigger, &ops, 60)
+                .unwrap_or_else(|error| panic!("retry {attempt}: {error}"));
+            assert_eq!(
+                retry.len(),
+                2,
+                "attempt {attempt}: a channel the relay never accepted must be replanned"
+            );
+        }
+
+        // A sidecar reopen must not lose that distinction either.
+        drop(routing);
+        let mut reopened = CaseRouting::open(&dir.path().join("routing.json"))
+            .unwrap_or_else(|error| panic!("reopen: {error}"));
+        assert_eq!(
+            reopened
+                .ensure_case_channel(&trigger, &ops, 60)
+                .unwrap()
+                .1
+                .len(),
+            2,
+            "the unconfirmed channel must survive a restart as unconfirmed"
+        );
+
+        reopened
+            .mark_case_channel_created(case)
+            .unwrap_or_else(|error| panic!("mark: {error}"));
+        assert!(
+            reopened
+                .ensure_case_channel(&trigger, &ops, 60)
+                .unwrap()
+                .1
+                .is_empty(),
+            "once the relay accepted it, replanning must stop"
         );
     }
 
