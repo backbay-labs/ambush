@@ -287,6 +287,7 @@ export const PERCH_DAEMON_WRITE_COMMANDS = [
  * routes when the claim it carries is about five.
  */
 export const PERCH_LOCAL_COMMANDS = [
+  "perch_export_bundle",
   "perch_verify_envelope",
   "perch_sidecar_start",
   "perch_sidecar_stop",
@@ -325,6 +326,45 @@ export type PerchEnvelopeVerification = {
   readonly tier: 0 | 1 | 2;
   readonly reason: string;
 };
+
+/** What the export actually wrote, so a caller reports that rather than intent. */
+export type PerchExportOutcome = {
+  readonly directory: string;
+  readonly written: readonly string[];
+  readonly bytes: number;
+};
+
+/**
+ * Write an evidence bundle into a directory the operator chose.
+ *
+ * Bytes are base64 because a `Uint8Array` across IPC becomes a JSON array of
+ * numbers, and a twelve-megabyte bundle would be a hundred megabytes of
+ * digits. They are the daemon's and the relay's bytes VERBATIM — the Rust side
+ * writes what it is handed and re-serializes nothing, because re-serializing
+ * changes the digest of a signed record.
+ */
+export function perchExportBundle(
+  directory: string,
+  files: readonly { path: string; bytes: Uint8Array }[],
+) {
+  return invokeTauri<PerchExportOutcome>("perch_export_bundle", {
+    directory,
+    files: files.map((file) => ({
+      path: file.path,
+      bytes_b64: bytesToBase64(file.bytes),
+    })),
+  });
+}
+
+/** Base64 without a data URL round-trip; chunked so a large bundle cannot blow the stack. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
+}
 
 /**
  * Verify a spine envelope in this process. Local computation, no host request,

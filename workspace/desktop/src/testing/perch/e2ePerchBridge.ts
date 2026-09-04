@@ -512,6 +512,7 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_list_containments",
   "perch_release_containment",
   "perch_evasion_coverage",
+  "perch_export_bundle",
   "perch_verify_envelope",
   "perch_sidecar_start",
   "perch_sidecar_stop",
@@ -911,6 +912,22 @@ export function handlePerchMockCommand(
     case "perch_record_verdict":
       s.log.push(command);
       return after(s.verdictDelayMs, () => recordVerdict(payload));
+    // The export writes no files in a browser. It reports what it was asked
+    // to write, so a spec can assert the PLAN — which is the part the console
+    // owns — without asserting a filesystem the mock does not have.
+    case "perch_export_bundle": {
+      s.log.push(command);
+      const request = payload as {
+        directory?: string;
+        files?: { path: string }[];
+      } | null;
+      const files = request?.files ?? [];
+      return {
+        directory: request?.directory ?? "",
+        written: files.map((file) => file.path),
+        bytes: 0,
+      };
+    }
     // Envelope verification. The mock answers tier 1 by default: an unsigned
     // envelope whose hash matches is the honest steady state of this fixture,
     // and a mock that answered tier 2 would let a spec assert a badge the
