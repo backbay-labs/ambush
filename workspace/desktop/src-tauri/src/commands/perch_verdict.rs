@@ -114,18 +114,25 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// beside it: a test that assembles its own `DetachedSignature` asserts a rule,
 /// not the code, and passes even when the command is wrong.
 ///
-/// `key_id` is `sha256(public_key_hex)`, never the operator's id.
-/// `swarm_crypto::verify_detached_signature` refuses any other value, so naming
-/// the operator here made every verdict signature this console produced verify
-/// nowhere. It stayed invisible because the finding-feedback route records
-/// `operator-bearer:{operator_id}` and never checks the signature; the hold
-/// decide route does, and tier-2 verification will.
+/// `key_id` is `sha256` of the key's RAW 32 bytes — never the operator's id,
+/// and never the hash of its hex spelling.
+///
+/// `swarm_crypto::verify_detached_signature` parses `public_key_hex` into a
+/// `PublicKey` and compares against `sha256(public_key.as_bytes())`, which is
+/// the raw form. Hashing the hex string produces a different digest and fails
+/// verification exactly as an operator id does, so getting this wrong twice
+/// looks identical from inside this crate.
+///
+/// Naming the operator here made every verdict signature this console produced
+/// verify nowhere. It stayed invisible because the finding-feedback route
+/// records `operator-bearer:{operator_id}` and never checks the signature; the
+/// hold's decide route does, and tier-2 verification will.
 fn sign_verdict(key: &SigningKey, preimage: &[u8]) -> DetachedSignature {
-    let public_key_hex = hex::encode(key.verifying_key().to_bytes());
+    let public_key = key.verifying_key().to_bytes();
     DetachedSignature {
         algorithm: "ed25519".to_string(),
-        key_id: sha256_hex(public_key_hex.as_bytes()),
-        public_key_hex,
+        key_id: sha256_hex(&public_key),
+        public_key_hex: hex::encode(public_key),
         signature_hex: hex::encode(key.sign(preimage).to_bytes()),
     }
 }

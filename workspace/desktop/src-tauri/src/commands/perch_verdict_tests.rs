@@ -331,11 +331,24 @@ fn the_verdict_signature_verifies_under_the_daemon_s_own_rule() {
     // is exactly what the first version of this test did.
     let signature = sign_verdict(&key, &preimage);
 
-    // Rule 1, the one that was wrong: the id names the key, not the operator.
+    // Rule 1, the one that was wrong TWICE. `verify_detached_signature` parses
+    // `public_key_hex` into a `PublicKey` and hashes `public_key.as_bytes()` --
+    // the RAW 32 bytes. The first fix here hashed the hex STRING instead, which
+    // is a different digest and fails verification just as an operator id does;
+    // it passed only because the test reproduced the same wrong rule. Deriving
+    // the expectation from the decoded key, the way the verifier does, is what
+    // makes this assertion independent of the code under test.
+    let raw = hex::decode(&signature.public_key_hex)
+        .unwrap_or_else(|error| panic!("public_key_hex must decode: {error}"));
     assert_eq!(
         signature.key_id,
+        sha256_hex(&raw),
+        "key_id must be sha256 of the RAW public key, not of its hex spelling"
+    );
+    assert_ne!(
+        signature.key_id,
         sha256_hex(signature.public_key_hex.as_bytes()),
-        "key_id must be sha256(public_key_hex); an operator id verifies nowhere"
+        "hashing the hex spelling is the wrong rule and must not accidentally match"
     );
 
     // Rule 2: the signature is over the preimage under that key.
