@@ -47,6 +47,7 @@ test("the perch singletons are registered", () => {
   assert.ok(
     [
       "perchSubscriptions",
+      "perchEphemeralStore",
       "perchSeqTracking",
       "perchAdmittedIssuers",
       "perchWriteStates",

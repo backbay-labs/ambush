@@ -16,6 +16,7 @@ import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
+import { resetPerchEphemeralStore } from "@/shared/api/perchEphemeralStore";
 import { resetPerchLaneMovement } from "@/shared/api/perchLaneMovement";
 import {
   resetPerchSeqTracking,
@@ -81,6 +82,7 @@ export const COMMUNITY_SCOPED_SINGLETONS = [
   // Perch (the operator console). Torn down after the relay is disconnected
   // so the subscription manager's CLOSE frames never race a live socket.
   "perchSubscriptions",
+  "perchEphemeralStore",
   "perchSeqTracking",
   "perchAdmittedIssuers",
   "perchWriteStates",
@@ -163,6 +165,11 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
     resetPerchLaneMovement();
     await resetPerchSubscriptions();
   },
+  // The 26000-26006 frames and the admitted set they are checked against.
+  // Cleared right after the REQs are closed: issuers are per-colony, and a
+  // queued alarm from the old colony would name a hold the new daemon has
+  // never heard of.
+  perchEphemeralStore: () => resetPerchEphemeralStore(),
   perchSeqTracking: () => resetPerchSeqTracking(),
   perchAdmittedIssuers: () => resetPerchAdmittedIssuers(),
   perchWriteStates: () => resetPerchWriteStates(),
