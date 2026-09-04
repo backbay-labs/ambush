@@ -44,6 +44,15 @@
 #      "the daemon signed the release attestation", which is true and renderable,
 #      and would still miss "verified" reaching a finding card through a variable.
 #
+#      IF ANYONE EVER ADDS ONE, ITS EXEMPTION IS WRITTEN IN THE SAME CHANGE.
+#      12-PLAN-FIRST-CARD.md mandates the tier-0 badge verbatim:
+#      `secp256k1 · tier 0 · TRANSPORT-SIGNED ONLY · the daemon is the record`.
+#      It contains the substring SIGNED, and a naive word-bounded `signed` row
+#      fires on it -- measured, by adding the row and watching it hit the badge
+#      in a corpus file the contract expects to be clean. Anchor the exemption
+#      to the WHOLE string, the way `bare-lane` anchors its nav-label exemption,
+#      so it exempts the badge and never a sentence that contains it.
+#
 #   2. NOTHING HERE COVERS A STRING THAT ARRIVES AS DATA. The scanner reads
 #      authored literals: copy-module strings, four attribute values, six object
 #      field names, and JSX text nodes. A daemon-supplied string interpolated

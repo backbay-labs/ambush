@@ -885,6 +885,69 @@ if [ "$PERCH_TREE_STATE" = "present" ]; then
   [ "${#markup_files[@]}" -gt 0 ] && \
     violations="$violations$(extract_strings markup "${markup_files[@]}" | scan_extracted | apply_allowlist)"
 
+  # ------------------------------------------------------------------------
+  # THE BARE-LITERAL BLIND SPOT, DECLARED.
+  #
+  # markup mode reads four attribute values, six object field names and JSX
+  # text nodes. A bare `const X = "..."` is none of those, so its string is
+  # invisible to every ban row -- including TIER_0_BADGE, the one literal the
+  # plan mandates verbatim. That is not a small corner: this gate's whole
+  # design principle is "refuse to pass silently", and a blind spot nobody
+  # counts is the silent part.
+  #
+  # The measure is exact rather than estimated: run BOTH modes over the same
+  # markup files and take the quoted literals copy mode would have seen and
+  # markup mode did not. copy mode's own skip rules still apply, so routes,
+  # URLs and snake_case wire tokens are excluded -- what remains is prose-
+  # shaped text that no ban row can currently judge.
+  #
+  # Moving a literal into a copy module (`copy.ts`, `copy/*.ts`, `*Copy.ts`)
+  # is what takes it out of this count and puts it under the ban list.
+  # ------------------------------------------------------------------------
+  UNSEEN_TOTAL=0
+  unseen_by_root=""
+  if [ "${#markup_files[@]}" -gt 0 ]; then
+    extract_strings markup "${markup_files[@]}" | LC_ALL=C sort -u > "$FIXTURE_DIR/seen"
+    extract_strings copy "${markup_files[@]}" | LC_ALL=C sort -u > "$FIXTURE_DIR/quoted"
+    comm -13 "$FIXTURE_DIR/seen" "$FIXTURE_DIR/quoted" > "$FIXTURE_DIR/unseen"
+    UNSEEN_TOTAL="$(wc -l < "$FIXTURE_DIR/unseen" | tr -d ' ')"
+    for dir in "${PERCH_ROOT_DIRS[@]}"; do
+      n="$(awk -F'\t' -v d="$dir/" 'index($1, d) == 1 { c++ } END { print c + 0 }' "$FIXTURE_DIR/unseen")"
+      unseen_by_root="${unseen_by_root}  ${n}	${dir#"$PERCH_DESKTOP_ROOT"/}"$'\n'
+    done
+  fi
+  if [ "$UNSEEN_TOTAL" -gt 0 ]; then
+    echo "BLIND SPOT: $UNSEEN_TOTAL string literal(s) in the required roots were NOT scanned"
+    echo "" >&2
+    echo "BLIND SPOT: $UNSEEN_TOTAL string literal(s) in the required roots were NOT scanned." >&2
+    printf '%s' "$unseen_by_root" | awk -F'\t' '{ printf "  %6s  %s\n", $1, $2 }' >&2
+    echo "  markup mode reads four attribute values, six object field names and JSX text" >&2
+    echo "  nodes. A bare \`const X = \"...\"\` is none of those, so no ban row can judge it." >&2
+    echo "  Move a rendered literal into a copy module (copy.ts, copy/*.ts, *Copy.ts) to" >&2
+    echo "  bring it under the ban list. Run with PERCH_LIST_UNSEEN=1 to print them." >&2
+    if [ -n "${PERCH_LIST_UNSEEN:-}" ]; then
+      sed "s#$PERCH_DESKTOP_ROOT/##" "$FIXTURE_DIR/unseen" \
+        | awk -F'\t' '{ printf "    %s:%s\n        %s\n", $1, $2, $3 }' >&2
+    fi
+    # The number with teeth. A raw count is mostly wire tokens, Tailwind class
+    # strings and schema names -- true, and easy to learn to ignore. This is the
+    # part that is not ignorable: how many of those unscanned literals a ban row
+    # WOULD have flagged. It runs the same rows over the same strings, so a
+    # nonzero here is a real violation hiding behind an extraction mode.
+    would_violate="$(scan_extracted < "$FIXTURE_DIR/unseen" | apply_allowlist || true)"
+    if [ -n "${would_violate//[$'\n']/}" ]; then
+      echo "" >&2
+      echo "  OF THOSE, these would violate a ban row if the literal were scanned:" >&2
+      printf '%s\n' "$would_violate" \
+        | awk -F'\t' -v r="$PERCH_DESKTOP_ROOT/" 'NF >= 6 { gsub(r, "", $3); printf "    [%s %s] %s:%s\n        %s\n", $2, $1, $3, $4, $5 }' >&2
+      echo "  Move each into a copy module so the ban row can judge it, or change the" >&2
+      echo "  string. This is not a pass over them." >&2
+    else
+      echo "  None of them trips a ban row today, checked by running the same rows over" >&2
+      echo "  the same strings on every run." >&2
+    fi
+  fi
+
   if [ "$COPY_SCOPE_STATUS" = "required" ]; then
     echo "scanned ${#asset_files[@]} asset(s), ${#copy_files[@]} copy module(s), ${#markup_files[@]} component file(s)"
   else
@@ -972,23 +1035,37 @@ if [ "$status" -ne 0 ]; then
 fi
 
 # The closing line names every scope this run did NOT cover. Unqualified
-# "copy gate clean" is reserved for the run that covered both halves; anything
-# else would let a deferral read as a clean sweep, which is the whole reason
-# W3-24 made the deferral a reviewed row instead of a deleted scan.
-if [ "$COPY_SCOPE_STATUS" = "required" ]; then
-  if [ "$PERCH_TREE_STATE" = "present" ]; then
-    echo "copy gate clean"
-  else
-    echo "copy gate clean over the asset half only; the product half is not yet scannable"
-  fi
+# "copy gate clean" is reserved for the run that covered everything; anything
+# else would let a deferral or a blind spot read as a clean sweep, which is the
+# whole reason W3-24 made the assets deferral a reviewed row instead of a
+# deleted scan. Three independent caveats can apply, so they are a list rather
+# than a nest of ifs -- adding a fourth must not be able to drop a third.
+caveats=()
+if [ "$COPY_SCOPE_STATUS" != "required" ]; then
+  caveats+=("$COPY_SCOPE_DIR is deferred and was NOT scanned")
+fi
+if [ -n "$keymap_deferred" ]; then
+  caveats+=("the keymap registry does not exist yet")
+fi
+if [ "${UNSEEN_TOTAL:-0}" -gt 0 ]; then
+  caveats+=("$UNSEEN_TOTAL literal(s) sit in the bare-literal blind spot")
+fi
+
+if [ "$PERCH_TREE_STATE" != "present" ]; then
+  closing="copy gate asserted nothing over the product half: it is not yet scannable"
+elif [ "${#caveats[@]}" -eq 0 ]; then
+  closing="copy gate clean"
 else
-  if [ "$PERCH_TREE_STATE" = "present" ]; then
-    if [ -n "$keymap_deferred" ]; then
-      echo "copy gate clean over the required Perch product roots; $COPY_SCOPE_DIR is deferred and was NOT scanned, and the keymap registry does not exist yet"
-    else
-      echo "copy gate clean over the required Perch product roots; $COPY_SCOPE_DIR is deferred and was NOT scanned"
-    fi
-  else
-    echo "copy gate asserted nothing: $COPY_SCOPE_DIR is deferred and the product half is not yet scannable"
-  fi
+  closing="copy gate clean over what it scanned"
+fi
+
+if [ "${#caveats[@]}" -eq 0 ]; then
+  echo "$closing"
+else
+  printf '%s; ' "$closing"
+  printf '%s' "${caveats[0]}"
+  for ((i = 1; i < ${#caveats[@]}; i++)); do
+    printf ', %s' "${caveats[i]}"
+  done
+  printf '\n'
 fi
