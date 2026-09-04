@@ -818,6 +818,39 @@ fi
 # ---------------------------------------------------------------------------
 perch_roots_gate copy "$PERCH_DESKTOP_ROOT"
 
+# THE THIRD ROOTS RULE. perch_roots_gate catches a `required` row whose
+# directory is missing and an `absent` row whose directory has landed. It does
+# NOT catch the other direction: a Perch directory that exists and that no row
+# mentions at all. 12-PLAN-FIRST-CARD.md Task 24 names all three, and this was
+# the one no gate carried -- so a new feature root, or a manifest row someone
+# deleted, would silently drop out of every scan while the gate stayed green.
+# That is the same silent-narrowing shape tools/copy-scope.tsv is written
+# against, so it is refused the same way.
+undeclared=""
+while IFS= read -r discovered; do
+  [ -n "$discovered" ] || continue
+  rel="${discovered#"$PERCH_DESKTOP_ROOT"/}"
+  if [ -z "$(perch_root_status "$rel")" ]; then
+    undeclared="${undeclared}  $rel"$'\n'
+  fi
+done < <(
+  {
+    find "$PERCH_DESKTOP_ROOT/src/features" -maxdepth 1 -type d -name 'perch*' 2>/dev/null
+    find "$PERCH_DESKTOP_ROOT/src/shared/ui" -maxdepth 1 -type d -name 'perch*' 2>/dev/null
+  } | LC_ALL=C sort
+)
+if [ -n "$undeclared" ]; then
+  echo "" >&2
+  echo "Perch source directories that tools/perch-source-roots.tsv does not mention:" >&2
+  printf '%s' "$undeclared" >&2
+  echo "" >&2
+  echo "Every Perch root is reviewed data. An unlisted one is scanned by no gate," >&2
+  echo "so its copy, its keymap and its write surface all go unchecked while every" >&2
+  echo "gate reports clean. Add a row -- status 'required' if it is Perch source --" >&2
+  echo "in the same commit that creates the directory." >&2
+  exit 1
+fi
+
 copy_files=()
 markup_files=()
 if [ "$PERCH_TREE_STATE" = "present" ]; then
