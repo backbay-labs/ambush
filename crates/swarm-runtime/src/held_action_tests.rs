@@ -596,3 +596,295 @@ fn health_reports_the_memory_backend_as_not_durable_and_counts_stalled_claims() 
         1
     );
 }
+
+fn temp_dir(label: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "held-action-{label}-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn a_file_store_recovers_an_open_hold_after_a_restart() {
+    let dir = temp_dir("restart");
+    let id = {
+        let store = FileHeldActionStore::open(&dir).unwrap();
+        let hold = fixture_hold(
+            ResponseAction::IsolateHost {
+                host_id: "host-ops-1".into(),
+            },
+            T0,
+        );
+        let id = hold.hold_id.clone();
+        store.create(hold).unwrap();
+        store
+            .mark_notified(&id, T0 + 5, &"cd".repeat(32), None)
+            .unwrap();
+        id
+    };
+    let reopened = FileHeldActionStore::open(&dir).unwrap();
+    let hold = reopened.get(&id).unwrap().unwrap();
+    assert_eq!(hold.state, HoldState::Notified);
+    assert!(reopened.health(T0, 60_000).unwrap().durable);
+    assert_eq!(reopened.health(T0, 60_000).unwrap().backend, "local_files");
+}
+
+/// Exactly one decision record is authoritative across a restart: a completed
+/// decision reloads byte-identically, and the reopened store neither invents a
+/// second one nor drops the one on disk.
+#[test]
+fn a_restart_recovers_the_one_decision_record_without_inventing_or_losing_one() {
+    let dir = temp_dir("decision-restart");
+    let (id, before) = {
+        let store = FileHeldActionStore::open(&dir).unwrap();
+        let hold = fixture_hold(
+            ResponseAction::IsolateHost {
+                host_id: "host-ops-1".into(),
+            },
+            T0,
+        );
+        let id = hold.hold_id.clone();
+        store.create(hold).unwrap();
+        store
+            .mark_notified(&id, T0 + 5, &"cd".repeat(32), None)
+            .unwrap();
+        let store_ref: &dyn HeldActionStore = &store;
+        let claim = DecisionClaim::begin(store_ref, &id, INTENT_A, T0 + 100).unwrap();
+        claim
+            .complete(refused_record(INTENT_A), HoldState::Refused)
+            .unwrap();
+        let before = store.get(&id).unwrap().unwrap();
+        (id, before)
+    };
+
+    let reopened = FileHeldActionStore::open(&dir).unwrap();
+    let after = reopened.get(&id).unwrap().unwrap();
+    assert_eq!(after.state, HoldState::Refused);
+    assert_eq!(after.decision, before.decision, "the decision changed");
+    assert_eq!(
+        after.decision.as_ref().unwrap().nostr_intent_event_id,
+        INTENT_A
+    );
+    assert!(!after.decision.as_ref().unwrap().dispatched);
+    assert_eq!(reopened.list(true, 10).unwrap().len(), 1, "one record only");
+
+    // And the reopened store refuses a second decision on it.
+    let error = reopened
+        .begin_decision(&id, INTENT_B, T0 + 200)
+        .unwrap_err();
+    assert!(matches!(error, HeldActionStoreError::NotDecidable { .. }));
+    assert_eq!(
+        reopened.get(&id).unwrap().unwrap().decision,
+        before.decision
+    );
+}
+
+#[test]
+fn a_deciding_hold_is_reloaded_as_deciding_and_resolved_by_the_sweep_not_by_a_guess() {
+    let dir = temp_dir("deciding");
+    let id = {
+        let store = FileHeldActionStore::open(&dir).unwrap();
+        let hold = fixture_hold(
+            ResponseAction::IsolateHost {
+                host_id: "host-ops-1".into(),
+            },
+            T0,
+        );
+        let id = hold.hold_id.clone();
+        store.create(hold).unwrap();
+        store.begin_decision(&id, INTENT_A, T0 + 100).unwrap();
+        id
+    };
+    let reopened = FileHeldActionStore::open(&dir).unwrap();
+    assert_eq!(
+        reopened.get(&id).unwrap().unwrap().state,
+        HoldState::Deciding
+    );
+    assert!(
+        reopened
+            .fail_stalled_decisions(T0 + 100 + 59_999, 60_000)
+            .unwrap()
+            .is_empty()
+    );
+    let failed = reopened
+        .fail_stalled_decisions(T0 + 100 + 60_000, 60_000)
+        .unwrap();
+    assert_eq!(failed.len(), 1);
+    let hold = reopened.get(&id).unwrap().unwrap();
+    assert_eq!(hold.state, HoldState::Failed);
+    let decision = hold.decision.unwrap();
+    assert!(!decision.dispatched, "a stalled decision never dispatched");
+    let refusal = decision.refusal.unwrap();
+    assert_eq!(refusal.rule, "runtime.capability_lease_expired");
+    assert!(refusal.reason.contains("whether the action ran is unknown"));
+
+    // The resolution is itself durable.
+    let again = FileHeldActionStore::open(&dir).unwrap();
+    assert_eq!(again.get(&id).unwrap().unwrap().state, HoldState::Failed);
+}
+
+#[test]
+fn a_torn_document_is_reported_as_corrupt_not_skipped() {
+    let dir = temp_dir("torn");
+    std::fs::write(dir.join("hold_torn.json"), b"{\"hold_id\": \"hold_torn").unwrap();
+    let error = FileHeldActionStore::open(&dir).unwrap_err();
+    assert!(matches!(error, HeldActionStoreError::Corrupt { .. }));
+}
+
+/// A hold that could not be written to disk is NOT in the store, so nothing
+/// can list it, claim it or dispatch it. The durable write comes first.
+#[test]
+fn a_hold_that_cannot_be_persisted_is_not_actionable() {
+    let dir = temp_dir("persist-fail");
+    let store = FileHeldActionStore::open(&dir).unwrap();
+    let hold = fixture_hold(
+        ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        T0,
+    );
+    let id = hold.hold_id.clone();
+    // Block the temp path with a directory: the write fails with EISDIR for
+    // any uid, so the injection does not depend on running unprivileged.
+    std::fs::create_dir(dir.join(format!("{id}.json.tmp"))).unwrap();
+
+    let error = store.create(hold).unwrap_err();
+    assert!(
+        matches!(error, HeldActionStoreError::Io { .. }),
+        "{error:?}"
+    );
+    assert!(
+        store.get(&id).unwrap().is_none(),
+        "an unpersisted hold is listed"
+    );
+    assert!(store.list(true, 10).unwrap().is_empty());
+    assert!(
+        store.begin_decision(&id, INTENT_A, T0 + 1).is_err(),
+        "an unpersisted hold was claimable"
+    );
+    assert!(!dir.join(format!("{id}.json")).exists());
+}
+
+/// A leftover temp document from an interrupted write is not a hold. It is
+/// ignored on reopen rather than parsed, so a half-written file cannot come
+/// back as a decidable record.
+#[test]
+fn a_leftover_temp_document_is_ignored_on_reopen() {
+    let dir = temp_dir("leftover-temp");
+    let id = {
+        let store = FileHeldActionStore::open(&dir).unwrap();
+        let hold = fixture_hold(
+            ResponseAction::BlockEgress {
+                target: "203.0.113.10".into(),
+            },
+            T0,
+        );
+        let id = hold.hold_id.clone();
+        store.create(hold).unwrap();
+        id
+    };
+    std::fs::write(
+        dir.join("hold_interrupted.json.tmp"),
+        b"{\"hold_id\": \"hold_i",
+    )
+    .unwrap();
+    let reopened = FileHeldActionStore::open(&dir).unwrap();
+    let ids: Vec<String> = reopened
+        .list(true, 10)
+        .unwrap()
+        .into_iter()
+        .map(|hold| hold.hold_id)
+        .collect();
+    assert_eq!(ids, vec![id]);
+}
+
+/// The file backend's compare-and-set is under the same one-winner rule as the
+/// memory backend's, and the winner is the one on disk.
+#[test]
+fn concurrent_claims_on_a_file_backed_hold_produce_exactly_one_winner() {
+    let dir = temp_dir("file-race");
+    let store = std::sync::Arc::new(FileHeldActionStore::open(&dir).unwrap());
+    let mut hold = fixture_hold(
+        ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        T0,
+    );
+    hold.state = HoldState::Notified;
+    let id = hold.hold_id.clone();
+    store.create(hold).unwrap();
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let winners = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut handles = Vec::new();
+    for slot in 0..8u8 {
+        let store = std::sync::Arc::clone(&store);
+        let barrier = std::sync::Arc::clone(&barrier);
+        let winners = std::sync::Arc::clone(&winners);
+        let id = id.clone();
+        handles.push(std::thread::spawn(move || {
+            let intent = format!("{slot:02x}").repeat(32);
+            barrier.wait();
+            if store.begin_decision(&id, &intent, T0 + 100).is_ok() {
+                winners.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(winners.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let in_memory = store.get(&id).unwrap().unwrap();
+    let on_disk = FileHeldActionStore::open(&dir)
+        .unwrap()
+        .get(&id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(on_disk.state, HoldState::Deciding);
+    assert_eq!(
+        on_disk.deciding_intent_event_id, in_memory.deciding_intent_event_id,
+        "the winner on disk is not the winner in memory"
+    );
+}
+
+#[test]
+fn configured_store_is_memory_when_no_path_is_set() {
+    let settings = ResponseHoldSettings::default();
+    let store =
+        ConfiguredHeldActionStore::from_settings(&settings, std::path::Path::new(".")).unwrap();
+    assert!(!store.health(T0, 60_000).unwrap().durable);
+}
+
+/// A relative `hold_store_path` resolves against the config file's directory,
+/// the way the containment lease store resolves its own path, so a daemon
+/// started from another working directory writes to the same place.
+#[test]
+fn configured_store_resolves_a_relative_path_against_the_config_directory() {
+    let dir = temp_dir("configured");
+    let settings = ResponseHoldSettings {
+        hold_store_path: Some("data/perch-dev/holds".to_string()),
+        ..ResponseHoldSettings::default()
+    };
+    let store = ConfiguredHeldActionStore::from_settings(&settings, &dir).unwrap();
+    let health = store.health(T0, 60_000).unwrap();
+    assert!(health.durable);
+    assert_eq!(health.backend, "local_files");
+
+    let hold = fixture_hold(
+        ResponseAction::IsolateHost {
+            host_id: "host-ops-1".into(),
+        },
+        T0,
+    );
+    let id = hold.hold_id.clone();
+    store.create(hold).unwrap();
+    assert!(
+        dir.join("data/perch-dev/holds")
+            .join(format!("{id}.json"))
+            .exists()
+    );
+}

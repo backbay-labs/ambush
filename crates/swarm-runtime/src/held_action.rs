@@ -18,9 +18,11 @@
 //! fact about the queue card, not about the hold.
 
 use std::collections::BTreeMap;
-use std::sync::RwLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
+use swarm_core::config::ResponseHoldSettings;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::{ResponseRehearsalPreview, Severity};
 use swarm_crypto::DetachedSignature;
@@ -892,6 +894,413 @@ impl Drop for DecisionClaim<'_> {
                 "abandon_decision failed; the hold may be parked in deciding until the sweep resolves it"
             );
         }
+    }
+}
+
+/// One JSON document per hold under `runtime.response.hold_store_path`,
+/// written temp-then-rename under a [`std::sync::Mutex`]. The in-memory map is
+/// the read cache; every mutation writes through before the lock is released,
+/// and a create persists BEFORE the record becomes visible, so a hold that
+/// could not be written is not actionable.
+#[derive(Debug)]
+pub struct FileHeldActionStore {
+    directory: PathBuf,
+    holds: Mutex<BTreeMap<String, HeldAction>>,
+}
+
+impl FileHeldActionStore {
+    /// Load every `*.json` document in `directory`, creating it if absent. A
+    /// document that does not parse is `Corrupt`, never skipped: a skipped
+    /// hold is a destructive action nobody is shown. A leftover `*.json.tmp`
+    /// from an interrupted write is not a `*.json` document and is ignored.
+    pub fn open(directory: impl AsRef<Path>) -> Result<Self, HeldActionStoreError> {
+        let directory = directory.as_ref().to_path_buf();
+        std::fs::create_dir_all(&directory).map_err(|source| HeldActionStoreError::Io {
+            path: directory.display().to_string(),
+            source,
+        })?;
+        let mut holds = BTreeMap::new();
+        let entries = std::fs::read_dir(&directory).map_err(|source| HeldActionStoreError::Io {
+            path: directory.display().to_string(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| HeldActionStoreError::Io {
+                path: directory.display().to_string(),
+                source,
+            })?;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = std::fs::read(&path).map_err(|source| HeldActionStoreError::Io {
+                path: path.display().to_string(),
+                source,
+            })?;
+            let hold: HeldAction =
+                serde_json::from_slice(&bytes).map_err(|error| HeldActionStoreError::Corrupt {
+                    path: path.display().to_string(),
+                    reason: error.to_string(),
+                })?;
+            holds.insert(hold.hold_id.clone(), hold);
+        }
+        Ok(Self {
+            directory,
+            holds: Mutex::new(holds),
+        })
+    }
+
+    fn document_path(&self, hold_id: &str) -> PathBuf {
+        self.directory.join(format!("{hold_id}.json"))
+    }
+
+    fn persist(&self, hold: &HeldAction) -> Result<(), HeldActionStoreError> {
+        let path = self.document_path(&hold.hold_id);
+        let temp = self.directory.join(format!("{}.json.tmp", hold.hold_id));
+        let bytes =
+            serde_json::to_vec_pretty(hold).map_err(|error| HeldActionStoreError::Corrupt {
+                path: path.display().to_string(),
+                reason: error.to_string(),
+            })?;
+        std::fs::write(&temp, bytes).map_err(|source| HeldActionStoreError::Io {
+            path: temp.display().to_string(),
+            source,
+        })?;
+        std::fs::rename(&temp, &path).map_err(|source| HeldActionStoreError::Io {
+            path: path.display().to_string(),
+            source,
+        })
+    }
+
+    fn lock(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, HeldAction>>, HeldActionStoreError> {
+        self.holds
+            .lock()
+            .map_err(|_| HeldActionStoreError::Poisoned)
+    }
+
+    fn mutate(
+        &self,
+        hold_id: &str,
+        apply: impl FnOnce(&mut HeldAction),
+    ) -> Result<(), HeldActionStoreError> {
+        let mut holds = self.lock()?;
+        let hold = holds
+            .get_mut(hold_id)
+            .ok_or_else(|| HeldActionStoreError::NotFound {
+                hold_id: hold_id.to_string(),
+            })?;
+        apply(hold);
+        self.persist(hold)
+    }
+}
+
+impl HeldActionStore for FileHeldActionStore {
+    fn create(&self, hold: HeldAction) -> Result<(), HeldActionStoreError> {
+        let mut holds = self.lock()?;
+        if holds.contains_key(&hold.hold_id) {
+            return Err(HeldActionStoreError::Duplicate {
+                hold_id: hold.hold_id,
+            });
+        }
+        // Durable first. A hold that is not on disk must not be listable,
+        // claimable or dispatchable.
+        self.persist(&hold)?;
+        holds.insert(hold.hold_id.clone(), hold);
+        Ok(())
+    }
+
+    fn get(&self, hold_id: &str) -> Result<Option<HeldAction>, HeldActionStoreError> {
+        Ok(self.lock()?.get(hold_id).cloned())
+    }
+
+    fn list(
+        &self,
+        include_terminal: bool,
+        limit: usize,
+    ) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+        let mut holds: Vec<HeldAction> = self
+            .lock()?
+            .values()
+            .filter(|hold| include_terminal || !hold.is_terminal())
+            .cloned()
+            .collect();
+        holds.sort_by_key(transitions::sort_key);
+        holds.truncate(limit);
+        Ok(holds)
+    }
+
+    fn mark_case_channel(
+        &self,
+        hold_id: &str,
+        case_channel: &str,
+    ) -> Result<(), HeldActionStoreError> {
+        self.mutate(hold_id, |hold| {
+            hold.case_channel = Some(case_channel.to_string());
+        })
+    }
+
+    fn mark_notified(
+        &self,
+        hold_id: &str,
+        at_ms: i64,
+        notice_event_id: &str,
+        card_event_id: Option<&str>,
+    ) -> Result<(), HeldActionStoreError> {
+        self.mutate(hold_id, |hold| {
+            hold.notified_at_ms = Some(at_ms);
+            hold.notice_event_id = Some(notice_event_id.to_string());
+            hold.card_event_id = card_event_id.map(str::to_string);
+            if hold.state == HoldState::Created {
+                hold.state = HoldState::Notified;
+            }
+        })
+    }
+
+    fn mark_armed(&self, hold_id: &str, _at_ms: i64) -> Result<(), HeldActionStoreError> {
+        self.mutate(hold_id, |hold| {
+            if hold.state == HoldState::Notified {
+                hold.state = HoldState::Armed;
+            }
+        })
+    }
+
+    fn begin_decision(
+        &self,
+        hold_id: &str,
+        intent_event_id: &str,
+        cas_instant_ms: i64,
+    ) -> Result<HeldAction, HeldActionStoreError> {
+        let mut holds = self.lock()?;
+        let hold = holds
+            .get_mut(hold_id)
+            .ok_or_else(|| HeldActionStoreError::NotFound {
+                hold_id: hold_id.to_string(),
+            })?;
+        if transitions::begin(hold, intent_event_id, cas_instant_ms).is_err() {
+            return Err(HeldActionStoreError::NotDecidable {
+                hold_id: hold_id.to_string(),
+                current: Box::new(hold.clone()),
+            });
+        }
+        self.persist(hold)?;
+        Ok(hold.clone())
+    }
+
+    fn abandon_decision(
+        &self,
+        hold_id: &str,
+        intent_event_id: &str,
+    ) -> Result<(), HeldActionStoreError> {
+        let mut holds = self.lock()?;
+        let Some(hold) = holds.get_mut(hold_id) else {
+            return Ok(());
+        };
+        if transitions::abandon(hold, intent_event_id) {
+            self.persist(hold)?;
+        }
+        Ok(())
+    }
+
+    fn complete_decision(
+        &self,
+        hold_id: &str,
+        decision: HoldDecisionRecord,
+        state: HoldState,
+    ) -> Result<(), HeldActionStoreError> {
+        self.mutate(hold_id, |hold| {
+            transitions::complete(hold, decision, state);
+        })
+    }
+
+    fn expire_due(&self, now_ms: i64) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+        let mut holds = self.lock()?;
+        let mut expired = Vec::new();
+        for hold in holds.values_mut() {
+            if transitions::expire(hold, now_ms) {
+                self.persist(hold)?;
+                expired.push(hold.clone());
+            }
+        }
+        Ok(expired)
+    }
+
+    fn fail_stalled_decisions(
+        &self,
+        now_ms: i64,
+        stall_ms: u64,
+    ) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+        let mut holds = self.lock()?;
+        let mut failed = Vec::new();
+        for hold in holds.values_mut() {
+            if transitions::fail_stalled(hold, now_ms, stall_ms) {
+                self.persist(hold)?;
+                failed.push(hold.clone());
+            }
+        }
+        Ok(failed)
+    }
+
+    fn health(
+        &self,
+        now_ms: i64,
+        stall_ms: u64,
+    ) -> Result<HeldActionStoreHealth, HeldActionStoreError> {
+        let holds = self.lock()?;
+        Ok(HeldActionStoreHealth {
+            durable: true,
+            backend: "local_files".to_string(),
+            open_holds: holds.values().filter(|hold| hold.is_open()).count(),
+            deciding_stalled: holds
+                .values()
+                .filter(|hold| transitions::is_stalled(hold, now_ms, stall_ms))
+                .count(),
+        })
+    }
+}
+
+/// The backend `runtime.response.hold_store_path` selects.
+#[derive(Debug)]
+pub enum ConfiguredHeldActionStore {
+    /// No path configured: holds live in memory and a restart forgets them.
+    Memory(MemoryHeldActionStore),
+    /// One JSON document per hold under the configured directory.
+    LocalFiles(FileHeldActionStore),
+}
+
+impl ConfiguredHeldActionStore {
+    /// `None` path => memory (and a restart forgets every open hold). A
+    /// relative path resolves against `config_dir`, matching how the
+    /// containment store resolves `lease_store_path`.
+    pub fn from_settings(
+        settings: &ResponseHoldSettings,
+        config_dir: &Path,
+    ) -> Result<Self, HeldActionStoreError> {
+        match settings
+            .hold_store_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            None => Ok(Self::Memory(MemoryHeldActionStore::default())),
+            Some(path) => {
+                let resolved = if Path::new(path).is_absolute() {
+                    PathBuf::from(path)
+                } else {
+                    config_dir.join(path)
+                };
+                Ok(Self::LocalFiles(FileHeldActionStore::open(resolved)?))
+            }
+        }
+    }
+}
+
+macro_rules! delegate_store {
+    ($self:ident, $method:ident $(, $arg:expr)*) => {
+        match $self {
+            ConfiguredHeldActionStore::Memory(store) => store.$method($($arg),*),
+            ConfiguredHeldActionStore::LocalFiles(store) => store.$method($($arg),*),
+        }
+    };
+}
+
+impl HeldActionStore for ConfiguredHeldActionStore {
+    fn create(&self, hold: HeldAction) -> Result<(), HeldActionStoreError> {
+        delegate_store!(self, create, hold)
+    }
+
+    fn get(&self, hold_id: &str) -> Result<Option<HeldAction>, HeldActionStoreError> {
+        delegate_store!(self, get, hold_id)
+    }
+
+    fn list(
+        &self,
+        include_terminal: bool,
+        limit: usize,
+    ) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+        delegate_store!(self, list, include_terminal, limit)
+    }
+
+    fn mark_case_channel(
+        &self,
+        hold_id: &str,
+        case_channel: &str,
+    ) -> Result<(), HeldActionStoreError> {
+        delegate_store!(self, mark_case_channel, hold_id, case_channel)
+    }
+
+    fn mark_notified(
+        &self,
+        hold_id: &str,
+        at_ms: i64,
+        notice_event_id: &str,
+        card_event_id: Option<&str>,
+    ) -> Result<(), HeldActionStoreError> {
+        delegate_store!(
+            self,
+            mark_notified,
+            hold_id,
+            at_ms,
+            notice_event_id,
+            card_event_id
+        )
+    }
+
+    fn mark_armed(&self, hold_id: &str, at_ms: i64) -> Result<(), HeldActionStoreError> {
+        delegate_store!(self, mark_armed, hold_id, at_ms)
+    }
+
+    fn begin_decision(
+        &self,
+        hold_id: &str,
+        intent_event_id: &str,
+        cas_instant_ms: i64,
+    ) -> Result<HeldAction, HeldActionStoreError> {
+        delegate_store!(
+            self,
+            begin_decision,
+            hold_id,
+            intent_event_id,
+            cas_instant_ms
+        )
+    }
+
+    fn abandon_decision(
+        &self,
+        hold_id: &str,
+        intent_event_id: &str,
+    ) -> Result<(), HeldActionStoreError> {
+        delegate_store!(self, abandon_decision, hold_id, intent_event_id)
+    }
+
+    fn complete_decision(
+        &self,
+        hold_id: &str,
+        decision: HoldDecisionRecord,
+        state: HoldState,
+    ) -> Result<(), HeldActionStoreError> {
+        delegate_store!(self, complete_decision, hold_id, decision, state)
+    }
+
+    fn expire_due(&self, now_ms: i64) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+        delegate_store!(self, expire_due, now_ms)
+    }
+
+    fn fail_stalled_decisions(
+        &self,
+        now_ms: i64,
+        stall_ms: u64,
+    ) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+        delegate_store!(self, fail_stalled_decisions, now_ms, stall_ms)
+    }
+
+    fn health(
+        &self,
+        now_ms: i64,
+        stall_ms: u64,
+    ) -> Result<HeldActionStoreHealth, HeldActionStoreError> {
+        delegate_store!(self, health, now_ms, stall_ms)
     }
 }
 
