@@ -66,6 +66,7 @@
 pub mod alarm;
 pub mod cards;
 pub mod channels;
+pub mod coalesce;
 pub mod error;
 pub mod holds;
 pub mod identity;
