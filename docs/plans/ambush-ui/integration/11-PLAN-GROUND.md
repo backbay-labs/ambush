@@ -129,8 +129,8 @@
   Expected: green; `MessageRow.tsx` at 798 gate-lines (three lines above the draft projection because its re-export did not import `ThreadDepthGuideAction` into local scope). The repository test command is required because it installs the alias and TypeScript loader; raw `node --test` does neither. Commit: `refactor(desktop): extract MessageThreadGuides from MessageRow (MR-1)`.
 - [x] **Step 3: MR-2 — extract `MessageBody.tsx` with the seam.** Same procedure with `refactor/MessageBody.tsx`; add the seam comment line in the `default:` branch; make `profiles` a required prop and pass it from `MessageRow`. Add a unit test `MessageBody.test.mjs` asserting that a body starting with `<!-- ambush:wave:v1 -->` still renders the wave fallback text (this pins the chat app's own marker across the split). Run the same gate; expect 708 gate-lines after MR-1's corrected local type import. Commit: `refactor(desktop): extract MessageBody, the renderer seam (MR-2)`.
 - [x] **Step 4: AS-1 … AS-4 on `AppShell.tsx`.** One commit each from the four drafts (`useAppShellBackgroundSync.ts` −49, `useCommunityDestinationRestore.ts` −44, `useChannelCreationHandlers.ts` −77 returning booleans, `AppShellSettingsSurface.tsx` −48). After each: `just desktop-check && just desktop-typecheck && just desktop-test && just file-size-check`. Expect `AppShell.tsx` at ~780 gate-lines after AS-4. Commits: `refactor(desktop): extract useAppShellBackgroundSync (AS-1)` … `(AS-4)`.
-- [ ] **Step 5: HV-1 … HV-4 on `HomeView.tsx`.** No drafts exist; cut per `15` §5.5's table. Under D3, **HV-1 extracts** the messages detail pane into `HomeMessagesDetail.tsx` (it is not deleted: The Watch replaces it only when the `perch` feature is enabled). HV-2 extracts `HomeInboxAuxiliaryPane.tsx` unchanged; HV-3 lifts the filter-change selection logic into `useHomeInboxFilterChange.ts` (a pure function `selectAfterFilterChange(items, filter, previousSelection)` that First card will extend with the four queues); HV-4 extracts `HomeFeedUnavailable.tsx`. Write `useHomeInboxFilterChange.test.mjs` covering: selection preserved when still visible, selection moves to the first visible item otherwise, empty list clears selection. Expect `HomeView.tsx` at ~736 gate-lines. Four commits `refactor(desktop): … (HV-n)`.
-- [ ] **Step 6: E2E smoke.** `cd workspace/desktop && pnpm test:e2e:smoke` — expected: the existing smoke project green (it builds the mock bridge; `pnpm run build` is the wrong command).
+- [x] **Step 5: HV-1 … HV-4 on `HomeView.tsx`.** No drafts exist; cut per `15` §5.5's table. Under D3, **HV-1 extracts** the messages detail pane into `HomeMessagesDetail.tsx` (it is not deleted: The Watch replaces it only when the `perch` feature is enabled). HV-2 extracts `HomeInboxAuxiliaryPane.tsx` unchanged; HV-3 lifts the filter-change selection logic into `useHomeInboxFilterChange.ts` (a pure function `selectAfterFilterChange(items, filter, previousSelection)` that First card will extend with the four queues); HV-4 extracts `HomeFeedUnavailable.tsx`. Write `useHomeInboxFilterChange.test.mjs` covering: selection preserved when still visible, selection moves to the first visible item otherwise, empty list clears selection. Expect `HomeView.tsx` at ~736 gate-lines. Four commits `refactor(desktop): … (HV-n)`.
+- [x] **Step 6: E2E smoke.** `cd workspace/desktop && pnpm test:e2e:smoke` — expected: the existing smoke project green (it builds the mock bridge; `pnpm run build` is the wrong command).
 
 ### Task 3: Re-land the relay patches and the repair-kinds constant (W3-7)
 
@@ -144,7 +144,7 @@
 **Interfaces:**
 - Produces: `ambush_core::kind::KIND_OPERATOR_ALARM_FRAME: u32 = 26006`; `required_scope_for_kind(46010, _) == Ok(Scope::MessagesWrite)`; `requires_h_channel_scope(46010) == true`.
 
-- [ ] **Step 1: Rewrite the patches' identifiers** (measured clean on 2026-09-02):
+- [x] **Step 1: Rewrite the patches' identifiers** (measured clean on 2026-09-02):
   ```bash
   S=$(mktemp -d)
   for p in relay-46010 relay-26006-pgate; do
@@ -154,20 +154,20 @@
   git apply --check --directory=workspace --exclude='workspace/.github/*' --exclude='workspace/justfile' "$S/relay-46010.patch" "$S/relay-26006-pgate.patch"
   ```
   Expected: silent (clean).
-- [ ] **Step 2: Apply the source hunks.** Same command without `--check`. `git status --short` shows `ingest.rs`, `kind.rs` modified and the two E2E files added.
-- [ ] **Step 3: Hand-apply the Justfile hunk.** Open `docs/plans/ambush-ui/build/patches/relay-46010.patch` at the `justfile` hunk (`@@ -378,8 +378,14 @@ test-unit:`); apply its intent to `workspace/Justfile`'s `test-unit` recipe: add a `cargo nextest run -p ambush-relay --lib -E 'test(handlers::ingest::tests)'` line (the patch documents that no CI job ran that module before).
-- [ ] **Step 4: Run the unit tests.**
+- [x] **Step 2: Apply the source hunks.** Same command without `--check`. `git status --short` shows `ingest.rs`, `kind.rs` modified and the two E2E files added.
+- [x] **Step 3: Hand-apply the Justfile hunk.** Open `docs/plans/ambush-ui/build/patches/relay-46010.patch` at the `justfile` hunk (`@@ -378,8 +378,14 @@ test-unit:`); apply its intent to `workspace/Justfile`'s `test-unit` recipe: add a `cargo nextest run -p ambush-relay --lib -E 'test(handlers::ingest::tests)'` line (the patch documents that no CI job ran that module before).
+- [x] **Step 4: Run the unit tests.**
   ```bash
   cd workspace && cargo test -p ambush-relay --lib workflow_approval && cargo test -p ambush-core --lib operator_alarm
   ```
   Expected: 7 and 3 tests pass. Also `cargo test -p ambush-relay --lib global_only_and_channel_scoped_are_disjoint` still passes (46010 is channel-scoped, not global-only).
-- [ ] **Step 5: Run the E2E tests.** Requires Postgres and Redis (`workspace/.env` points at `127.0.0.1`, see the rebrand memory about the Lima VM squatting IPv6 localhost):
+- [x] **Step 5: Run the E2E tests.** Requires Postgres and Redis (`workspace/.env` points at `127.0.0.1`, see the rebrand memory about the Lima VM squatting IPv6 localhost):
   ```bash
   cd workspace && cargo test -p ambush-test-client --test e2e_workflow_approval -- --ignored && cargo test -p ambush-test-client --test e2e_operator_alarm_pgate -- --ignored
   ```
   Expected: 6 and 8 pass, including `a_named_principal_receives_the_frame_and_an_unnamed_one_does_not` and the needs-action INNER JOIN test.
-- [ ] **Step 6: Wire CI.** In `.github/workflows/workspace-ci.yml`, add both binaries to the relay E2E job where `--test e2e_event_reminder` is listed (archive step, line ~405) and to the matching `cargo nextest run -E 'binary(...)'` step (~794). YAML must parse.
-- [ ] **Step 7: The repair-kinds constant.** In `channel_reconnect_repair.rs`, extend `CHANNEL_REPAIR_KINDS` with `46010`, `40100`, `39005` and add a test:
+- [x] **Step 6: Wire CI.** In `.github/workflows/workspace-ci.yml`, add both binaries to the relay E2E job where `--test e2e_event_reminder` is listed (archive step, line ~405) and to the matching `cargo nextest run -E 'binary(...)'` step (~794). YAML must parse.
+- [x] **Step 7: The repair-kinds constant.** In `channel_reconnect_repair.rs`, extend `CHANNEL_REPAIR_KINDS` with `46010`, `40100`, `39005` and add a test:
   ```rust
   #[test]
   fn repair_kinds_cover_perch_case_channel_kinds() {
@@ -177,7 +177,8 @@
   }
   ```
   Run `cargo test --manifest-path workspace/desktop/src-tauri/Cargo.toml repair_kinds_cover_perch` → pass.
-- [ ] **Step 8: Commit** (two commits): `fix(relay): admit kind:46010 workflow approval requests, channel-scoped` and `feat(relay): fence kind:26006 operator alarm frames behind the p-gate`.
+  - *Superseded in part (2026-09-04, `f17936137`):* `46010` and `40100` are in `CHANNEL_REPAIR_KINDS`; **`39005` is deliberately not**. It is relay-only (`is_relay_only_kind(39005)`), synthesized at query time and never stored, and the repair filter sets neither `top_level` nor `include_summaries`, so repairing it could never return a row — while listing it in `CHANNEL_EVENT_KINDS` made every thread reply append a dead, uncapped entry to the channel message cache. The test now asserts its absence and says why.
+- [x] **Step 8: Commit** (two commits): `fix(relay): admit kind:46010 workflow approval requests, channel-scoped` and `feat(relay): fence kind:26006 operator alarm frames behind the p-gate`.
 
 ### Task 4: H1 — delete animated-avatar capture and pin the CSP (INV-30 as narrowed by W3-23)
 
@@ -187,7 +188,7 @@
 - Modify: `workspace/desktop/src-tauri/tauri.conf.json` line 39
 - Create: `workspace/desktop/src-tauri/src/csp_pin_tests.rs` (+ `mod csp_pin_tests;` under `#[cfg(test)]` in `lib.rs`)
 
-- [ ] **Step 1: Write the failing test.**
+- [x] **Step 1: Write the failing test.**
   ```rust
   //! INV-30 (as narrowed by 00-DECISIONS W3-23): the CSP is a pinned literal.
   const PINNED_CSP: &str = "default-src 'self'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ambush-media: http://ambush-media.localhost https: http: wss: ws:; img-src 'self' ambush-media: http://ambush-media.localhost data: blob: https: http:; media-src 'self' ambush-media: http://ambush-media.localhost data: blob: https: http:; worker-src 'self' blob:";
@@ -207,11 +208,11 @@
   }
   ```
   (Adjust the JSON path if the key sits at the top level in this Tauri version; `grep -n '"csp"' tauri.conf.json` shows it.)
-- [ ] **Step 2: Run it.** `cargo test --manifest-path workspace/desktop/src-tauri/Cargo.toml csp_` → `csp_is_the_pinned_literal` FAILS (the live CSP still carries the mediapipe host).
-- [ ] **Step 3: Delete the feature.** Remove the four files; remove the capture entry point from the profile UI at each import site (the avatar picker keeps static images). Run `cd workspace && just desktop-check && just desktop-typecheck && just desktop-test`.
-- [ ] **Step 4: Pin.** Edit line 39 of `tauri.conf.json` to the literal above (the only change is the removal of ` https://cdn.jsdelivr.net/npm/@mediapipe/`). Assert no other reference remains: `grep -rn "mediapipe\|storage.googleapis.com" workspace/desktop/src workspace/desktop/src-tauri/src` → nothing.
-- [ ] **Step 5: Run.** The two tests pass; `pnpm test:e2e:smoke` green.
-- [ ] **Step 6: Commit.** `feat(desktop)!: remove animated-avatar capture and pin the CSP`.
+- [x] **Step 2: Run it.** `cargo test --manifest-path workspace/desktop/src-tauri/Cargo.toml csp_` → `csp_is_the_pinned_literal` FAILS (the live CSP still carries the mediapipe host).
+- [x] **Step 3: Delete the feature.** Remove the four files; remove the capture entry point from the profile UI at each import site (the avatar picker keeps static images). Run `cd workspace && just desktop-check && just desktop-typecheck && just desktop-test`.
+- [x] **Step 4: Pin.** Edit line 39 of `tauri.conf.json` to the literal above (the only change is the removal of ` https://cdn.jsdelivr.net/npm/@mediapipe/`). Assert no other reference remains: `grep -rn "mediapipe\|storage.googleapis.com" workspace/desktop/src workspace/desktop/src-tauri/src` → nothing.
+- [x] **Step 5: Run.** The two tests pass; `pnpm test:e2e:smoke` green.
+- [x] **Step 6: Commit.** `feat(desktop)!: remove animated-avatar capture and pin the CSP`.
 
 ### Task 5: H2 — `perch_sign_gate` at every signing boundary (INV-29, W3-2)
 
@@ -223,7 +224,7 @@
 **Interfaces:**
 - Produces: `pub fn perch_sign_gate(kind: u16, content: &str) -> Result<(), String>`; `pub fn is_swarm_marker_line(line: &str) -> bool`.
 
-- [ ] **Step 1: Write the failing tests** in `perch_sign_gate.rs`:
+- [x] **Step 1: Write the failing tests** in `perch_sign_gate.rs`:
   ```rust
   #[cfg(test)]
   mod tests {
@@ -249,8 +250,8 @@
       }
   }
   ```
-- [ ] **Step 2: Run.** `cargo test --manifest-path workspace/desktop/src-tauri/Cargo.toml perch_sign_gate` → compile failure (functions undefined).
-- [ ] **Step 3: Implement.**
+- [x] **Step 2: Run.** `cargo test --manifest-path workspace/desktop/src-tauri/Cargo.toml perch_sign_gate` → compile failure (functions undefined).
+- [x] **Step 3: Implement.**
   ```rust
   //! ADR 0014 C1 / INV-29: no renderer-supplied content may be signed as a swarm
   //! governance marker, on any command. `perch_record_verdict` is the only
@@ -286,9 +287,9 @@
       slug_ok && version_ok
   }
   ```
-- [ ] **Step 4: Run.** The four tests pass.
-- [ ] **Step 5: Wire the five call sites.** In each command, immediately after the kind is resolved and **before** `state.signing_keys()`: `crate::perch_sign_gate::perch_sign_gate(kind, &content)?;` — for `sign_event` the `kind: u16` parameter as-is; for `send_channel_message` the resolved `Option<u32>` cast with `u16::try_from(kind).map_err(|_| "invalid kind".to_string())?`; for the announcement path its `kind: u16`. Where the command's error type is not `String`, map with the command's existing conversion.
-- [ ] **Step 6: The inventory test** (`perch_sign_gate_inventory_tests.rs`, following `egress_guard_tests.rs`'s shape):
+- [x] **Step 4: Run.** The four tests pass.
+- [x] **Step 5: Wire the five call sites.** In each command, immediately after the kind is resolved and **before** `state.signing_keys()`: `crate::perch_sign_gate::perch_sign_gate(kind, &content)?;` — for `sign_event` the `kind: u16` parameter as-is; for `send_channel_message` the resolved `Option<u32>` cast with `u16::try_from(kind).map_err(|_| "invalid kind".to_string())?`; for the announcement path its `kind: u16`. Where the command's error type is not `String`, map with the command's existing conversion.
+- [x] **Step 6: The inventory test** (`perch_sign_gate_inventory_tests.rs`, following `egress_guard_tests.rs`'s shape):
   ```rust
   //! ADR 0014 C1 obligation 3: the set of commands that must call the gate is
   //! asserted, not remembered. Every `#[tauri::command]` under commands/ that
@@ -334,8 +335,8 @@
   }
   ```
   Register with `#[cfg(test)] mod perch_sign_gate_inventory_tests;` in `lib.rs`.
-- [ ] **Step 7: Run.** `cargo test --manifest-path workspace/desktop/src-tauri/Cargo.toml every_content_signing_command_calls_the_gate` → pass once all five sites are wired; deliberately remove one call and confirm it fails, then restore.
-- [ ] **Step 8: Commit.** `feat(desktop): gate every content-signing command against swarm governance markers (INV-29)`.
+- [x] **Step 7: Run.** `cargo test --manifest-path workspace/desktop/src-tauri/Cargo.toml every_content_signing_command_calls_the_gate` → pass once all five sites are wired; deliberately remove one call and confirm it fails, then restore.
+- [x] **Step 8: Commit.** `feat(desktop): gate every content-signing command against swarm governance markers (INV-29)`.
 
 ### Task 6: H3 — `resetCommunityState` as a typed registry (INV-23)
 
@@ -346,7 +347,7 @@
 **Interfaces:**
 - Produces: `export const COMMUNITY_SCOPED_SINGLETONS = [...] as const`; `export type CommunityScopedSingleton`; `export const RESETTERS: Record<CommunityScopedSingleton, Resetter>`; `export async function runResetters(ctx: ResetContext): Promise<void>`; `export type ResetContext = { resetAvatarState: boolean; isMacTauri: boolean }`.
 
-- [ ] **Step 1: Write the failing test.**
+- [x] **Step 1: Write the failing test.**
   ```js
   import test from "node:test";
   import assert from "node:assert/strict";
@@ -370,8 +371,8 @@
     assert.ok(!order.includes("avatarProfileSync") && !order.includes("avatarPresentations"));
   });
   ```
-- [ ] **Step 2: Run.** `cd workspace/desktop && node --test src/features/communities/communityScopedRegistry.test.mjs` → module not found.
-- [ ] **Step 3: Implement** `communityScopedRegistry.ts`, transcribing the 21 calls in `resetCommunityState`'s body in their current order:
+- [x] **Step 2: Run.** `cd workspace/desktop && node --test src/features/communities/communityScopedRegistry.test.mjs` → module not found.
+- [x] **Step 3: Implement** `communityScopedRegistry.ts`, transcribing the 21 calls in `resetCommunityState`'s body in their current order:
   ```ts
   export const COMMUNITY_SCOPED_SINGLETONS = [
     "relayClient", "navigationDeepLinkDrain", "rateLimitGate", "drafts",
@@ -418,8 +419,8 @@
   }
   ```
   (Imports are the ones `useCommunityInit.ts` already has; move them.) `resetCommunityState` becomes `await runResetters({ resetAvatarState, isMacTauri: isTauri() && isMacPlatform() })`.
-- [ ] **Step 4: Run.** The three tests pass; `just desktop-check && just desktop-typecheck && just desktop-test` green; the existing community-switch specs in `tests/e2e/` still pass under `pnpm test:e2e:smoke`.
-- [ ] **Step 5: Commit.** `refactor(desktop): resetCommunityState as a typed, exhaustive resetter registry (INV-23)`.
+- [x] **Step 4: Run.** The three tests pass; `just desktop-check && just desktop-typecheck && just desktop-test` green; the existing community-switch specs in `tests/e2e/` still pass under `pnpm test:e2e:smoke`.
+- [x] **Step 5: Commit.** `refactor(desktop): resetCommunityState as a typed, exhaustive resetter registry (INV-23)`.
 
 ### Task 7: H7 — the ws-client's four panic sites become typed errors (W3-6)
 
@@ -427,7 +428,7 @@
 - Modify: `workspace/crates/ambush-ws-client/src/connection.rs` (:165–175 and :225–235), `error.rs`
 - Modify: `tools/check-runtime-panic-contract.sh` (enumeration)
 
-- [ ] **Step 1: Write the failing test** in `connection.rs`'s test module — a buffer whose `position()` match and `remove()` disagree cannot be constructed from outside, so test the extracted helper instead:
+- [x] **Step 1: Write the failing test** in `connection.rs`'s test module — a buffer whose `position()` match and `remove()` disagree cannot be constructed from outside, so test the extracted helper instead:
   ```rust
   #[test]
   fn take_buffered_returns_a_typed_error_when_the_slot_is_not_the_expected_variant() {
@@ -437,8 +438,8 @@
       assert!(matches!(got, Err(WsClientError::Protocol(_))));
   }
   ```
-- [ ] **Step 2: Run.** `cd workspace && cargo test -p ambush-ws-client take_buffered` → compile failure.
-- [ ] **Step 3: Implement.** Add to `error.rs` a variant `Protocol(String)` (with its `Display` arm, `"protocol: {0}"`) if none like it exists. In `connection.rs`:
+- [x] **Step 2: Run.** `cd workspace && cargo test -p ambush-ws-client take_buffered` → compile failure.
+- [x] **Step 3: Implement.** Add to `error.rs` a variant `Protocol(String)` (with its `Display` arm, `"protocol: {0}"`) if none like it exists. In `connection.rs`:
   ```rust
   /// Removes `idx` from the buffer and returns it only if it satisfies `is_expected`;
   /// otherwise a typed error. Replaces `remove(idx).unwrap()` + `unreachable!()`
@@ -457,9 +458,9 @@
   }
   ```
   Replace both `match self.buffer.remove(idx).unwrap() { … _ => unreachable!() }` blocks with `match take_buffered(&mut self.buffer, idx, |m| matches!(m, RelayMessage::Auth { .. }))? { RelayMessage::Auth { challenge } => return Ok(challenge), _ => return Err(WsClientError::Protocol("auth slot was not an AUTH frame".into())) }` and the `Ok` equivalent (keyed on `event_id`).
-- [ ] **Step 4: Run.** `cargo test -p ambush-ws-client` green; `grep -n "unwrap()\|unreachable!" workspace/crates/ambush-ws-client/src/connection.rs` → nothing outside `#[cfg(test)]`.
-- [ ] **Step 5: Bring the crate under the engine's panic gate.** In `tools/check-runtime-panic-contract.sh`, add `workspace/crates/ambush-ws-client/src` to the enumerated roots (the script's header names them). Run `bash tools/check-runtime-panic-contract.sh` → exit 0.
-- [ ] **Step 6: Commit.** `fix(ws-client): replace the four panic sites with typed errors; enrol the crate in the panic contract`.
+- [x] **Step 4: Run.** `cargo test -p ambush-ws-client` green; `grep -n "unwrap()\|unreachable!" workspace/crates/ambush-ws-client/src/connection.rs` → nothing outside `#[cfg(test)]`.
+- [x] **Step 5: Bring the crate under the engine's panic gate.** In `tools/check-runtime-panic-contract.sh`, add `workspace/crates/ambush-ws-client/src` to the enumerated roots (the script's header names them). Run `bash tools/check-runtime-panic-contract.sh` → exit 0.
+- [x] **Step 6: Commit.** `fix(ws-client): replace the four panic sites with typed errors; enrol the crate in the panic contract`.
 
 ### Task 8: B0 — `nostr_pubkey` on the operator principal
 
@@ -469,7 +470,7 @@
 **Interfaces:**
 - Produces: `pub nostr_pubkey: Option<String>` on both structs; `OperatorPrincipalConfig::nostr_pubkey_bytes(&self) -> Option<[u8; 32]>`.
 
-- [ ] **Step 1: Write the failing tests** in the module's test block:
+- [x] **Step 1: Write the failing tests** in the module's test block:
   ```rust
   #[test]
   fn principal_without_nostr_pubkey_still_loads() {
@@ -499,8 +500,8 @@
       assert_eq!(auth.effective_principals()[0].nostr_pubkey.as_deref(), Some("b".repeat(64).as_str()));
   }
   ```
-- [ ] **Step 2: Run.** `cargo test -p swarm-core nostr_pubkey` → compile failure.
-- [ ] **Step 3: Implement.** Add to both structs:
+- [x] **Step 2: Run.** `cargo test -p swarm-core nostr_pubkey` → compile failure.
+- [x] **Step 3: Implement.** Add to both structs:
   ```rust
   /// The operator's Nostr public key (64 lowercase hex), used by the swarm bridge to
   /// `p`-tag held actions and hold alarms so they reach this principal's console.
@@ -510,8 +511,8 @@
   pub nostr_pubkey: Option<String>,
   ```
   `effective_principals()` copies `self.nostr_pubkey.clone()` into the synthesized principal. Add `pub fn nostr_pubkey_bytes(&self) -> Option<[u8; 32]>` decoding hex, and extend the existing `validate()` (or the config loader's principal validation) with: if `Some(k)`, then `k.len() == 64 && k.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))`, else `Err(OperatorConfigError::InvalidNostrPubkey { operator_id })`.
-- [ ] **Step 4: Run.** The four tests pass; `cargo clippy --workspace --all-targets -- -D warnings` clean; `swarmctl validate` on `rulesets/default.yaml` still passes (the field is absent there).
-- [ ] **Step 5: Commit.** `feat(core): nostr_pubkey on operator principals (B0)`.
+- [x] **Step 4: Run.** The four tests pass; `cargo clippy --workspace --all-targets -- -D warnings` clean; `swarmctl validate` on `rulesets/default.yaml` still passes (the field is absent there).
+- [x] **Step 5: Commit.** `feat(core): nostr_pubkey on operator principals (B0)`.
 
 ### Task 9: The dev ruleset and its signing binary (P0-22)
 
@@ -519,12 +520,12 @@
 - Create: `rulesets-dev/perch-dev.yaml`, `rulesets-dev/perch-dev.yaml.sig.json`
 - Create: `crates/swarm-runtime-http/src/bin/sign_dev_ruleset.rs` (+ `[[bin]]` entry)
 
-- [ ] **Step 1: Generate, then edit.**
+- [x] **Step 1: Generate, then edit.**
   ```bash
   cargo run -p swarm-runtime-http --bin swarmctl -- init --mode detect_only --output rulesets-dev/perch-dev.yaml
   ```
   Then set, keeping every other generated value: `operator_surface.enabled: true`; `correlation.enabled: true`; `correlation.incident_store` to the file-backed variant (the `BundleStoreConfig` enum's non-memory arm — `swarmctl validate` rejects an unknown key, so the wrong spelling fails loudly); `audit.recent_decisions_limit: 200`; one operator principal with `scopes: [read, rehearse, approve, maintenance]`, `token_env: SWARM_OPERATOR_TOKEN`, and `nostr_pubkey` set to the dev operator key `scripts/provision-perch.sh` prints. Leave `runtime.mode: detect_only` (D4).
-- [ ] **Step 2: The signing binary.**
+- [x] **Step 2: The signing binary.**
   ```rust
   //! Signs a development ruleset with the in-repo DEBUG key. A `--release` daemon
   //! refuses this signature (the debug trust root is `#[cfg(debug_assertions)]`
@@ -536,9 +537,9 @@
       Ok(())
   }
   ```
-- [ ] **Step 3: Sign and validate.** `cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets-dev/perch-dev.yaml && cargo run -p swarm-runtime-http --bin swarmctl -- validate --config rulesets-dev/perch-dev.yaml` → valid; commit the sidecar (`git status --porcelain rulesets/` clean afterwards).
-- [ ] **Step 4: Prove the release refusal.** `cargo run --release -p swarm-runtime-http --bin swarm_detect -- --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9099` → exits with a signature-trust error (record the text in the commit message). Debug build: `cargo run -p swarm-runtime-http --bin swarm_detect -- --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9099` → `curl -sf http://127.0.0.1:9099/readyz` succeeds and the log says the operator surface is enabled.
-- [ ] **Step 5: Commit.** `feat(rulesets): perch-dev profile with a debug-signed sidecar and its signing binary`.
+- [x] **Step 3: Sign and validate.** `cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets-dev/perch-dev.yaml && cargo run -p swarm-runtime-http --bin swarmctl -- validate --config rulesets-dev/perch-dev.yaml` → valid; commit the sidecar (`git status --porcelain rulesets/` clean afterwards).
+- [x] **Step 4: Prove the release refusal.** `cargo run --release -p swarm-runtime-http --bin swarm_detect -- --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9099` → exits with a signature-trust error (record the text in the commit message). Debug build: `cargo run -p swarm-runtime-http --bin swarm_detect -- --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9099` → `curl -sf http://127.0.0.1:9099/readyz` succeeds and the log says the operator surface is enabled.
+- [x] **Step 5: Commit.** `feat(rulesets): perch-dev profile with a debug-signed sidecar and its signing binary`.
 
 ### Task 10: The dev stack — relay, Postgres, Redis beside the daemon (P0-21)
 
@@ -546,7 +547,7 @@
 - Modify: `docker-compose.yml`
 - Create: `scripts/provision-perch.sh`
 
-- [ ] **Step 1: Add the three services**, transcribed from `workspace/docker-compose.yml`'s `postgres` and `redis` blocks (same images, healthchecks and memory limits; ports bound to `127.0.0.1`), plus:
+- [x] **Step 1: Add the three services**, transcribed from `workspace/docker-compose.yml`'s `postgres` and `redis` blocks (same images, healthchecks and memory limits; ports bound to `127.0.0.1`), plus:
   ```yaml
     relay:
       build:
@@ -567,9 +568,10 @@
       restart: unless-stopped
   ```
   The relay applies its own migrations on start (`workspace/CLAUDE.md`). `swarm-detect` gains `depends_on: relay`.
-- [ ] **Step 2: Provisioning.** `scripts/provision-perch.sh` uses `workspace/target/release/ambush` (the CLI) with a generated dev operator key to: mint the twelve lane channels named by `standard_threat_classes()` (open visibility), print the operator pubkey (for Task 9's `nostr_pubkey`), and write `.perch-dev/lane-channels.json` (git-ignored) mapping threat-class slug → channel UUID. Membership for the bridge identities is First card's job (it derives them).
+- [x] **Step 2: Provisioning.** `scripts/provision-perch.sh` uses `workspace/target/release/ambush` (the CLI) with a generated dev operator key to: mint the twelve lane channels named by `standard_threat_classes()` (open visibility), print the operator pubkey (for Task 9's `nostr_pubkey`), and write `.perch-dev/lane-channels.json` (git-ignored) mapping threat-class slug → channel UUID. Membership for the bridge identities is First card's job (it derives them).
 - [ ] **Step 3: Run.** `docker compose up -d postgres redis relay && curl -sf -H 'Accept: application/nostr+json' http://localhost:3000 | head -c 200` → the NIP-11 document; `bash scripts/provision-perch.sh` → twelve channel ids.
-- [ ] **Step 4: Commit.** `feat(dev): compose the relay stack beside swarm-detect, and provision the lanes`.
+  - *Unticked at exit (2026-09-03):* the compose half was not run — the local Docker daemon (colima) has filesystem I/O errors, so only `docker compose config --quiet` validated the model. The provisioning half ran twice against a native relay built from this tree. See `evidence/ground.md` → Known limitations.
+- [x] **Step 4: Commit.** `feat(dev): compose the relay stack beside swarm-detect, and provision the lanes`.
 
 ### Task 11: `preview-features.json` gains `perch`
 
@@ -577,7 +579,7 @@
 - Modify: `workspace/preview-features.json`
 - Test: `workspace/desktop/src/shared/features/manifest.test.mjs` (create if absent)
 
-- [ ] **Step 1: Failing test.**
+- [x] **Step 1: Failing test.**
   ```js
   import test from "node:test"; import assert from "node:assert/strict";
   import { getFeature } from "./manifest.ts";
@@ -588,14 +590,14 @@
     assert.notEqual(f.defaultEnabled, true);
   });
   ```
-- [ ] **Step 2: Run** → fails. **Step 3:** append to `features`: `{ "id": "perch", "name": "Operator console", "description": "Lanes, cases and the verdict queue for the swarm engine", "platforms": ["desktop"] }`. **Step 4:** run → pass; `just desktop-check`. **Step 5:** commit `feat(desktop): register the perch console as a preview feature`.
+- [x] **Step 2: Run** → fails. **Step 3:** append to `features`: `{ "id": "perch", "name": "Operator console", "description": "Lanes, cases and the verdict queue for the swarm engine", "platforms": ["desktop"] }`. **Step 4:** run → pass; `just desktop-check`. **Step 5:** commit `feat(desktop): register the perch console as a preview feature`.
 
 ### Task 12: Engine CI gains a `changes` job
 
 **Files:**
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1:** Add a first job, modelled on `workspace-ci.yml`'s:
+- [x] **Step 1:** Add a first job, modelled on `workspace-ci.yml`'s:
   ```yaml
     changes:
       runs-on: ubuntu-latest
@@ -614,18 +616,19 @@
                 - '!docs/plans/**'
   ```
   and `needs: changes` + `if: needs.changes.outputs.engine == 'true'` on every existing job. Jobs skipped by `if:` satisfy branch protection; a top-level `paths:` would not.
-- [ ] **Step 2:** `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` → ok; `bash tools/check-gates-wired.sh` → still finds every gate's `run:` step. Commit `ci(engine): skip engine lanes on workspace-only changes without pending required checks`.
+- [x] **Step 2:** `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` → ok; `bash tools/check-gates-wired.sh` → still finds every gate's `run:` step. Commit `ci(engine): skip engine lanes on workspace-only changes without pending required checks`.
 
 ### Task 13: Documentation touch-ups the tasks above force
 
-- [ ] **Step 1:** `01-DESIGN.md` §9: move H8 to First card (W3-24) and note W3-23 on H1. **Step 2:** `workspace/CLAUDE.md`: add one paragraph under "Community Switching" pointing at `communityScopedRegistry.ts` as the inventory. **Step 3:** commit `docs: align the design and the workspace guide with Ground`.
+- [x] **Step 1:** `01-DESIGN.md` §9: move H8 to First card (W3-24) and note W3-23 on H1. **Step 2:** `workspace/CLAUDE.md`: add one paragraph under "Community Switching" pointing at `communityScopedRegistry.ts` as the inventory. **Step 3:** commit `docs: align the design and the workspace guide with Ground`.
 
 ### Task 14: Ground exit
 
-- [ ] **Step 1:** At the root: `cargo build --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace` (expect the known flaky notification tests noted in `.planning/STATE.md` to be the only noise) and every `tools/check-*.sh` that CI runs.
-- [ ] **Step 2:** In `workspace/`: `just ci`.
+- [x] **Step 1:** At the root: `cargo build --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace` (expect the known flaky notification tests noted in `.planning/STATE.md` to be the only noise) and every `tools/check-*.sh` that CI runs.
+- [x] **Step 2:** In `workspace/`: `just ci`.
 - [ ] **Step 3:** The fixture validators of Task 1 step 5, again, from a clean checkout.
-- [ ] **Step 4:** Record the exit in `20-ROADMAP.md`'s milestone table with the commit hash.
+  - *Unticked at exit (2026-09-03):* the validators ran once under Task 1 (with a temporary `ajv@8` install), not again from a clean checkout at exit, and two of the four no longer apply — `tokens/perch-tokens.test.mjs` and `viz/contrast.mjs` read the palette superseded by the Quiet decision. See `evidence/ground.md` → Known limitations.
+- [x] **Step 4:** Record the exit in `20-ROADMAP.md`'s milestone table with the commit hash.
 
 ---
 
