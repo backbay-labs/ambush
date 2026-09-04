@@ -529,6 +529,13 @@ impl Spool for DiskSpool {
 #[derive(Debug, Default)]
 pub struct MemorySpool {
     slots: BTreeMap<String, Record>,
+    /// How many records landed in each slot since the last drain.
+    ///
+    /// Last-wins keeps ONE record, so without this a frame that collapsed
+    /// thirty ticks would report `coalesced_from: 1` — a lie about coalescing
+    /// on the one field whose whole job is to admit it. The console renders
+    /// "1 of N" from this number.
+    puts: BTreeMap<String, u32>,
     gaps: Vec<GapCause>,
 }
 
@@ -538,14 +545,38 @@ impl MemorySpool {
         Self::default()
     }
 
-    /// Overwrites the slot at `key`.
+    /// Overwrites the slot at `key`, counting the overwrite.
     pub fn put(&mut self, key: impl Into<String>, record: Record) {
-        self.slots.insert(key.into(), record);
+        let key = key.into();
+        *self.puts.entry(key.clone()).or_default() += 1;
+        self.slots.insert(key, record);
+    }
+
+    /// How many records landed in `key` since the last drain.
+    pub fn puts(&self, key: &str) -> u32 {
+        self.puts.get(key).copied().unwrap_or(0)
     }
 
     /// Takes every slot, leaving the spool empty.
+    ///
+    /// The put counts reset with the slots: they describe one window, and a
+    /// count that outlived its records would attribute another window's
+    /// coalescing to this frame.
     pub fn drain(&mut self) -> Vec<(String, Record)> {
+        self.puts.clear();
         std::mem::take(&mut self.slots).into_iter().collect()
+    }
+
+    /// Takes every slot with the number of records that landed in it.
+    pub fn drain_with_counts(&mut self) -> Vec<(String, Record, u32)> {
+        let puts = std::mem::take(&mut self.puts);
+        std::mem::take(&mut self.slots)
+            .into_iter()
+            .map(|(key, record)| {
+                let count = puts.get(&key).copied().unwrap_or(1);
+                (key, record, count)
+            })
+            .collect()
     }
 
     /// Slots currently held.
@@ -583,6 +614,11 @@ pub struct SpoolSet {
     evidence: DiskSpool,
     alarm: DiskSpool,
     telemetry: MemorySpool,
+    /// The one-second `26000` window. Counted rather than spooled: `Ingest` is
+    /// `DroppedAtSource` because one record per event at 3,645/second is not a
+    /// design, but the gauge IS the counts. Lives here so the receive loop can
+    /// feed it — it may name this module — without owning a timer.
+    ingest_window: crate::coalesce::IngestWindow,
     /// Events classified [`Stream::DroppedAtSource`], counted and never stored.
     dropped_at_source: u64,
 }
@@ -613,6 +649,7 @@ impl SpoolSet {
             alarm: DiskSpool::open(&dir, colony_id, Stream::Alarm, segment_bytes, max_bytes)?,
             telemetry: MemorySpool::new(),
             dropped_at_source: 0,
+            ingest_window: crate::coalesce::IngestWindow::default(),
         })
     }
 
@@ -655,6 +692,18 @@ impl SpoolSet {
             }
             Stream::DroppedAtSource => {
                 self.dropped_at_source = self.dropped_at_source.saturating_add(1);
+                // An ingest event is dropped as a RECORD and kept as a COUNT.
+                // Decoding it here rather than taking the counts as arguments
+                // keeps the receive loop's append call one line and one lock.
+                if let Ok(swarm_runtime::runtime_events::RuntimeEvent::Ingest {
+                    source,
+                    accepted,
+                    ..
+                }) = serde_json::from_slice::<swarm_runtime::runtime_events::RuntimeEvent>(
+                    &record.payload,
+                ) {
+                    self.ingest_window.record(&source, accepted);
+                }
                 Ok(None)
             }
         }
@@ -680,6 +729,11 @@ impl SpoolSet {
     /// The telemetry spool.
     pub fn telemetry(&mut self) -> &mut MemorySpool {
         &mut self.telemetry
+    }
+
+    /// Take the `26000` window and reset it. Called once per publish tick.
+    pub fn drain_ingest_window(&mut self) -> swarm_perch_wire::IngestRate {
+        self.ingest_window.drain()
     }
 
     /// Events classified [`Stream::DroppedAtSource`] since open.

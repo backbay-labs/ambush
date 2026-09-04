@@ -80,6 +80,7 @@ pub mod rollback;
 pub mod spine;
 pub mod spool;
 pub mod stream;
+pub mod telemetry;
 
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
@@ -388,6 +389,13 @@ impl PerchBridge {
             );
             return;
         };
+        // The telemetry slot signs 26000-26005 under its own key. A separate
+        // connection from the alarm's: the alarm publisher carries a burst
+        // budget sized for held actions, and colony telemetry must not spend it.
+        let telemetry_identity = identities
+            .index_of(&identity::Slot::Telemetry)
+            .and_then(|idx| identities.get(idx).cloned());
+        let telemetry_metrics = metrics.clone();
 
         let pacer = Pacer::new(
             Arc::clone(&spools),
@@ -432,6 +440,39 @@ impl PerchBridge {
             shutdown: shutdown.clone(),
         })));
 
+        // The Watchfloor's four frames. A separate task from the pacer because
+        // the two have opposite retry semantics: an evidence record that is
+        // lost is unrecoverable, and a telemetry frame that is REPLAYED is a
+        // lie about now. Allowed to die alone for the same reason the alarm
+        // drainer is — losing the wall must not stop evidence reaching the
+        // relay.
+        let mut telemetry_task = match telemetry_identity {
+            Some(identity_or_return) => {
+                Some(tokio::spawn(telemetry::run(telemetry::TelemetryDrainer {
+                    spools: Arc::clone(&spools),
+                    identities: Arc::clone(&identities),
+                    config: config.clone(),
+                    publisher: ConnectionSupervisor::new(
+                        config.relay_url.clone(),
+                        identity_or_return,
+                    ),
+                    metrics: telemetry_metrics,
+                    shutdown: shutdown.clone(),
+                })))
+            }
+            // No telemetry slot is a configuration state, not a crash: every
+            // other stream keeps publishing and the Watchfloor reports that no
+            // frame has arrived, which is true.
+            None => {
+                tracing::warn!(
+                    module = module_path!(),
+                    "the perch identity table has no telemetry slot; the Watchfloor will report \
+                     no frames"
+                );
+                None
+            }
+        };
+
         let mut shutdown = shutdown;
         loop {
             tokio::select! {
@@ -455,6 +496,24 @@ impl PerchBridge {
                 }
                 // The pacer only returns on shutdown.
                 _ = &mut pacer_task => break,
+                // The telemetry publisher may die alone: the Watchfloor going
+                // dark is a visible, recoverable state, and the console renders
+                // "no frame has arrived" rather than inventing zeroes.
+                result = async {
+                    match telemetry_task.as_mut() {
+                        Some(handle) => handle.await,
+                        None => std::future::pending().await,
+                    }
+                }, if telemetry_task.is_some() => {
+                    telemetry_task = None;
+                    if let Ok(Err(error)) = result {
+                        tracing::error!(
+                            module = module_path!(),
+                            reason = %error,
+                            "perch telemetry publisher exited; the Watchfloor will report no frames"
+                        );
+                    }
+                }
                 // The alarm drainer is allowed to die alone. A relay that refuses a lane
                 // create, or a `case_id` the daemon minted as something other than a UUID,
                 // must not stop evidence from reaching the relay: the alarm records stay
@@ -490,6 +549,9 @@ impl PerchBridge {
 
         receive_task.abort();
         pacer_task.abort();
+        if let Some(handle) = telemetry_task.take() {
+            handle.abort();
+        }
         if let Some(handle) = alarm_task {
             handle.abort();
         }

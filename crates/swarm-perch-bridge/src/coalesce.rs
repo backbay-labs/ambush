@@ -45,6 +45,58 @@ use crate::stream::{agent_role_to_wire, concentration_to_wire, threat_class_to_w
 /// `window_ms`, so all four frames describe the same slice of time.
 pub const COALESCE_WINDOW_MS: u32 = 1_000;
 
+/// The one-second window of ingest events, counted rather than spooled.
+///
+/// `Ingest` is classified `DroppedAtSource`: at the measured 3,645
+/// events/second, spooling one record per event is not a design, and the
+/// record already exists in the `ReplayBundle`. But the `26000` gauge is
+/// exactly the counts, so they are accumulated here — by the receive loop,
+/// which may name `crate::spool` and this module but not the publisher — and
+/// drained once per tick by the telemetry publisher.
+///
+/// This is the answer to W3-37's open question. The window lives beside the
+/// spools rather than inside the receive loop, so the loop does one `+= 1` and
+/// owns no timer; its 281 ms head room is defended by a module boundary rather
+/// than a timing test, and a windowing owner inside it would trade against the
+/// thing that protects evidence.
+#[derive(Debug, Default)]
+pub struct IngestWindow {
+    accepted: u64,
+    rejected: u64,
+    by_source: BTreeMap<String, u64>,
+}
+
+impl IngestWindow {
+    /// Count one ingest event. Called on the receive path; must stay trivial.
+    pub fn record(&mut self, source: &str, accepted: bool) {
+        if accepted {
+            self.accepted += 1;
+        } else {
+            self.rejected += 1;
+        }
+        let key = if looks_like_a_host(source) {
+            SUSPECT_SOURCE.to_string()
+        } else {
+            source.to_string()
+        };
+        *self.by_source.entry(key).or_default() += 1;
+    }
+
+    /// Take the window and reset it.
+    ///
+    /// Always returns a frame, even for a window that counted nothing: zero
+    /// accepted is a real measurement — the collectors are connected and quiet
+    /// — and it is not the same as no frame, which means nothing was said.
+    pub fn drain(&mut self) -> IngestRate {
+        IngestRate {
+            window_ms: COALESCE_WINDOW_MS,
+            accepted: std::mem::take(&mut self.accepted),
+            rejected: std::mem::take(&mut self.rejected),
+            by_source: std::mem::take(&mut self.by_source),
+        }
+    }
+}
+
 /// The telemetry spool slot a runtime event belongs to.
 ///
 /// `MemorySpool` is last-wins per key, so the key decides what coalescing
@@ -142,15 +194,18 @@ fn agent_health_to_wire(health: &swarm_core::agent::AgentHealth) -> WireAgentHea
 
 /// Reduce a window of `ConcentrationSnapshot` events to one `26001` frame.
 ///
-/// The LAST snapshot wins, and `coalesced_from` says how many were collapsed.
+/// The LAST snapshot wins, and `coalesced_from` — supplied by the caller from
+/// the spool's own put count — says how many were collapsed.
 /// An average of a decaying quantity is a number the substrate never held, and
 /// a threshold crossing read off one is a crossing that did not happen.
 ///
 /// `None` when the window carried no snapshot: an empty window is not a
 /// concentration of zero, and publishing one would tell the wall the substrate
 /// went quiet when the bridge simply saw nothing.
-pub fn concentration_frame(events: &[RuntimeEvent]) -> Option<ConcentrationFrame> {
-    let mut coalesced_from = 0u32;
+pub fn concentration_frame(
+    events: &[RuntimeEvent],
+    coalesced_from: u32,
+) -> Option<ConcentrationFrame> {
     let mut latest: Option<(&swarm_core::agent::SwarmMode, &Vec<_>, i64)> = None;
     for event in events {
         let RuntimeEvent::ConcentrationSnapshot {
@@ -161,7 +216,6 @@ pub fn concentration_frame(events: &[RuntimeEvent]) -> Option<ConcentrationFrame
         else {
             continue;
         };
-        coalesced_from += 1;
         if latest.is_none_or(|(_, _, at)| *emitted_at_ms >= at) {
             latest = Some((current_mode, concentrations, *emitted_at_ms));
         }
@@ -170,7 +224,11 @@ pub fn concentration_frame(events: &[RuntimeEvent]) -> Option<ConcentrationFrame
     Some(ConcentrationFrame {
         current_mode: swarm_mode_to_wire(mode),
         concentrations: concentrations.iter().map(concentration_to_wire).collect(),
-        coalesced_from,
+        // Supplied by the caller, never derived from this slice. The spool is
+        // last-wins, so by publish time the slice holds ONE snapshot; deriving
+        // the count here would report `1` for a window that collapsed thirty,
+        // on the one field whose whole job is to admit the coalescing.
+        coalesced_from: coalesced_from.max(1),
         // SECONDS, in its native unit and with the unit in the name. A shared
         // millisecond helper here produces a 1000x wrong decay curve silently,
         // in the direction of "everything looks evaporated".
@@ -315,3 +373,108 @@ pub fn mode_transitions(events: &[RuntimeEvent]) -> Vec<ModeTransitionFrame> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "coalesce_tests.rs"]
 mod tests;
+
+/// One frame ready to be signed and published.
+pub struct PendingFrame {
+    /// The Nostr kind, `26000`-`26003`.
+    pub kind: u16,
+    /// The serialized frame body.
+    pub value: serde_json::Value,
+}
+
+/// Build the tick's frames from the drained ingest window and telemetry records.
+///
+/// Order is kind order, and it is load-bearing for one pair: `26003` follows
+/// `26001`, so a mode transition never arrives before the concentration that
+/// explains it. An operator watching the wall see INCIDENT with no number
+/// behind it, even for one tick, is the reading this ordering avoids.
+///
+/// `seq` is per kind and supplied by the caller, which owns the counters — a
+/// gap in one kind's sequence is how a console detects a dropped frame, so the
+/// counter must outlive any single tick.
+///
+/// # Errors
+///
+/// [`BridgeError::Encode`] when a frame does not serialize to a JSON object.
+pub fn tick_frames(
+    ingest: IngestRate,
+    events: &[RuntimeEvent],
+    concentration_coalesced_from: u32,
+    issuer: &str,
+    emitted_at_ms: i64,
+    seq_for: &mut dyn FnMut(u16) -> u64,
+) -> Result<Vec<PendingFrame>, crate::error::BridgeError> {
+    let mut frames = Vec::new();
+    let mut push =
+        |kind: u16, frame: swarm_perch_wire::Frame| -> Result<(), crate::error::BridgeError> {
+            let value = serde_json::to_value(&frame)
+                .map_err(|error| crate::error::BridgeError::Encode(error.to_string()))?;
+            if !value.is_object() {
+                return Err(crate::error::BridgeError::Encode(format!(
+                    "frame {kind} did not serialize to a JSON object"
+                )));
+            }
+            frames.push(PendingFrame { kind, value });
+            Ok(())
+        };
+
+    push(
+        26000,
+        swarm_perch_wire::Frame::IngestRate(swarm_perch_wire::FrameBody {
+            header: swarm_perch_wire::FrameHeader {
+                kind: 26000,
+                issuer: issuer.to_string(),
+                emitted_at_ms,
+                seq: seq_for(26000),
+            },
+            body: ingest,
+        }),
+    )?;
+
+    if let Some(body) = concentration_frame(events, concentration_coalesced_from) {
+        push(
+            26001,
+            swarm_perch_wire::Frame::Concentration(swarm_perch_wire::FrameBody {
+                header: swarm_perch_wire::FrameHeader {
+                    kind: 26001,
+                    issuer: issuer.to_string(),
+                    emitted_at_ms,
+                    seq: seq_for(26001),
+                },
+                body,
+            }),
+        )?;
+    }
+
+    if let Some(body) = agent_health_frame(events) {
+        push(
+            26002,
+            swarm_perch_wire::Frame::AgentHealth(swarm_perch_wire::FrameBody {
+                header: swarm_perch_wire::FrameHeader {
+                    kind: 26002,
+                    issuer: issuer.to_string(),
+                    emitted_at_ms,
+                    seq: seq_for(26002),
+                },
+                body,
+            }),
+        )?;
+    }
+
+    for body in mode_transitions(events) {
+        push(
+            26003,
+            swarm_perch_wire::Frame::ModeTransition(swarm_perch_wire::FrameBody {
+                header: swarm_perch_wire::FrameHeader {
+                    kind: 26003,
+                    issuer: issuer.to_string(),
+                    emitted_at_ms,
+                    seq: seq_for(26003),
+                },
+                body,
+            }),
+        )?;
+    }
+
+    Ok(frames)
+}

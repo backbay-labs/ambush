@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 use swarm_core::agent::{AgentHealth, AgentRole, SwarmMode};
 use swarm_core::pheromone::ThreatClass;
 use swarm_runtime::runtime_events::RuntimeThreatConcentration;
@@ -73,11 +74,14 @@ fn an_empty_ingest_window_is_zeroes_and_not_an_absent_frame() {
 
 #[test]
 fn the_concentration_frame_keeps_the_last_snapshot_not_an_average() {
-    let frame = concentration_frame(&[
-        snapshot(1_000, SwarmMode::Normal, 1.0),
-        snapshot(3_000, SwarmMode::Alert, 5.0),
-        snapshot(2_000, SwarmMode::Normal, 2.0),
-    ])
+    let frame = concentration_frame(
+        &[
+            snapshot(1_000, SwarmMode::Normal, 1.0),
+            snapshot(3_000, SwarmMode::Alert, 5.0),
+            snapshot(2_000, SwarmMode::Normal, 2.0),
+        ],
+        3,
+    )
     .expect("a frame");
     assert_eq!(frame.coalesced_from, 3);
     assert_eq!(frame.concentrations[0].total_strength, 5.0);
@@ -91,7 +95,7 @@ fn the_concentration_frame_keeps_the_last_snapshot_not_an_average() {
 
 #[test]
 fn the_observed_time_is_seconds_and_the_field_says_so() {
-    let frame = concentration_frame(&[snapshot(1_773_738_881_000, SwarmMode::Normal, 1.0)])
+    let frame = concentration_frame(&[snapshot(1_773_738_881_000, SwarmMode::Normal, 1.0)], 1)
         .expect("a frame");
     assert_eq!(frame.observed_at_seconds, 1_773_738_881);
 }
@@ -100,8 +104,8 @@ fn the_observed_time_is_seconds_and_the_field_says_so() {
 fn an_empty_window_publishes_no_concentration_frame() {
     // Not a frame of zeroes: an empty window is "the bridge saw nothing", and
     // a zero frame would tell the wall the substrate went quiet.
-    assert!(concentration_frame(&[]).is_none());
-    assert!(concentration_frame(&[ingest("s", true)]).is_none());
+    assert!(concentration_frame(&[], 0).is_none());
+    assert!(concentration_frame(&[ingest("s", true)], 0).is_none());
 }
 
 #[test]
@@ -267,4 +271,171 @@ fn ingest_has_no_telemetry_slot_because_a_slot_would_lie() {
     // computed from it would report `accepted: 1` for a window that carried
     // three thousand.
     assert_eq!(telemetry_slot_key(&ingest("syslog-collector", true)), None);
+}
+
+#[test]
+fn the_ingest_window_accumulates_then_resets() {
+    let mut window = IngestWindow::default();
+    window.record("syslog-collector", true);
+    window.record("syslog-collector", true);
+    window.record("edr-collector", false);
+    let first = window.drain();
+    assert_eq!((first.accepted, first.rejected), (2, 1));
+    assert_eq!(first.by_source.get("syslog-collector"), Some(&2));
+
+    // Drained means drained: the next window starts empty, or a rate would
+    // grow monotonically and read as an accelerating collector.
+    let second = window.drain();
+    assert_eq!((second.accepted, second.rejected), (0, 0));
+    assert!(second.by_source.is_empty());
+}
+
+#[test]
+fn the_window_publishes_a_zero_frame_rather_than_no_frame() {
+    // Zero accepted is a measurement -- the collectors are connected and quiet
+    // -- and differs from no frame, which means nothing was said.
+    let rate = IngestWindow::default().drain();
+    assert_eq!(rate.window_ms, COALESCE_WINDOW_MS);
+    assert_eq!((rate.accepted, rate.rejected), (0, 0));
+}
+
+#[test]
+fn the_window_applies_the_same_host_sentinel_as_the_batch_reducer() {
+    let mut window = IngestWindow::default();
+    window.record("10.0.0.4", true);
+    let rate = window.drain();
+    assert_eq!(
+        rate.by_source.keys().collect::<Vec<_>>(),
+        vec![SUSPECT_SOURCE]
+    );
+    // One rule, one place: the batch reducer must agree.
+    assert_eq!(
+        ingest_rate(&[ingest("10.0.0.4", true)]).by_source,
+        rate.by_source
+    );
+}
+
+fn seq_counter() -> impl FnMut(u16) -> u64 {
+    let mut seqs: BTreeMap<u16, u64> = BTreeMap::new();
+    move |kind| {
+        let next = seqs.entry(kind).or_insert(0);
+        *next += 1;
+        *next
+    }
+}
+
+#[test]
+fn a_quiet_tick_still_publishes_the_gauge_and_nothing_else() {
+    let mut seq = seq_counter();
+    let frames = tick_frames(
+        IngestWindow::default().drain(),
+        &[],
+        0,
+        "issuer",
+        1_000,
+        &mut seq,
+    )
+    .expect("frames");
+    // The gauge always: zero accepted is a measurement. The other three only
+    // when something was said, because absence is not zero on the wall.
+    assert_eq!(
+        frames.iter().map(|f| f.kind).collect::<Vec<_>>(),
+        vec![26000]
+    );
+}
+
+#[test]
+fn concentration_precedes_the_mode_transition_it_explains() {
+    let mut seq = seq_counter();
+    let frames = tick_frames(
+        IngestWindow::default().drain(),
+        &[
+            RuntimeEvent::ModeTransition {
+                emitted_at_ms: 2,
+                from: SwarmMode::Normal,
+                to: SwarmMode::Incident,
+                triggering_threat_class: Some(ThreatClass::Execution),
+                reason: "crossed".into(),
+            },
+            snapshot(1_000, SwarmMode::Incident, 6.0),
+        ],
+        1,
+        "issuer",
+        1_000,
+        &mut seq,
+    )
+    .expect("frames");
+    // An operator seeing INCIDENT with no number behind it, even for one tick,
+    // is the reading this ordering avoids.
+    assert_eq!(
+        frames.iter().map(|f| f.kind).collect::<Vec<_>>(),
+        vec![26000, 26001, 26003]
+    );
+}
+
+#[test]
+fn the_sequence_is_per_kind_so_a_gap_in_one_is_visible() {
+    let mut seq = seq_counter();
+    let first = tick_frames(IngestWindow::default().drain(), &[], 0, "i", 1, &mut seq).unwrap();
+    let second = tick_frames(
+        IngestWindow::default().drain(),
+        &[snapshot(2_000, SwarmMode::Normal, 1.0)],
+        1,
+        "i",
+        2,
+        &mut seq,
+    )
+    .unwrap();
+    assert_eq!(first[0].value["seq"], 1);
+    assert_eq!(second[0].value["seq"], 2, "26000 continues its own run");
+    let concentration = second.iter().find(|f| f.kind == 26001).expect("26001");
+    assert_eq!(
+        concentration.value["seq"], 1,
+        "26001 starts at 1; a shared counter would show a gap where none exists"
+    );
+}
+
+#[test]
+fn every_frame_carries_its_kind_and_schema_in_the_body() {
+    let mut seq = seq_counter();
+    let frames = tick_frames(
+        IngestWindow::default().drain(),
+        &[snapshot(1_000, SwarmMode::Normal, 1.0)],
+        1,
+        "spine-issuer",
+        7,
+        &mut seq,
+    )
+    .unwrap();
+    for frame in &frames {
+        // Self-describing: a copied frame still says what it is.
+        assert_eq!(frame.value["kind"], frame.kind);
+        assert_eq!(frame.value["issuer"], "spine-issuer");
+        assert_eq!(frame.value["emitted_at_ms"], 7);
+        assert!(
+            frame.value["schema"]
+                .as_str()
+                .unwrap()
+                .starts_with("swarm.perch.frame."),
+            "{:?}",
+            frame.value["schema"]
+        );
+    }
+}
+
+#[test]
+fn the_coalesced_count_comes_from_the_caller_not_the_slice() {
+    // The spool is last-wins, so at publish time the slice holds ONE snapshot.
+    // Deriving the count here would report 1 for a window that collapsed
+    // thirty, on the field whose whole job is to admit the coalescing.
+    let frame =
+        concentration_frame(&[snapshot(1_000, SwarmMode::Normal, 1.0)], 30).expect("a frame");
+    assert_eq!(frame.coalesced_from, 30);
+}
+
+#[test]
+fn a_zero_count_still_reports_one_because_a_frame_collapsed_at_least_itself() {
+    let frame =
+        concentration_frame(&[snapshot(1_000, SwarmMode::Normal, 1.0)], 0).expect("a frame");
+    assert_eq!(frame.coalesced_from, 1);
 }
