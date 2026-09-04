@@ -125,3 +125,13 @@ id_ed25519
 # The dev stack's environment file: the bridge's key-derivation seed and the
 # operator bearer (.env.perch.example is the tracked template).
 .env.perch
+
+# The live-response dev profile's own runtime state: the durable hold store,
+# the containment lease file and the pheromone substrate the daemon writes
+# while `docs/PERCH-DEV.md` steps 11-16 run. All of it is per-run daemon state,
+# not source, and committing it puts real hold records and decision history in
+# the repository. `rulesets-dev/data/` is the same store reached through the
+# config file's own directory: the daemon resolves `hold_store_path` relative
+# to the ruleset, not to the working directory.
+data/perch-hold-dev/
+rulesets-dev/data/

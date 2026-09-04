@@ -348,3 +348,124 @@ beyond the debug-signature one:
   would stop sharing a record, which is the whole point of the walking skeleton.
 
 `docker-compose.yml` records the rest of what such a move would take.
+
+---
+
+# The hold — steps 11 to 16
+
+Everything above produces a FINDING card. This half produces a HELD ACTION: a response the
+policy would have run, stopped at the gate, addressed to a named operator, decided by that
+operator, and executed or refused by the daemon on their word.
+
+**It runs on a different profile.** `rulesets-dev/perch-hold-dev.yaml`, not `perch-dev.yaml`
+(00-DECISIONS D4 and W3-33): First card is accepted on `detect_only`, which cannot execute
+anything, and the hold needs `live_response`. Sign it the same way as step 1.
+
+## 11. A debug binary needs its own startup attestation
+
+`swarm_detect --serve` verifies a signed statement beside its own executable and refuses to
+start without one. A release build ships that statement; `cargo build` does not:
+
+```
+Error: StartupAttestationFailure { summary: "binary=failed to read startup attestation
+`target/debug/swarm_detect.attestation.json`: No such file or directory (os error 2),
+rulesets=verified 4 repo-owned ruleset files" }
+```
+
+Note that the ruleset half already passed — only the binary statement is missing. Write it
+with the debug key, once per rebuild of the binary:
+
+```bash
+cargo build -p swarm-runtime-http --bin swarm_detect
+cargo run -p swarm-runtime --example attest_debug_binary -- ./target/debug/swarm_detect
+```
+
+## 12. The daemon on the live-response profile
+
+```bash
+export SWARM_OPERATOR_TOKEN=perch-dev-operator-token
+export PERCH_BRIDGE_NOSTR_SEED=$(python3 -c 'import hashlib;print(hashlib.sha256(b"ambush-perch-bridge-dev-v1").hexdigest())')
+./target/debug/swarm_detect --config rulesets-dev/perch-hold-dev.yaml --serve --bind 127.0.0.1:9090
+```
+
+Expect `perch bridge starting`, `perch bridge socket authenticated` and
+`lane channels ensured lanes=12`. `/readyz` answers 200.
+
+## 13. Produce a hold
+
+The same office-dropper telemetry as step 5. On `live_response` its escalation asks for
+`isolate_host` at CRITICAL, which `static.human_gate` holds instead of refusing:
+
+```bash
+curl -sf -X POST http://127.0.0.1:9090/v1/ingest/events \
+  -H 'content-type: application/json' --data @.perch-dev/events.json
+sleep 5
+curl -sf "http://127.0.0.1:9090/v1/response/holds" \
+  -H "Authorization: Bearer $SWARM_OPERATOR_TOKEN" -H 'x-swarm-schema-version: 1' \
+  | python3 -m json.tool
+```
+
+Expect `open_count: 1`, `store_durable: true`, and one hold whose `state` is `notified`,
+whose `action_kind` is `isolate_host`, whose `case_channel` is a UUID and whose
+`notified_at_ms` is non-null. A null `notified_at_ms` means the bridge could not address
+it — read the daemon log for `hold_undeliverable`, usually a principal with no
+`nostr_pubkey` (F18).
+
+## 14. The queue record and the alarm reached the relay
+
+```bash
+PK=$(python3 -c "import yaml;print(yaml.safe_load(open('rulesets-dev/perch-hold-dev.yaml'))['operator_surface']['auth']['principals'][0]['nostr_pubkey'])")
+CASE=$(curl -sf "http://127.0.0.1:9090/v1/response/holds" -H "Authorization: Bearer $SWARM_OPERATOR_TOKEN" \
+  -H 'x-swarm-schema-version: 1' | python3 -c 'import json,sys;print(json.load(sys.stdin)["holds"][0]["case_channel"])')
+
+# the 46010 notice, addressed to this operator and scoped to the case channel
+curl -s -X POST http://localhost:3000/query -H "X-Pubkey: $PK" -H 'content-type: application/json' \
+  -d "[{\"kinds\":[46010],\"#p\":[\"$PK\"],\"limit\":20}]"
+# exactly one open swarm:hold:v1 card in the case channel
+curl -s -X POST http://localhost:3000/query -H "X-Pubkey: $PK" -H 'content-type: application/json' \
+  -d "[{\"kinds\":[9],\"#h\":[\"$CASE\"],\"limit\":20}]"
+# the global 26006 alarm
+curl -s -X POST http://localhost:3000/query -H "X-Pubkey: $PK" -H 'content-type: application/json' \
+  -d '[{"kinds":[26006],"limit":10}]'
+```
+
+The notice carries `h` (the case channel), `p` (this operator) and `hold` (the hold id).
+The card's line 0 is exactly `<!-- swarm:hold:v1 -->` and its line 1 names the hold, the
+action, the severity, the host and the expiry.
+
+## 15. Decide it — leg 2 without the console
+
+The console signs leg 1 onto the relay and then calls the decide route. To exercise the
+DAEMON half alone, sign a decision with the same shared preimage function the console uses:
+
+```bash
+HOLD=<hold_id from step 13>
+cargo run -q -p swarm-runtime-http --example perch_decide_dev -- "$HOLD" refuse "not our host" \
+  > /tmp/decide.json
+curl -sS -X POST "http://127.0.0.1:9090/v1/response/holds/$HOLD/decide" \
+  -H "Authorization: Bearer $SWARM_OPERATOR_TOKEN" -H 'x-swarm-schema-version: 1' \
+  -H 'content-type: application/json' --data @/tmp/decide.json
+```
+
+The helper derives the operator's Ed25519 key from the documented seed
+(`Ed25519Signer::from_secret_material("ambush-perch-dev-operator-v1")`) and prints the public
+half; it must equal the profile's `verdict_public_key_hex`.
+
+- **refuse** → `state: refused`, `decision.outcome: refused_by_operator`, no receipt, no lease.
+- **grant** → `state: executed`, `decision.outcome: granted_executed`, a receipt, an
+  `audit_trail_id`, and a `capability_lease` expiring 60 s after the daemon's own decision
+  instant. The lease has **no** `issued_at_ms` field (W3-34).
+- **the same body twice** → `replayed: true`, the state unchanged.
+- **a different decision on a decided hold** → HTTP 409 `hold_already_decided`, "the hold was
+  decided under another intent; re-read the hold" — the conflict W3-17 has the console
+  re-read rather than retry.
+
+## 16. What this half does NOT demonstrate
+
+- **The console.** Every step above talks to the daemon and the relay over HTTP. The
+  desktop's hold surface goes through Tauri commands that hold the daemon bearer and the
+  operator's signing key, so a browser cannot drive it and the Playwright specs run against
+  the mock bridge. Selecting a hold, the dwell-gated two-stroke grant and the rendered
+  two-leg states have not been driven against this live stack.
+- **`refused_late` from a containment refusal.** Removing `runtime.containment` and
+  re-signing does not produce it; a granted `isolate_host` still executes. See W3-35.
