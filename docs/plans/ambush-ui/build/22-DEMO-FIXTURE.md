@@ -153,7 +153,7 @@ nothing here is a signature (§9).
 |---|---|---|
 | The daemon's ingest identity | `swarm:ed25519:18085f16…ce470` | `AgentId::from_verifying_key` → `AgentId::from_public_key_hex` → `swarm:ed25519:{hex}` (`AMB crates/swarm-core/src/types.rs:16-22`). This is the value the daemon passes as `EventExecutionContext.agent_id` (`AMB crates/swarm-ingest-runtime/src/ingest/mod.rs:1074` live, `:1184` replay), so it is also `ActionRequest.requested_by` on every hold |
 | Deposit source ids | `swarm:ed25519:18085f16…ce470:suspicious_process_tree` and `…:suspicious_scripting` | `resolve_deposits` sets `agent_id: strategy_scoped_agent_id(agent_id, &finding.strategy_id)` (`AMB crates/swarm-runtime/src/detection/pipeline.rs:573`, called from `detect_and_deposit_with_role` at `:80` in the daemon's detect path, which then signs and writes each deposit to the substrate). The formatter is `{base}:{strategy_id}` (`AMB crates/swarm-whisker/src/stream.rs:19-21`). **This is what `distinct_sources` counts** — see finding **F-5** |
-| The operator, on the relay | `684949a3…fbde5` (32-byte x-only) | leg 1. Signs the `ambush:verdict:v1` card |
+| The operator, on the relay | `684949a3…fbde5` (32-byte x-only) | leg 1. Signs the `swarm:verdict:v1` card |
 | The operator, to the daemon | `perch-operator-1` / `swarm:ed25519:bcefbd06…3ded` | leg 2. `operator_id` comes from `AuthenticatedOperatorPrincipal`, never from the request body; `voter_id` uses the same formatter as `voter_id_from_public_key` (`AMB crates/swarm-runtime/src/approval.rs:1783-1785`) |
 | The bridge, on the relay | `20717633…b586` | publishes every card and every frame |
 | The bridge, as a spine issuer | `swarm:ed25519:5fa33029…4622` | the envelope's `issuer`. **Who published**, never who produced |
@@ -434,29 +434,29 @@ Wall clock 2026-03-17 UTC. The shift began 08:00:00Z. The demo's "now" is
 | # | Time | What happens | Becomes | File |
 |---|---|---|---|---|
 | 1 | 09:14:32.000 | telemetry `hunt-evt-1` accepted | `RuntimeEvent::Ingest` → a tally in the 1 Hz ingest frame | `wire/frame-26000-ingest-rate-0914.json` |
-| 2 | 09:14:32.140 | finding `suspicious_process_tree:hunt-evt-1` | `RuntimeEvent::Finding` → `ambush:finding:v1` in the `execution` channel | `wire/card-01-…-evt1.json` |
+| 2 | 09:14:32.140 | finding `suspicious_process_tree:hunt-evt-1` | `RuntimeEvent::Finding` → `swarm:finding:v1` in the `execution` channel | `wire/card-01-…-evt1.json` |
 | 3 | 09:14:32.141 | finding `suspicious_scripting:hunt-evt-1` | same | `wire/card-02-…-evt1.json` |
 | 4 | 09:14:32.2 | deposits D1, D2 written to the substrate | **nothing on the wire** — no `RuntimeEvent` exists for a deposit | — |
 | 5 | 09:14:33.000 | monitor tick: 1.799653, 2 sources / 1 agent → **below** | `ConcentrationSnapshot` ×10 → one coalesced frame | `wire/frame-26001-concentration-below.json` |
 | 6 | 09:14:41.000 | telemetry `hunt-evt-2` accepted | ingest tally | — |
-| 7 | 09:14:41.130 | finding `suspicious_process_tree:hunt-evt-2` | `ambush:finding:v1` | `wire/card-03-…-evt2.json` |
-| 8 | 09:14:41.900 | monitor tick: **2.696884 crosses 2.0** | `RuntimeEvent::Escalation` → `ambush:escalation:v1`, edge-triggered | `wire/card-04-escalation-execution-alert.json` |
+| 7 | 09:14:41.130 | finding `suspicious_process_tree:hunt-evt-2` | `swarm:finding:v1` | `wire/card-03-…-evt2.json` |
+| 8 | 09:14:41.900 | monitor tick: **2.696884 crosses 2.0** | `RuntimeEvent::Escalation` → `swarm:escalation:v1`, edge-triggered | `wire/card-04-escalation-execution-alert.json` |
 | 9 | 09:14:41.900 | `SwarmMode` `normal` → `alert` | `RuntimeEvent::ModeTransition` → 26003 | `wire/frame-26003-mode-transition.json` |
 | 10 | 09:14:42.000 | the crossing tick, coalesced | 26001 | `wire/frame-26001-concentration-crossing.json` |
 | 11 | 09:14:42.400 | correlation assembles `incident:hunt-evt-1:1773738882400` from both `hunt_id`s | daemon-only. Perch mints its own case channel and its own `IncidentRecord` via **B3i** | `http/POST-v1-operator-incidents.json` |
-| 12 | 09:14:42.600 | `isolate_host` → `require_human` → **hold A** | `RuntimeEvent::ResponseHeld` (**B1**, twelfth variant) → `kind:46010` + `ambush:hold:v1` + a 26006 alarm | `wire/card-05-…`, `wire/event-46010-hold-a.json`, `wire/frame-26006-hold-alarm-a.json` |
+| 12 | 09:14:42.600 | `isolate_host` → `require_human` → **hold A** | `RuntimeEvent::ResponseHeld` (**B1**, twelfth variant) → `kind:46010` + `swarm:hold:v1` + a 26006 alarm | `wire/card-05-…`, `wire/event-46010-hold-a.json`, `wire/frame-26006-hold-alarm-a.json` |
 | 13 | 09:14:42.700 | `block_egress` → `require_human` → **hold B** | same three | `wire/card-06-…`, `wire/event-46010-hold-b.json`, `wire/frame-26006-hold-alarm-b.json` |
 | 14 | 09:16:05.000 | the operator opens hold A in the Verdict Row | client-side. Starts the 1500 ms dwell gate | — |
-| 15 | 09:16:19.000 | **leg 1** — the operator signs an `ambush:verdict:v1` grant card to the relay | `kind:9`, operator's Nostr key, NIP-10 reply to the hold card | `wire/card-07-verdict-grant-hold-a.json` |
+| 15 | 09:16:19.000 | **leg 1** — the operator signs an `swarm:verdict:v1` grant card to the relay | `kind:9`, operator's Nostr key, NIP-10 reply to the hold card | `wire/card-07-verdict-grant-hold-a.json` |
 | 16 | 09:16:19.300 | **leg 2** — `POST /v1/response/holds/h_a07aeacf/decide` to `127.0.0.1:9090`. The store's compare-and-set instant is what the lease is minted from | HTTP | `http/POST-v1-response-holds-hold-a-decide.json` |
 | 17 | 09:16:19.300 | capability lease minted: expires 09:17:19.300 (**60 s**) | inside the receipt and the decide response | same file |
-| 18 | 09:16:19.800 | receipt `resp:hunt-evt-1:lease:…` status `executed` | `ambush:receipt:v1` | `wire/card-09-receipt-hunt-evt-1.json` |
-| 19 | 09:16:19.900 | containment lease `cl_9b3645fc` opens: expires 09:31:19.900 (**900 s**) | `ambush:lease:v1` | `wire/card-10-lease-host-ops-1.json` |
-| 20 | 09:16:20.000 | hold A terminal card, `state: executed`, carrying the decision record | `ambush:hold:v1` as a NIP-10 reply to the open card | `wire/card-08-hold-a-terminal-executed.json` |
-| 21 | 09:18:44.000 | the operator **dismisses** `suspicious_scripting:hunt-evt-1` | `ambush:verdict:v1` + `POST /v1/operator/findings/{id}/feedback` | `http/POST-v1-operator-findings-feedback-dismiss.json` |
+| 18 | 09:16:19.800 | receipt `resp:hunt-evt-1:lease:…` status `executed` | `swarm:receipt:v1` | `wire/card-09-receipt-hunt-evt-1.json` |
+| 19 | 09:16:19.900 | containment lease `cl_9b3645fc` opens: expires 09:31:19.900 (**900 s**) | `swarm:lease:v1` | `wire/card-10-lease-host-ops-1.json` |
+| 20 | 09:16:20.000 | hold A terminal card, `state: executed`, carrying the decision record | `swarm:hold:v1` as a NIP-10 reply to the open card | `wire/card-08-hold-a-terminal-executed.json` |
+| 21 | 09:18:44.000 | the operator **dismisses** `suspicious_scripting:hunt-evt-1` | `swarm:verdict:v1` + `POST /v1/operator/findings/{id}/feedback` | `http/POST-v1-operator-findings-feedback-dismiss.json` |
 | 22 | 09:18:44.200 | suppression marker deposit lands; **D1 and D2 both leave the sum** | a rendered timeline row, never a hole in the curve | `http/GET-…-deposits-execution-after-dismiss.json` |
 | 23 | 09:18:45.000 | monitor tick: 0.858696, 1 source / 1 agent → **both bars fail** | 26001 | `wire/frame-26001-concentration-after-dismiss.json` |
-| 24 | 09:31:19.900 | the containment sweep releases the lease on TTL expiry | `RollbackReceipt`, `trigger: expiry` → `ambush:rollback:v1` | `wire/card-11-rollback-host-ops-1.json` |
+| 24 | 09:31:19.900 | the containment sweep releases the lease on TTL expiry | `RollbackReceipt`, `trigger: expiry` → `swarm:rollback:v1` | `wire/card-11-rollback-host-ops-1.json` |
 
 Hold B is **still open** at the demo's end, 54m 42.7s from expiry. That is
 deliberate: a queue with nothing in it is not a queue.
@@ -536,7 +536,7 @@ bad file could pass:
 Each card body on the relay is:
 
 ```
-<!-- ambush:hold:v1 -->
+<!-- swarm:hold:v1 -->
 
 ```json
 { …the envelope from fixtures/wire/card-05-….json… }
@@ -732,8 +732,8 @@ failing three frames later with a `TypeError`. `perch_operator_status` says that
 process with a different incident store — and points at
 `GET /v2/api/runtime/status` on the daemon instead. `perch_verify_artifact` says
 that **no daemon route returns an artifact by id at all**, which is `INV-RF2`'s
-verified consequence: `ambush:finding:v1`, `ambush:receipt:v1` and
-`ambush:escalation:v1` have no re-read, so those three cards must render the
+verified consequence: `swarm:finding:v1`, `swarm:receipt:v1` and
+`swarm:escalation:v1` have no re-read, so those three cards must render the
 absence rather than offer a verification affordance that would 404.
 
 ### 8.1 The seed itself
@@ -1235,7 +1235,7 @@ entirely**. This fixture emitted an explicit `null`, which is a shape the daemon
 never produces — so any decoder tested only against the fixture would never
 exercise the absent-key path that is the actual shipped default (no governance
 receipt is minted on this path at all). **Fixed:** `card-10` no longer carries
-the key, and `card-ambush-lease-v1.schema.json` tolerates both absent and null,
+the key, and `card-swarm-lease-v1.schema.json` tolerates both absent and null,
 so a decoder test can cover the real shape.
 
 **Do not "fix" the neighbour the same way.** `RollbackReceipt`'s
@@ -1730,7 +1730,7 @@ That is the reconciliation rule, carried as data in
 `variants.contested.reconciliation_rule` so two producers do not implement it
 twice and differently:
 
-> A `kind:9` `ambush:verdict:v1` card whose `hold_id` matches a hold the daemon
+> A `kind:9` `swarm:verdict:v1` card whose `hold_id` matches a hold the daemon
 > reports as decided, but whose Nostr event id is **not** the decision record's
 > `nostr_intent_event_id`, renders as a human intent record that did not become
 > the decision — never as the decision.

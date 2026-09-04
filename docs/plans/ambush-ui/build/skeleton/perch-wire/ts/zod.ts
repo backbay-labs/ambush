@@ -184,7 +184,7 @@ export const factIssuer = z.strictObject({
 });
 
 /**
- * WHO PRODUCED THE FACT, when the producer is a PERSON. `ambush:verdict:v1` only.
+ * WHO PRODUCED THE FACT, when the producer is a PERSON. `swarm:verdict:v1` only.
  *
  * `role: z.null()` is the point. `AgentRole` has no human member and
  * `AgentRole.Tom` is the governance/veto actor
@@ -317,7 +317,7 @@ const locatorBase = { emitted_at_ms: unixMillis, issuer: factIssuer };
 // ─────────────────────────────────────────────────────────── card facts
 
 export const findingFact = z.strictObject({
-  schema: z.literal("ambush.perch.finding.v1"),
+  schema: z.literal("swarm.perch.finding.v1"),
   ...locatorBase,
   locator: z.strictObject({
     finding_id: z.string(),
@@ -345,7 +345,7 @@ export const findingFact = z.strictObject({
 });
 
 export const escalationFact = z.strictObject({
-  schema: z.literal("ambush.perch.escalation.v1"),
+  schema: z.literal("swarm.perch.escalation.v1"),
   ...locatorBase,
   locator: z.strictObject({
     lane_channel: uuid,
@@ -420,7 +420,7 @@ export const escalationFact = z.strictObject({
   );
 
 export const holdFact = z.strictObject({
-  schema: z.literal("ambush.perch.hold.v1"),
+  schema: z.literal("swarm.perch.hold.v1"),
   ...locatorBase,
   locator: z.strictObject({
     hold_id: holdId,
@@ -477,7 +477,7 @@ export const holdFact = z.strictObject({
 });
 
 export const verdictFact = z.strictObject({
-  schema: z.literal("ambush.perch.verdict.v1"),
+  schema: z.literal("swarm.perch.verdict.v1"),
   emitted_at_ms: unixMillis,
   issuer: operatorFactIssuer,
   locator: z.strictObject({
@@ -490,6 +490,7 @@ export const verdictFact = z.strictObject({
     hold_id: holdId,
     decided_at_ms: unixMillis,
     operator_id: z.string().min(1),
+    rationale_sha256: hex64.nullable(),
     rationale: z.string().nullish(),
   }),
   signature: detachedSignature,
@@ -520,7 +521,7 @@ export const verdictFact = z.strictObject({
 });
 
 export const receiptFact = z.strictObject({
-  schema: z.literal("ambush.perch.receipt.v1"),
+  schema: z.literal("swarm.perch.receipt.v1"),
   ...locatorBase,
   locator: z.strictObject({
     trail_id: z.string(),
@@ -555,7 +556,7 @@ export const receiptFact = z.strictObject({
 });
 
 export const leaseFact = z.strictObject({
-  schema: z.literal("ambush.perch.lease.v1"),
+  schema: z.literal("swarm.perch.lease.v1"),
   ...locatorBase,
   locator: z.strictObject({
     lease_id: z.string(),
@@ -578,7 +579,7 @@ export const leaseFact = z.strictObject({
 });
 
 export const rollbackFact = z.strictObject({
-  schema: z.literal("ambush.perch.rollback.v1"),
+  schema: z.literal("swarm.perch.rollback.v1"),
   ...locatorBase,
   locator: z.strictObject({
     rollback_id: z.string(),
@@ -657,7 +658,7 @@ const frameHeader = {
 
 export const frame = z.discriminatedUnion("schema", [
   z.strictObject({
-    schema: z.literal("ambush.perch.frame.ingest_rate.v1"),
+    schema: z.literal("swarm.perch.frame.ingest_rate.v1"),
     kind: z.literal(26000),
     ...frameHeader,
     window_ms: z.literal(1000),
@@ -666,7 +667,7 @@ export const frame = z.discriminatedUnion("schema", [
     by_source: z.record(z.string(), z.number().int().nonnegative()),
   }),
   z.strictObject({
-    schema: z.literal("ambush.perch.frame.concentration.v1"),
+    schema: z.literal("swarm.perch.frame.concentration.v1"),
     kind: z.literal(26001),
     ...frameHeader,
     current_mode: swarmMode,
@@ -675,7 +676,7 @@ export const frame = z.discriminatedUnion("schema", [
     observed_at_seconds: unixSeconds,
   }),
   z.strictObject({
-    schema: z.literal("ambush.perch.frame.agent_health.v1"),
+    schema: z.literal("swarm.perch.frame.agent_health.v1"),
     kind: z.literal(26002),
     ...frameHeader,
     agents: z.array(
@@ -690,7 +691,7 @@ export const frame = z.discriminatedUnion("schema", [
     ),
   }),
   z.strictObject({
-    schema: z.literal("ambush.perch.frame.mode_transition.v1"),
+    schema: z.literal("swarm.perch.frame.mode_transition.v1"),
     kind: z.literal(26003),
     ...frameHeader,
     from: swarmMode,
@@ -699,7 +700,7 @@ export const frame = z.discriminatedUnion("schema", [
     reason: z.string(),
   }),
   z.strictObject({
-    schema: z.literal("ambush.perch.frame.governance_status.v1"),
+    schema: z.literal("swarm.perch.frame.governance_status.v1"),
     kind: z.literal(26004),
     ...frameHeader,
     partition_state: partitionState,
@@ -713,7 +714,7 @@ export const frame = z.discriminatedUnion("schema", [
     contingency_lease_ttl_ms: z.number().int(),
   }),
   z.strictObject({
-    schema: z.literal("ambush.perch.frame.tamper_alert.v1"),
+    schema: z.literal("swarm.perch.frame.tamper_alert.v1"),
     kind: z.literal(26005),
     ...frameHeader,
     debugger_attached: z.boolean(),
@@ -723,7 +724,7 @@ export const frame = z.discriminatedUnion("schema", [
     fail_closed: z.boolean(),
   }),
   z.strictObject({
-    schema: z.literal("ambush.perch.frame.hold_alarm.v1"),
+    schema: z.literal("swarm.perch.frame.hold_alarm.v1"),
     kind: z.literal(26006),
     ...frameHeader,
     hold_id: holdId,

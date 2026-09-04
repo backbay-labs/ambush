@@ -1,0 +1,391 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-hold-v1.schema.json",
+  "title": "swarm:hold:v1",
+  "description": "The rendered hold card, in the case channel. This is the row an operator reads; the needs-action QUEUE row is the separate kind:46010 notice (event-46010-hold-notice.schema.json), per 10-RELAY-FORK.md decision RF-D3.\n\nOne hold produces two or more cards: an OPEN card (state=created|notified|armed|deciding) and exactly one TERMINAL card (state=granted|refused|expired|executed|failed) published as a NIP-10 reply to the open card. The terminal card is the appendix's 'also the expiry record'. Both carry the full hold, because a card is immutable and the timeline must read top to bottom without a join.\n\nremaining_ms and expired are NOT on this card. They are clock-derived, the card is immutable, and INV-06 requires the two to be two separate rendered facts. The console computes both from expires_at_ms.\n\nTier 0. The HeldActionStore record carries no signature; the ActionRequest inside it may carry a governance_receipt in `evidence`, which is a separate, separately-badged object.",
+  "allOf": [
+    {
+      "$ref": "card-envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "fact": {
+      "type": "object",
+      "required": [
+        "schema",
+        "issuer",
+        "emitted_at_ms",
+        "locator",
+        "hold"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "swarm.perch.hold.v1"
+        },
+        "issuer": {
+          "$ref": "common.schema.json#/$defs/FactIssuer",
+          "description": "WHO PRODUCED THE FACT \u2014 the agent whose SwarmAction became this ActionRequest. `role` may be null: request_from_action sets `requested_by: agent_id.clone()` (crates/swarm-runtime/src/dispatcher.rs:1338-1345) from whatever AgentId the emitting agent holds, and on the Whisker/ingest path that is a derived `swarm:ed25519:<hex>`-shaped identity, which infer_agent_role (crates/swarm-runtime/src/detection/pipeline.rs:583-604) prefix-matches to None. See common.schema.json#/$defs/FactIssuer."
+        },
+        "emitted_at_ms": {
+          "$ref": "common.schema.json#/$defs/UnixMillis",
+          "description": "The RuntimeEvent's own emitted_at_ms, carried through unchanged. THE SORT KEY for every Perch surface. The Nostr event's `created_at` is a transport timestamp stamped at publish, because MAX_TIMESTAMP_DRIFT_SECS is 900 and REJECTS (crates/buzz-relay/src/handlers/ingest.rs:2224-2231) and `created_at` is inside the Nostr signature, so a spooled card carrying its true emit time becomes permanently unpublishable fifteen minutes after it was produced."
+        },
+        "locator": {
+          "type": "object",
+          "required": [
+            "hold_id",
+            "case_channel",
+            "hunt_id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "hold_id": {
+              "$ref": "common.schema.json#/$defs/HoldId"
+            },
+            "case_channel": {
+              "$ref": "common.schema.json#/$defs/Uuid"
+            },
+            "hunt_id": {
+              "type": "string"
+            },
+            "finding_card_id": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/Hex64Lower"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Nostr event id of the swarm:finding:v1 card this hold answers, when one exists."
+            }
+          }
+        },
+        "hold": {
+          "type": "object",
+          "required": [
+            "hold_id",
+            "state",
+            "action_kind",
+            "severity",
+            "held_at_ms",
+            "expires_at_ms",
+            "action_request",
+            "policy_decision",
+            "rationale",
+            "leases_a_containment",
+            "inverse_resolution"
+          ],
+          "additionalProperties": false,
+          "description": "HeldActionView minus the two clock-derived fields. Field-for-field the same object as build/openapi/perch-operator-v1.yaml#/components/schemas/HeldActionView, which is normative for the HTTP shape; this schema is normative for the wire shape and the two are held together by tools/check-perch-wire-parity.sh (PROPOSED).",
+          "properties": {
+            "hold_id": {
+              "$ref": "common.schema.json#/$defs/HoldId"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "created",
+                "notified",
+                "armed",
+                "deciding",
+                "granted",
+                "refused",
+                "expired",
+                "executed",
+                "failed"
+              ]
+            },
+            "action_kind": {
+              "$ref": "common.schema.json#/$defs/ResponseActionKind"
+            },
+            "severity": {
+              "$ref": "common.schema.json#/$defs/Severity"
+            },
+            "held_at_ms": {
+              "$ref": "common.schema.json#/$defs/UnixMillis"
+            },
+            "expires_at_ms": {
+              "$ref": "common.schema.json#/$defs/UnixMillis"
+            },
+            "action_request": {
+              "type": "object",
+              "required": [
+                "hunt_id",
+                "requested_by",
+                "action",
+                "severity",
+                "evidence"
+              ],
+              "additionalProperties": false,
+              "description": "crates/swarm-policy/src/lib.rs:45-58. `severity` and the threat class inside `evidence` are set by the REQUESTING AGENT and read back by ConfigurableApprovalGate::selector_matches (crates/swarm-policy/src/configurable_gate.rs:44-56), so an agent influences which rule judges its own destructive action. The WHY WE ARE ASKING slot must mark both request-carried.",
+              "properties": {
+                "hunt_id": {
+                  "type": "string"
+                },
+                "requested_by": {
+                  "type": "string",
+                  "description": "An Ambush AgentId. NOT a Nostr pubkey and there is no mapping to one anywhere in swarm-core/src/config, which is why no Perch card p-tags the requesting agent."
+                },
+                "action": {
+                  "$ref": "common.schema.json#/$defs/ResponseAction"
+                },
+                "severity": {
+                  "$ref": "common.schema.json#/$defs/Severity"
+                },
+                "evidence": {
+                  "type": "object"
+                }
+              },
+              "x-carried-whole": "swarm_policy::ActionRequest",
+              "x-carried-note": "This object is a domain type carried VERBATIM. The Rust wire crate names the type rather than redeclaring its fields, so a field added upstream reaches the wire with no edit and a field removed upstream is a compile error. tools/check-perch-wire-parity.sh skips its property names on the Rust side for exactly that reason, and the golden vectors plus this schema are what hold the shape."
+            },
+            "policy_decision": {
+              "$ref": "common.schema.json#/$defs/PolicyDecision",
+              "x-carried-whole": "swarm_policy::PolicyDecision",
+              "x-carried-note": "This object is a domain type carried VERBATIM. The Rust wire crate names the type rather than redeclaring its fields, so a field added upstream reaches the wire with no edit and a field removed upstream is a compile error. tools/check-perch-wire-parity.sh skips its property names on the Rust side for exactly that reason, and the golden vectors plus this schema are what hold the shape."
+            },
+            "rationale": {
+              "type": "object",
+              "required": [
+                "rule_name",
+                "reason",
+                "threat_class",
+                "severity",
+                "request_carried_fields"
+              ],
+              "additionalProperties": false,
+              "description": "NEW IN B1, mirroring build/openapi/perch-operator-v1.yaml#/components/schemas/HoldRationale. It exists because policy_decision is a single constant pair for all twelve action kinds.",
+              "properties": {
+                "rule_name": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "threat_class": {
+                  "$ref": "common.schema.json#/$defs/ThreatClass"
+                },
+                "severity": {
+                  "$ref": "common.schema.json#/$defs/Severity"
+                },
+                "request_carried_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "concentration_at_hold": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/PheromoneConcentration"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "escalation_level": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/EscalationLevel"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "governance_receipt_present": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "leases_a_containment": {
+              "type": "boolean",
+              "description": "is_containment_action(action) (crates/swarm-runtime/src/containment.rs:54-63). False for eight of the twelve destructive kinds, and a false here means the card renders NO pending containment-lease slot rather than an empty one."
+            },
+            "rehearsal": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/ResponseRehearsalPreview"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "inverse_resolution": {
+              "type": "array",
+              "items": {
+                "$ref": "common.schema.json#/$defs/InverseResolution"
+              },
+              "description": "Empty when rehearsal is null. DERIVED, marked as such."
+            },
+            "decision": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/HoldDecisionRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Null on the open card, set on the terminal card."
+            }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema": "swarm.spine.envelope.v1",
+      "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
+      "seq": 3,
+      "prev_envelope_hash": "0xabababababababababababababababababababababababababababababababab",
+      "issued_at": "2026-03-17T09:14:42Z",
+      "capability_token": null,
+      "fact": {
+        "schema": "swarm.perch.hold.v1",
+        "issuer": {
+          "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+          "role": null,
+          "nostr_pubkey": null
+        },
+        "emitted_at_ms": 1773738882600,
+        "locator": {
+          "hold_id": "h_a07aeacf",
+          "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+          "hunt_id": "hunt-evt-1",
+          "finding_card_id": "ad87733a20dc8c74e001bd9f60db48f01ad01513b3ea0df29c471b3872e9874a"
+        },
+        "hold": {
+          "hold_id": "h_a07aeacf",
+          "state": "created",
+          "action_kind": "isolate_host",
+          "severity": "CRITICAL",
+          "held_at_ms": 1773738882600,
+          "expires_at_ms": 1773742482600,
+          "action_request": {
+            "hunt_id": "hunt-evt-1",
+            "requested_by": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
+            "action": {
+              "type": "isolate_host",
+              "host_id": "host-ops-1"
+            },
+            "severity": "CRITICAL",
+            "evidence": {
+              "escalation": {
+                "threat_class": "execution"
+              }
+            }
+          },
+          "policy_decision": {
+            "verdict": "require_human",
+            "rule_name": "static.human_gate",
+            "reason": "authorized but held for human approval"
+          },
+          "rationale": {
+            "rule_name": "static.human_gate",
+            "reason": "authorized but held for human approval",
+            "threat_class": "execution",
+            "severity": "CRITICAL",
+            "request_carried_fields": [
+              "severity",
+              "threat_class"
+            ],
+            "concentration_at_hold": {
+              "threat_class": "execution",
+              "total_strength": 2.696884,
+              "distinct_sources": 2,
+              "peak_confidence": 0.9
+            },
+            "escalation_level": "alert",
+            "governance_receipt_present": false
+          },
+          "leases_a_containment": true,
+          "rehearsal": null,
+          "inverse_resolution": [],
+          "decision": null
+        }
+      },
+      "envelope_hash": "0xabababababababababababababababababababababababababababababababab"
+    }
+  ],
+  "$defs": {
+    "HoldDecisionRecord": {
+      "type": "object",
+      "required": [
+        "decision",
+        "operator_id",
+        "decided_at_ms",
+        "nostr_intent_event_id",
+        "outcome",
+        "dispatched"
+      ],
+      "additionalProperties": false,
+      "description": "Mirrors build/openapi/perch-operator-v1.yaml#/components/schemas/HoldDecisionRecord. `decision` is grant|refuse and never `deny`: appendix section 7 rules `refuse` to the operator, `deny` to the policy and `veto` to governance.",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "grant",
+            "refuse"
+          ]
+        },
+        "operator_id": {
+          "type": "string"
+        },
+        "decided_at_ms": {
+          "$ref": "common.schema.json#/$defs/UnixMillis"
+        },
+        "nostr_intent_event_id": {
+          "$ref": "common.schema.json#/$defs/Hex64Lower"
+        },
+        "signature": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/DetachedSignature"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rationale": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "dispatched": {
+          "type": "boolean"
+        },
+        "receipt_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refusal": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -265,58 +265,16 @@ export function AvatarStep({
   const [avatarSquishKey, setAvatarSquishKey] = React.useState(0);
   const [avatarEditorMode, setAvatarEditorMode] =
     React.useState<AvatarMode>("image");
-  const [animatedPreviewEl, setAnimatedPreviewEl] =
-    React.useState<HTMLDivElement | null>(null);
-  const [isAnimatedPreviewActive, setIsAnimatedPreviewActive] =
-    React.useState(false);
-  const [animatedPreviewCaption, setAnimatedPreviewCaption] = React.useState<
-    string | null
-  >(null);
-  const [pendingAnimatedAvatarUrl, setPendingAnimatedAvatarUrl] =
-    React.useState<string | null>(null);
   const [isCustomColorPickerOpen, setIsCustomColorPickerOpen] =
     React.useState(false);
   const hasAvatarDraft = avatar.draftUrl.trim().length > 0;
   const canSubmit = hasAvatarDraft && !isSaving && !isUploadingAvatar;
-  const isAutoAdvancingAnimatedAvatar = pendingAnimatedAvatarUrl !== null;
-  const shouldHideActionsForAnimatedAvatar =
-    avatarEditorMode === "animated" &&
-    (!hasAvatarDraft || isAutoAdvancingAnimatedAvatar);
-  const areActionsHidden =
-    isCustomColorPickerOpen || shouldHideActionsForAnimatedAvatar;
+  const areActionsHidden = isCustomColorPickerOpen;
   const previewName =
     name.draftValue.trim() || name.savedValue.trim() || "Your avatar";
   const animateEmojiAvatarChange = React.useCallback(() => {
     setAvatarSquishKey((key) => key + 1);
   }, []);
-  const handleAnimatedAvatarApply = React.useCallback((url: string) => {
-    setPendingAnimatedAvatarUrl(url);
-  }, []);
-
-  React.useEffect(() => {
-    if (!pendingAnimatedAvatarUrl) {
-      return;
-    }
-    if (avatar.draftUrl !== pendingAnimatedAvatarUrl) {
-      return;
-    }
-    if (saveRecovery.errorMessage) {
-      setPendingAnimatedAvatarUrl(null);
-      return;
-    }
-    if (isSaving || isUploadingAvatar) {
-      return;
-    }
-
-    submit();
-  }, [
-    avatar.draftUrl,
-    isSaving,
-    isUploadingAvatar,
-    pendingAnimatedAvatarUrl,
-    saveRecovery.errorMessage,
-    submit,
-  ]);
 
   return (
     <OnboardingSlideTransition
@@ -347,33 +305,12 @@ export function AvatarStep({
 
           <div className="mt-12 grid justify-items-center gap-3 lg:justify-items-start">
             <div className="relative h-48 w-48">
-              <div
-                className="pointer-events-none absolute inset-0 z-10"
-                data-testid="onboarding-avatar-animated-preview-slot"
-                ref={setAnimatedPreviewEl}
+              <AvatarPreview
+                avatarSquishKey={avatarSquishKey}
+                avatarUrl={avatar.draftUrl}
+                previewName={previewName}
               />
-              {isAnimatedPreviewActive ? null : (
-                <AvatarPreview
-                  avatarSquishKey={avatarSquishKey}
-                  avatarUrl={avatar.draftUrl}
-                  previewName={previewName}
-                />
-              )}
             </div>
-
-            <AnimatePresence initial={false}>
-              {animatedPreviewCaption ? (
-                <motion.p
-                  animate={{ opacity: 1, y: 0 }}
-                  className="w-48 text-center text-sm font-medium text-muted-foreground"
-                  exit={{ opacity: 0, y: -4 }}
-                  initial={{ opacity: 0, y: 4 }}
-                  transition={AVATAR_ACTIONS_MOTION_TRANSITION}
-                >
-                  {animatedPreviewCaption}
-                </motion.p>
-              ) : null}
-            </AnimatePresence>
           </div>
         </div>
 
@@ -384,14 +321,10 @@ export function AvatarStep({
           transition={AVATAR_POSITION_MOTION_TRANSITION}
         >
           <ProfileAvatarEditor
-            animatedPreviewContainer={animatedPreviewEl}
             avatarUrl={avatar.draftUrl}
             disabled={isSaving}
             emojiPickerTheme="auto"
             emojiPickerThemeVars={NEUTRAL_EMOJI_PICKER_THEME_VARS}
-            onAnimatedAvatarApply={handleAnimatedAvatarApply}
-            onAnimatedPreviewActiveChange={setIsAnimatedPreviewActive}
-            onAnimatedPreviewCaptionChange={setAnimatedPreviewCaption}
             onCustomColorPickerOpenChange={setIsCustomColorPickerOpen}
             onEmojiAvatarChange={animateEmojiAvatarChange}
             onModeChange={setAvatarEditorMode}

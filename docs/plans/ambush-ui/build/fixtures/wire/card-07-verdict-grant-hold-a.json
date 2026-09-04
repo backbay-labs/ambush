@@ -2,11 +2,11 @@
   "schema": "swarm.spine.envelope.v1",
   "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
   "seq": 3,
-  "prev_envelope_hash": "0xc8290784b13d5636e3058089fdf3e4344af6862a9d9dae312308c87efca3356d",
+  "prev_envelope_hash": "0xea7b3f212a4d2fbe5f0b02cabee1747388f6ff3e5cea2b081fa29d2ee5b7e477",
   "issued_at": "2026-03-17T09:16:19Z",
   "capability_token": null,
   "fact": {
-    "schema": "ambush.perch.verdict.v1",
+    "schema": "swarm.perch.verdict.v1",
     "issuer": {
       "swarm_agent_id": "perch-operator-1",
       "role": null,
@@ -23,6 +23,7 @@
       "hold_id": "h_a07aeacf",
       "operator_id": "perch-operator-1",
       "decided_at_ms": 1773738979000,
+      "rationale_sha256": "1c491e2debf2a8ba8e863a6f7303ca7dbd2413418ed5f7a897ece1a919fa350d",
       "rationale": "Two detectors on one workstation, encoded PowerShell under WINWORD and a fetch under OUTLOOK. Isolating host-ops-1 while we read the disk."
     },
     "signature": {
@@ -39,5 +40,5 @@
       "superseded_at_ms": null
     }
   },
-  "envelope_hash": "0x5866d48541b908f74416bbdac90d4edee9f7a81558fbb03893f2730412654ae7"
+  "envelope_hash": "0xec46ec27c18f2886f99c2c212cedd93f5b1f994a319cfc4a0ae11798176ae2e3"
 }

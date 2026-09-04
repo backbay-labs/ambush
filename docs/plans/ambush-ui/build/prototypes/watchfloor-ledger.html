@@ -1217,9 +1217,9 @@ function writeHash() {
         <code>concentration_for</code> tests the unscaled deposit; in the quiet state that evaporated
         deposits five times early. Both are fixed: the scale multiplies deposit <em>confidence</em>
         before decay, and disagreement now requires a declared unmodelled deposit event.</td></tr>
-      <tr><td>R8</td><td>Every <code>ambush:receipt:v1</code> row is tier&nbsp;0 and the manifest writes
+      <tr><td>R8</td><td>Every <code>swarm:receipt:v1</code> row is tier&nbsp;0 and the manifest writes
         <code>"verification_tier": 0</code> for them. <code>tier1_bound</code> is reserved for
-        <code>ambush:rollback:v1</code>.</td>
+        <code>swarm:rollback:v1</code>.</td>
         <td>Revision 1 stamped <em>tier 1 &middot; Signed &middot; subject-bound</em> on three receipt
         rows. <code>ResponseReceipt</code>
         (AMB <code>crates/swarm-response/src/lib.rs:99-116</code>, the struct every response adapter
@@ -1246,7 +1246,7 @@ function writeHash() {
       §4.4 resolves the daemon side with <code>409 hold_already_deciding</code> &mdash; but leg 1 is
       published <em>before</em> leg 2, the relay has no compare-and-set, and a <code>kind:9</code> event
       is immutable. Both signed cards land in the case channel and
-      <code>card-ambush-verdict-v1.schema.json</code>'s <code>leg2.state</code> enum
+      <code>card-swarm-verdict-v1.schema.json</code>'s <code>leg2.state</code> enum
       (<code>sending | recorded | acknowledged | refused_late</code>) has no value meaning "another
       operator's decision was the one that executed". The <em>Two consoles</em> state draws the row, the
       detail pane states the reconciliation rule, and the export marks the file
@@ -2521,7 +2521,7 @@ function renderStrip() {
    renders struck through rather than being omitted.
 
    Revision 1 stamped `tier1_bound` ("Signed · subject-bound / attestation
-   matches this body") on three ambush:receipt:v1 rows and wrote
+   matches this body") on three swarm:receipt:v1 rows and wrote
    "verification_tier": 1 for them in MANIFEST.json. A ResponseReceipt
    (AMB crates/swarm-response/src/lib.rs:99-116 — the struct every response
    adapter returns and the one AuditResponseRecord::Success embeds) has fields
@@ -2561,63 +2561,63 @@ const HOLDS = Object.assign({}, CANON.holds, {
 function baseRows() {
   const O = CANON.operator.id, H = CANON.holds;
   return [
-    { at: C.evt1_s * 1000 + 140, kind: "finding", marker: "ambush:finding:v1", pillar: "substrate",
+    { at: C.evt1_s * 1000 + 140, kind: "finding", marker: "swarm:finding:v1", pillar: "substrate",
       act: "Finding · suspicious_process_tree",
       sub: "execution · " + CANON.host + " · confidence 0.90 · CRITICAL",
       who: "swarm-ingest", tier: "tier0_none", cat: "finding" },
-    { at: C.evt1_s * 1000 + 141, kind: "finding", marker: "ambush:finding:v1", pillar: "substrate",
+    { at: C.evt1_s * 1000 + 141, kind: "finding", marker: "swarm:finding:v1", pillar: "substrate",
       act: "Finding · suspicious_scripting",
       sub: "execution · " + CANON.host + " · confidence 0.90 · CRITICAL",
       who: "swarm-ingest", tier: "tier0_none", cat: "finding" },
-    { at: C.evt2_s * 1000 + 130, kind: "finding", marker: "ambush:finding:v1", pillar: "substrate",
+    { at: C.evt2_s * 1000 + 130, kind: "finding", marker: "swarm:finding:v1", pillar: "substrate",
       act: "Finding · suspicious_process_tree",
       sub: "execution · " + CANON.host + " · second telemetry event · CRITICAL",
       who: "swarm-ingest", tier: "tier0_none", cat: "finding" },
-    { at: C.cross_ms, kind: "escalation", marker: "ambush:escalation:v1", pillar: "authority",
+    { at: C.cross_ms, kind: "escalation", marker: "swarm:escalation:v1", pillar: "authority",
       act: "Escalation · execution",
       sub: "total_strength 2.696884 crossed alert_threshold 2.00 · 2 sources / 1 agent",
       who: "daemon", tier: "tier0_none", cat: "escalation" },
-    { at: C.hold_a_ms, kind: "hold", marker: "ambush:hold:v1", pillar: "authority",
+    { at: C.hold_a_ms, kind: "hold", marker: "swarm:hold:v1", pillar: "authority",
       act: "Held · isolate_host",
       sub: CANON.host + " · CRITICAL · rule " + H.a.rule + " · " + H.a.id,
       who: "daemon", tier: "tier0_none", cat: "hold", hold: "a" },
-    { at: C.hold_b_ms, kind: "hold", marker: "ambush:hold:v1", pillar: "authority",
+    { at: C.hold_b_ms, kind: "hold", marker: "swarm:hold:v1", pillar: "authority",
       act: "Held · block_egress",
       sub: H.b.scope + " · CRITICAL · rule " + H.b.rule + " · " + H.b.id,
       who: "daemon", tier: "tier0_none", cat: "hold", hold: "b" },
-    { at: C.leg1_ms, kind: "verdict", marker: "ambush:verdict:v1", pillar: "authority",
+    { at: C.leg1_ms, kind: "verdict", marker: "swarm:verdict:v1", pillar: "authority",
       act: "Grant · isolate_host",
       sub: CANON.host + " · hold " + H.a.id + " · leg 1, signed by " + O,
       who: O, tier: "tier0_none", cat: "verdict", verb: "Grant", hold: "a", leg2: "recorded" },
-    { at: C.receipt_ms, kind: "receipt", marker: "ambush:receipt:v1", pillar: "evidence",
+    { at: C.receipt_ms, kind: "receipt", marker: "swarm:receipt:v1", pillar: "evidence",
       act: "Executed · isolate_host",
       sub: "enforced · " + CANON.host + " · receipt id embeds its capability lease: " + CANON.receipt_id,
       who: "pouncer-11c2", tier: "tier0_none", cat: "receipt", gov: true },
-    { at: C.lease_ms, kind: "containment lease", marker: "ambush:lease:v1", pillar: "evidence",
+    { at: C.lease_ms, kind: "containment lease", marker: "swarm:lease:v1", pillar: "evidence",
       act: "Containment lease opened · isolate_host",
       sub: CANON.containment_lease_id + " · " + CANON.host + " · 900,000 ms TTL",
       who: "pouncer-11c2", tier: "tier0_none", cat: "lease" },
-    { at: C.dismiss_leg1_ms, kind: "verdict", marker: "ambush:verdict:v1", pillar: "authority",
+    { at: C.dismiss_leg1_ms, kind: "verdict", marker: "swarm:verdict:v1", pillar: "authority",
       act: "Dismiss · suspicious_scripting on hunt-evt-1",
       sub: "execution · suppressed 2 deposits · 2.573610 → 0.858696",
       who: O, tier: "tier0_none", cat: "verdict", verb: "Dismiss", leg2: "recorded" },
-    { at: C.demo_now_ms - 118000, kind: "receipt", marker: "ambush:receipt:v1", pillar: "evidence",
+    { at: C.demo_now_ms - 118000, kind: "receipt", marker: "swarm:receipt:v1", pillar: "evidence",
       act: "Executed · quarantine_file",
       sub: "enforced · web-07.prod.internal · receipt id embeds its capability lease: " + EXT.receipts.b,
       who: "pouncer-11c2", tier: "tier0_none", cat: "receipt" },
-    { at: C.demo_now_ms - 194000, kind: "receipt", marker: "ambush:receipt:v1", pillar: "evidence",
+    { at: C.demo_now_ms - 194000, kind: "receipt", marker: "swarm:receipt:v1", pillar: "evidence",
       act: "Executed · sinkhole_dns",
       sub: "dry_run · cdn-a1.example.net · receipt id embeds its capability lease: " + EXT.receipts.c,
       who: "pouncer-11c2", tier: "tier0_none", cat: "receipt" },
-    { at: C.demo_now_ms - 74000, kind: "verdict", marker: "ambush:verdict:v1", pillar: "authority",
+    { at: C.demo_now_ms - 74000, kind: "verdict", marker: "swarm:verdict:v1", pillar: "authority",
       act: "Refuse · revoke_credential",
       sub: "svc-backup-01 · 11 capabilities in the blast radius · " + EXT.hold_c,
       who: O, tier: "tier0_none", cat: "verdict", verb: "Refuse", hold: "c", leg2: "recorded" },
-    { at: C.rollback_ms - 680000, kind: "rollback", marker: "ambush:rollback:v1", pillar: "evidence",
+    { at: C.rollback_ms - 680000, kind: "rollback", marker: "swarm:rollback:v1", pillar: "evidence",
       act: "Released · isolate_host",
       sub: CANON.rollback_id + " · fully_reversed: true · 1 step Reversed",
       who: O, tier: "tier1_bound", cat: "rollback" },
-    { at: C.demo_now_ms - 11000, kind: "rollback", marker: "ambush:rollback:v1", pillar: "evidence",
+    { at: C.demo_now_ms - 11000, kind: "rollback", marker: "swarm:rollback:v1", pillar: "evidence",
       act: "Release did not succeed · isolate_host",
       sub: EXT.rollback_b + " · lease_closed: false · 1 step Failed",
       who: O, tier: "tier1_failed", cat: "rollback" },
@@ -2627,7 +2627,7 @@ function baseRows() {
 /* The two-console row. See the reconciliation note in the detail pane. */
 function supersededRow() {
   return {
-    at: C.leg1_ms + 400, kind: "verdict", marker: "ambush:verdict:v1", pillar: "authority",
+    at: C.leg1_ms + 400, kind: "verdict", marker: "swarm:verdict:v1", pillar: "authority",
     act: "Refuse · isolate_host",
     sub: CANON.host + " · hold " + CANON.holds.a.id + " · leg 1, signed by " + EXT.operator2.id,
     who: EXT.operator2.id, tier: "tier0_none", cat: "verdict", verb: "Refuse",
@@ -2798,7 +2798,7 @@ function detailMarkup(r) {
   const s = STATES[state];
   const t = TIERS[r.tier];
   const hold = r.hold ? HOLDS[r.hold] : null;
-  /* RFC 8785 canonical form of the ambush:verdict:v1 signing preimage. 13-WIRE-SCHEMAS
+  /* RFC 8785 canonical form of the swarm:verdict:v1 signing preimage. 13-WIRE-SCHEMAS
      fixes the preimage at {decided_at_ms, decision, hold_id} exactly so ONE signature
      serves both legs; rationale and operator_id are deliberately outside it. */
   const canonical = r.cat === "verdict" && hold
@@ -2863,7 +2863,7 @@ function detailMarkup(r) {
         field("Reconciliation rule", 'A verdict card with no matching daemon decision record renders as <span class="mono">superseded</span>, never as a decision. The losing console publishes the update; a console that closed its window leaves the card unqualified until the next reconcile reads <span class="mono">GET /v1/response/holds/{id}</span>.') +
         '<p class="t-sm second" style="margin:8px 0 0;line-height:1.6">' +
         '<span class="tag">PROPOSED</span> <span class="mono">leg2.state</span> in ' +
-        '<span class="mono">schemas/card-ambush-verdict-v1.schema.json</span> is today ' +
+        '<span class="mono">schemas/card-swarm-verdict-v1.schema.json</span> is today ' +
         '<span class="mono">sending | recorded | acknowledged | refused_late</span> — four values, none of which ' +
         'means "another operator’s decision was the one that executed". This drawing needs a fifth, ' +
         '<span class="mono">superseded</span>, carrying the winning <span class="mono">nostr_intent_event_id</span>. ' +
@@ -2980,7 +2980,7 @@ const REDACTION = {
     "RollbackReceipt in full, including governance_attestation",
     "HeldAction.hold_id / action_kind / severity / held_at_ms / expires_at_ms / state",
     "HoldRationale (rule_name, reason, threat_class, escalation_level, concentration_at_hold)",
-    "ambush:verdict:v1 leg 1 in full, including its detached ed25519 signature",
+    "swarm:verdict:v1 leg 1 in full, including its detached ed25519 signature",
     "canvas.md as the operator wrote it",
   ],
   hashed: [
@@ -3015,7 +3015,7 @@ function renderExport() {
     '  <b>envelopes/</b>             <i>EMPTY. Tier 2 needs B6; VERIFY.md says why rather than\n' +
     '                          omitting the directory</i>\n' +
     '  <b>holds/</b>                 <i>' + holds.length + ' records: each policy decision, each outcome, and the\n' +
-    '                          human intent record (kind:9 + ambush:verdict:v1).\n' +
+    '                          human intent record (kind:9 + swarm:verdict:v1).\n' +
     '                          ' + (superseded.length ? superseded.length + ' of them is marked superseded and is NOT a decision' : 'None superseded in this result set') + '</i>\n' +
     '  <b>canvas.md</b>              <i>the case canvas as written. Free operator prose: it is copied\n' +
     '                          verbatim and nothing scans it</i>\n' +

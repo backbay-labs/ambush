@@ -20,7 +20,7 @@
   "additionalProperties": false,
   "properties": {
     "schema": {
-      "const": "ambush.perch.frame.governance_status.v1"
+      "const": "swarm.perch.frame.governance_status.v1"
     },
     "kind": {
       "const": 26004
@@ -88,7 +88,7 @@
   },
   "examples": [
     {
-      "schema": "ambush.perch.frame.governance_status.v1",
+      "schema": "swarm.perch.frame.governance_status.v1",
       "kind": 26004,
       "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
       "emitted_at_ms": 1787754973300,

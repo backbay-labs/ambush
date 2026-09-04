@@ -12,22 +12,6 @@ export const DONE_BUTTON_SHELL_TRANSITION = {
   ease: [0.23, 1, 0.32, 1],
 } as const;
 
-export function waitForPendingButtonPaint() {
-  return new Promise<void>((resolve) => {
-    if (
-      typeof window === "undefined" ||
-      typeof window.requestAnimationFrame !== "function"
-    ) {
-      setTimeout(resolve, 0);
-      return;
-    }
-
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => setTimeout(resolve, 0));
-    });
-  });
-}
-
 export function useUploadPreviewLifecycle({
   clearFallback,
   onSuccess,

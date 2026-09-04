@@ -167,9 +167,15 @@ impl NostrWsConnection {
             .iter()
             .position(|m| matches!(m, RelayMessage::Auth { .. }))
         {
-            match self.buffer.remove(idx).unwrap() {
+            match take_buffered(&mut self.buffer, idx, |m| {
+                matches!(m, RelayMessage::Auth { .. })
+            })? {
                 RelayMessage::Auth { challenge } => return Ok(challenge),
-                _ => unreachable!(),
+                _ => {
+                    return Err(WsClientError::Protocol(
+                        "auth slot was not an AUTH frame".into(),
+                    ))
+                }
             }
         }
 
@@ -226,9 +232,17 @@ impl NostrWsConnection {
             .iter()
             .position(|m| matches!(m, RelayMessage::Ok(ok) if ok.event_id == event_id))
         {
-            match self.buffer.remove(idx).unwrap() {
+            match take_buffered(
+                &mut self.buffer,
+                idx,
+                |m| matches!(m, RelayMessage::Ok(ok) if ok.event_id == event_id),
+            )? {
                 RelayMessage::Ok(ok) => return Ok(ok),
-                _ => unreachable!(),
+                _ => {
+                    return Err(WsClientError::Protocol(
+                        "ok slot was not an OK frame".into(),
+                    ))
+                }
             }
         }
 
@@ -266,6 +280,32 @@ impl NostrWsConnection {
                 _ => {}
             }
         }
+    }
+}
+
+/// Removes `idx` from the buffer and returns it only if it satisfies `is_expected`;
+/// otherwise a typed error. Replaces the former unwrap-then-unreachable pair
+/// (ADR 0015 C6 as amended by 00-DECISIONS W3-6): the daemon that will host
+/// this client runs with panic = "abort". A message that turns out not to be
+/// the expected one is put back where it was, never dropped.
+fn take_buffered(
+    buf: &mut VecDeque<RelayMessage>,
+    idx: usize,
+    is_expected: impl Fn(&RelayMessage) -> bool,
+) -> Result<RelayMessage, WsClientError> {
+    match buf.remove(idx) {
+        Some(msg) if is_expected(&msg) => Ok(msg),
+        Some(other) => {
+            // `remove(idx)` just succeeded, so `idx <= buf.len()` holds and
+            // `insert` cannot panic.
+            buf.insert(idx, other);
+            Err(WsClientError::Protocol(
+                "buffered relay message changed variant between position() and remove()".into(),
+            ))
+        }
+        None => Err(WsClientError::Protocol(
+            "buffered relay message vanished between position() and remove()".into(),
+        )),
     }
 }
 
@@ -310,5 +350,41 @@ mod tests {
     #[test]
     fn publish_ok_timeout_meets_floor() {
         const { assert!(PUBLISH_OK_TIMEOUT_SECS >= 30) };
+    }
+
+    // A buffer whose `position()` match and `remove()` disagree cannot be
+    // constructed through the public API, so the extracted helper is tested
+    // directly (00-DECISIONS W3-6).
+    #[test]
+    fn take_buffered_returns_a_typed_error_when_the_slot_is_not_the_expected_variant() {
+        let mut buf: VecDeque<RelayMessage> = VecDeque::new();
+        buf.push_back(RelayMessage::Notice {
+            message: "x".into(),
+        });
+        let got = take_buffered(&mut buf, 0, |m| matches!(m, RelayMessage::Auth { .. }));
+        assert!(matches!(got, Err(WsClientError::Protocol(_))));
+        assert_eq!(buf.len(), 1, "the unexpected message is kept, not dropped");
+    }
+
+    #[test]
+    fn take_buffered_returns_a_typed_error_when_the_slot_is_gone() {
+        let mut buf: VecDeque<RelayMessage> = VecDeque::new();
+        let got = take_buffered(&mut buf, 0, |_| true);
+        assert!(matches!(got, Err(WsClientError::Protocol(_))));
+    }
+
+    #[test]
+    fn take_buffered_removes_and_returns_the_expected_slot() {
+        let mut buf: VecDeque<RelayMessage> = VecDeque::new();
+        buf.push_back(RelayMessage::Notice {
+            message: "first".into(),
+        });
+        buf.push_back(RelayMessage::Auth {
+            challenge: "c".into(),
+        });
+        let got = take_buffered(&mut buf, 1, |m| matches!(m, RelayMessage::Auth { .. }));
+        assert!(matches!(got, Ok(RelayMessage::Auth { ref challenge }) if challenge == "c"));
+        assert_eq!(buf.len(), 1, "only the taken slot leaves the buffer");
+        assert!(matches!(buf.front(), Some(RelayMessage::Notice { .. })));
     }
 }

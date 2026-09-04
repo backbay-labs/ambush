@@ -1,0 +1,44 @@
+{
+  "capability_token": null,
+  "envelope_hash": "0xabababababababababababababababababababababababababababababababab",
+  "fact": {
+    "decision": {
+      "decided_at_ms": 1773738979050,
+      "decision": "grant",
+      "hold_id": "h_a07aeacf",
+      "operator_id": "perch-operator-2",
+      "rationale_sha256": "6ec22089809e9c2e8c5a2799c3a248e92d71c4c223b73101c9a768eb1615d1d2",
+      "rationale": "Same call, one tick later."
+    },
+    "emitted_at_ms": 1773738979050,
+    "issuer": {
+      "nostr_pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "role": null,
+      "swarm_agent_id": "perch-operator-2"
+    },
+    "leg2": {
+      "receipt_id": null,
+      "refusal_check": null,
+      "state": "superseded",
+      "superseded_at_ms": 1773738979310,
+      "superseded_by": "243aad87527a33433a60e2f990d83de1e84618a69e583fbd8172de4e8fe7d9d8"
+    },
+    "locator": {
+      "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+      "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c",
+      "hold_id": "h_a07aeacf"
+    },
+    "schema": "swarm.perch.verdict.v1",
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "perch-operator-2",
+      "public_key_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "signature_hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  },
+  "issued_at": "2026-03-17T09:16:21Z",
+  "issuer": "swarm:ed25519:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "prev_envelope_hash": "0xabababababababababababababababababababababababababababababababab",
+  "schema": "swarm.spine.envelope.v1",
+  "seq": 2
+}

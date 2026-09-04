@@ -33,26 +33,26 @@ use crate::marker::CardKind;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "schema")]
 pub enum Card {
-    /// `ambush:finding:v1`
-    #[serde(rename = "ambush.perch.finding.v1")]
+    /// `swarm:finding:v1`
+    #[serde(rename = "swarm.perch.finding.v1")]
     Finding(FindingCard),
-    /// `ambush:escalation:v1`
-    #[serde(rename = "ambush.perch.escalation.v1")]
+    /// `swarm:escalation:v1`
+    #[serde(rename = "swarm.perch.escalation.v1")]
     Escalation(EscalationCard),
-    /// `ambush:hold:v1`
-    #[serde(rename = "ambush.perch.hold.v1")]
+    /// `swarm:hold:v1`
+    #[serde(rename = "swarm.perch.hold.v1")]
     Hold(HoldCard),
-    /// `ambush:verdict:v1`
-    #[serde(rename = "ambush.perch.verdict.v1")]
+    /// `swarm:verdict:v1`
+    #[serde(rename = "swarm.perch.verdict.v1")]
     Verdict(VerdictCard),
-    /// `ambush:receipt:v1`
-    #[serde(rename = "ambush.perch.receipt.v1")]
+    /// `swarm:receipt:v1`
+    #[serde(rename = "swarm.perch.receipt.v1")]
     Receipt(ReceiptCard),
-    /// `ambush:lease:v1`
-    #[serde(rename = "ambush.perch.lease.v1")]
+    /// `swarm:lease:v1`
+    #[serde(rename = "swarm.perch.lease.v1")]
     Lease(LeaseCard),
-    /// `ambush:rollback:v1`
-    #[serde(rename = "ambush.perch.rollback.v1")]
+    /// `swarm:rollback:v1`
+    #[serde(rename = "swarm.perch.rollback.v1")]
     Rollback(RollbackCard),
 }
 
@@ -107,7 +107,7 @@ pub const HUMAN_SEP: &str = " · ";
 
 // ───────────────────────────────────────────────────────────── finding
 
-/// `ambush:finding:v1` — one `DetectionFinding`, in a lane channel.
+/// `swarm:finding:v1` — one `DetectionFinding`, in a lane channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FindingCard {
     /// Who produced it.
@@ -181,7 +181,7 @@ impl FindingCard {
 
 // ────────────────────────────────────────────────────────── escalation
 
-/// `ambush:escalation:v1` — one of three daemon events, in a lane channel.
+/// `swarm:escalation:v1` — one of three daemon events, in a lane channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EscalationCard {
     /// Who produced it.
@@ -399,7 +399,7 @@ impl EscalationCard {
 
 // ──────────────────────────────────────────────────────────────── hold
 
-/// `ambush:hold:v1` — one held destructive action, in a case channel.
+/// `swarm:hold:v1` — one held destructive action, in a case channel.
 ///
 /// One hold produces two or more cards: an OPEN card (`state` in
 /// `created|notified|armed|deciding`) and exactly one TERMINAL card (`state` in
@@ -438,7 +438,7 @@ pub struct HoldLocator {
     pub case_channel: String,
     /// `ActionRequest.hunt_id`.
     pub hunt_id: String,
-    /// Nostr event id of the `ambush:finding:v1` card this answers, when one
+    /// Nostr event id of the `swarm:finding:v1` card this answers, when one
     /// exists. Also the `e` tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finding_card_id: Option<String>,
@@ -638,7 +638,7 @@ impl HoldCard {
 
 // ───────────────────────────────────────────────────────────── verdict
 
-/// `ambush:verdict:v1` — LEG 1 OF THE TWO-LEGGED WRITE.
+/// `swarm:verdict:v1` — LEG 1 OF THE TWO-LEGGED WRITE.
 ///
 /// A signed human intent record, published by the OPERATOR'S OWN Nostr key. It
 /// is not an authorization and no daemon reads it as one: leg 2 is a separate
@@ -672,10 +672,11 @@ pub struct VerdictCard {
     /// What was decided.
     pub decision: VerdictBody,
     /// Ed25519 over the RFC 8785 canonical form of
-    /// `{decided_at_ms, decision, hold_id}` — EXACTLY the preimage the decide
-    /// route requires, so ONE signature serves both legs and a reviewer diffing
+    /// `{decided_at_ms, decision, hold_id, rationale_sha256}` — EXACTLY the
+    /// preimage the decide route requires, so ONE signature serves both legs
+    /// and a reviewer diffing
     /// them checks one thing. `rationale` and `operator_id` are deliberately
-    /// outside the preimage: rationale is free text the operator may reword, and
+    /// outside the preimage: rationale is bound by its digest, and
     /// `operator_id` is re-derived from `public_key_hex` by
     /// `voter_id_from_public_key`
     /// (`AMB crates/swarm-runtime/src/approval.rs:1783-1785`).
@@ -695,7 +696,7 @@ pub struct VerdictLocator {
     /// The case channel. `INV-12` asserts it equals the `h` tag; `INV-13`
     /// asserts a mismatch refuses to render.
     pub case_channel: String,
-    /// Nostr event id of the open `ambush:hold:v1` card. Also the `e` tag.
+    /// Nostr event id of the open `swarm:hold:v1` card. Also the `e` tag.
     pub hold_card_id: String,
 }
 
@@ -713,6 +714,8 @@ pub struct VerdictBody {
     /// asserts it equals `voter_id_from_public_key(signature.public_key_hex)`
     /// before publishing, because the decide route will.
     pub operator_id: String,
+    /// SHA-256 of the UTF-8 rationale, or JSON `null` when absent.
+    pub rationale_sha256: Option<String>,
     /// Free text. Never parsed by anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rationale: Option<String>,
@@ -807,7 +810,7 @@ impl VerdictCard {
 
 // ───────────────────────────────────────────────────────────── receipt
 
-/// `ambush:receipt:v1` — one `AuditTrail`, in a case channel.
+/// `swarm:receipt:v1` — one `AuditTrail`, in a case channel.
 ///
 /// NARROWING: carries `AuditTrail` ONLY, not `AuditTrail` + `ResponseReceipt`.
 /// APPENDIX-NORMATIVE §3 says both; `AuditResponseRecord::Success(ResponseReceipt)`
@@ -856,7 +859,7 @@ impl ReceiptCard {
 
 // ─────────────────────────────────────────────────────────────── lease
 
-/// `ambush:lease:v1` — one containment lease on open, in a case channel.
+/// `swarm:lease:v1` — one containment lease on open, in a case channel.
 ///
 /// NARROWING: carries `ContainmentLease` (which serializes as the private
 /// `ContainmentLeaseRecord`, `AMB crates/swarm-response/src/containment.rs:101-118`
@@ -902,7 +905,7 @@ pub struct LeaseLocator {
     pub case_channel: String,
     /// The response receipt that made the containment.
     pub origin_receipt_id: String,
-    /// Nostr event id of the `ambush:receipt:v1` card. Also the `e` tag.
+    /// Nostr event id of the `swarm:receipt:v1` card. Also the `e` tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt_card_id: Option<String>,
 }
@@ -915,7 +918,7 @@ impl LeaseCard {
 
 // ──────────────────────────────────────────────────────────── rollback
 
-/// `ambush:rollback:v1` — one `RollbackReceipt`, replying to its lease card.
+/// `swarm:rollback:v1` — one `RollbackReceipt`, replying to its lease card.
 ///
 /// THE ONLY CARD THAT CAN REACH TIER 1 TODAY.
 /// `RollbackReceipt.governance_attestation`
@@ -979,7 +982,7 @@ pub struct RollbackLocator {
     pub lease_id: String,
     /// The case channel.
     pub case_channel: String,
-    /// Nostr event id of the `ambush:lease:v1` card. Also the `e` tag.
+    /// Nostr event id of the `swarm:lease:v1` card. Also the `e` tag.
     pub lease_card_id: String,
 }
 

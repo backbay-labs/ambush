@@ -2,42 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { isMacPlatform } from "@/shared/lib/platform";
 
-import { relayClient } from "@/shared/api/relayClient";
-import { resetRateLimitGate } from "@/shared/api/relayRateLimitGate";
 import {
   applyCommunity,
   autoConnectDefaultRelayEnabled,
   getDefaultRelayUrl,
 } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
-import { clearTrayAgentActivity } from "@/shared/api/trayMenu";
 import { getOverrides } from "@/shared/features";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
-import { resetLinkPreviewMetadataCache } from "@/shared/lib/useResolvedLinkPreviews";
-import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
-import { resetNavigationDeepLinkDrain } from "@/shared/deep-link";
+import { initDraftStore } from "@/features/messages/lib/useDrafts";
 import {
-  clearAllDrafts,
-  initDraftStore,
-} from "@/features/messages/lib/useDrafts";
-import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
-import { resetBackgroundMediaUploads } from "@/features/messages/lib/backgroundMediaUploadStore";
-import { resetLinkPreviewPreparations } from "@/features/messages/lib/linkPreviewPreparationStore";
-import { resetPersistentAgentAudienceStore } from "@/features/messages/lib/persistentAgentAudience";
-import {
-  resetActiveAgentTurnsStore,
   saveActiveAgentTurnsForCommunity,
   restoreActiveAgentTurnsForCommunity,
 } from "@/features/agents/activeAgentTurnsStore";
-import { resetAgentWorkingSignal } from "@/features/agents/agentWorkingSignal";
-import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
-import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
-import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
-import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
-import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
-import { resetMessageLinkMetadataCache } from "@/shared/ui/markdown/useMessageLinkMetadata";
-import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
 
+import { runResetters } from "./communityScopedRegistry";
 import {
   initFirstCommunity,
   shouldAutoConnectDefaultRelay,
@@ -46,41 +25,23 @@ import type { Community } from "./types";
 
 /**
  * Tear down all community-scoped module singletons so the new
- * community starts with a clean slate. Hook-managed singletons
- * (e.g. ChannelMuteSyncManager, ChannelSectionSyncManager) are
- * destroyed via effect cleanup and do not need entries here.
- * See AGENTS.md "Community Switching" for the full contract.
+ * community starts with a clean slate. The inventory of singletons and
+ * their teardown order live in `communityScopedRegistry.ts`
+ * (`COMMUNITY_SCOPED_SINGLETONS` / `RESETTERS`); this only supplies the
+ * boundary context. Hook-managed singletons (e.g. ChannelMuteSyncManager,
+ * ChannelSectionSyncManager) are destroyed via effect cleanup and do not
+ * need entries there. See CLAUDE.md "Community Switching" for the full
+ * contract.
  */
 async function resetCommunityState({
   resetAvatarState,
 }: {
   resetAvatarState: boolean;
 }): Promise<void> {
-  relayClient.disconnect();
-  await resetNavigationDeepLinkDrain();
-  resetRateLimitGate();
-  clearAllDrafts();
-  resetAgentObserverStore();
-  resetActiveAgentTurnsStore();
-  resetAgentWorkingSignal();
-  if (isTauri() && isMacPlatform()) {
-    void clearTrayAgentActivity();
-  }
-  if (resetAvatarState) {
-    resetAvatarProfileSync();
-    resetAvatarPresentations();
-  }
-  resetSidebarRelayConnectionCardState();
-  resetMediaCaches();
-  resetLinkPreviewMetadataCache();
-  resetVideoPlayerState();
-  resetRenderScopedReactionHydration();
-  resetBackgroundMediaUploads();
-  resetLinkPreviewPreparations();
-  resetPersistentAgentAudienceStore();
-  clearSearchHitEventCache();
-  clearMarkdownNodeCache();
-  resetMessageLinkMetadataCache();
+  await runResetters({
+    resetAvatarState,
+    isMacTauri: isTauri() && isMacPlatform(),
+  });
 }
 
 type CommunityInitResult =

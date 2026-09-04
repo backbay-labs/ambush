@@ -175,7 +175,7 @@ files; §9 below files that as a proposed brief amendment, converged with
 
 Perch cannot start on any of the three:
 
-- **`MessageRow`.** The seven `ambush:*:v1` markers ride `kind:9` and reach the
+- **`MessageRow`.** The seven `swarm:*:v1` markers ride `kind:9` and reach the
   screen through `renderBody`'s `default:` arm, which already content-sniffs
   (`parseWaveMessageContent` at `MessageRow.tsx:415`, predicate
   `content.trimStart().startsWith(WAVE_MESSAGE_MARKER)` at

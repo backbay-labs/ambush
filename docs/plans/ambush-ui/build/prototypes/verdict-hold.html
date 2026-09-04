@@ -1098,7 +1098,7 @@ ul { padding: 0; list-style: none; }
                 of them: it invented <code>case-0042</code> on channel
                 <code>0192f4a1-…</code> with hold ids of the form
                 <code>hold:01K3QJ…</code>, which uses the <code>hold:</code> colon
-                prefix that <code>card-ambush-hold-v1.schema.json</code>'s own
+                prefix that <code>card-swarm-hold-v1.schema.json</code>'s own
                 description warns against as the forbidden derived form.</td>
                 <td>Every id, clock, host, channel and number below now comes from
                 <code>build/fixtures/perch-demo-fixture.json</code> — the only
@@ -1144,7 +1144,7 @@ ul { padding: 0; list-style: none; }
                 refused with the winner named, then a third step publishing an
                 <b>update card</b> that marks this console's own intent record as not
                 the decision. The <code>leg2.state</code> value it needs does not exist
-                — <code>schemas/card-ambush-verdict-v1.schema.json:110-116</code> has
+                — <code>schemas/card-swarm-verdict-v1.schema.json:110-116</code> has
                 <code>sending | recorded | acknowledged | refused_late</code> — so it is
                 rendered and marked <b>PROPOSED</b>, with the reconciliation rule and
                 the consequence of closing the window first.</td>
@@ -1326,7 +1326,7 @@ ul { padding: 0; list-style: none; }
               <code>const</code>, a <code>z.literal</code> and a pinned golden hash.
               <b>Majority opinion does not propagate; artifact ownership does.</b> This
               is a decision that needs an owner, not another prose correction:
-              <code>schemas/card-ambush-escalation-v1.schema.json</code>'s
+              <code>schemas/card-swarm-escalation-v1.schema.json</code>'s
               <code>distinct_sources_counts</code> <code>const</code> and
               <code>skeleton/perch-wire/ts/zod.ts</code>'s matching literal must become
               <code>strategy_scoped_agent_id</code>, and the golden vector and its hash
@@ -2441,7 +2441,7 @@ function provenance() {
   } else if (S.tier === 0) {
     state = "unattested — no ed25519 signature of its own";
     tone = "warn";
-    detail = "ambush:hold:v1 carries no Ed25519 signature in Ambush today, under any " +
+    detail = "swarm:hold:v1 carries no Ed25519 signature in Ambush today, under any " +
       "condition. This card is a copy; the daemon holds the record.";
     limit = "Nothing here can be checked offline. Tier 0 runs none of the three checks, " +
       "so the affordance below does the only honest thing available: it re-reads the " +
@@ -2506,7 +2506,7 @@ function provenance() {
       "<div>" +
         '<div class="provstate t-sm" data-tone="none">a human was asked</div>' +
         '<p class="sub t-sm sub-tight">Perch&rsquo;s own hold record and the ' +
-          '<span class="mono">ambush:verdict:v1</span> card you publish under your own ' +
+          '<span class="mono">swarm:verdict:v1</span> card you publish under your own ' +
           "key both name you. The daemon&rsquo;s receipt does not: " +
           '<span class="mono">ResponseReceiptAudit</span> has exactly two fields, both ' +
           '<span class="mono">Option</span> &mdash; a policy attribution and a governance ' +
@@ -2672,7 +2672,7 @@ function writeState(h) {
       step("done", "Refused",
         "One keypress, no dialog, no undo. Your refusal is recorded in " +
         '<span class="mono">' + esc(FIX.caseName) + "</span> as an " +
-        '<span class="mono">ambush:verdict:v1</span> card published under your own key, ' +
+        '<span class="mono">swarm:verdict:v1</span> card published under your own key, ' +
         "and posted to the daemon. Nothing dispatches. If you change your mind, request " +
         "the action again &mdash; that produces a new hold and a second, separately " +
         "recorded decision, rather than editing this one.") +
@@ -2701,7 +2701,7 @@ function writeState(h) {
 
     out += step("done", "Leg 1 — your intent card was published, and it stands",
       '<span class="mono">kind:9</span> + ' +
-      '<span class="mono">ambush:verdict:v1</span>, h = ' +
+      '<span class="mono">swarm:verdict:v1</span>, h = ' +
       '<span class="mono">' + esc(FIX.caseChannel) + "</span>, event " +
       '<span class="mono">' + esc(FIX.ev.verdictGrant.slice(0, 16)) + "&hellip;</span>. " +
       "Leg 1 is published before leg 2 by construction, and a " +
@@ -2716,7 +2716,7 @@ function writeState(h) {
       "(12-BACKEND-BILL-API section 4.4). This is the boundary working.");
 
     out += step("done", "Leg 1 update — this console marked its own card superseded",
-      "A second <span class=\"mono\">ambush:verdict:v1</span> replying to the first, " +
+      "A second <span class=\"mono\">swarm:verdict:v1</span> replying to the first, " +
       'with <span class="mono">leg2.state</span> naming ' +
       '<span class="mono">' + esc(FIX.operator2.verdictEventId.slice(0, 16)) +
       "&hellip;</span> as the intent record that actually executed.");
@@ -2724,7 +2724,7 @@ function writeState(h) {
     out += '<div class="banner banner--evidence t-sm" style="margin:12px 0 0">' +
       '<span class="eyebrow t-2xs">Proposed, and not in the schema yet</span>' +
       '<span class="mono">leg2.state</span> has four values in ' +
-      '<span class="mono">schemas/card-ambush-verdict-v1.schema.json:110-116</span> ' +
+      '<span class="mono">schemas/card-swarm-verdict-v1.schema.json:110-116</span> ' +
       "&mdash; <span class=\"mono\">sending</span>, " +
       '<span class="mono">recorded</span>, <span class="mono">acknowledged</span>, ' +
       '<span class="mono">refused_late</span> &mdash; and none of them means ' +
@@ -2747,7 +2747,7 @@ function writeState(h) {
   out += step(S.write === "sending" ? "active" : "done",
     "Leg 1 — publishing your intent card to the relay",
     '<span class="mono">kind:9</span> + ' +
-    '<span class="mono">ambush:verdict:v1</span> &middot; h = ' +
+    '<span class="mono">swarm:verdict:v1</span> &middot; h = ' +
     '<span class="mono">' + esc(FIX.caseChannel) + "</span> &middot; carrying your " +
     "Ed25519 signature over the RFC 8785 canonical form of " +
     '<span class="mono">{decided_at_ms, decision, hold_id}</span> &mdash; byte-identical ' +

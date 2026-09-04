@@ -2050,12 +2050,14 @@ async fn platform_api_bearer_requires_read_scoped_operator_principal() {
             token_env: READ_ENV.to_string(),
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Read],
+            nostr_pubkey: None,
         },
         OperatorPrincipalConfig {
             operator_id: "maintainer-1".to_string(),
             token_env: MAINT_ENV.to_string(),
             token_expires_at_ms: None,
             scopes: vec![OperatorScope::Maintenance],
+            nostr_pubkey: None,
         },
     ];
     let app = detect_http_router(

@@ -1,5 +1,5 @@
 {
-  "schema": "ambush.perch.demo-fixture.v1",
+  "schema": "swarm.perch.demo-fixture.v1",
   "name": "hellcat-office",
   "generated_by": "fixtures/build.mjs",
   "based_on": "scenarios/office-dropper-correlation.yaml",
@@ -967,7 +967,7 @@
         "two_principal_notice": "wire/variant-contested-event-46010-hold-b-two-principals.json",
         "conflict_body": "http/variant-contested-POST-v1-response-holds-hold-b-decide-409.json"
       },
-      "reconciliation_rule": "A kind:9 ambush:verdict:v1 card whose hold_id matches a hold the daemon reports as decided, but whose Nostr event id is NOT the decision record's nostr_intent_event_id, renders as a human intent record that did not become the decision — never as the decision. The losing console publishes the `superseded` update card; a reader that never sees that card still reaches the same rendering from GET /v1/response/holds alone."
+      "reconciliation_rule": "A kind:9 swarm:verdict:v1 card whose hold_id matches a hold the daemon reports as decided, but whose Nostr event id is NOT the decision record's nostr_intent_event_id, renders as a human intent record that did not become the decision — never as the decision. The losing console publishes the `superseded` update card; a reader that never sees that card still reaches the same rendering from GET /v1/response/holds alone."
     }
   },
   "mock_bridge": {
@@ -1528,7 +1528,7 @@
         "__absent": "GET /v1/operator/status is swarmctl serve's route on :7766, a different process with a different incident store. Perch's equivalent read is not in this fixture; 20-TASK-BREAKDOWN.md T11 points the tuning report at GET /v2/api/runtime/status on the daemon instead."
       },
       "perch_verify_artifact": {
-        "__absent": "no daemon route returns an artifact by id. INV-RF2's verified consequence is that ambush:finding:v1, ambush:receipt:v1 and ambush:escalation:v1 have NO daemon re-read at all, so those three cards must render the absence rather than a verification affordance."
+        "__absent": "no daemon route returns an artifact by id. INV-RF2's verified consequence is that swarm:finding:v1, swarm:receipt:v1 and swarm:escalation:v1 have NO daemon re-read at all, so those three cards must render the absence rather than a verification affordance."
       }
     },
     "perch_daemon_write_commands_are_not_mocked_here": [

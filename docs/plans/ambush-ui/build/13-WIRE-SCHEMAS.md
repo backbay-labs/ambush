@@ -1,5 +1,7 @@
 # 13 — Wire schemas: markers, ephemerals, types
 
+> **Wave 3 (2026-09-02): the marker namespace is `swarm:` and the fact schema id is `swarm.perch.<card>.v1` (00-DECISIONS W3-1); the verdict preimage has four members (W3-16). The bodies of this document still say `ambush:` where they quote wave 2; the schemas and goldens are authoritative.**
+
 **Status:** buildable artifact, **revised after red-team review**. The schemas,
 the skeletons and the gate are the deliverable; this file carries the argument
 around them.
@@ -40,7 +42,7 @@ corpora for one card is zero.
 build/schemas/                            17 JSON Schemas (draft 2020-12)
   common.schema.json                      40 shared definitions, each with its source
   card-envelope.schema.json               the swarm.spine.envelope.v1 wrapper
-  card-ambush-{finding,escalation,hold,verdict,receipt,lease,rollback}-v1.schema.json
+  card-swarm-{finding,escalation,hold,verdict,receipt,lease,rollback}-v1.schema.json
   event-46010-hold-notice.schema.json     an EVENT schema: a closed tag set + a content grammar
   frame-2600{0..6}-*.schema.json          the ephemeral block
   _index.json                             registry, tier and issuer type per card
@@ -59,7 +61,7 @@ build/skeleton/perch-wire/
 
 ```bash
 cd docs/plans/ambush-ui/build
-bash skeleton/perch-wire/parity-gate.sh              # 311 fields, 17 schemas
+bash skeleton/perch-wire/parity-gate.sh              # 312 fields, 17 schemas
 bash skeleton/perch-wire/parity-gate.sh --self-test  # 5 cases, each a way it must fail
 ```
 
@@ -70,10 +72,10 @@ Verified in this session by running exactly those files from exactly those paths
 | All 17 schemas are valid draft 2020-12 | pass |
 | Every `examples` entry validates against its own schema, cross-file `$ref` resolved | **16/16** |
 | A positive/negative mutation suite over the contested clauses | **25/25 behave** (below) |
-| `parity-gate.sh`, as committed, no env vars | **311 declared fields across 17 schemas, all present on both sides** |
+| `parity-gate.sh`, as committed, no env vars | **312 declared fields across 17 schemas, all present on both sides** |
 | `parity-gate.sh --self-test` | **5/5** — including the string-literal near-miss that had made the gate satisfiable by an error message |
 | `parity-gate.sh` live self-test | deleting `dedupe_key` from `rust/src/cards.rs` → exit 1 naming it; renaming `source_ids_absent_reason` in `ts/zod.ts` → exit 1 naming it |
-| Golden hash, now asserted by **both** suites | `94ccea0d…` |
+| Golden hash, now asserted by **both** suites | `10233c15…` |
 | 22-DEMO-FIXTURE's 23 wire fixtures against these schemas | **20 pass, 3 fail**, each with a one-line fix named in §11 |
 | Every TypeScript file clears the 1000-line cap | `zod.ts` 820, `types.ts` 759, `golden.test.mjs` 576, `marker.ts` 210, `tags.ts` 153, `index.ts` 127 gate-lines (the gate counts `content.split(/\r?\n/).length` = `wc -l` **plus one**, `BUZZ scripts/check-file-sizes-core.mjs:24-29`); `src/features` is a governed root |
 | Rust gate-lines, for the record | `cards.rs` **992**, `tags.rs` 552, `frames.rs` 495, `tests/golden.rs` 374, `envelope.rs` 334, `marker.rs` 323, `narrowing.rs` 179, `lib.rs` 133. AMBUSH's `tools/` has **no file-size gate** (15 `check-*.sh`, none of them one), so 992 is legal there; the `cards/{mod,evidence,hold,verdict}.rs` split is a readability call, and `parity-gate.sh` uses `rglob` so taking it cannot make the Rust half go vacuous |
@@ -91,7 +93,7 @@ The mutation suite, all 25 behaving:
 **Three corrections to this file's own previous numbers**, since a count quoted
 as a measurement is a claim like any other. It said *18 JSON Schemas* — there
 are **17** (7 cards + 7 frames + the 46010 event + `common` + `card-envelope`).
-It said *15 golden vectors* — there are **16**, because `ambush:verdict:v1` now
+It said *15 golden vectors* — there are **16**, because `swarm:verdict:v1` now
 has two examples. And it reported a golden hash and a 308-field parity result as
 verification results when **neither was reachable from a committed file**: the
 hash was computed at a shell prompt and asserted nowhere, and the 308 required
@@ -111,7 +113,7 @@ was not run (`node_modules` is not installed in this checkout), and
 ### 1.1 The marker, exactly
 
 ```
-<!-- ambush:<card>:v1 -->
+<!-- swarm:<card>:v1 -->
 ```
 
 `19 + len(slug)` characters — **23 to 29**, not a fixed width: `hold` is 23,
@@ -133,17 +135,17 @@ there is one precedent and Perch matches it rather than inventing a shape.
 ### 1.2 The three parts, in this order
 
 ````
-<!-- ambush:hold:v1 -->
+<!-- swarm:hold:v1 -->
 hold h_a07aeacf · isolate_host · CRITICAL · host host-ops-1 · expires 2026-03-17T10:14:42+00:00
 
-```ambush:hold:v1
+```swarm:hold:v1
 {"schema":"swarm.spine.envelope.v1","issuer":"swarm:ed25519:…","seq":3, …}
 ```
 ````
 
 1. **Marker.** Whole first line, nothing else.
 2. **Human fallback line.** One line, ` · `-separated. The degradation contract.
-3. **Fenced JSON**, info string `ambush:<card>:v1`, one line of JSON.
+3. **Fenced JSON**, info string `swarm:<card>:v1`, one line of JSON.
 
 **This is not the plan's ordering, and the change is the point.**
 `03` §3.2's sketch is marker / JSON / human line. Two things break under it, and
@@ -157,7 +159,7 @@ function in the renderer, called from the Cmd-K result list at
 length. When the query does not match inside the body it returns
 `text.slice(0, 93) + "..."`; when it does, it slices 96 characters around the
 first match. With the JSON second, every Ledger result reads
-`<!-- ambush:hold:v1 --> {"schema":"swarm.spine.envelope.v1","issuer":"swarm:ed`.
+`<!-- swarm:hold:v1 --> {"schema":"swarm.spine.envelope.v1","issuer":"swarm:ed`.
 With the human line second, the marker costs 27 characters (26 + a newline) and
 the remaining 69 carry the hold id, the action kind, the severity and the host.
 `golden.test.mjs` asserts exactly that, on the 95-character line above.
@@ -199,7 +201,7 @@ Perch's sniff differs in two ways, both required by INV-15:
 | Issuer | none | the event's **raw signer** must resolve to an admitted bridge identity |
 
 The first matters because `startsWith` after `trimStart` accepts
-`"<!-- ambush:hold:v1 --> and here is what I want you to believe"`.
+`"<!-- swarm:hold:v1 --> and here is what I want you to believe"`.
 `routeCard` compares whole lines and `golden.test.mjs` pins four negative cases.
 
 The second has its own shipped precedent, and it is a better one than the wave
@@ -235,13 +237,13 @@ re-sign — which is why the margin exists.
 
 | Marker | Kind | Channel | `k` | Carries | Tier |
 |---|:-:|---|---|---|:-:|
-| `ambush:finding:v1` | 9 | lane channel | `finding` | `SwarmFindingEnvelope` + `host_id` from the `RuntimeEvent::Finding` wrapper | 0 |
-| `ambush:escalation:v1` | 9 | lane channel | `escalation` | one of three causes (§4.2) | 0 |
-| `ambush:hold:v1` | 9 | case | `hold` | the `HeldActionStore` record; open card + one terminal card | 0 |
-| `ambush:verdict:v1` | 9 | case | `verdict` | the human decision — leg 1 | **1** |
-| `ambush:receipt:v1` | 9 | case | `receipt` | `AuditTrail` | 0 · 1 scoped |
-| `ambush:lease:v1` | 9 | case | `lease` | `ContainmentLease` on open | 0 |
-| `ambush:rollback:v1` | 9 | case | `rollback` | `RollbackReceipt` (+ the release body when manual) | 0 · **1** when attested |
+| `swarm:finding:v1` | 9 | lane channel | `finding` | `SwarmFindingEnvelope` + `host_id` from the `RuntimeEvent::Finding` wrapper | 0 |
+| `swarm:escalation:v1` | 9 | lane channel | `escalation` | one of three causes (§4.2) | 0 |
+| `swarm:hold:v1` | 9 | case | `hold` | the `HeldActionStore` record; open card + one terminal card | 0 |
+| `swarm:verdict:v1` | 9 | case | `verdict` | the human decision — leg 1 | **1** |
+| `swarm:receipt:v1` | 9 | case | `receipt` | `AuditTrail` | 0 · 1 scoped |
+| `swarm:lease:v1` | 9 | case | `lease` | `ContainmentLease` on open | 0 |
+| `swarm:rollback:v1` | 9 | case | `rollback` | `RollbackReceipt` (+ the release body when manual) | 0 · **1** when attested |
 | — | **46010** | case | — | the needs-action queue record: one human line, a closed four-name tag set | n/a |
 | — | 26000–26006 | **global, no `h`** | — | aggregates (§4); `26006` is compartmented by `P_GATED_KINDS`, not by a channel (§4.4) | n/a |
 
@@ -250,7 +252,7 @@ reconstruct without it after the ephemeral has decayed* — and the two suites'
 registry tests are where that conversation starts:
 `the_registry_is_seven_cards_one_stored_kind_and_seven_frames` (`tests/golden.rs`)
 and its `golden.test.mjs` twin. **Both count distinct `fact.schema` values, not
-files**, because `ambush:verdict:v1` has two vectors: the leg-1 card and the
+files**, because `swarm:verdict:v1` has two vectors: the leg-1 card and the
 losing console's `superseded` update card (§3.5). Counting files would have made
 the second one look like an eighth marker.
 
@@ -266,7 +268,7 @@ Every card body is a swarm-spine envelope with the card as its `fact`:
   "prev_envelope_hash": "0x…" | null,
   "issued_at": "2026-08-30T02:41:07Z",   // RFC 3339, SECOND precision, Z
   "capability_token": null,              // envelope.rs:89 hardcodes it
-  "fact": { "schema": "ambush.perch.hold.v1", "issuer": {…}, … },
+  "fact": { "schema": "swarm.perch.hold.v1", "issuer": {…}, … },
   "envelope_hash": "0x…"                 // keyless
   // "signature" — ABSENT UNTIL B6
 }
@@ -348,7 +350,7 @@ for `p` tags (§3.4).
 
 [`10-RELAY-FORK.md`](10-RELAY-FORK.md) decision **RF-D3** (binding) establishes
 that Perch pays **zero** of the four client registration points and that the
-rendered row is the `kind:9` `ambush:hold:v1` card. This artifact binds to it and
+rendered row is the `kind:9` `swarm:hold:v1` card. This artifact binds to it and
 draws the consequence the fork document leaves open: **what is in the 46010's
 `content`?**
 
@@ -381,7 +383,7 @@ force it:
 ["h",    "<case channel UUID>"]        exactly 1, SQL-pushed, relay-enforced
 ["p",    "<64 lowercase hex>"]         >= 1, one per Approve-scoped principal
 ["hold", "h_a07aeacf"]                 exactly 1, the reconciliation key
-["card", "<64 hex Nostr event id>"]    <= 1, the sibling ambush:hold:v1 card
+["card", "<64 hex Nostr event id>"]    <= 1, the sibling swarm:hold:v1 card
 ```
 
 `e`, `t`, `l` and `k` are **forbidden**, and until this revision that ban lived
@@ -527,7 +529,7 @@ the grant control.
 
 What happens is fully determined and, until this revision, half-recorded:
 
-1. Console A publishes its signed leg-1 `ambush:verdict:v1` card to the case
+1. Console A publishes its signed leg-1 `swarm:verdict:v1` card to the case
    channel. Console B publishes its own, a tick later. **Both are now permanent.**
    The relay has no compare-and-set, `kind:9` is immutable, and both cards are
    signed by real operators with real Ed25519 keys.
@@ -647,7 +649,7 @@ Two variants have **two destinations**, and both splits are the disclosure
 boundary:
 
 - `ModeTransition` → the `26003` frame in **both directions**, and a durable
-  `ambush:escalation:v1` card **only into `incident`**. A lane channel that fills
+  `swarm:escalation:v1` card **only into `incident`**. A lane channel that fills
   with "back to normal" rows teaches an operator to scroll past it. The frame
   still carries de-escalation, because `transition_down`
   (`AMB crates/swarm-core/src/agent.rs:148-155`) exists beside `transition_to`
@@ -910,7 +912,7 @@ console could not establish it"* rather than as healthy (INV-08). And
 (`Ed25519`) and the tier, never a shield.
 
 **The one place this artifact corrects the tier table.** `08` §6.2 files
-`ambush:verdict:v1` as tier 0 "until B1.6" (= **B2o**). That is one step too
+`swarm:verdict:v1` as tier 0 "until B1.6" (= **B2o**). That is one step too
 conservative: B2o is what puts the operator on the **receipt**. The operator's
 `DetachedSignature` is produced by the console for **leg 2** regardless of B2o,
 so the card carries it from the first day leg 2 exists. Recorded as **W-4**.
@@ -1106,9 +1108,9 @@ line of copy. **The test that settles it**, as a mobile widget test under
 ```dart
 testWidgets('an ambush marker line is not rendered as body text', (tester) async {
   await tester.pumpWidget(WidgetHelpers.testable(
-    MessageContent(content: '<!-- ambush:hold:v1 -->\nhold h_1 · isolate_host', ...),
+    MessageContent(content: '<!-- swarm:hold:v1 -->\nhold h_1 · isolate_host', ...),
   ));
-  expect(find.textContaining('ambush:hold:v1'), findsNothing);
+  expect(find.textContaining('swarm:hold:v1'), findsNothing);
 });
 ```
 
@@ -1199,8 +1201,8 @@ withdrawals come first, because a wrong amendment that got compiled into a
 |---|---|---|---|
 | **W-2** | **Card bodies are `swarm.spine.envelope.v1` from day one, `signature` absent.** | `03` §3.2's flat sketch | `compute_envelope_hash_hex` and `verify_chain_link` are both keyless and `pub`. Makes B6 additive rather than a `v1`→`v2` bump, and supplies the sequence number `GET /v1/events/stream` does not have. Explicitly does **not** raise the tier. |
 | **W-3** | **The `web/` degradation claim is withdrawn.** | `03`'s "honest degradation for free" | `BUZZ web/` has no message renderer; it is a repo browser plus an invite page. Perch cards are unreachable there — a stronger statement than "degrades honestly", and it needs no work. |
-| **W-4** | **`ambush:verdict:v1` is tier 1 from day one**, conditional on B2's operator Ed25519 key. | `08` §6.2 ("until B1.6") | The operator's `DetachedSignature` is produced for leg 2 regardless of B2o; B2o is what puts the operator on the **receipt**. |
-| **W-5** | **`ambush:receipt:v1` carries `AuditTrail` only.** | APPENDIX §3 | `AuditResponseRecord::Success(ResponseReceipt)` (`AMB crates/swarm-spine/src/lib.rs:103-110`) already embeds the whole receipt; carrying both puts a byte-for-byte duplicate in a card INV-26 then has to reconcile against the daemon's stored body. |
+| **W-4** | **`swarm:verdict:v1` is tier 1 from day one**, conditional on B2's operator Ed25519 key. | `08` §6.2 ("until B1.6") | The operator's `DetachedSignature` is produced for leg 2 regardless of B2o; B2o is what puts the operator on the **receipt**. |
+| **W-5** | **`swarm:receipt:v1` carries `AuditTrail` only.** | APPENDIX §3 | `AuditResponseRecord::Success(ResponseReceipt)` (`AMB crates/swarm-spine/src/lib.rs:103-110`) already embeds the whole receipt; carrying both puts a byte-for-byte duplicate in a card INV-26 then has to reconcile against the daemon's stored body. |
 | **W-7** | **`26004` carries all eight `GovernanceStatusReport` fields**, plus `contingency_lease_ttl_ms`. | APPENDIX §3 (six fields) | `last_transition_at_ms` and `last_reconciliation_report_id` are on the type (`AMB crates/swarm-policy/src/governance.rs:62-71`), and the first is the governance strip's staleness clock. The TTL is carried because `06` §2.2's "60-second" figure cites a `#[tokio::test]` fixture; the production default is 300,000 ms. |
 
 ### 9.3 New in this revision
@@ -1208,7 +1210,7 @@ withdrawals come first, because a wrong amendment that got compiled into a
 | # | Departure | Against | Argument |
 |---|---|---|---|
 | **W-9** | **`26006` stays global with no `h` tag, and `26006` is added to `P_GATED_KINDS`** in `BUZZ crates/buzz-core/src/kind.rs:159-169`. | nothing — it **binds to** `adr/0017` clause C3 and restores APPENDIX §3 | This is not a new mechanism; it is this artifact abandoning its own competing one. `P_GATED_KINDS` already carries an ephemeral (`KIND_AGENT_OBSERVER_FRAME`) for exactly this filter-layer enforcement, per the doc comment at `:156-158`, so there is an in-tree precedent on the exact kind range. The correct framing everywhere is **AD-A7**'s: "three hunks in `buzz-relay/src/handlers/ingest.rs` and one line in `buzz-core/src/kind.rs`; zero client registration points." §4.4. |
-| **W-10** | **`distinct_sources_counts` is `strategy_scoped_agent_id`,** and `SourceCountMechanism`'s only variant is renamed to match. | this file's own previous `const` | See W-6 above. The change is in five places (`card-ambush-escalation-v1.schema.json`, `rust/src/cards.rs`, `ts/types.ts`, `ts/zod.ts`, the golden vector) plus the two `x-note`/`x-source` blocks in `common.schema.json` that carried the wrong tracing. §7.2. |
+| **W-10** | **`distinct_sources_counts` is `strategy_scoped_agent_id`,** and `SourceCountMechanism`'s only variant is renamed to match. | this file's own previous `const` | See W-6 above. The change is in five places (`card-swarm-escalation-v1.schema.json`, `rust/src/cards.rs`, `ts/types.ts`, `ts/zod.ts`, the golden vector) plus the two `x-note`/`x-source` blocks in `common.schema.json` that carried the wrong tracing. §7.2. |
 | **W-11** | **A verdict card's issuer is `OperatorFactIssuer`, whose `role` is `const: null`.** | `08` §6.2's silence; this file's withdrawn W-8 | A human produced the fact. `AgentRole` has no human member, and the value previously in the golden vector was `tom`. A separate type with a `null`-only role makes the conflation a schema error, a `tsc` error and a serde error, in the same shape on all three sides. `NeverARole` is a unit struct so `{"role":"tom"}` fails to deserialize with the same force the schema's `"type": "null"` rejects it. |
 | **W-A1** | **`FactIssuer.role` is NULLABLE AND REQUIRED** on every other card. | APPENDIX §3's implicit non-null | Two production paths disagree: `WhiskerAgent::tick` passes `Some(AgentRole::Whisker)` explicitly (`whisker_agent.rs:150-156`), while `infer_agent_role` (`pipeline.rs:583-604`) prefix-matches and returns `None` for every `swarm:ed25519:<hex>` identity the HTTP ingest lane uses. Both shapes are real. Required-but-nullable, never optional: a **missing** key stays a decode error while a genuine absence is an explicit `null`, so a truncated body cannot pass as an unattributed fact. Independently filed by 22-DEMO-FIXTURE as its F-2; this is the same amendment and the two agree. **This one change takes 22-DEMO-FIXTURE's 11 marker-card fixtures from failing to passing.** |
 | **W-12** | **`common.schema.json#/$defs/HoldId` pins the hold-id shape**, `$ref`'d from all three card/frame schemas and both 46010 positions. | nothing — it closes an unowned gap | Six formats were in circulation and two used the `hold:` prefix the schema's own prose forbade. §3.2.1. |
@@ -1219,7 +1221,7 @@ withdrawals come first, because a wrong amendment that got compiled into a
 
 Applied rather than re-litigated: the containment lease TTL is 900,000 ms and not
 the 60,000 ms `policy.lease_ttl_ms` (carried as `ttl_source` on the
-`ambush:lease:v1` card); the contingency lease TTL is 300,000 ms and not 60,000
+`swarm:lease:v1` card); the contingency lease TTL is 300,000 ms and not 60,000
 (carried on `26004`); the ladder is 12 destructive → 4 leased → 3 reversible, so
 a hold card for one of the eight unleased kinds renders no pending containment
 slot (`leases_a_containment`); `requires_h_channel_scope` is at
@@ -1234,7 +1236,7 @@ paragraph: the JSON Schemas are normative; the golden vectors are **extracted**
 from the schemas' own `examples` by a generator, so a schema and its vector
 cannot disagree and a hand-edited vector is a bug rather than a fix; the Rust
 suite reads them with `include_str!` and the TypeScript suite from disk, and
-**both now assert `GOLDEN.sha256`** (`94ccea0d…`), with the TypeScript suite
+**both now assert `GOLDEN.sha256`** (`10233c15…`), with the TypeScript suite
 additionally reading the Rust constant out of a sibling checkout when it is
 reachable and asserting the two pin the same corpus; and `parity-gate.sh`
 compares **field-set names only** across schema, Rust and zod, which catches the

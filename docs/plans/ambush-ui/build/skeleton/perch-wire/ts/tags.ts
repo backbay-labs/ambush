@@ -3,7 +3,7 @@
  *
  * Tag reading, on the client side.
  *
- * The client BUILDS tags in exactly one place — the `ambush:verdict:v1` card,
+ * The client BUILDS tags in exactly one place — the `swarm:verdict:v1` card,
  * which is the only event the operator's own key publishes. Everything else on
  * this wire is built by the bridge in Rust (`tags.rs`). This module is
  * predominantly a reader, and its most important export is `pushdownClass`,

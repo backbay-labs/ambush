@@ -65,6 +65,8 @@ pub async fn publish_note(
     let mentions = mention_pubkeys.unwrap_or_default();
     let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
     let media = media_tags.unwrap_or_default();
+    // INV-29: renderer content never signs as a swarm governance marker.
+    crate::perch_sign_gate::perch_sign_gate(nostr::Kind::TextNote.as_u16(), &content)?;
     let builder = events::build_note(&content, reply_id, &mention_refs, &media)?;
     submit_event(builder, &state).await
 }

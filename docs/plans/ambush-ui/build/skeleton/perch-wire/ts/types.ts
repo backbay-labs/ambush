@@ -253,7 +253,7 @@ export type FactIssuer = {
 /**
  * WHO PRODUCED THE FACT, when the producer is a PERSON.
  *
- * Used by `ambush:verdict:v1` and nothing else — the one card in the registry a
+ * Used by `swarm:verdict:v1` and nothing else — the one card in the registry a
  * human, not the bridge, publishes. `role` is `null` and cannot be anything
  * else: `AgentRole` is a closed eight-variant enum of SWARM agents
  * (`AMB crates/swarm-core/src/agent.rs:14-34`) with no human member, and
@@ -314,7 +314,7 @@ export type ThreatConcentration = {
 // them and `check:perch-wire` asserts the field sets are equal.
 
 export type FindingFact = {
-  readonly schema: "ambush.perch.finding.v1";
+  readonly schema: "swarm.perch.finding.v1";
   readonly issuer: FactIssuer;
   readonly emitted_at_ms: UnixMillis;
   readonly locator: {
@@ -341,7 +341,7 @@ export type FindingFact = {
 };
 
 export type EscalationFact = {
-  readonly schema: "ambush.perch.escalation.v1";
+  readonly schema: "swarm.perch.escalation.v1";
   readonly issuer: FactIssuer;
   readonly emitted_at_ms: UnixMillis;
   readonly locator: {
@@ -434,7 +434,7 @@ export type HoldState =
 export type Decision = "grant" | "refuse";
 
 export type HoldFact = {
-  readonly schema: "ambush.perch.hold.v1";
+  readonly schema: "swarm.perch.hold.v1";
   readonly issuer: FactIssuer;
   readonly emitted_at_ms: UnixMillis;
   readonly locator: {
@@ -509,7 +509,7 @@ export type Leg2Outcome =
   | "superseded";
 
 export type VerdictFact = {
-  readonly schema: "ambush.perch.verdict.v1";
+  readonly schema: "swarm.perch.verdict.v1";
   /** A PERSON produced this fact. See `OperatorFactIssuer` for why it is its own type. */
   readonly issuer: OperatorFactIssuer;
   readonly emitted_at_ms: UnixMillis;
@@ -523,10 +523,13 @@ export type VerdictFact = {
     readonly hold_id: string;
     readonly decided_at_ms: UnixMillis;
     readonly operator_id: string;
+    /** SHA-256 of the UTF-8 rationale, or JSON `null` when absent. */
+    readonly rationale_sha256: string | null;
     readonly rationale?: string | null;
   };
   /**
-   * Ed25519 over the canonical form of `{decided_at_ms, decision, hold_id}` —
+   * Ed25519 over the canonical form of
+   * `{decided_at_ms, decision, hold_id, rationale_sha256}` —
    * exactly the decide route's preimage, so one signature serves both legs.
    */
   readonly signature: DetachedSignature;
@@ -554,7 +557,7 @@ export type VerdictFact = {
 };
 
 export type ReceiptFact = {
-  readonly schema: "ambush.perch.receipt.v1";
+  readonly schema: "swarm.perch.receipt.v1";
   readonly issuer: FactIssuer;
   readonly emitted_at_ms: UnixMillis;
   readonly locator: {
@@ -592,7 +595,7 @@ export type ReceiptFact = {
 };
 
 export type LeaseFact = {
-  readonly schema: "ambush.perch.lease.v1";
+  readonly schema: "swarm.perch.lease.v1";
   readonly issuer: FactIssuer;
   readonly emitted_at_ms: UnixMillis;
   readonly locator: {
@@ -622,7 +625,7 @@ export type LeaseFact = {
 };
 
 export type RollbackFact = {
-  readonly schema: "ambush.perch.rollback.v1";
+  readonly schema: "swarm.perch.rollback.v1";
   readonly issuer: FactIssuer;
   readonly emitted_at_ms: UnixMillis;
   readonly locator: {
@@ -685,7 +688,7 @@ export type FrameHeader = {
 
 export type Frame =
   | (FrameHeader & {
-      readonly schema: "ambush.perch.frame.ingest_rate.v1";
+      readonly schema: "swarm.perch.frame.ingest_rate.v1";
       readonly kind: 26000;
       readonly window_ms: 1000;
       readonly accepted: number;
@@ -693,7 +696,7 @@ export type Frame =
       readonly by_source: Readonly<Record<string, number>>;
     })
   | (FrameHeader & {
-      readonly schema: "ambush.perch.frame.concentration.v1";
+      readonly schema: "swarm.perch.frame.concentration.v1";
       readonly kind: 26001;
       readonly current_mode: SwarmMode;
       readonly concentrations: readonly ThreatConcentration[];
@@ -703,7 +706,7 @@ export type Frame =
       readonly observed_at_seconds: UnixSeconds;
     })
   | (FrameHeader & {
-      readonly schema: "ambush.perch.frame.agent_health.v1";
+      readonly schema: "swarm.perch.frame.agent_health.v1";
       readonly kind: 26002;
       readonly agents: readonly {
         readonly agent_id: string;
@@ -716,7 +719,7 @@ export type Frame =
       }[];
     })
   | (FrameHeader & {
-      readonly schema: "ambush.perch.frame.mode_transition.v1";
+      readonly schema: "swarm.perch.frame.mode_transition.v1";
       readonly kind: 26003;
       readonly from: SwarmMode;
       readonly to: SwarmMode;
@@ -724,7 +727,7 @@ export type Frame =
       readonly reason: string;
     })
   | (FrameHeader & {
-      readonly schema: "ambush.perch.frame.governance_status.v1";
+      readonly schema: "swarm.perch.frame.governance_status.v1";
       readonly kind: 26004;
       readonly partition_state: PartitionState;
       readonly total_governors: number;
@@ -738,7 +741,7 @@ export type Frame =
       readonly contingency_lease_ttl_ms: number;
     })
   | (FrameHeader & {
-      readonly schema: "ambush.perch.frame.tamper_alert.v1";
+      readonly schema: "swarm.perch.frame.tamper_alert.v1";
       readonly kind: 26005;
       readonly debugger_attached: boolean;
       readonly tracer_pid?: number | null;
@@ -748,7 +751,7 @@ export type Frame =
       readonly fail_closed: boolean;
     })
   | (FrameHeader & {
-      readonly schema: "ambush.perch.frame.hold_alarm.v1";
+      readonly schema: "swarm.perch.frame.hold_alarm.v1";
       readonly kind: 26006;
       readonly hold_id: string;
       readonly action_kind: ResponseActionKind;

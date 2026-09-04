@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-finding-v1.schema.json",
+  "title": "swarm:finding:v1",
+  "description": "One DetectionFinding as a lane-channel evidence card. Produced from RuntimeEvent::Finding (crates/swarm-runtime/src/runtime_events.rs:224-228), which the daemon publishes on its broadcast channel and the bridge receives in-process through IngestState::subscribe_runtime_events (crates/swarm-ingest-runtime/src/ingest/mod.rs:1875-1881).\n\nhost_id comes from the RuntimeEvent WRAPPER, not from the envelope: SwarmFindingEnvelope (crates/swarm-response/src/siem.rs:17-27) has eight fields and none of them is a host. Verification tier 0 \u2014 DetectionFinding (crates/swarm-whisker/src/detector.rs:50-59, seven fields) carries no signature and neither does its envelope.",
+  "allOf": [
+    {
+      "$ref": "card-envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "fact": {
+      "type": "object",
+      "required": [
+        "schema",
+        "issuer",
+        "emitted_at_ms",
+        "locator",
+        "finding"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "swarm.perch.finding.v1"
+        },
+        "issuer": {
+          "$ref": "common.schema.json#/$defs/FactIssuer",
+          "description": "WHO PRODUCED THE FACT. See the envelope's `issuer` for who published it."
+        },
+        "emitted_at_ms": {
+          "$ref": "common.schema.json#/$defs/UnixMillis",
+          "description": "The RuntimeEvent's own emitted_at_ms, carried through unchanged. THE SORT KEY for every Perch surface. The Nostr event's `created_at` is a transport timestamp stamped at publish, because MAX_TIMESTAMP_DRIFT_SECS is 900 and REJECTS (crates/buzz-relay/src/handlers/ingest.rs:2224-2231) and `created_at` is inside the Nostr signature, so a spooled card carrying its true emit time becomes permanently unpublishable fifteen minutes after it was produced."
+        },
+        "locator": {
+          "type": "object",
+          "required": [
+            "finding_id",
+            "event_id",
+            "strategy_id",
+            "lane_channel"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "finding_id": {
+              "type": "string"
+            },
+            "event_id": {
+              "type": "string",
+              "description": "The TELEMETRY event id, not the Nostr event id. Half of the feedback-suppression key: Dismiss builds FeedbackSuppressionKey{threat_class, event_id} (crates/swarm-pheromone/src/substrate.rs:345-348) and concentration_for then drops every matching deposit at or before the marker (:1286), reaching detectors the operator never reviewed."
+            },
+            "strategy_id": {
+              "type": "string"
+            },
+            "host_id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lane_channel": {
+              "$ref": "common.schema.json#/$defs/Uuid"
+            }
+          }
+        },
+        "finding": {
+          "type": "object",
+          "required": [
+            "schema",
+            "finding_id",
+            "event_id",
+            "strategy_id",
+            "threat_class",
+            "severity",
+            "confidence",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "description": "SwarmFindingEnvelope verbatim, crates/swarm-response/src/siem.rs:17-27.",
+          "properties": {
+            "schema": {
+              "const": "swarm_finding",
+              "description": "Hardcoded at siem.rs:33 in the From<&DetectionFinding> impl."
+            },
+            "finding_id": {
+              "type": "string"
+            },
+            "event_id": {
+              "type": "string"
+            },
+            "strategy_id": {
+              "type": "string"
+            },
+            "threat_class": {
+              "$ref": "common.schema.json#/$defs/ThreatClass"
+            },
+            "severity": {
+              "$ref": "common.schema.json#/$defs/Severity"
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "evidence": {
+              "description": "serde_json::Value, unconstrained, DERIVED FROM TELEMETRY AN ADVERSARY CAN SHAPE. Every string reached from here must be wrapped in <AdversaryString> (INV-14). Truncated by the bridge when the serialized card would exceed PERCH_CARD_MAX_BYTES; see 13-WIRE-SCHEMAS.md section 4.4."
+            },
+            "evidence_truncated": {
+              "type": "object",
+              "required": [
+                "bytes",
+                "sha256"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sha256": {
+                  "$ref": "common.schema.json#/$defs/HexPrefixed"
+                }
+              },
+              "description": "Present only when the bridge replaced `evidence`. The card then renders an explicit absence with the byte count and the hash, never a silently smaller evidence blob."
+            }
+          },
+          "x-carried-whole": "swarm_response::SwarmFindingEnvelope",
+          "x-carried-note": "This object is a domain type carried VERBATIM. The Rust wire crate names the type rather than redeclaring its fields, so a field added upstream reaches the wire with no edit and a field removed upstream is a compile error. tools/check-perch-wire-parity.sh skips its property names on the Rust side for exactly that reason, and the golden vectors plus this schema are what hold the shape."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema": "swarm.spine.envelope.v1",
+      "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
+      "seq": 1,
+      "prev_envelope_hash": null,
+      "issued_at": "2026-08-30T02:41:07Z",
+      "capability_token": null,
+      "fact": {
+        "schema": "swarm.perch.finding.v1",
+        "issuer": {
+          "swarm_agent_id": "whisker-7a3f",
+          "role": "whisker",
+          "nostr_pubkey": null
+        },
+        "emitted_at_ms": 1787754972123,
+        "locator": {
+          "finding_id": "f2c9a1b4",
+          "event_id": "tel-8831",
+          "strategy_id": "dns_exfil_beaconing",
+          "host_id": "web-04",
+          "lane_channel": "3f1e77c2-0b41-4c6a-9d55-8ac1e2f40911"
+        },
+        "finding": {
+          "schema": "swarm_finding",
+          "finding_id": "f2c9a1b4",
+          "event_id": "tel-8831",
+          "strategy_id": "dns_exfil_beaconing",
+          "threat_class": "data_exfiltration",
+          "severity": "HIGH",
+          "confidence": 0.82,
+          "evidence": {
+            "query_count": 411,
+            "entropy": 4.7
+          }
+        }
+      },
+      "envelope_hash": "0xabababababababababababababababababababababababababababababababab"
+    }
+  ]
+}

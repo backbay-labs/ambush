@@ -444,7 +444,7 @@ corroboration that does not exist.
 
 ## 3. The marker-renderer registry
 
-The extension point for all seven `kind:9` `ambush:*:v1` cards (`APPENDIX-NORMATIVE.md` §3). Its
+The extension point for all seven `kind:9` `swarm:*:v1` cards (`APPENDIX-NORMATIVE.md` §3). Its
 shape decides whether an eighth marker is a two-file change or a seven-file one. Governing sections:
 `03` §3/§4.4/§13, `04` §2.3, `05` §9, `08` §7.7 control 2, INV-13, INV-15.
 
@@ -507,15 +507,15 @@ export const AMBUSH_MARKER_KINDS = [
 ] as const satisfies readonly AmbushMarkerKind[];
 
 /** The only admitted schema version. A `v2` card renders as §3.6's refusal, never as prose. */
-export const AMBUSH_MARKER_VERSION = 1;
+export const SWARM_MARKER_VERSION = 1;
 
 /**
- * `<!-- ambush:finding:v1 -->`. Built here so no call site concatenates the
+ * `<!-- swarm:finding:v1 -->`. Built here so no call site concatenates the
  * string; `check-perch-adversary-strings.sh` (PROPOSED) treats a hand-built
  * marker literal outside this module as a failure.
  */
 export function ambushMarkerComment(kind: AmbushMarkerKind): string {
-  return `<!-- ambush:${kind}:v${AMBUSH_MARKER_VERSION} -->`;
+  return `<!-- swarm:${kind}:v${SWARM_MARKER_VERSION} -->`;
 }
 
 /** Which Perch surface is rendering. Decides `homeSurface` admission. */
@@ -535,7 +535,7 @@ export type PerchPillar = "substrate" | "authority" | "evidence";
 /** A marker that passed line-0 + admission. `rawBody` is never trimmed. */
 export type AmbushMarkerCard = {
   kind: AmbushMarkerKind;
-  version: typeof AMBUSH_MARKER_VERSION;
+  version: typeof SWARM_MARKER_VERSION;
   /** Everything after the first newline, byte-for-byte. Interior whitespace is load-bearing. */
   rawBody: string;
   /** The signer whose admission was checked. Lowercased 64-hex, asserted by the parser. */
@@ -641,12 +641,12 @@ export function defineAmbushCard<T>(spec: {
 // BUZZ desktop/src/features/perch-evidence/lib/parseAmbushMarker.ts
 import {
   AMBUSH_MARKER_KINDS,
-  AMBUSH_MARKER_VERSION,
+  SWARM_MARKER_VERSION,
   type AmbushMarkerKind,
   type AmbushMarkerParse,
 } from "./markerTypes";
 
-const MARKER_RE = /^<!--\s+ambush:([a-z][a-z-]*):v(\d{1,3})\s+-->$/;
+const MARKER_RE = /^<!--\s+swarm:([a-z][a-z-]*):v(\d{1,3})\s+-->$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
 
 /**
@@ -697,11 +697,11 @@ export function parseAmbushMarker(args: {
   }
   const kind = slug as AmbushMarkerKind;
 
-  if (version !== AMBUSH_MARKER_VERSION) {
+  if (version !== SWARM_MARKER_VERSION) {
     return { status: "unsupported-version", kind, version, card: base };
   }
 
-  return { status: "ok", card: { ...base, kind, version: AMBUSH_MARKER_VERSION } };
+  return { status: "ok", card: { ...base, kind, version: SWARM_MARKER_VERSION } };
 }
 ```
 
@@ -749,7 +749,7 @@ export function AmbushEvidenceCard({ card, ctx }: AmbushCardRenderArgs) {
 ```
 
 **Vocabulary note on the `lease` slug.** `"lease"` is the normative marker identifier from
-`APPENDIX-NORMATIVE.md` §3 (`ambush:lease:v1`) and stays verbatim on the wire and in the union. Its
+`APPENDIX-NORMATIVE.md` §3 (`swarm:lease:v1`) and stays verbatim on the wire and in the union. Its
 **rendered heading is `CONTAINMENT LEASE`**, never bare "lease" — `APPENDIX-NORMATIVE.md` §7 bans the
 bare word in a label, heading, nav item or badge because three unrelated objects carry it. The
 registry key and the card's `EyebrowLabel` are deliberately different strings, and
@@ -780,7 +780,7 @@ None uses `<AdversaryString>` for anything but the slug, which is regex-bounded 
 | Component | Fires when | Copy shape | `data-testid` |
 |---|---|---|---|
 | `UndecodableCard` | the decoder returned `ok:false` | "This `<kind>` card did not decode: `<reason>`. The daemon holds the record. [verify against the daemon]" | `perch-evidence-undecodable` |
-| `UnknownMarkerCard` | admitted issuer, unknown slug | "This console does not know how to render an `ambush:<slug>:v<n>` card. It was published by an admitted bridge at `<time>`. [open in Ledger]" | `perch-evidence-unknown-kind` |
+| `UnknownMarkerCard` | admitted issuer, unknown slug | "This console does not know how to render an `swarm:<slug>:v<n>` card. It was published by an admitted bridge at `<time>`. [open in Ledger]" | `perch-evidence-unknown-kind` |
 | `UnsupportedVersionCard` | admitted issuer, known kind, `version !== 1` | "This `<kind>` card is version `<n>`; this console reads version 1. Nothing is rendered rather than rendering it wrong. [open in Ledger]" | `perch-evidence-unsupported-version` |
 | `MisplacedCard` | `homeSurface` miss, or INV-13 channel mismatch | "A `<kind>` card arrived on a surface that does not hold them (`<surface>`). It is not rendered here. [open in Ledger]" | `perch-evidence-misplaced` |
 
@@ -1361,7 +1361,7 @@ It never renders `5 sources` alone, and it never fabricates an agent count.
 
 #### The Phase-1 sequencing this resolves
 
-`grep source_ids schemas/*.json` returns hits only in `card-ambush-escalation-v1.schema.json`, where
+`grep source_ids schemas/*.json` returns hits only in `card-swarm-escalation-v1.schema.json`, where
 the field is `null` and the example is `null`; no finding, hold, verdict, receipt, lease or rollback
 schema carries source ids at all. B4 — the only route that can serve them — is **Phase 2** in
 `APPENDIX-NORMATIVE.md` §5. So in Phase 1 **every** call site takes the second arm. That is a real
@@ -1378,7 +1378,7 @@ survives Phase 1.
 Filed here because this sheet is the other artifact that carried the wrong reading. Both were
 one-token changes in files `13` owns, and **`13` applied both**; re-verified by the integration pass:
 
-- `schemas/card-ambush-escalation-v1.schema.json` now `$ref`s
+- `schemas/card-swarm-escalation-v1.schema.json` now `$ref`s
   `common.schema.json#/$defs/SourceCountMechanism`, whose `const` is `strategy_scoped_agent_id`.
   `skeleton/perch-wire/ts/zod.ts`, `ts/types.ts` and `rust/src/cards.rs` carry the same value, and
   the golden vector and its pinned hash were regenerated — `GOLDEN.sha256` reproduces exactly.
@@ -1560,7 +1560,7 @@ Enter. `12-BACKEND-BILL-API.md` §4.4 resolves the **daemon** side — the compa
 POSTed (`13-WIRE-SCHEMAS.md`'s publish order — the decide body needs the card id as its idempotency
 key). The relay has no compare-and-set, a `kind:9` event is immutable, and both cards are genuinely
 signed by real operators. Without this state the case channel keeps two unqualified
-`ambush:verdict:v1` records for one hold, forever, with nothing marking which one executed — and the
+`swarm:verdict:v1` records for one hold, forever, with nothing marking which one executed — and the
 Ledger export's `holds/` directory contains two "human intent records" for one decision.
 
 **What this component does about it.** On a 409, the losing console:
@@ -1574,7 +1574,7 @@ Ledger export's `holds/` directory contains two "human intent records" for one d
 3. leaves the grant control absent, not disabled-with-retry.
 
 **Two things this needs from peers, filed not assumed.**
-`13-WIRE-SCHEMAS.md` owns `schemas/card-ambush-verdict-v1.schema.json`, whose `leg2.state` enum is
+`13-WIRE-SCHEMAS.md` owns `schemas/card-swarm-verdict-v1.schema.json`, whose `leg2.state` enum is
 `sending | recorded | acknowledged | refused_late` — there is no value meaning "another operator's
 decision executed". It needs a fifth, `superseded`, carrying the winning event id.
 `16-INVARIANT-TESTS.md` owns the reconciliation rule that belongs beside INV-12/INV-35 as a P0: **a
@@ -1591,7 +1591,7 @@ node naming the winning event id.
 
 **`hold_id` is opaque, everywhere.** Every component in this sheet that takes a `holdId` treats it as
 a token: it is never parsed, split, sorted lexically for meaning, or rendered as anything but a
-monospace label. `card-ambush-hold-v1.schema.json`, `card-ambush-verdict-v1.schema.json` and
+monospace label. `card-swarm-hold-v1.schema.json`, `card-swarm-verdict-v1.schema.json` and
 `frame-26006-hold-alarm.schema.json` all declare it a bare `"type": "string"` today, and the six
 formats in circulation across wave 2's artifacts (`hold_a1f4…`, `hold:01K3…`, `hold-9c1e…`,
 `h_a07aeacf`, …) are a `13`-owned schema gap, not a component contract. Two of those use the `hold:`
@@ -2273,7 +2273,7 @@ disposition, not a token swap.
 | `badge.tsx` `success` variant `:17` | emerald "success" | green is the **substrate** pillar (detection), not success. A green badge next to a finding reads as "this is fine" | variant removed |
 | `alert-dialog.tsx` `AlertDialogAction` `:149` | defaults to `bg-primary` `[V]` | a hold decision styled as the primary action is exactly what render law 6 forbids | `variant` made required |
 | `useMarkAsReadShortcuts.ts:24,:33` | bare `Escape` marks the active channel read `[V]` | in a queue where *read* and *decided* are different facts, an accidental `Escape` clears a queue | unchanged file; Perch surfaces hold an `acquireEscapeSurface()` for their lifetime (`escapeSurfaces.ts:26-33` `[V]`), which the shortcut already yields to at `:33`. **A leaked acquire disables mark-read permanently — every Perch surface's release is asserted in its own unmount test.** |
-| `MessageReactions` / reaction chips | emoji reactions on a message | a reaction on an evidence card is an unsigned, unattributable pseudo-verdict | deleted from the case timeline; verdicts are `ambush:verdict:v1` cards |
+| `MessageReactions` / reaction chips | emoji reactions on a message | a reaction on an evidence card is an unsigned, unattributable pseudo-verdict | deleted from the case timeline; verdicts are `swarm:verdict:v1` cards |
 | `UnreadPill.tsx`, `useFeedItemState.ts` done/unread | localStorage `buzz-home-feed-done.v1` / `.unread.v1`, 500-item cap `[V]` | "done" reads like a disposition | kept, relabelled, and every surface that renders it carries the copy "local to this workstation, never a decision record" (`APPENDIX-NORMATIVE.md` §2, `M`/`U`) |
 | `attachment.tsx` + the five `*link-preview*` files | unfurls remote URLs | renders adversary-controlled remote content into a console whose trust argument is that it renders nothing it did not receive over an authorized path; also egress from an analyst workstation | **deleted** (§10) |
 | `features/terminal` PTY | a developer tool | a real shell reachable from a surface that also renders adversary text | kept, but the PTY is **the operator's tool, not an agent's** (`08` §7.7 control 4); the banner is permanent |
@@ -2484,7 +2484,7 @@ Four critics audited this sheet against source. Their findings, each verified be
 | 1 | **Render law 2's mechanism was stated backwards.** Revision 1 read `whisker_agent.rs:148-149`, concluded `distinct_sources` counts the agent instance id, and filed an amendment against the appendix. | Read the four-link chain end to end: `whisker_agent.rs:148-149` builds the **base**; `pipeline.rs:80` → `resolve_deposits`; `pipeline.rs:573` applies `strategy_scoped_agent_id`; `stream.rs:20-22` formats `{base}:{strategy_id}`; `substrate.rs:1295` inserts it. The workspace's own test at `substrate.rs:2105` is named `query_counts_strategy_scoped_agent_ids_as_distinct_sources`. | **Amendment withdrawn.** §4.8 rewritten with the chain, the appendix's gloss restored, and the expansion copy pushed the *other* way — it must make a single agent's own detectors satisfying the minimum visible. Two one-token corrections filed to `13` (§4.8). |
 | 2 | **Every token reference was a bare Buzz shadcn name**, which `ThemeProvider` overwrites inline. | Counted `createThemeVars`' return: 38 vars, including all nine names this sheet used. Read the two inline write loops at `ThemeProvider.tsx:404-406` and `:444-446`, and `applyAccentColor`'s six more at `:213-218`/`:231-236`. | §1.9 added; every token reference outside §1.9's own name map, §8's Buzz-engine edits and this log renamed to `--perch-*`, matching `tokens/perch-tokens.css`'s actual names (`--perch-foreground-muted`, not `--muted-foreground`). Verified by grep. |
 | 3 | **`SourceCount` had no Phase-1 data source.** `source_ids` is `null` on the only schema that carries it, and B4 is Phase 2. | `grep source_ids schemas/*.json`; `APPENDIX-NORMATIVE.md` §5's phase column. | §4.8's discriminated pair with three typed absence reasons; §7 narrows `18`'s CR-5 so it survives Phase 1; §12 step 24 wires the id arm with B4. |
-| 4 | **Nothing handled two operators deciding one hold.** | `APPENDIX` §4 layer 1 `p`-tags every Approve principal; `12` §4.4 resolves the daemon side but leg 1 publishes first and a `kind:9` is immutable; `card-ambush-verdict-v1`'s `leg2.state` enum has no value for it. | §4.12's `superseded` phase, the losing console's update-card obligation, and two named asks (a fifth enum value from `13`, a P0 reconciliation invariant from `16`). |
+| 4 | **Nothing handled two operators deciding one hold.** | `APPENDIX` §4 layer 1 `p`-tags every Approve principal; `12` §4.4 resolves the daemon side but leg 1 publishes first and a `kind:9` is immutable; `card-swarm-verdict-v1`'s `leg2.state` enum has no value for it. | §4.12's `superseded` phase, the losing console's update-card obligation, and two named asks (a fifth enum value from `13`, a P0 reconciliation invariant from `16`). |
 | 5 | **The Cmd-K omnibox had a binding, a route-table home, two drawn overlays and no spec.** | `grep -ci omnibox` → 0 in revision 1 and in `18`/`14`/`20`/`22`. | §6.13, with its modes, its **two-entry** closed command registry, the escape-surface contract, and a keymap-registry row so INV-31/32 cover the chord. |
 | 6 | **The Case Canvas was handed between three artifacts and owned by none.** | Revision 1's own UNRESOLVED entry; `20`'s single `canvas` row points elsewhere; `prototypes/case.html` files it PROPOSED with no owner. | §6.14 takes it: five headings, written by the console once per case, no `ChannelCanvas.tsx` change. |
 | 7 | **Queue headers were specified two incompatible ways**, and this sheet cited the losing source. | `04` §2.1 vs `06` §5.1; `prototypes/watch.html` renders the former. | §6.2 ratifies `04` §2.1's set with the argument, and joins the amendment against `06`. |
@@ -2508,7 +2508,7 @@ above) and two structural collisions that are the gate's to resolve, not this sh
 
 Two further collisions the critics found on the prototypes — U+26A0 (the warning-sign glyph, the
 fourth alternate in the `shield-glyph` row's pattern) opening the render-law-2 evidence warning, and
-the literal `ambush:lease:v1` marker comments — do not occur in this sheet's rendered strings, and
+the literal `swarm:lease:v1` marker comments — do not occur in this sheet's rendered strings, and
 the `shield-glyph` pattern's four codepoints appear in this document only inside §14.2's own
 discussion of the row. But both bear on this sheet's contracts. On the first: `SeverityChip` (§5.1)
 already carries the rule — severity is a word plus a four-segment bar and **never** a glyph — so the

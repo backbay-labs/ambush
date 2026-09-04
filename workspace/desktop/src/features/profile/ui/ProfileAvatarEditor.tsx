@@ -3,9 +3,7 @@ import Picker from "@emoji-mart/react";
 import { Link2, UploadCloud } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
-import { flushSync } from "react-dom";
 
-import { AnimatedAvatarCapture } from "@/features/profile/ui/AnimatedAvatarCapture";
 import { AvatarCustomColorPanel } from "@/features/profile/ui/AvatarCustomColorPanel";
 import { ProfileAvatarModeTabs } from "@/features/profile/ui/ProfileAvatarModeTabs";
 import { useAvatarSelection } from "@/features/profile/avatarPresentationStore";
@@ -19,7 +17,6 @@ import {
   DONE_BUTTON_SHELL_TRANSITION,
   useLocalAvatarPreview,
   useUploadPreviewLifecycle,
-  waitForPendingButtonPaint,
 } from "./ProfileAvatarEditor.helpers";
 import {
   AVATAR_COLORS,
@@ -74,16 +71,12 @@ export function ProfileAvatarEditor({
   onLocalPreviewChange,
   onUploadedAvatarChange,
   onUrlChange,
-  onAnimatedAvatarApply,
   onDone,
   onUploadingChange,
   showEmojiColorControlsWhenEmpty = false,
   disabled,
   testIdPrefix = "profile-avatar",
-  animatedPreviewContainer = null,
   modeTabsContainer,
-  onAnimatedPreviewActiveChange,
-  onAnimatedPreviewCaptionChange,
   presentation = "default",
 }: ProfileAvatarEditorProps) {
   const { burstEmoji } = useEmojiBurst();
@@ -111,8 +104,6 @@ export function ProfileAvatarEditor({
   );
   const [customValue, setCustomValue] = React.useState(DEFAULT_CUSTOM_VALUE);
   const [isCustomColorPickerOpen, setIsCustomColorPickerOpen] =
-    React.useState(false);
-  const [isAnimatedCustomColorPickerOpen, setIsAnimatedCustomColorPickerOpen] =
     React.useState(false);
   const dragDepthRef = React.useRef(0);
   const emojiPickerContainerRef = React.useRef<HTMLDivElement | null>(null);
@@ -151,8 +142,6 @@ export function ProfileAvatarEditor({
     (selectedEmoji !== null || showEmojiColorControlsWhenEmpty);
   const isCustomColorPickerVisible =
     isCustomColorPickerOpen && shouldShowColorControls;
-  const isAnyCustomColorPickerVisible =
-    isCustomColorPickerVisible || isAnimatedCustomColorPickerOpen;
   const updateMode = React.useCallback(
     (nextMode: AvatarMode) => {
       if (mode === nextMode) {
@@ -174,8 +163,6 @@ export function ProfileAvatarEditor({
     },
     [onUploadedAvatarChange, setAvatar, updateMode],
   );
-  const [isAnimatedApplyPending, setIsAnimatedApplyPending] =
-    React.useState(false);
   const uploadPreviewLifecycle = useUploadPreviewLifecycle({
     clearFallback: localPreview.clearPreview,
     onSuccess: handleUploadSuccess,
@@ -190,69 +177,11 @@ export function ProfileAvatarEditor({
     openPicker,
     uploadFile,
   } = useAvatarUpload(uploadPreviewLifecycle);
-  const isInputDisabled = disabled || isUploading || isAnimatedApplyPending;
-  const handleAnimatedApply = React.useCallback(
-    (animatedUrl: string) => {
-      clearUploadError();
-      setUrlDraft("");
-      onUploadedAvatarChange?.(animatedUrl);
-      setAvatar(animatedUrl);
-      onAnimatedAvatarApply?.(animatedUrl);
-    },
-    [
-      clearUploadError,
-      onAnimatedAvatarApply,
-      onUploadedAvatarChange,
-      setAvatar,
-    ],
-  );
-  // Done on the animated tab uploads the pending recording first, then
-  // saves. The save is queued through state so it runs on the next render,
-  // after the freshly applied avatar URL has propagated into the host's
-  // drafts (calling onDone directly would read stale state).
-  const animatedApplyRef = React.useRef<(() => Promise<boolean>) | null>(null);
-  const [hasAnimatedApply, setHasAnimatedApply] = React.useState(false);
-  const registerAnimatedApply = React.useCallback(
-    (apply: (() => Promise<boolean>) | null) => {
-      animatedApplyRef.current = apply;
-      setHasAnimatedApply(apply !== null);
-    },
-    [],
-  );
-  const [isAnimatedDoneQueued, setIsAnimatedDoneQueued] = React.useState(false);
-  const isDoneButtonPending =
-    donePending ||
-    isUploading ||
-    isAnimatedApplyPending ||
-    isAnimatedDoneQueued;
+  const isInputDisabled = disabled || isUploading;
+  const isDoneButtonPending = donePending || isUploading;
   const handleDoneClick = React.useCallback(() => {
-    const applyAnimated = mode === "animated" ? animatedApplyRef.current : null;
-    if (applyAnimated) {
-      flushSync(() => {
-        setIsAnimatedApplyPending(true);
-      });
-      void waitForPendingButtonPaint()
-        .then(() => applyAnimated())
-        .then((applied) => {
-          if (applied) {
-            setIsAnimatedDoneQueued(true);
-            return;
-          }
-        })
-        .catch(() => {})
-        .finally(() => {
-          setIsAnimatedApplyPending(false);
-        });
-      return;
-    }
     onDone?.();
-  }, [mode, onDone]);
-
-  React.useEffect(() => {
-    if (!isAnimatedDoneQueued) return;
-    setIsAnimatedDoneQueued(false);
-    onDone?.();
-  }, [isAnimatedDoneQueued, onDone]);
+  }, [onDone]);
 
   useEmojiMartStyles(emojiPickerContainerRef, mode === "emoji");
 
@@ -312,8 +241,8 @@ export function ProfileAvatarEditor({
   }, []);
 
   React.useLayoutEffect(() => {
-    onUploadingChange?.(isUploading || (!onDone && isAnimatedApplyPending));
-  }, [isAnimatedApplyPending, isUploading, onDone, onUploadingChange]);
+    onUploadingChange?.(isUploading);
+  }, [isUploading, onUploadingChange]);
 
   React.useEffect(() => {
     const emojiAvatar = parseEmojiAvatarDataUrl(avatarUrl);
@@ -333,12 +262,12 @@ export function ProfileAvatarEditor({
   }, [shouldShowColorControls]);
 
   React.useLayoutEffect(() => {
-    onCustomColorPickerOpenChange?.(isAnyCustomColorPickerVisible);
+    onCustomColorPickerOpenChange?.(isCustomColorPickerVisible);
 
     return () => {
       onCustomColorPickerOpenChange?.(false);
     };
-  }, [isAnyCustomColorPickerVisible, onCustomColorPickerOpenChange]);
+  }, [isCustomColorPickerVisible, onCustomColorPickerOpenChange]);
 
   React.useEffect(() => {
     if (!isCustomColorPickerOpen || !selectedEmoji) {
@@ -482,14 +411,8 @@ export function ProfileAvatarEditor({
   }, [isDragging, resetDragState]);
 
   const isImageDropActive = mode === "image" && isDragging;
-  const shouldShowDoneButton =
-    onDone &&
-    !isAnyCustomColorPickerVisible &&
-    (mode !== "animated" || hasAnimatedApply || isDoneButtonPending);
-  const isDoneButtonDisabled =
-    disabled ||
-    isDoneButtonPending ||
-    (isOnboardingModal && mode === "animated" && !hasAnimatedApply);
+  const shouldShowDoneButton = onDone && !isCustomColorPickerVisible;
+  const isDoneButtonDisabled = disabled || isDoneButtonPending;
   const modeTabsContent = (
     <ProfileAvatarModeTabs
       disabled={isInputDisabled}
@@ -565,7 +488,7 @@ export function ProfileAvatarEditor({
         className="relative"
         style={
           isOnboardingModal
-            ? { minHeight: isAnyCustomColorPickerVisible ? 704 : 454 }
+            ? { minHeight: isCustomColorPickerVisible ? 704 : 454 }
             : undefined
         }
       >
@@ -729,22 +652,6 @@ export function ProfileAvatarEditor({
                     </p>
                   ) : null}
                 </div>
-              ) : mode === "animated" ? (
-                <AnimatedAvatarCapture
-                  disabled={isInputDisabled}
-                  onCustomColorPickerOpenChange={
-                    setIsAnimatedCustomColorPickerOpen
-                  }
-                  onApply={handleAnimatedApply}
-                  onApplyPendingChange={setIsAnimatedApplyPending}
-                  onPreviewActiveChange={onAnimatedPreviewActiveChange}
-                  onPreviewCaptionChange={onAnimatedPreviewCaptionChange}
-                  previewContainer={animatedPreviewContainer}
-                  registerApply={registerAnimatedApply}
-                  compactReview={isOnboardingModal}
-                  showApplyButton={!onDone}
-                  testIdPrefix={testIdPrefix}
-                />
               ) : (
                 <div className="relative grid content-start gap-3">
                   <div

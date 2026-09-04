@@ -354,7 +354,7 @@ crates/swarm-perch-bridge/
     ├── cards.rs         Marker card assembly. Body schemas are 13-WIRE-SCHEMAS.md's.      ~260
     ├── channels.rs      Case-channel provisioning on both triggers; HoldId; kind 9007
     │                    + kind 9000, idempotent.                                          ~280
-    ├── leases.rs        1 Hz containment-lease diff -> ambush:lease:v1.                   ~180
+    ├── leases.rs        1 Hz containment-lease diff -> swarm:lease:v1.                   ~180
     ├── publish.rs       Connection supervisor, OK reaper, backoff, admission handling.    ~380
     ├── metrics.rs       prometheus-client Registry::with_prefix("perch") + axum router.   ~220
     └── ws/              VENDORED from BUZZ crates/buzz-ws-client, four panic sites removed.
@@ -522,7 +522,7 @@ the separator.
 `PERCH_GAP_FLUSH_TICKS = 3` — **PROPOSED**, no measurement behind it; three ticks is the smallest
 value that does not race a busy stream's own next card.
 
-> **Commitment for `13-WIRE-SCHEMAS.md`:** every `ambush:*:v1` body schema carries optional
+> **Commitment for `13-WIRE-SCHEMAS.md`:** every `swarm:*:v1` body schema carries optional
 > `gap` and `coalesced` blocks, and a card with an **empty payload array and a populated `gap`
 > block is legal and must render**. A schema that makes the payload array `minItems: 1` breaks
 > gap flushing.
@@ -601,7 +601,7 @@ returns the **scheduling** class, which is the one that governs backpressure.
 | | **Evidence** | **Telemetry** | **Alarm** | **Dropped-at-source** |
 |---|---|---|---|---|
 | Carries | `Finding`, `Escalation`, `ResponseExecution`; and the containment-lease diff (§9) | `ConcentrationSnapshot`, `AgentHealth`, `AgentAction` | `ResponseHeld`, `ModeTransition`, `TamperAlert` | `Ingest`, `Replay`, `EvolutionStatus`, plus every loss record |
-| Wire | `kind:9` + `ambush:finding\|escalation\|receipt\|lease:v1`, into a **lane** or **case** channel | ephemeral `26001`, `26002`, global, no `h` | `kind:46010` + `ambush:hold:v1` into the case channel; ephemeral `26006`/`26003`/`26005`, global | ephemeral `26000` gauge; `gap`/`coalesced` blocks on other streams' cards |
+| Wire | `kind:9` + `swarm:finding\|escalation\|receipt\|lease:v1`, into a **lane** or **case** channel | ephemeral `26001`, `26002`, global, no `h` | `kind:46010` + `swarm:hold:v1` into the case channel; ephemeral `26006`/`26003`/`26005`, global | ephemeral `26000` gauge; `gap`/`coalesced` blocks on other streams' cards |
 | Durable at the relay | **yes** | no (ephemeral kinds are never stored) | 46010 yes; 26006/26003/26005 no | no |
 | Identity | one per admitted agent (§7) | `perch-telemetry` | `perch-alarm` | `perch-telemetry` (the gauge) |
 | Coalescing | last-wins per `(threat_class, level)` for `Escalation`; batch by `(threat_class, host_id)` for `Finding`; none for `ResponseExecution` | last-wins per key, 10 Hz → 1 Hz | **none, ever** | n/a |
@@ -988,7 +988,7 @@ no new key material is provisioned, nothing extra can be lost, and the mapping
 
 ```
 nostr_secret[i] = SHA-256( DOMAIN || 0x00 || colony_id || 0x00 || slot_label )
-    DOMAIN     = b"ambush.perch.bridge.nostr.v1"
+    DOMAIN     = b"swarm.perch.bridge.nostr.v1"
     slot_label = the AgentId string for an agent slot ("swarm:ed25519:<hex>"),
                  or b"perch-telemetry" / b"perch-alarm"
 ```
@@ -1428,7 +1428,7 @@ does not depend on the frame carrying a `p` tag, and it survives a client that f
 
 The bridge never mints a `hold_id` — B1's `HeldActionStore` does, and `12-BACKEND-BILL-API.md`
 records it as *"opaque (uuid)"*. But the schemas that carry it
-(`card-ambush-hold-v1`, `card-ambush-verdict-v1`, `frame-26006-hold-alarm`) declare it as a bare
+(`card-swarm-hold-v1`, `card-swarm-verdict-v1`, `frame-26006-hold-alarm`) declare it as a bare
 `"type": "string"` with the constraint stated only in prose, and six different shapes are in
 circulation across the wave-2 artifacts, two of them using the `hold:` colon prefix the schema
 descriptions warn against.
@@ -1444,7 +1444,7 @@ once in `common.schema.json`'s `$defs`**, and the bridge will conform to whateve
 
 ## 9. Case-channel provisioning, and the two cards nobody assigned
 
-Case channels, their TTL, `ambush:lease:v1` and `ambush:rollback:v1` — the four things in this
+Case channels, their TTL, `swarm:lease:v1` and `swarm:rollback:v1` — the four things in this
 document's scope that no plan document assigned an owner. All four are decided or have a named,
 priced bill item below.
 
@@ -1556,7 +1556,7 @@ ensure_case_channel(trigger, operators, ttl):
       step 2: kind:9000  h=uuid  p=<each OperatorScope::Approve principal>   (one event each)
       routing.put(trigger.hunt_id, uuid)                      # durable, before step 3
   # Held only:
-  step 3: kind:46010  h=uuid  p=<same set>  + ambush:hold:v1
+  step 3: kind:46010  h=uuid  p=<same set>  + swarm:hold:v1
   step 4: ephemeral 26006  h=<#watch>  p=<same set>
 ```
 
@@ -1668,7 +1668,7 @@ conclusion — the daemon's case record, not the channel row, answers "is this c
 document adds only that **the bridge must not treat channel archival as case closure** and must
 keep its `hunt_id → case_channel` routing entry until the daemon says the hold is decided.
 
-### 9.3 `ambush:lease:v1` — the 1 Hz containment-lease diff
+### 9.3 `swarm:lease:v1` — the 1 Hz containment-lease diff
 
 There is no `RuntimeEvent` for a containment lease opening. So the bridge polls.
 
@@ -1681,7 +1681,7 @@ sweeps over a `MemoryContainmentLeaseStore` are two different maps.
 The bridge holds `Option<Arc<ContainmentSweep>>` (the same option `swarm_detect` already computes),
 polls at 1 Hz, and diffs by `lease_id`:
 
-- **appeared** → build `ambush:lease:v1` from the `ContainmentLease` and publish it on the evidence
+- **appeared** → build `swarm:lease:v1` from the `ContainmentLease` and publish it on the evidence
   stream into the case channel resolved through `lease.origin_receipt_id` → `receipt_id → hunt_id`
   (recorded when the `ResponseExecution` came through) → `hunt_id → case_channel`.
 - **disappeared** → §9.4.
@@ -1699,22 +1699,22 @@ clock-derived: `ContainmentLeaseView`'s own doc comment
 hour ago and the sweep has not managed to release it", which is why `expired` is a separate field.
 Baking either into an immutable card would freeze a lie.
 
-### 9.4 OPEN — `ambush:rollback:v1` has no assigned producer, and here is the smallest fix
+### 9.4 OPEN — `swarm:rollback:v1` has no assigned producer, and here is the smallest fix
 
-`APPENDIX-NORMATIVE.md` §3 assigns `ambush:rollback:v1` a payload (`RollbackReceipt`, as a NIP-10
+`APPENDIX-NORMATIVE.md` §3 assigns `swarm:rollback:v1` a payload (`RollbackReceipt`, as a NIP-10
 reply to the containment-lease card) and a channel (case). `07-REALTIME-AND-DATA.md` §4's stream table does not
 list it, because no `RuntimeEvent` carries it. It has two possible producers and they cover
 different events:
 
 | Release cause | Who holds the `RollbackReceipt` | Can publish the card? |
 |---|---|---|
-| Operator release — the console `POST`s `/v1/operator/containment/leases/{id}/release` (one of INV-01's five permitted non-GETs) and gets `ContainmentReleaseResponse` back (`containment.rs:128-145`) | the console | **yes** — as leg 1 of the release, the same shape as `ambush:verdict:v1` |
+| Operator release — the console `POST`s `/v1/operator/containment/leases/{id}/release` (one of INV-01's five permitted non-GETs) and gets `ContainmentReleaseResponse` back (`containment.rs:128-145`) | the console | **yes** — as leg 1 of the release, the same shape as `swarm:verdict:v1` |
 | TTL expiry — `ContainmentSweep::sweep` (`swarm-runtime/src/containment.rs:568+`) produces a `ContainmentSweepReport { expired, receipts: Vec<RollbackReceipt>, failures }` and `run_until_shutdown` consumes it internally | nobody outside the sweep | **no** |
 
 **Decision, in two parts:**
 
-1. **The console publishes `ambush:rollback:v1` for an operator release**, as leg 1, exactly like
-   `ambush:verdict:v1`. This is `14-CLIENT-ARCHITECTURE.md`'s to implement; recorded here as a
+1. **The console publishes `swarm:rollback:v1` for an operator release**, as leg 1, exactly like
+   `swarm:verdict:v1`. This is `14-CLIENT-ARCHITECTURE.md`'s to implement; recorded here as a
    commitment so it is not assumed to be the bridge's.
 2. **A TTL-expiry release needs a thirteenth `RuntimeEvent` variant**, and I am naming it rather
    than assuming it: **B1c — `RuntimeEvent::ContainmentReleased { emitted_at_ms, lease_id, trigger,
@@ -2072,9 +2072,9 @@ An **integration** test against a real relay belongs in `crates/buzz-test-client
    `perch.case_ttl_seconds`, and requires `ChannelsWrite` + `AdminChannels` on `perch-alarm`
    (§9.1, §9.2, §8.3). The routing map is single-valued and first-write-wins; a conflicting
    `case_id` is refused, never adopted.
-8. `ambush:lease:v1` comes from a 1 Hz `open_leases()` diff and never carries `remaining_ms` or
+8. `swarm:lease:v1` comes from a 1 Hz `open_leases()` diff and never carries `remaining_ms` or
    `expired` (§9.3).
-9. `ambush:rollback:v1` for an operator release is the **console's** leg-1 publish, not the
+9. `swarm:rollback:v1` for an operator release is the **console's** leg-1 publish, not the
    bridge's (§9.4).
 10. Metrics live on a `perch`-prefixed registry at `GET /metrics/perch`, registered without the
     `_total` suffix (§11.1).
@@ -2098,12 +2098,12 @@ An **integration** test against a real relay belongs in `crates/buzz-test-client
 | Open | Owner | Smallest fix |
 |---|---|---|
 | No operator Nostr pubkey exists in Ambush config; `46010` cannot be `p`-tagged (§7.5) | the backend bill | `nostr_pubkey: Option<String>` on `OperatorPrincipalConfig`, `#[serde(default)]` |
-| TTL-expiry releases produce no `ambush:rollback:v1` (§9.4) | the backend bill | **B1c** — a thirteenth `RuntimeEvent::ContainmentReleased`, PROPOSED, ~0.5 ew |
+| TTL-expiry releases produce no `swarm:rollback:v1` (§9.4) | the backend bill | **B1c** — a thirteenth `RuntimeEvent::ContainmentReleased`, PROPOSED, ~0.5 ew |
 | Whether `nostr` with `default-features = false` deletes the `chacha20` duplicate (§1.5) | this crate's first commit | three commands, listed |
 | Every constant marked PROPOSED in §13 | measurement, after the first real spool drain | — |
 | Manual promotion — the only clause ADR 0018 C4 enables first — has no case-channel creator (§9.1.2) | the backend bill | **B1d** — a `RuntimeEvent::CasePromoted`, PROPOSED, ~0.5 ew, seven upstream edits itemised in §9.1.5. **Not cuttable** while clause 3 is the enabled one |
 | Whether `case_id` is minted by the daemon or by the console (§9.1.6) | `12-BACKEND-BILL-API.md` | daemon-side removes the conflict arm; console-side needs zero OpenAPI change. Either works; the bridge's behaviour is identical apart from whether `CaseChannelConflict` is reachable |
-| Two operators deciding one hold — the daemon's CAS picks a winner, the relay keeps both signed `ambush:verdict:v1` cards forever, and nothing marks the loser | `13-WIRE-SCHEMAS.md` (a `leg2.state` value) + `16-INVARIANT-TESTS.md` (the invariant and its two-console E2E) | **Not the bridge's, and recorded here so nobody assumes it is.** The bridge publishes no verdict card; it publishes the `46010` and the `26006` whose `p` tag sets are what make more than one console eligible in the first place (`APPENDIX-NORMATIVE.md` §4 layer 1 p-tags *every* `OperatorScope::Approve` principal). The bridge cannot dedupe: a `kind:9` is immutable and the bridge has no relay read path (§8.4). Even B1's hold-state republish would produce a lifecycle card, not a mark on the losing verdict |
+| Two operators deciding one hold — the daemon's CAS picks a winner, the relay keeps both signed `swarm:verdict:v1` cards forever, and nothing marks the loser | `13-WIRE-SCHEMAS.md` (a `leg2.state` value) + `16-INVARIANT-TESTS.md` (the invariant and its two-console E2E) | **Not the bridge's, and recorded here so nobody assumes it is.** The bridge publishes no verdict card; it publishes the `46010` and the `26006` whose `p` tag sets are what make more than one console eligible in the first place (`APPENDIX-NORMATIVE.md` §4 layer 1 p-tags *every* `OperatorScope::Approve` principal). The bridge cannot dedupe: a `kind:9` is immutable and the bridge has no relay read path (§8.4). Even B1's hold-state republish would produce a lifecycle card, not a mark on the losing verdict |
 | The `26006` reconciliation's *upstream* half — whether `26006` actually joins `P_GATED_KINDS` | `10-RELAY-FORK.md` / ADR 0017 | land it, described as closing the **global** form only. §8.6 shows the two mechanisms do not conflict; what must change is ADR 0017's claim to be the whole answer |
 
 **Proposed amendments this document files, collected:**
@@ -2112,7 +2112,7 @@ An **integration** test against a real relay belongs in `crates/buzz-test-client
 |---|---|---|
 | §5.1 | `APPENDIX-NORMATIVE.md` §6 | `PERCH_SPOOL_MAX_BYTES` reads "256 MiB per **disk-spooled** stream (evidence, alarm); the telemetry stream is not disk-spooled" |
 | B0 | the backend bill | `nostr_pubkey: Option<String>` on `OperatorPrincipalConfig` (§7.5) |
-| B1c | the backend bill | `RuntimeEvent::ContainmentReleased`, so a TTL-expiry release can produce `ambush:rollback:v1` (§9.4) |
+| B1c | the backend bill | `RuntimeEvent::ContainmentReleased`, so a TTL-expiry release can produce `swarm:rollback:v1` (§9.4) |
 | **B1d** | the backend bill | `RuntimeEvent::CasePromoted`, so the manual-promotion clause has a case-channel creator (§9.1.5). **New in revision 2, and the one that is not cuttable** |
 | §9.1.6 | `12-BACKEND-BILL-API.md` | mint `case_id` daemon-side and return it, rather than requiring it in `IncidentMintRequest` — removes the conflict arm entirely. The alternative is spelled out with its cost |
 | §8.3 items 8–9 | ADR 0017 / the relay operator's runbook | `#watch` is provisioned **private**, and `perch-alarm` is a member of it. Without both, `26006` disclosure is unchanged or the alarm path is dead |

@@ -119,7 +119,7 @@ step needs. Three candidate creators were checked and two are closed:
 | Candidate | Verdict |
 |---|---|
 | The bridge, on `RuntimeEvent::ResponseHeld` | correct for clause 1 and silent for clause 3 — the enabled one |
-| The console, publishing `kind:9007` itself | **closed.** `10-RELAY-FORK.md`'s INV-RF1 restricts the operator's own key to exactly one published kind, `kind:9` / `ambush:verdict:v1`, via `perch_record_verdict`. `14-CLIENT-ARCHITECTURE.md`'s write set has no channel-create command, and widening it would put a channel-creation authority in the renderer's reach |
+| The console, publishing `kind:9007` itself | **closed.** `10-RELAY-FORK.md`'s INV-RF1 restricts the operator's own key to exactly one published kind, `kind:9` / `swarm:verdict:v1`, via `perch_record_verdict`. `14-CLIENT-ARCHITECTURE.md`'s write set has no channel-create command, and widening it would put a channel-creation authority in the renderer's reach |
 | The daemon, publishing directly to the relay | **closed.** ADR 0015 makes the bridge the only Ambush component holding a relay identity, and ADR 0012 clause 3 keeps the daemon off the relay entirely |
 
 That leaves the bridge, on a **second** trigger — which means a runtime event must exist for

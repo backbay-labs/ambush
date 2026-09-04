@@ -8,7 +8,7 @@
   "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
   "kind": 26000,
   "rejected": 4,
-  "schema": "ambush.perch.frame.ingest_rate.v1",
+  "schema": "swarm.perch.frame.ingest_rate.v1",
   "seq": 4411,
   "window_ms": 1000
 }

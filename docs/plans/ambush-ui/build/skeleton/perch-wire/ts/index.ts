@@ -21,7 +21,7 @@
  * - A conversion between `UnixMillis` and `UnixSeconds`. Crossing the two clock
  *   domains must be named at the call site.
  * - A `signRelayEvent` wrapper. INV-29 requires the ONLY producer of an
- *   `ambush:verdict:v1` card to be a dedicated `perch_record_verdict` Tauri
+ *   `swarm:verdict:v1` card to be a dedicated `perch_record_verdict` Tauri
  *   command that builds its body from daemon-fetched hold state — because
  *   `sign_event` (`BUZZ desktop/src-tauri/src/commands/identity.rs:108`, exposed
  *   to the webview as `signRelayEvent` at

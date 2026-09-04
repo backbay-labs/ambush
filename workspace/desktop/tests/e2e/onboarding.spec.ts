@@ -8,7 +8,6 @@ import {
   TEST_IDENTITIES,
 } from "../helpers/bridge";
 import { expectEmojiMartStylesInstalled } from "../helpers/css";
-import { installFakeCamera } from "../helpers/fakeCamera";
 import {
   E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
   seedActiveIdentity,
@@ -1936,7 +1935,6 @@ test("connected first-community profile keeps Back bottom-left and balances the 
       transactionStorageKey: COMMUNITY_ONBOARDING_TRANSACTION_STORAGE_KEY,
     },
   );
-  await installFakeCamera(page, { failRequests: 1 });
   const uploadedAvatarUrl = "https://mock.relay/media/community-avatar.png";
   let avatarRequestCount = 0;
   await page.route(`${uploadedAvatarUrl}*`, async (route) => {
@@ -2190,55 +2188,6 @@ test("connected first-community profile keeps Back bottom-left and balances the 
   await page.waitForTimeout(300);
   const emojiEditorLayout = await measureAnchoredEditorLayout();
   expect(emojiEditorLayout.saveBox.y).toBe(imageEditorLayout.saveBox.y);
-  await page.getByRole("tab", { name: "Animated" }).click();
-  await expect(saveButton).toHaveCount(0);
-  const iphoneCameraButton = page.getByTestId(
-    "community-avatar-animated-camera-iphone",
-  );
-  const computerCameraButton = page.getByTestId(
-    "community-avatar-animated-camera-computer",
-  );
-  await expect(iphoneCameraButton).toBeVisible();
-  await expect(computerCameraButton).toBeVisible();
-  await expect(iphoneCameraButton).toHaveAttribute("aria-pressed", "false");
-  await expect(computerCameraButton).toHaveAttribute("aria-pressed", "false");
-  await iphoneCameraButton.click();
-  await expect(
-    page.getByTestId("community-avatar-animated-error"),
-  ).toContainText("Could not access the camera");
-  await expect(iphoneCameraButton).toHaveAttribute("aria-pressed", "true");
-  await computerCameraButton.click();
-  await expect(computerCameraButton).toHaveAttribute("aria-pressed", "true");
-  const captureButton = page.getByTestId("community-avatar-animated-record");
-  await expect(captureButton).toHaveText("Capture 3 sec video");
-  const captureButtonStyles = await captureButton.evaluate((element) => {
-    const styles = window.getComputedStyle(element);
-    return {
-      backgroundColor: styles.backgroundColor,
-      borderRadius: Number.parseFloat(styles.borderRadius),
-      color: styles.color,
-      height: styles.height,
-    };
-  });
-  expect(captureButtonStyles).toMatchObject({
-    backgroundColor: "rgb(41, 32, 25)",
-    color: "rgb(188, 181, 173)",
-    height: "38px",
-  });
-  expect(captureButtonStyles.borderRadius).toBeGreaterThan(1_000);
-  await captureButton.click();
-  await expect(
-    page.getByTestId("community-avatar-animated-sections"),
-  ).toBeVisible({ timeout: 60_000 });
-  await expect(saveButton).toBeVisible();
-  await saveButton.click();
-  await expect(avatarDialog).toHaveCount(0, { timeout: 30_000 });
-  await expect(
-    page.getByTestId("community-avatar-circle-image"),
-  ).toHaveAttribute("src", /^blob:/);
-  await avatarButton.click();
-  await expect(avatarDialog).toBeVisible();
-  await page.getByRole("tab", { name: "Emoji" }).click();
   await selectFirstEmojiFromPicker(page);
   const liveEmoji = page.getByTestId("community-avatar-live-preview-emoji");
   await expect(liveEmoji).toHaveClass(/ambush-avatar-squish/);

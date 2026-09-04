@@ -212,11 +212,14 @@ function jcs(value) {
 // can recompute it from the committed file and so the demo's "check against the
 // daemon" affordance is a real diff rather than a picture of one.
 const envelopeHash = (unsigned) => "0x" + createHash("sha256").update(jcs(unsigned), "utf8").digest("hex");
+const rationaleSha256 = (value) => value == null
+  ? null
+  : createHash("sha256").update(value, "utf8").digest("hex");
 
 // seq and prev_envelope_hash are PER (issuer, stream), not global
 // (13-WIRE-SCHEMAS.md SEQ commitment). The bridge publishes every card the
 // daemon produces on its evidence stream; the operator's own console publishes
-// the two `ambush:verdict:v1` cards under the operator's spine identity, which
+// the two `swarm:verdict:v1` cards under the operator's spine identity, which
 // is a different issuer and therefore a different chain. A consumer that treats
 // them as one chain reports a phantom gap at every verdict.
 const CHAINS = new Map();
@@ -320,7 +323,7 @@ function findingCard(label, { strategyId, eventId, evidence, emittedMs }) {
     evidence,
   };
   return envelope(label, {
-    schema: "ambush.perch.finding.v1",
+    schema: "swarm.perch.finding.v1",
     issuer: DAEMON_FACT_ISSUER,
     emitted_at_ms: emittedMs,
     locator: {
@@ -337,7 +340,7 @@ function findingCard(label, { strategyId, eventId, evidence, emittedMs }) {
 // ── the escalation ─────────────────────────────────────────────────────────
 function escalationCard() {
   return envelope("escalation", {
-    schema: "ambush.perch.escalation.v1",
+    schema: "swarm.perch.escalation.v1",
     issuer: { swarm_agent_id: "concentration-monitor", role: null, nostr_pubkey: null },
     emitted_at_ms: T.cross_ms,
     locator: { lane_channel: IDS.lane_execution_channel, case_channel: null },
@@ -465,7 +468,7 @@ function holdBody(id, { state, action, huntId, evidence, heldMs, rehearsal, inve
 
 function holdCard(label, holdId, findingCardId, body, emittedMs) {
   return envelope(label, {
-    schema: "ambush.perch.hold.v1",
+    schema: "swarm.perch.hold.v1",
     issuer: DAEMON_FACT_ISSUER,
     emitted_at_ms: emittedMs,
     locator: {
@@ -529,7 +532,7 @@ const HOLD_A_TERMINAL = holdBody(IDS.hold_a, {
 // ── the verdict cards (leg 1) ──────────────────────────────────────────────
 function verdictGrantCard() {
   return envelope("verdict-grant", {
-    schema: "ambush.perch.verdict.v1",
+    schema: "swarm.perch.verdict.v1",
     issuer: { swarm_agent_id: OPERATOR_ID, role: null, nostr_pubkey: IDS.operator_nostr_pubkey },
     emitted_at_ms: T.leg1_ms,
     locator: { hold_id: IDS.hold_a, case_channel: IDS.case_channel, hold_card_id: IDS.ev_hold_a_open },
@@ -538,6 +541,7 @@ function verdictGrantCard() {
       hold_id: IDS.hold_a,
       operator_id: OPERATOR_ID,
       decided_at_ms: T.leg1_ms,
+      rationale_sha256: rationaleSha256(HOLD_A_DECISION.rationale),
       rationale: HOLD_A_DECISION.rationale,
     },
     signature: HOLD_A_DECISION.signature,
@@ -580,7 +584,7 @@ function receiptCard() {
     },
   };
   return envelope("receipt", {
-    schema: "ambush.perch.receipt.v1",
+    schema: "swarm.perch.receipt.v1",
     issuer: DAEMON_FACT_ISSUER,
     emitted_at_ms: T.receipt_ms,
     locator: {
@@ -644,7 +648,7 @@ const CONTAINMENT_LEASE_RECORD = {
 
 function leaseCard() {
   return envelope("lease", {
-    schema: "ambush.perch.lease.v1",
+    schema: "swarm.perch.lease.v1",
     issuer: DAEMON_FACT_ISSUER,
     emitted_at_ms: T.lease_ms,
     locator: {
@@ -661,7 +665,7 @@ function leaseCard() {
 // ── the rollback receipt ───────────────────────────────────────────────────
 function rollbackCard() {
   return envelope("rollback", {
-    schema: "ambush.perch.rollback.v1",
+    schema: "swarm.perch.rollback.v1",
     issuer: { swarm_agent_id: "containment-sweep", role: null, nostr_pubkey: null },
     emitted_at_ms: T.rollback_ms,
     locator: {
@@ -921,12 +925,12 @@ const INSTRUMENTATION = {
 // opaque ids only (APPENDIX-NORMATIVE.md section 3).
 const FRAMES = {
   "frame-26000-ingest-rate-0914": {
-    kind: 26000, schema: "ambush.perch.frame.ingest_rate.v1", issuer: BRIDGE_ISSUER,
+    kind: 26000, schema: "swarm.perch.frame.ingest_rate.v1", issuer: BRIDGE_ISSUER,
     seq: 1, emitted_at_ms: M("2026-03-17T09:14:33.000Z"), window_ms: 1000,
     accepted: 2, rejected: 0, by_source: { synthetic: 2 },
   },
   "frame-26001-concentration-below": {
-    kind: 26001, schema: "ambush.perch.frame.concentration.v1", issuer: BRIDGE_ISSUER,
+    kind: 26001, schema: "swarm.perch.frame.concentration.v1", issuer: BRIDGE_ISSUER,
     seq: 2, emitted_at_ms: T.tick_below_ms, observed_at_seconds: T.tick_below_s,
     // APPENDIX-NORMATIVE.md section 3: coalesced 10 Hz -> 1 Hz IN THE BRIDGE,
     // before IPC. The ten ticks inside one second are byte-identical because
@@ -936,19 +940,19 @@ const FRAMES = {
     concentrations: twelveClasses(CONC.below),
   },
   "frame-26001-concentration-crossing": {
-    kind: 26001, schema: "ambush.perch.frame.concentration.v1", issuer: BRIDGE_ISSUER,
+    kind: 26001, schema: "swarm.perch.frame.concentration.v1", issuer: BRIDGE_ISSUER,
     seq: 10, emitted_at_ms: M("2026-03-17T09:14:42.000Z"), observed_at_seconds: T.cross_s,
     coalesced_from: 10, current_mode: "alert",
     concentrations: twelveClasses(CONC.crossing),
   },
   "frame-26001-concentration-after-dismiss": {
-    kind: 26001, schema: "ambush.perch.frame.concentration.v1", issuer: BRIDGE_ISSUER,
+    kind: 26001, schema: "swarm.perch.frame.concentration.v1", issuer: BRIDGE_ISSUER,
     seq: 253, emitted_at_ms: T.tick_after_dismiss_ms, observed_at_seconds: T.tick_after_dismiss_s,
     coalesced_from: 10, current_mode: "alert",
     concentrations: twelveClasses(CONC.after_dismiss),
   },
   "frame-26002-agent-health": {
-    kind: 26002, schema: "ambush.perch.frame.agent_health.v1", issuer: BRIDGE_ISSUER,
+    kind: 26002, schema: "swarm.perch.frame.agent_health.v1", issuer: BRIDGE_ISSUER,
     seq: 3, emitted_at_ms: M("2026-03-17T09:14:33.100Z"),
     agents: [{
       agent_id: DAEMON_AGENT_ID, role: "whisker", from: "healthy", to: "healthy",
@@ -956,13 +960,13 @@ const FRAMES = {
     }],
   },
   "frame-26003-mode-transition": {
-    kind: 26003, schema: "ambush.perch.frame.mode_transition.v1", issuer: BRIDGE_ISSUER,
+    kind: 26003, schema: "swarm.perch.frame.mode_transition.v1", issuer: BRIDGE_ISSUER,
     seq: 11, emitted_at_ms: T.mode_ms, from: "normal", to: "alert",
     triggering_threat_class: "execution",
     reason: "concentration crossed alert_threshold",
   },
   "frame-26004-governance-status": {
-    kind: 26004, schema: "ambush.perch.frame.governance_status.v1", issuer: BRIDGE_ISSUER,
+    kind: 26004, schema: "swarm.perch.frame.governance_status.v1", issuer: BRIDGE_ISSUER,
     seq: 12, emitted_at_ms: M("2026-03-17T09:14:42.000Z"),
     partition_state: "healthy", healthy_governors: 1, total_governors: 1, quorum_threshold: 1,
     active_contingency_leases: 0, contingency_lease_ttl_ms: CONTINGENCY_LEASE_TTL_MS,
@@ -970,7 +974,7 @@ const FRAMES = {
     last_transition_at_ms: null, last_reconciliation_report_id: null,
   },
   "frame-26005-tamper-alert": {
-    kind: 26005, schema: "ambush.perch.frame.tamper_alert.v1", issuer: BRIDGE_ISSUER,
+    kind: 26005, schema: "swarm.perch.frame.tamper_alert.v1", issuer: BRIDGE_ISSUER,
     seq: 1, emitted_at_ms: M("2026-03-17T09:14:42.050Z"),
     debugger_attached: false, tracer_pid: null, fail_closed: false,
     unexpected_library_count: 0,
@@ -981,13 +985,13 @@ const FRAMES = {
     unexpected_library_sha256: "0x" + createHash("sha256").update("").digest("hex"),
   },
   "frame-26006-hold-alarm-a": {
-    kind: 26006, schema: "ambush.perch.frame.hold_alarm.v1", issuer: BRIDGE_ISSUER,
+    kind: 26006, schema: "swarm.perch.frame.hold_alarm.v1", issuer: BRIDGE_ISSUER,
     seq: 1, emitted_at_ms: T.alarm_a_ms, hold_id: IDS.hold_a, action_kind: "isolate_host",
     severity: "CRITICAL", case_channel: IDS.case_channel,
     expires_at_ms: T.hold_a_ms + PERCH_HOLD_TTL_MS,
   },
   "frame-26006-hold-alarm-b": {
-    kind: 26006, schema: "ambush.perch.frame.hold_alarm.v1", issuer: BRIDGE_ISSUER,
+    kind: 26006, schema: "swarm.perch.frame.hold_alarm.v1", issuer: BRIDGE_ISSUER,
     seq: 2, emitted_at_ms: T.alarm_b_ms, hold_id: IDS.hold_b, action_kind: "block_egress",
     severity: "CRITICAL", case_channel: IDS.case_channel,
     expires_at_ms: T.hold_b_ms + PERCH_HOLD_TTL_MS,
@@ -1054,10 +1058,11 @@ function holdNotice(holdId, action, holdMs, cardEventId, approvers = [IDS.operat
 // A surface loading the base fixture never sees any of this: it lives under
 // `variants.contested` and nothing in `story` references it.
 const CONTESTED_DECIDE_MS = T.demo_now_ms + 1200;
+const CONTESTED_RATIONALE = "Blocking egress to 198.51.100.20 while we read the disk on host-ops-1.";
 
 function contestedVerdictCard(label, { operatorId, operatorNostr, operatorVoter, signature, decidedAtMs, leg2 }) {
   return envelope(label, {
-    schema: "ambush.perch.verdict.v1",
+    schema: "swarm.perch.verdict.v1",
     issuer: { swarm_agent_id: operatorId, role: null, nostr_pubkey: operatorNostr },
     emitted_at_ms: decidedAtMs,
     locator: { hold_id: IDS.hold_b, case_channel: IDS.case_channel, hold_card_id: IDS.ev_hold_b_open },
@@ -1066,7 +1071,8 @@ function contestedVerdictCard(label, { operatorId, operatorNostr, operatorVoter,
       hold_id: IDS.hold_b,
       operator_id: operatorId,
       decided_at_ms: decidedAtMs,
-      rationale: "Blocking egress to 198.51.100.20 while we read the disk on host-ops-1.",
+      rationale_sha256: rationaleSha256(CONTESTED_RATIONALE),
+      rationale: CONTESTED_RATIONALE,
     },
     signature,
     leg2,
@@ -1389,7 +1395,7 @@ for (const [name, body] of Object.entries(HTTP)) writeFileSync(join(HERE, "http"
 
 // ── the one canonical fixture file everything else derives from ────────────
 const FIXTURE = {
-  schema: "ambush.perch.demo-fixture.v1",
+  schema: "swarm.perch.demo-fixture.v1",
   name: "hellcat-office",
   generated_by: "fixtures/build.mjs",
   based_on: "scenarios/office-dropper-correlation.yaml",
@@ -1492,7 +1498,7 @@ const FIXTURE = {
       },
       // The reconciliation rule a console must implement, stated once so two
       // producers do not implement it twice and differently.
-      reconciliation_rule: "A kind:9 ambush:verdict:v1 card whose hold_id matches a hold the daemon reports as decided, but whose Nostr event id is NOT the decision record's nostr_intent_event_id, renders as a human intent record that did not become the decision — never as the decision. The losing console publishes the `superseded` update card; a reader that never sees that card still reaches the same rendering from GET /v1/response/holds alone.",
+      reconciliation_rule: "A kind:9 swarm:verdict:v1 card whose hold_id matches a hold the daemon reports as decided, but whose Nostr event id is NOT the decision record's nostr_intent_event_id, renders as a human intent record that did not become the decision — never as the decision. The losing console publishes the `superseded` update card; a reader that never sees that card still reaches the same rendering from GET /v1/response/holds alone.",
     },
   },
 
@@ -1526,7 +1532,7 @@ const FIXTURE = {
       // unmocked command fails with the reason instead of a TypeError three
       // frames later.
       perch_operator_status: { __absent: "GET /v1/operator/status is swarmctl serve's route on :7766, a different process with a different incident store. Perch's equivalent read is not in this fixture; 20-TASK-BREAKDOWN.md T11 points the tuning report at GET /v2/api/runtime/status on the daemon instead." },
-      perch_verify_artifact: { __absent: "no daemon route returns an artifact by id. INV-RF2's verified consequence is that ambush:finding:v1, ambush:receipt:v1 and ambush:escalation:v1 have NO daemon re-read at all, so those three cards must render the absence rather than a verification affordance." },
+      perch_verify_artifact: { __absent: "no daemon route returns an artifact by id. INV-RF2's verified consequence is that swarm:finding:v1, swarm:receipt:v1 and swarm:escalation:v1 have NO daemon re-read at all, so those three cards must render the absence rather than a verification affordance." },
     },
     perch_daemon_write_commands_are_not_mocked_here: [
       "perch_decide_hold", "perch_finding_feedback", "perch_mint_incident",

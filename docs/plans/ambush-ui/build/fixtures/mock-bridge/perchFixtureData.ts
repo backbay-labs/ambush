@@ -10,7 +10,7 @@
 // which 00-BRIEF.md and 09 both forbid splitting.
 
 export const PERCH_DEMO_FIXTURE = {
-  "schema": "ambush.perch.demo-fixture.v1",
+  "schema": "swarm.perch.demo-fixture.v1",
   "name": "hellcat-office",
   "generated_by": "fixtures/build.mjs",
   "based_on": "scenarios/office-dropper-correlation.yaml",
@@ -978,7 +978,7 @@ export const PERCH_DEMO_FIXTURE = {
         "two_principal_notice": "wire/variant-contested-event-46010-hold-b-two-principals.json",
         "conflict_body": "http/variant-contested-POST-v1-response-holds-hold-b-decide-409.json"
       },
-      "reconciliation_rule": "A kind:9 ambush:verdict:v1 card whose hold_id matches a hold the daemon reports as decided, but whose Nostr event id is NOT the decision record's nostr_intent_event_id, renders as a human intent record that did not become the decision — never as the decision. The losing console publishes the `superseded` update card; a reader that never sees that card still reaches the same rendering from GET /v1/response/holds alone."
+      "reconciliation_rule": "A kind:9 swarm:verdict:v1 card whose hold_id matches a hold the daemon reports as decided, but whose Nostr event id is NOT the decision record's nostr_intent_event_id, renders as a human intent record that did not become the decision — never as the decision. The losing console publishes the `superseded` update card; a reader that never sees that card still reaches the same rendering from GET /v1/response/holds alone."
     }
   },
   "mock_bridge": {
@@ -1539,7 +1539,7 @@ export const PERCH_DEMO_FIXTURE = {
         "__absent": "GET /v1/operator/status is swarmctl serve's route on :7766, a different process with a different incident store. Perch's equivalent read is not in this fixture; 20-TASK-BREAKDOWN.md T11 points the tuning report at GET /v2/api/runtime/status on the daemon instead."
       },
       "perch_verify_artifact": {
-        "__absent": "no daemon route returns an artifact by id. INV-RF2's verified consequence is that ambush:finding:v1, ambush:receipt:v1 and ambush:escalation:v1 have NO daemon re-read at all, so those three cards must render the absence rather than a verification affordance."
+        "__absent": "no daemon route returns an artifact by id. INV-RF2's verified consequence is that swarm:finding:v1, swarm:receipt:v1 and swarm:escalation:v1 have NO daemon re-read at all, so those three cards must render the absence rather than a verification affordance."
       }
     },
     "perch_daemon_write_commands_are_not_mocked_here": [
@@ -1569,7 +1569,7 @@ export const PERCH_DEMO_CARDS = {
     "issued_at": "2026-03-17T09:14:32Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.finding.v1",
+      "schema": "swarm.perch.finding.v1",
       "issuer": {
         "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
         "role": null,
@@ -1608,17 +1608,17 @@ export const PERCH_DEMO_CARDS = {
         }
       }
     },
-    "envelope_hash": "0xf7449c4d97149219b3f50f8b01b3d32efeef5d12b5d5b4de54d9ef73926ecafb"
+    "envelope_hash": "0x1f1c38da53c401c1d4c4d48bebe74c551eb95f7454f1aa0c9e01b672f50a3a14"
   },
   "card-02-finding-suspicious-scripting-evt1": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 2,
-    "prev_envelope_hash": "0xf7449c4d97149219b3f50f8b01b3d32efeef5d12b5d5b4de54d9ef73926ecafb",
+    "prev_envelope_hash": "0x1f1c38da53c401c1d4c4d48bebe74c551eb95f7454f1aa0c9e01b672f50a3a14",
     "issued_at": "2026-03-17T09:14:32Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.finding.v1",
+      "schema": "swarm.perch.finding.v1",
       "issuer": {
         "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
         "role": null,
@@ -1658,17 +1658,17 @@ export const PERCH_DEMO_CARDS = {
         }
       }
     },
-    "envelope_hash": "0x8c95cdd6afe36e5bc9896c1b46d07c0e5b409cdcd49b1db429fbb5140dc00ec1"
+    "envelope_hash": "0xb06df753aa36f6411540e5c8ff6e3a47b5d96fdd38dbe98cbff4cc15932f23c4"
   },
   "card-03-finding-suspicious-process-tree-evt2": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 3,
-    "prev_envelope_hash": "0x8c95cdd6afe36e5bc9896c1b46d07c0e5b409cdcd49b1db429fbb5140dc00ec1",
+    "prev_envelope_hash": "0xb06df753aa36f6411540e5c8ff6e3a47b5d96fdd38dbe98cbff4cc15932f23c4",
     "issued_at": "2026-03-17T09:14:41Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.finding.v1",
+      "schema": "swarm.perch.finding.v1",
       "issuer": {
         "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
         "role": null,
@@ -1707,17 +1707,17 @@ export const PERCH_DEMO_CARDS = {
         }
       }
     },
-    "envelope_hash": "0x0cd2c532068bbc80354704012dd6b93ebd7e52b98b2a830fb13c0b51f411cf29"
+    "envelope_hash": "0x90ce187491eeacba121bf800591d6d317d002cb6fd3c780275d5f504ebb0e250"
   },
   "card-04-escalation-execution-alert": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 4,
-    "prev_envelope_hash": "0x0cd2c532068bbc80354704012dd6b93ebd7e52b98b2a830fb13c0b51f411cf29",
+    "prev_envelope_hash": "0x90ce187491eeacba121bf800591d6d317d002cb6fd3c780275d5f504ebb0e250",
     "issued_at": "2026-03-17T09:14:41Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.escalation.v1",
+      "schema": "swarm.perch.escalation.v1",
       "issuer": {
         "swarm_agent_id": "concentration-monitor",
         "role": null,
@@ -1743,17 +1743,17 @@ export const PERCH_DEMO_CARDS = {
         "source_ids_absent_reason": "not_carried_by_runtime_event"
       }
     },
-    "envelope_hash": "0x2f6442eb37ffe7cc53b375ea1ea39ec30495fc2199a711dcaa8aee202a7ceff7"
+    "envelope_hash": "0x1c9d229ff2a31cecf91692c1c8609484a0f2112a64ba8e67a2ad450bfc731d09"
   },
   "card-05-hold-a-isolate-host-open": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 5,
-    "prev_envelope_hash": "0x2f6442eb37ffe7cc53b375ea1ea39ec30495fc2199a711dcaa8aee202a7ceff7",
+    "prev_envelope_hash": "0x1c9d229ff2a31cecf91692c1c8609484a0f2112a64ba8e67a2ad450bfc731d09",
     "issued_at": "2026-03-17T09:14:42Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.hold.v1",
+      "schema": "swarm.perch.hold.v1",
       "issuer": {
         "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
         "role": null,
@@ -1858,17 +1858,17 @@ export const PERCH_DEMO_CARDS = {
         "decision": null
       }
     },
-    "envelope_hash": "0x74dd74f7e62dee123e0244b6cccf8e1d81909dfe513ebbaa48a3394096941e02"
+    "envelope_hash": "0x8a4f5c6f4943afe80ff404b967ec4855f99e7922899d6a134da930c26d282e48"
   },
   "card-06-hold-b-block-egress-open": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 6,
-    "prev_envelope_hash": "0x74dd74f7e62dee123e0244b6cccf8e1d81909dfe513ebbaa48a3394096941e02",
+    "prev_envelope_hash": "0x8a4f5c6f4943afe80ff404b967ec4855f99e7922899d6a134da930c26d282e48",
     "issued_at": "2026-03-17T09:14:42Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.hold.v1",
+      "schema": "swarm.perch.hold.v1",
       "issuer": {
         "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
         "role": null,
@@ -1972,17 +1972,17 @@ export const PERCH_DEMO_CARDS = {
         "decision": null
       }
     },
-    "envelope_hash": "0xb7b7c9b3d02d0599899c054d629aab5021d88728080bec7be426ffa53b542906"
+    "envelope_hash": "0xe81ae4fdf0373c09ff5943b89de2f5123d8b5c1a1fdcdc2db8ddcfaa1e6f712f"
   },
   "card-07-verdict-grant-hold-a": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
     "seq": 3,
-    "prev_envelope_hash": "0xc8290784b13d5636e3058089fdf3e4344af6862a9d9dae312308c87efca3356d",
+    "prev_envelope_hash": "0xea7b3f212a4d2fbe5f0b02cabee1747388f6ff3e5cea2b081fa29d2ee5b7e477",
     "issued_at": "2026-03-17T09:16:19Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.verdict.v1",
+      "schema": "swarm.perch.verdict.v1",
       "issuer": {
         "swarm_agent_id": "perch-operator-1",
         "role": null,
@@ -1999,6 +1999,7 @@ export const PERCH_DEMO_CARDS = {
         "hold_id": "h_a07aeacf",
         "operator_id": "perch-operator-1",
         "decided_at_ms": 1773738979000,
+        "rationale_sha256": "1c491e2debf2a8ba8e863a6f7303ca7dbd2413418ed5f7a897ece1a919fa350d",
         "rationale": "Two detectors on one workstation, encoded PowerShell under WINWORD and a fetch under OUTLOOK. Isolating host-ops-1 while we read the disk."
       },
       "signature": {
@@ -2015,17 +2016,17 @@ export const PERCH_DEMO_CARDS = {
         "superseded_at_ms": null
       }
     },
-    "envelope_hash": "0x5866d48541b908f74416bbdac90d4edee9f7a81558fbb03893f2730412654ae7"
+    "envelope_hash": "0xec46ec27c18f2886f99c2c212cedd93f5b1f994a319cfc4a0ae11798176ae2e3"
   },
   "card-08-hold-a-terminal-executed": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 7,
-    "prev_envelope_hash": "0xb7b7c9b3d02d0599899c054d629aab5021d88728080bec7be426ffa53b542906",
+    "prev_envelope_hash": "0xe81ae4fdf0373c09ff5943b89de2f5123d8b5c1a1fdcdc2db8ddcfaa1e6f712f",
     "issued_at": "2026-03-17T09:16:20Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.hold.v1",
+      "schema": "swarm.perch.hold.v1",
       "issuer": {
         "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
         "role": null,
@@ -2146,17 +2147,17 @@ export const PERCH_DEMO_CARDS = {
         }
       }
     },
-    "envelope_hash": "0x1fad6e0b0b3f9ddd1b3940101b6257d9f945dc829574e069cefaea79e6f59cc5"
+    "envelope_hash": "0x9ca8f584e288736174c1ea76c77d744f9177fb3987841e27bedca2ea5f6c2fb1"
   },
   "card-09-receipt-hunt-evt-1": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 8,
-    "prev_envelope_hash": "0x1fad6e0b0b3f9ddd1b3940101b6257d9f945dc829574e069cefaea79e6f59cc5",
+    "prev_envelope_hash": "0x9ca8f584e288736174c1ea76c77d744f9177fb3987841e27bedca2ea5f6c2fb1",
     "issued_at": "2026-03-17T09:16:19Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.receipt.v1",
+      "schema": "swarm.perch.receipt.v1",
       "issuer": {
         "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
         "role": null,
@@ -2245,17 +2246,17 @@ export const PERCH_DEMO_CARDS = {
         "created_at_ms": 1773738979800
       }
     },
-    "envelope_hash": "0x7461b5e805d49e798064e27975abb1a701ee4f6aa98f99e9f171b769db77d92d"
+    "envelope_hash": "0x9d0db3b5f33136aec9867e9f137b017ed004fcfebcb1895a1f89d0b1c104a26c"
   },
   "card-10-lease-host-ops-1": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 9,
-    "prev_envelope_hash": "0x7461b5e805d49e798064e27975abb1a701ee4f6aa98f99e9f171b769db77d92d",
+    "prev_envelope_hash": "0x9d0db3b5f33136aec9867e9f137b017ed004fcfebcb1895a1f89d0b1c104a26c",
     "issued_at": "2026-03-17T09:16:19Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.lease.v1",
+      "schema": "swarm.perch.lease.v1",
       "issuer": {
         "swarm_agent_id": "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470",
         "role": null,
@@ -2302,17 +2303,17 @@ export const PERCH_DEMO_CARDS = {
         "expires_at_ms": 1773739879900
       }
     },
-    "envelope_hash": "0xd751d499e0dbdf4c072b8bca8cdb8e1e5bedb213cae295836382208f3b8c55c8"
+    "envelope_hash": "0x79f27cd1d3b2316fd7ce6cfcb5e1d4332bedb5d4ee1b0dea5729f9cfba054ceb"
   },
   "card-11-rollback-host-ops-1": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 10,
-    "prev_envelope_hash": "0xd751d499e0dbdf4c072b8bca8cdb8e1e5bedb213cae295836382208f3b8c55c8",
+    "prev_envelope_hash": "0x79f27cd1d3b2316fd7ce6cfcb5e1d4332bedb5d4ee1b0dea5729f9cfba054ceb",
     "issued_at": "2026-03-17T09:31:19Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.rollback.v1",
+      "schema": "swarm.perch.rollback.v1",
       "issuer": {
         "swarm_agent_id": "containment-sweep",
         "role": null,
@@ -2345,7 +2346,7 @@ export const PERCH_DEMO_CARDS = {
         "governance_receipt_id": null
       }
     },
-    "envelope_hash": "0x729f3b63a31578067ac49fc227a67b7e6e84a72d5f48c177eaa1fbbcb1a6b130"
+    "envelope_hash": "0x243c10da18850ed0bf672169d40c661a8a56f9ce8dc95aec0bc3a8e3f8741c50"
   },
   "variant-contested-01-verdict-op2-wins": {
     "schema": "swarm.spine.envelope.v1",
@@ -2355,7 +2356,7 @@ export const PERCH_DEMO_CARDS = {
     "issued_at": "2026-03-17T09:20:01Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.verdict.v1",
+      "schema": "swarm.perch.verdict.v1",
       "issuer": {
         "swarm_agent_id": "perch-operator-2",
         "role": null,
@@ -2372,6 +2373,7 @@ export const PERCH_DEMO_CARDS = {
         "hold_id": "h_1c28ae79",
         "operator_id": "perch-operator-2",
         "decided_at_ms": 1773739201200,
+        "rationale_sha256": "bc931bdcaf5ef952addf97428b88b629b8bb57213e8bb492d27b31221f343edf",
         "rationale": "Blocking egress to 198.51.100.20 while we read the disk on host-ops-1."
       },
       "signature": {
@@ -2388,7 +2390,7 @@ export const PERCH_DEMO_CARDS = {
         "superseded_at_ms": null
       }
     },
-    "envelope_hash": "0x8c5a62a516bc635b7bfff3cafd9727e13505e65a9e8838136dc93473654419b0"
+    "envelope_hash": "0x471b069d9f3ab05c47c10949b6b0d9f266a3b90189503cf7e74563d7a2918fdc"
   },
   "variant-contested-02-verdict-op1-sending": {
     "schema": "swarm.spine.envelope.v1",
@@ -2398,7 +2400,7 @@ export const PERCH_DEMO_CARDS = {
     "issued_at": "2026-03-17T09:20:01Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.verdict.v1",
+      "schema": "swarm.perch.verdict.v1",
       "issuer": {
         "swarm_agent_id": "perch-operator-1",
         "role": null,
@@ -2415,6 +2417,7 @@ export const PERCH_DEMO_CARDS = {
         "hold_id": "h_1c28ae79",
         "operator_id": "perch-operator-1",
         "decided_at_ms": 1773739201600,
+        "rationale_sha256": "bc931bdcaf5ef952addf97428b88b629b8bb57213e8bb492d27b31221f343edf",
         "rationale": "Blocking egress to 198.51.100.20 while we read the disk on host-ops-1."
       },
       "signature": {
@@ -2431,17 +2434,17 @@ export const PERCH_DEMO_CARDS = {
         "superseded_at_ms": null
       }
     },
-    "envelope_hash": "0x78c0153b56f2904153c5829df3e2ec47c1b7855516b18fa9061b8665aad51dba"
+    "envelope_hash": "0x616a920ac45a2ad52bd1fa6f0bee64b05356ea48b971ec8cb5b19b61c9897f7a"
   },
   "variant-contested-03-verdict-op1-superseded": {
     "schema": "swarm.spine.envelope.v1",
     "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
     "seq": 2,
-    "prev_envelope_hash": "0x78c0153b56f2904153c5829df3e2ec47c1b7855516b18fa9061b8665aad51dba",
+    "prev_envelope_hash": "0x616a920ac45a2ad52bd1fa6f0bee64b05356ea48b971ec8cb5b19b61c9897f7a",
     "issued_at": "2026-03-17T09:20:01Z",
     "capability_token": null,
     "fact": {
-      "schema": "ambush.perch.verdict.v1",
+      "schema": "swarm.perch.verdict.v1",
       "issuer": {
         "swarm_agent_id": "perch-operator-1",
         "role": null,
@@ -2458,6 +2461,7 @@ export const PERCH_DEMO_CARDS = {
         "hold_id": "h_1c28ae79",
         "operator_id": "perch-operator-1",
         "decided_at_ms": 1773739201900,
+        "rationale_sha256": "bc931bdcaf5ef952addf97428b88b629b8bb57213e8bb492d27b31221f343edf",
         "rationale": "Blocking egress to 198.51.100.20 while we read the disk on host-ops-1."
       },
       "signature": {
@@ -2474,7 +2478,7 @@ export const PERCH_DEMO_CARDS = {
         "superseded_at_ms": 1773739201900
       }
     },
-    "envelope_hash": "0xc8290784b13d5636e3058089fdf3e4344af6862a9d9dae312308c87efca3356d"
+    "envelope_hash": "0xea7b3f212a4d2fbe5f0b02cabee1747388f6ff3e5cea2b081fa29d2ee5b7e477"
   }
 } as const;
 
@@ -2554,7 +2558,7 @@ export const PERCH_DEMO_NOTICES = {
 export const PERCH_DEMO_FRAMES = {
   "frame-26000-ingest-rate-0914": {
     "kind": 26000,
-    "schema": "ambush.perch.frame.ingest_rate.v1",
+    "schema": "swarm.perch.frame.ingest_rate.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 1,
     "emitted_at_ms": 1773738873000,
@@ -2567,7 +2571,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26001-concentration-below": {
     "kind": 26001,
-    "schema": "ambush.perch.frame.concentration.v1",
+    "schema": "swarm.perch.frame.concentration.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 2,
     "emitted_at_ms": 1773738873000,
@@ -2651,7 +2655,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26001-concentration-crossing": {
     "kind": 26001,
-    "schema": "ambush.perch.frame.concentration.v1",
+    "schema": "swarm.perch.frame.concentration.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 10,
     "emitted_at_ms": 1773738882000,
@@ -2735,7 +2739,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26001-concentration-after-dismiss": {
     "kind": 26001,
-    "schema": "ambush.perch.frame.concentration.v1",
+    "schema": "swarm.perch.frame.concentration.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 253,
     "emitted_at_ms": 1773739125000,
@@ -2819,7 +2823,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26002-agent-health": {
     "kind": 26002,
-    "schema": "ambush.perch.frame.agent_health.v1",
+    "schema": "swarm.perch.frame.agent_health.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 3,
     "emitted_at_ms": 1773738873100,
@@ -2839,7 +2843,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26003-mode-transition": {
     "kind": 26003,
-    "schema": "ambush.perch.frame.mode_transition.v1",
+    "schema": "swarm.perch.frame.mode_transition.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 11,
     "emitted_at_ms": 1773738881900,
@@ -2850,7 +2854,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26004-governance-status": {
     "kind": 26004,
-    "schema": "ambush.perch.frame.governance_status.v1",
+    "schema": "swarm.perch.frame.governance_status.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 12,
     "emitted_at_ms": 1773738882000,
@@ -2866,7 +2870,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26005-tamper-alert": {
     "kind": 26005,
-    "schema": "ambush.perch.frame.tamper_alert.v1",
+    "schema": "swarm.perch.frame.tamper_alert.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 1,
     "emitted_at_ms": 1773738882050,
@@ -2878,7 +2882,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26006-hold-alarm-a": {
     "kind": 26006,
-    "schema": "ambush.perch.frame.hold_alarm.v1",
+    "schema": "swarm.perch.frame.hold_alarm.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 1,
     "emitted_at_ms": 1773738882610,
@@ -2890,7 +2894,7 @@ export const PERCH_DEMO_FRAMES = {
   },
   "frame-26006-hold-alarm-b": {
     "kind": 26006,
-    "schema": "ambush.perch.frame.hold_alarm.v1",
+    "schema": "swarm.perch.frame.hold_alarm.v1",
     "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
     "seq": 2,
     "emitted_at_ms": 1773738882710,

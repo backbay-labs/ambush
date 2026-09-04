@@ -266,14 +266,14 @@ by `46010`, `40100` and `39005` so perch events get the lossless reconnect backf
 
 | # | Item | Invariant | Milestone |
 |---|---|---|---|
-| H1 | Delete animated-avatar capture and its remote script host; pin `security.csp` as a literal string with no bare `https:`/`wss:` in `connect-src` and no remote `script-src` | INV-30 | Ground |
+| H1 | Delete animated-avatar capture and its remote script host; pin `security.csp` as a literal string asserted by a test, with no remote `script-src` host. `connect-src` keeps `https: http: wss: ws:` under D3 (W3-23): narrowing it to named relay origins needs a Tauri-side proxy for the invite, join-policy and moderation fetches and is a follow-up; the pin makes any widening a reviewed edit | INV-30 as narrowed by W3-23 | Ground |
 | H2 | `perch_sign_gate` at every signing boundary, with the inventory test | INV-29 | Ground |
 | H3 | `resetCommunityState` → typed exhaustive registry | INV-23 | Ground |
 | H4 | `tools/check-perch-write-allowlist.sh`: the console tree's daemon-bound non-GETs are exactly five | INV-01 | First card |
 | H5 | Admitted-issuer gate on every marker parse and every `26xxx` frame | INV-15 | First card |
 | H6 | The six `shared/ui` components that render adversary-controlled remote content (link previews, attachments) are not mounted inside a perch surface; card bodies are `AdversaryText` end to end | INV-14 | First card |
 | H7 | Fix the four panic sites in `workspace/crates/ambush-ws-client/src/connection.rs` in place and bring that crate under `tools/check-runtime-panic-contract.sh` | ADR 0015 C6 as amended (W3-6) | Ground |
-| H8 | `tools/check-copy-banned-terms.sh` + the `.mjs` half over perch roots, with `Perch` added to the ban list | INV-31, W3-8 | Ground |
+| H8 | `tools/check-copy-banned-terms.sh` + the `.mjs` half over perch roots, with `Perch` added to the ban list; lands with its first real subject, and the `docs/assets` scope is marked `deferred` until Operator-complete (W3-24) | INV-31, W3-8, W3-24 | First card |
 
 Everything else the deletion programme removed stays.
 
@@ -306,7 +306,7 @@ Every failure mode has a rendered state; none is a toast. The full table is
 | Engine unit | `HeldActionStore` state machine, `HoldId::parse`, stream classifier exhaustiveness, spool round-trip and CRC, ephemeral builders reject a `RuntimeEvent` by type, `mint_incident` field contract | `crates/swarm-perch-*/`, `crates/swarm-ingest-runtime/src/ingest/perch_ops/` |
 | Engine integration | the walking skeleton's daemon half: ingest a scenario, assert a `finding` card leaves the bridge; promote, assert `CasePromoted`; feedback, assert the measurement has a real `strategy_id` and `host_id` (ADR 0018 verification) | `crates/swarm-runtime-http/tests/` |
 | Relay E2E | `e2e_workflow_approval.rs` (six tests incl. the positive-control fan-out and the needs-action INNER JOIN) and `e2e_operator_alarm_pgate.rs` (eight tests) | `workspace/crates/ambush-test-client/tests/` |
-| Wire parity | 311 declared fields present on both the Rust and zod sides; golden vectors reproduce their pinned hash | `tools/check-perch-wire-parity.sh` |
+| Wire parity | 312 declared fields present on both the Rust and zod sides after W3-16; golden vectors reproduce their pinned hash | `tools/check-perch-wire-parity.sh` |
 | Desktop unit | marker parser (whole-line, admitted-only), registry exactly seven entries, keymap registry, resetter registry, freshness table completeness | colocated `*.test.mjs`, Node's runner |
 | Desktop E2E, mock | the five Playwright specs in `../build/skeleton/tests/playwright/` (verdict pane, marker admission, provenance, queue lifecycle, containment) against a delegated perch fixture module in `e2eBridge.ts` | `workspace/desktop/tests/e2e/perch-*.spec.ts` |
 | Desktop E2E, relay-backed | the walking-skeleton script end to end: real daemon, real relay, real card, `E` then `D`, the tuning report moves | `docs/PERCH-DEV.md` script, run by hand at each milestone exit |

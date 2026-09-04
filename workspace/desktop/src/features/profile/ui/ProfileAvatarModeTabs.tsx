@@ -7,9 +7,8 @@ import type {
 import { cn } from "@/shared/lib/cn";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
-const MODE_TAB_ORDER: AvatarMode[] = ["image", "emoji", "animated"];
+const MODE_TAB_ORDER: AvatarMode[] = ["image", "emoji"];
 const MODE_TAB_LABELS: Record<AvatarMode, string> = {
-  animated: "Animated",
   emoji: "Emoji",
   image: "Image",
 };
@@ -42,8 +41,8 @@ export function ProfileAvatarModeTabs({
         aria-label="Avatar type"
         className={cn(
           isOnboardingModal
-            ? "relative isolate grid h-10 w-full max-w-[320px] grid-cols-3 overflow-hidden rounded-full bg-[color:rgb(var(--ambush-onboarding-avatar-control-fg)_/_0.12)] p-1 text-muted-foreground"
-            : "relative isolate grid h-14 w-full grid-cols-3 overflow-hidden rounded-full bg-muted p-1 text-muted-foreground",
+            ? "relative isolate grid h-10 w-full max-w-[320px] grid-cols-2 overflow-hidden rounded-full bg-[color:rgb(var(--ambush-onboarding-avatar-control-fg)_/_0.12)] p-1 text-muted-foreground"
+            : "relative isolate grid h-14 w-full grid-cols-2 overflow-hidden rounded-full bg-muted p-1 text-muted-foreground",
         )}
       >
         <div
@@ -56,7 +55,7 @@ export function ProfileAvatarModeTabs({
           )}
           style={{
             transform: `translateX(${MODE_TAB_ORDER.indexOf(mode) * 100}%)`,
-            width: "calc((100% - 8px) / 3)",
+            width: `calc((100% - 8px) / ${MODE_TAB_ORDER.length})`,
           }}
         />
         {MODE_TAB_ORDER.map((tabMode) => (

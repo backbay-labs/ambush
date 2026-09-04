@@ -8,7 +8,8 @@ use tracing::{debug, warn};
 use ambush_core::filter::filters_match;
 use ambush_core::kind::{
     is_unshared_gated_event, AUTHOR_ONLY_KINDS, KIND_AGENT_ENGRAM, KIND_AGENT_TURN_METRIC,
-    KIND_DM_VISIBILITY, P_GATED_KINDS, RESULT_GATED_KINDS, SHARED_GATED_KINDS,
+    KIND_DM_VISIBILITY, KIND_OPERATOR_ALARM_FRAME, P_GATED_KINDS, RESULT_GATED_KINDS,
+    SHARED_GATED_KINDS,
 };
 use ambush_core::tenant::TenantContext;
 use ambush_db::EventQuery;
@@ -1197,12 +1198,20 @@ pub(crate) fn p_gated_filters_authorized(filters: &[Filter], authed_pubkey_hex: 
         // when `ids` is present. KIND_AGENT_TURN_METRIC events are long-lived
         // and their cleartext envelope (pubkey, agent tag, created_at) leaks
         // turn-activity metadata — knowing an event id is NOT authorization
-        // (NIP-AM §Relay Behavior). Only filters that explicitly name the kind
-        // lose the exemption — a kindless `ids` lookup is unaffected.
+        // (NIP-AM §Relay Behavior). KIND_OPERATOR_ALARM_FRAME is ephemeral and
+        // therefore has no stored row an `ids` lookup could ever return, so
+        // exempting it bought nothing while contradicting its own doc comment,
+        // which states flatly that a global REQ matching it is closed unless
+        // `#p` equals the reader. The filter layer is that kind's whole defense
+        // — it is listed here so the code and the contract agree. Only filters
+        // that explicitly name the kind lose the exemption — a kindless `ids`
+        // lookup is unaffected.
         let explicitly_no_ids_exemption = filter.kinds.as_ref().is_some_and(|ks| {
             ks.iter().any(|kind| {
                 let k = kind.as_u16() as u32;
-                k == KIND_DM_VISIBILITY || k == KIND_AGENT_TURN_METRIC
+                k == KIND_DM_VISIBILITY
+                    || k == KIND_AGENT_TURN_METRIC
+                    || k == KIND_OPERATOR_ALARM_FRAME
             })
         });
         if !explicitly_no_ids_exemption && filter.ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
@@ -1970,6 +1979,52 @@ mod tests {
             p_gated_filters_authorized(&[owner_p_and_ids], authed),
             "kind:44200 with matching #p and ids must be allowed"
         );
+    }
+
+    /// RF/R-1: kind:26006's doc comment says a global REQ matching it is closed
+    /// unless the filter's `#p` values equal the reader's own pubkey. The `ids`
+    /// exemption used to contradict that, so `{"kinds":[26006],"ids":[…]}`
+    /// cleared the p-gate. The kind is ephemeral — no stored row, so no id
+    /// lookup could return one — but the gate is its whole defense and the
+    /// comment has to be true of the code.
+    #[test]
+    fn operator_alarm_frame_requires_p_tag_even_with_ids() {
+        let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+        let authed = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let event_id = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let alarm = nostr::Kind::Custom(ambush_core::kind::KIND_OPERATOR_ALARM_FRAME as u16);
+
+        let ids_only = Filter::new()
+            .kind(alarm)
+            .id(nostr::EventId::from_hex(event_id).unwrap());
+        assert!(
+            !p_gated_filters_authorized(&[ids_only], authed),
+            "kind:26006 + ids without a matching #p must be denied"
+        );
+
+        let ids_wrong_p = Filter::new()
+            .kind(alarm)
+            .id(nostr::EventId::from_hex(event_id).unwrap())
+            .custom_tags(p_tag, [other]);
+        assert!(
+            !p_gated_filters_authorized(&[ids_wrong_p], authed),
+            "kind:26006 + ids + another principal's #p must be denied"
+        );
+
+        // The addressee still reads their own frames, with or without ids.
+        let owner_by_p = Filter::new().kind(alarm).custom_tags(p_tag, [authed]);
+        assert!(p_gated_filters_authorized(&[owner_by_p], authed));
+
+        let owner_p_and_ids = Filter::new()
+            .kind(alarm)
+            .id(nostr::EventId::from_hex(event_id).unwrap())
+            .custom_tags(p_tag, [authed]);
+        assert!(p_gated_filters_authorized(&[owner_p_and_ids], authed));
+
+        // A kindless ids lookup is unchanged, as for every other p-gated kind.
+        let kindless_ids = Filter::new().id(nostr::EventId::from_hex(event_id).unwrap());
+        assert!(p_gated_filters_authorized(&[kindless_ids], authed));
     }
 
     #[test]

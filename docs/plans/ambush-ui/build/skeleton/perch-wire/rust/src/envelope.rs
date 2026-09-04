@@ -113,7 +113,7 @@ pub struct FactIssuer {
 
 /// WHO PRODUCED THE FACT, when the producer is a PERSON.
 ///
-/// A separate type from [`FactIssuer`], used by `ambush:verdict:v1` and nothing
+/// A separate type from [`FactIssuer`], used by `swarm:verdict:v1` and nothing
 /// else — the one card in the registry a human, not the bridge, publishes.
 ///
 /// The whole reason it exists is `role: NeverARole`, a unit type that serializes
@@ -164,7 +164,7 @@ pub struct CardEnvelope {
     /// Always [`ENVELOPE_SCHEMA_V1`].
     pub schema: String,
     /// `swarm:ed25519:{64 hex}` — the BRIDGE's spine identity, one per colony.
-    /// On an `ambush:verdict:v1` card only, it is the OPERATOR's, because the
+    /// On an `swarm:verdict:v1` card only, it is the OPERATOR's, because the
     /// operator publishes that card with their own key.
     pub issuer: String,
     /// Per-issuer, per-stream monotonic counter assigned by the bridge.
@@ -215,7 +215,7 @@ impl CardEnvelope {
     ///
     /// [`EnvelopeError::SchemaMismatch`] when the serialized card's `schema`
     /// does not equal `kind.fact_schema()` — the one check that stops a
-    /// `HoldCard` shipping under an `ambush:receipt:v1` marker — and
+    /// `HoldCard` shipping under an `swarm:receipt:v1` marker — and
     /// [`EnvelopeError::Spine`] when canonicalization fails.
     pub fn seal_unsigned(
         kind: CardKind,
@@ -293,7 +293,7 @@ mod tests {
             1,
             None,
             "2026-08-30T02:41:07Z".into(),
-            fact("ambush.perch.hold.v1"),
+            fact("swarm.perch.hold.v1"),
         )
         .expect_err("must reject");
         assert!(matches!(err, EnvelopeError::SchemaMismatch { .. }));
@@ -307,7 +307,7 @@ mod tests {
             1,
             None,
             "2026-08-30T02:41:07Z".into(),
-            fact("ambush.perch.hold.v1"),
+            fact("swarm.perch.hold.v1"),
         )
         .expect("seals");
         assert!(!env.envelope_hash.is_empty());
@@ -322,7 +322,7 @@ mod tests {
             1,
             None,
             "2026-08-30T02:41:07Z".into(),
-            fact("ambush.perch.hold.v1"),
+            fact("swarm.perch.hold.v1"),
         )
         .expect("seals");
         let json = serde_json::to_value(&env).expect("serializes");

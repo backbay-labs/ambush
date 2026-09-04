@@ -13,7 +13,83 @@ env:
   CARGO_TARGET_DIR: target/ci
 
 jobs:
+  # Path gate for the two-workspace repository (docs/plans/ambush-ui/integration/00-DECISIONS.md D2).
+  # A workspace-only or plan-only change skips every engine lane below via each
+  # job's `if:`; a skipped job still satisfies branch protection, whereas a
+  # top-level `paths:` filter would leave the required checks pending forever.
+  #
+  # Two filter steps because `predicate-quantifier` is per step:
+  #   - `engine` is a NEGATION list and needs `every`. Under the default `some`
+  #     a file counts when it matches ANY rule, and every file matches at least
+  #     one of two negations; `every` makes a file engine only when it is
+  #     outside `workspace/` AND outside `docs/plans/` (dorny/paths-filter
+  #     src/filter.ts at the pinned commit).
+  #   - `shared` is a POSITIVE list and needs the default `some`. It re-admits
+  #     the two workspace crates D2 lets engine crates depend on and the
+  #     key-material shapes tools/check-no-committed-keys.sh scans across the
+  #     whole tree, so a change there still runs the lanes that inspect it.
+  # tools/check-gates-wired.sh accepts exactly the job-level condition below.
+  changes:
+    name: Detect engine changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      engine: ${{ steps.engine.outputs.engine == 'true' || steps.shared.outputs.shared == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: engine
+        with:
+          token: ''
+          predicate-quantifier: 'every'
+          filters: |
+            engine:
+              - '!workspace/**'
+              - '!docs/plans/**'
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: shared
+        with:
+          token: ''
+          filters: |
+            shared:
+              - 'workspace/crates/ambush-ws-client/**'
+              - 'workspace/crates/ambush-sdk/**'
+              - 'workspace/**/*.ed25519'
+              - 'workspace/**/*.pem'
+              - 'workspace/**/*.key'
+              - 'workspace/**/*.p12'
+              - 'workspace/**/*.pfx'
+              - 'workspace/**/*.jks'
+              - 'workspace/**/*.keystore'
+              - 'workspace/**/agent-keys/**'
+
+  # Deliberately NOT behind the `changes` path gate. `tools/check-no-committed-keys.sh`
+  # detects three shapes: key-ish file names, PEM/OpenSSH headers in file CONTENT, and
+  # high-entropy 32/64-byte blobs. A path filter can re-admit the first shape only, so a
+  # workspace-only commit adding, say, `workspace/relay/deploy_id` holding a raw Ed25519
+  # seed would skip the scanner entirely if this step lived in a gated job. It needs no
+  # toolchain and no cache, so running it on every event costs seconds.
+  #
+  # A live Ed25519 seed sat tracked at rulesets/data/agent-keys/ from 69814a4 until the
+  # repo went public, and no gate looked for it. That is the failure this job exists for.
+  committed-keys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check for committed key material
+        run: bash tools/check-no-committed-keys.sh
+
   fmt:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,6 +119,9 @@ jobs:
         run: cargo fmt --all -- --check
 
   panic-contract:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -75,12 +154,6 @@ jobs:
 
       - name: Check runtime panic contract
         run: bash tools/check-runtime-panic-contract.sh
-
-      # No toolchain needed; kept in this job because it is a fast static check.
-      # A live Ed25519 seed sat tracked at rulesets/data/agent-keys/ from 69814a4
-      # until the repo went public, and no gate looked for it.
-      - name: Check for committed key material
-        run: bash tools/check-no-committed-keys.sh
 
       # INCFIX-03. No toolchain needed; another fast static check. `#[path =
       # "x.inc"]` pulls real Rust into a crate that rust-analyzer and every
@@ -175,6 +248,9 @@ jobs:
         run: bash tools/check-single-governor-key.sh
 
   build:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -211,7 +287,9 @@ jobs:
 
   clippy:
     needs:
+      - changes
       - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -250,7 +328,9 @@ jobs:
 
   test:
     needs:
+      - changes
       - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -373,7 +453,9 @@ jobs:
   # exists to end.
   solver-z3:
     needs:
+      - changes
       - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -425,6 +507,9 @@ jobs:
         run: bash tools/check-worktree-clean.sh "the z3 solver lane"
 
   fixture-freshness:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -453,7 +538,9 @@ jobs:
 
   platform-contract:
     needs:
+      - changes
       - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -507,7 +594,9 @@ jobs:
 
   proof-surfaces:
     needs:
+      - changes
       - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -578,7 +667,9 @@ jobs:
 
   jetstream:
     needs:
+      - changes
       - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -615,7 +706,9 @@ jobs:
 
   benchmark:
     needs:
+      - changes
       - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -661,6 +754,9 @@ jobs:
           if-no-files-found: error
 
   supply-chain:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

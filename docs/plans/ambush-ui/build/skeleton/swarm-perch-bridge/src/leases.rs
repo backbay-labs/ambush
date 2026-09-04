@@ -13,7 +13,7 @@ use crate::error::BridgeError;
 /// than one tick. PROPOSED.
 pub const LEASE_POLL_MS: u64 = 1_000;
 
-/// Diffs `open_leases()` by `lease_id` and emits `ambush:lease:v1` on appearance.
+/// Diffs `open_leases()` by `lease_id` and emits `swarm:lease:v1` on appearance.
 ///
 /// `ContainmentSweep::open_leases()` (`swarm-runtime/src/containment.rs:537-539`) is `pub` and
 /// reads the process's ONE `Arc<ContainmentSweep>` -- the same `Arc` that `swarm_detect.rs:1022-1075`
@@ -67,7 +67,7 @@ pub struct LeaseDiff {
     pub disappeared: Vec<String>,
 }
 
-/// Builds the `ambush:lease:v1` body from a `ContainmentLease`.
+/// Builds the `swarm:lease:v1` body from a `ContainmentLease`.
 ///
 /// **`remaining_ms` and `expired` are never baked in.** `ContainmentLeaseView`'s own doc comment
 /// (`swarm-runtime-http/src/http/containment.rs:75-86`) says `remaining_ms` "SATURATES AT ZERO"

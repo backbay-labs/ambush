@@ -240,7 +240,7 @@ the other five are gated off by default and drawn with the same hatch every abse
 
 > **Every record ends in two ruled lines: the record's own, and yours.**
 
-The first is **hatched, and it stays hatched.** `ambush:hold:v1` carries no Ed25519
+The first is **hatched, and it stays hatched.** `swarm:hold:v1` carries no Ed25519
 signature in Ambush today under any condition, so the document arrives at your bench
 unsigned and says so in its *shape*, above the sentence explaining it. Tier 0 is a hatched
 stamp in the margin and a hatched rule in the body. When a card does carry an attestation

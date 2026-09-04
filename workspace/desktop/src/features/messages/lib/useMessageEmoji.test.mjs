@@ -6,8 +6,8 @@ import { isEmojiOnlyMessage } from "@/shared/lib/emojiOnly.ts";
 
 // useMessageEmoji is a thin React-hook wrapper around these two pure
 // functions (memoized with React.useMemo). Exercise the underlying logic
-// directly here — the same data both MessageRow (channels) and
-// InboxMessageRow (inbox) now derive their emoji rendering from, so a custom
+// directly here — the same data MessageRow passes to MessageBody (channels)
+// and InboxMessageRow (inbox) derive their emoji rendering from, so a custom
 // emoji tag on an event must produce the same `customEmoji`/`emojiOnly`
 // regardless of which row reads it.
 const EMOJI_TAGS = [["emoji", "ambush", "https://relay/ambush.png"]];

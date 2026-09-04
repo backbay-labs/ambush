@@ -5,7 +5,7 @@
 // authority whatsoever. It touches no Ambush host except a GET, so it is
 // deliberately NOT in perch_writes.rs and is NOT counted by INV-01's
 // five-daemon-write table. INV-RF1 closes this set instead: the operator's own
-// key publishes exactly one kind (`kind:9` / `ambush:verdict:v1`) and exactly
+// key publishes exactly one kind (`kind:9` / `swarm:verdict:v1`) and exactly
 // one command may do it.
 //
 // ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@
 // (BUZZ desktop/src-tauri/src/commands/identity.rs:107-135 — the Tauri Rust
 // process; it takes `kind`, `content`, `created_at`, `tags`, signs with
 // `state.signing_keys()` and returns the event JSON to the renderer) and
-// REFUSES any content whose first line is an `ambush:<slug>:v<n>` marker. Its
+// REFUSES any content whose first line is an `swarm:<slug>:v<n>` marker. Its
 // refusal string names `perch_record_verdict` as the alternative. Without this
 // file that alternative does not exist and the console cannot publish leg 1 at
 // all — a two-legged write with one leg, which is how four wave-2 artifacts
@@ -26,7 +26,7 @@
 // (BUZZ desktop/src-tauri/src/commands/messages.rs:409-...) takes an arbitrary
 // `content: String` and an optional `kind: Option<u32>`, snapshots
 // `state.signing_keys()` at :447, and publishes. Gating only `sign_event`
-// leaves a renderer able to sign a `kind:9` whose body is an `ambush:*:v1`
+// leaves a renderer able to sign a `kind:9` whose body is an `swarm:*:v1`
 // marker through that command instead. `perch_sign_gate(kind_num, &content)`
 // must be called there too, immediately after `kind_num` is resolved at
 // messages.rs:452. Handed to 16-INVARIANT-TESTS.md as an INV-29 completeness
@@ -52,7 +52,7 @@ const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
 /// this file the way `tools/check-perch-write-allowlist.sh` reads one out of
 /// perch_writes.rs.
 pub const PERCH_RELAY_PUBLISHED_KINDS: [u32; 1] = [9];
-pub const PERCH_RELAY_PUBLISHED_MARKERS: [&str; 1] = ["ambush:verdict:v1"];
+pub const PERCH_RELAY_PUBLISHED_MARKERS: [&str; 1] = ["swarm:verdict:v1"];
 
 // ---------------------------------------------------------------------------
 // KEY MATERIAL — where it lives, and why the renderer can never hold it.
@@ -143,7 +143,7 @@ pub struct RecordVerdictOutput {
     pub signature: DetachedSignature,
 }
 
-/// Build, sign and publish the leg-1 `ambush:verdict:v1` card.
+/// Build, sign and publish the leg-1 `swarm:verdict:v1` card.
 ///
 /// Runs in the Tauri Rust process. Order of operations, and every step is
 /// load-bearing:
@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn the_operator_key_publishes_exactly_one_kind_and_one_marker() {
         assert_eq!(PERCH_RELAY_PUBLISHED_KINDS, [9]);
-        assert_eq!(PERCH_RELAY_PUBLISHED_MARKERS, ["ambush:verdict:v1"]);
+        assert_eq!(PERCH_RELAY_PUBLISHED_MARKERS, ["swarm:verdict:v1"]);
     }
 
     /// The gate at commands/identity_perch_gate.rs must refuse the exact
@@ -219,7 +219,7 @@ mod tests {
     /// signed itself.
     #[test]
     fn the_generic_signer_refuses_what_this_command_publishes() {
-        let card_line_0 = "<!-- ambush:verdict:v1 -->";
+        let card_line_0 = "<!-- swarm:verdict:v1 -->";
         assert!(
             crate::commands::identity_perch_gate::perch_sign_gate(9, card_line_0)
                 .is_err(),

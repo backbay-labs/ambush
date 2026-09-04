@@ -1984,7 +1984,7 @@ concentration ${c.total.toFixed(6)} · ${sa(c.sources, c.agents)} · peak ${c.pe
     ${sourceNote(c)}
 
     <div class="hr"></div>
-    ${provenanceBlock("ambush:hold:v1")}
+    ${provenanceBlock("swarm:hold:v1")}
 
     <div class="hr"></div>
     ${expired
@@ -2184,7 +2184,7 @@ host exclusion         ${FX.tuning.host[0]} reviewed · ${FX.tuning.host[1]} fal
     </div>` : ""}
 
     <div class="hr"></div>
-    ${provenanceBlock("ambush:finding:v1")}
+    ${provenanceBlock("swarm:finding:v1")}
 
     <div class="hr"></div>
     <div class="controls">
@@ -2324,10 +2324,10 @@ function renderOverlay(){
           <span class="omni-q">in:${CASES.caseA.id.slice(0,8)} after:2026-03-17 block_egress<span class="caret"></span></span>
         </div>
         <div class="omni-sec eyebrow">Matches — 12</div>
-        <div class="omni-item" data-sel="1"><span class="mono">ambush:hold:v1</span> block_egress · 198.51.100.20 <span class="m">${caseShort("caseA")} · 09:14</span></div>
-        <div class="omni-item"><span class="mono">ambush:receipt:v1</span> isolate_host · dispatched <span class="m">${caseShort("caseA")} · 09:16</span></div>
-        <div class="omni-item"><span class="mono">ambush:verdict:v1</span> refuse · block_egress <span class="m">${caseShort("caseC")} · 08:41</span></div>
-        <div class="omni-item"><span class="mono">ambush:finding:v1</span> suspicious_scripting · host-ops-1 <span class="m">execution · 09:14</span></div>
+        <div class="omni-item" data-sel="1"><span class="mono">swarm:hold:v1</span> block_egress · 198.51.100.20 <span class="m">${caseShort("caseA")} · 09:14</span></div>
+        <div class="omni-item"><span class="mono">swarm:receipt:v1</span> isolate_host · dispatched <span class="m">${caseShort("caseA")} · 09:16</span></div>
+        <div class="omni-item"><span class="mono">swarm:verdict:v1</span> refuse · block_egress <span class="m">${caseShort("caseC")} · 08:41</span></div>
+        <div class="omni-item"><span class="mono">swarm:finding:v1</span> suspicious_scripting · host-ops-1 <span class="m">execution · 09:14</span></div>
         <div class="omni-foot">
           <span class="mono">from:</span> <span class="mono">in:</span> <span class="mono">after:</span>
           <span class="mono">before:</span> are operators.
@@ -2646,11 +2646,11 @@ const RED_TEAM = [
 ];
 
 const OPEN_ITEMS = [
-  ["O-1","Two operators, one hold.","APPENDIX §4 layer 1 p-tags EVERY OperatorScope::Approve principal, so more than one console can legitimately hold the same open hold. 12-BACKEND-BILL-API §4.4 resolves the daemon side with 409 hold_already_deciding, but leg 1 is published to the relay BEFORE leg 2, the relay has no compare-and-set, and a kind:9 is immutable — so both signed verdict cards land in the case channel forever with nothing marking the loser. schemas/card-ambush-verdict-v1.schema.json's leg2.state enum is sending|recorded|acknowledged|refused_late and carries no value meaning “another operator's decision was the one that executed”. This page DRAWS that state (state=divergence, the fourth row) so the hole is visible rather than theoretical, and the row says plainly that nothing pressed there will run. It cannot be closed here: it needs a `superseded` leg2.state value carrying the winning nostr_intent_event_id, a rule that publishes it from whichever console gets the 409, and a reconciliation rule that renders a verdict card with no matching daemon decision record as not-the-decision. Owner: 13-WIRE-SCHEMAS plus 16-INVARIANT-TESTS, as a P0 invariant with a two-console E2E."],
+  ["O-1","Two operators, one hold.","APPENDIX §4 layer 1 p-tags EVERY OperatorScope::Approve principal, so more than one console can legitimately hold the same open hold. 12-BACKEND-BILL-API §4.4 resolves the daemon side with 409 hold_already_deciding, but leg 1 is published to the relay BEFORE leg 2, the relay has no compare-and-set, and a kind:9 is immutable — so both signed verdict cards land in the case channel forever with nothing marking the loser. schemas/card-swarm-verdict-v1.schema.json's leg2.state enum is sending|recorded|acknowledged|refused_late and carries no value meaning “another operator's decision was the one that executed”. This page DRAWS that state (state=divergence, the fourth row) so the hole is visible rather than theoretical, and the row says plainly that nothing pressed there will run. It cannot be closed here: it needs a `superseded` leg2.state value carrying the winning nostr_intent_event_id, a rule that publishes it from whichever console gets the 409, and a reconciliation rule that renders a verdict card with no matching daemon decision record as not-the-decision. Owner: 13-WIRE-SCHEMAS plus 16-INVARIANT-TESTS, as a P0 invariant with a two-console E2E."],
   ["O-2","The daemon's policy reason is unrenderable under the shipped ban list.","See departure D7. Either C-A2 is ratified or every hold pane in the product paraphrases a string the operator may need verbatim in an audit."],
   ["O-4","Two identifier strings the canonical fixture owns trip the shipped copy gate.",
    "The demo fixture's telemetry event ids are literally <code>hunt-evt-1</code> and <code>hunt-evt-2</code> (perch-demo-fixture.json <code>deposits[].event_id</code>), and render law 5 requires the Dismiss preview to name the event id it suppresses on, so the string reaches a rendered surface. skeleton/tools/copy-ban-list.tsv's <code>hunt-noun</code> row exempts only <code>hunt_id</code>. 22-DEMO-FIXTURE has filed amendment C-A1 to add <code>hunt[_-][a-z0-9]</code> to that exempt column; this page's boot assertion allows exactly that one shape and names it, so a second allowance cannot arrive quietly. The related case is departure D7, where the daemon's own policy reason is withheld rather than allowed, because that row is P0 and this one is hygiene. Someone has to ratify C-A1 and C-A2 together or the copy gate and the canonical fixture disagree on the first commit that wires them."],
-  ["O-3","distinct_sources is decided two ways in the wave.","Six producers read pipeline.rs:573 and concluded strategy-scoped; 13-WIRE-SCHEMAS and 17-COMPONENT-SPECS read whisker_agent.rs:148-149, stopped there, and concluded agent-instance — and they own the schema const, the zod literal and the golden vector. The majority reading is verified below and is what this page renders. Someone has to ratify it into schemas/card-ambush-escalation-v1.schema.json's distinct_sources_counts const, because prose does not propagate into a decoder."],
+  ["O-3","distinct_sources is decided two ways in the wave.","Six producers read pipeline.rs:573 and concluded strategy-scoped; 13-WIRE-SCHEMAS and 17-COMPONENT-SPECS read whisker_agent.rs:148-149, stopped there, and concluded agent-instance — and they own the schema const, the zod literal and the golden vector. The majority reading is verified below and is what this page renders. Someone has to ratify it into schemas/card-swarm-escalation-v1.schema.json's distinct_sources_counts const, because prose does not propagate into a decoder."],
 ];
 
 const VERIFIED = [

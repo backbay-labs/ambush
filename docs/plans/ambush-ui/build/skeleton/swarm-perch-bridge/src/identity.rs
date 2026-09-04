@@ -8,7 +8,7 @@ use crate::error::BridgeError;
 
 /// Domain separation for key derivation. Changing this string rotates every bridge key and
 /// invalidates the relay-side admission list, so it is versioned and never edited in place.
-pub const DERIVATION_DOMAIN: &[u8] = b"ambush.perch.bridge.nostr.v1";
+pub const DERIVATION_DOMAIN: &[u8] = b"swarm.perch.bridge.nostr.v1";
 
 /// What an identity slot is for. The evidence slots are sized from
 /// `admitted_identities` (`swarm_detect.rs:768-962`, handed to

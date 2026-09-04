@@ -257,7 +257,7 @@ test.describe("Perch queue lifecycle", () => {
   //
   // 13-WIRE-SCHEMAS.md has landed the wire half: `leg2.state` gains `superseded`
   // and `superseded_by` (the winning leg-1 event id, required non-null exactly
-  // when state is superseded) in card-ambush-verdict-v1.schema.json. This is the
+  // when state is superseded) in card-swarm-verdict-v1.schema.json. This is the
   // client half.
   test("04 — the console that loses the decide race publishes superseded and stops claiming the decision", async ({ page }) => {
     const winnerIntentId = "aa".repeat(32);

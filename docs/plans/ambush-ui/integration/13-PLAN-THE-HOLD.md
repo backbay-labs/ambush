@@ -38,7 +38,7 @@ Path convention (D2): an unprefixed path is the engine root; `workspace/` is the
 
 Everything below is owed by `10-PLAN-MIGRATION.md`, `11-PLAN-GROUND.md` and `12-PLAN-FIRST-CARD.md`. A worker starting Task 3 verifies each line first; a missing line is a blocker on that earlier plan, not work for this one.
 
-- [ ] `rulesets/perch-dev.yaml` + `.sig.json` exist with `runtime.mode: live_response`, `require_durable_live_response: true`, `pheromone.backend.kind: local_journal`, `runtime.containment.lease_store_path: data/perch-dev/containment-leases`, `correlation.enabled: true` with a `local_files` incident store, `audit.recent_decisions_limit: 200`, `operator_surface.enabled: true` and one principal carrying `nostr_pubkey` (P0-22, P0-26, D4). A debug `swarm_detect --config rulesets/perch-dev.yaml --serve` logs `operator containment release routes mounted`.
+- [ ] `rulesets-dev/perch-dev.yaml` + `.sig.json` exist with `runtime.mode: live_response`, `require_durable_live_response: true`, `pheromone.backend.kind: local_journal`, `runtime.containment.lease_store_path: data/perch-dev/containment-leases`, `correlation.enabled: true` with a `local_files` incident store, `audit.recent_decisions_limit: 200`, `operator_surface.enabled: true` and one principal carrying `nostr_pubkey` (P0-22, P0-26, D4). A debug `swarm_detect --config rulesets-dev/perch-dev.yaml --serve` logs `operator containment release routes mounted`.
 - [ ] `OperatorPrincipalConfig` has `nostr_pubkey: Option<String>` (B0) at `crates/swarm-core/src/config/operator.rs:115-129`.
 - [ ] `crates/swarm-perch-wire` exists (P1-26) with `marker.rs`, `tags.rs` (`is_opaque_hold_id`, `TagSet::assert_publishable`), `cards.rs` and `frames.rs` renamed to `swarm:` markers, and its default feature set links no engine crate.
 - [ ] `crates/swarm-perch-bridge` exists (P0-17 … P0-19) with `receive.rs`, `spool/`, `pacer.rs`, `identity.rs` (`normalize_p_tag`, `approve_scoped_operator_pubkeys`), `publish.rs`, `channels.rs` (with `ensure_case_channel`'s `Promoted` arm from B1d), and publishes `swarm:finding:v1` end to end.
@@ -158,7 +158,7 @@ Everything below is owed by `10-PLAN-MIGRATION.md`, `11-PLAN-GROUND.md` and `12-
 Replace the existing row `D4 confirmation | detect-only for First card, live-response dev profile for The hold | project owner, on spec review` with the block:
 
 ```markdown
-| D4 confirmation (The hold) | **Options:** (a) The hold runs on `rulesets/perch-dev.yaml` with `runtime.mode: live_response`, a `local_journal` substrate, a file-backed containment lease store and a file-backed incident store, debug-signed, refused by a release build — the plans' default; (b) The hold runs on `detect_only` with a test-only interception of the dry-run path — rejected by the plans because `lib.rs:1133-1146` never produces a `Skipped` RequireHuman in `detect_only`, so no hold can exist; (c) a production-signed live-response ruleset from day one — a deployment question, not a milestone one (`21-ADRS.md` Q1). **Default: (a).** Status: ☐ confirmed by the project owner on ____-__-__. | project owner, on spec review |
+| D4 confirmation (The hold) | **Options:** (a) The hold runs on `rulesets-dev/perch-dev.yaml` with `runtime.mode: live_response`, a `local_journal` substrate, a file-backed containment lease store and a file-backed incident store, debug-signed, refused by a release build — the plans' default; (b) The hold runs on `detect_only` with a test-only interception of the dry-run path — rejected by the plans because `lib.rs:1133-1146` never produces a `Skipped` RequireHuman in `detect_only`, so no hold can exist; (c) a production-signed live-response ruleset from day one — a deployment question, not a milestone one (`21-ADRS.md` Q1). **Default: (a).** Status: ☐ confirmed by the project owner on ____-__-__. | project owner, on spec review |
 ```
 
 - [ ] **Step 2: Commit.**
@@ -438,19 +438,19 @@ Expected: both new tests pass; every existing config test still passes (the bloc
 
 - [ ] **Step 5: Add the block to the dev ruleset and re-sign it.**
 
-Append to `rulesets/perch-dev.yaml` under `runtime:`:
+Append to `rulesets-dev/perch-dev.yaml` under `runtime:`:
 
 ```yaml
   response:
     hold_store_path: data/perch-dev/holds
 ```
 
-Then `cargo run --bin sign_dev_ruleset -- rulesets/perch-dev.yaml` (P0-22's binary) and confirm `git status --porcelain rulesets/` shows both the YAML and the sidecar modified, nothing else.
+Then `cargo run --bin sign_dev_ruleset -- rulesets-dev/perch-dev.yaml` (P0-22's binary) and confirm `git status --porcelain rulesets/` shows both the YAML and the sidecar modified, nothing else.
 
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add crates/swarm-core rulesets/perch-dev.yaml rulesets/perch-dev.yaml.sig.json
+git add crates/swarm-core rulesets-dev/perch-dev.yaml rulesets-dev/perch-dev.yaml.sig.json
 git commit -s -m "feat(swarm-core): add runtime.response hold settings"
 ```
 
@@ -4961,7 +4961,7 @@ pub(super) fn default_operator_context_token_env() -> String {
 }
 ```
 
-with a `docs/CONFIGURATION.md` paragraph: the stream token and the operator bearer were one env var; a deployment that relied on that sets `operator_surface.auth.context_token_env: SWARM_OPERATOR_TOKEN` explicitly. `rulesets/perch-dev.yaml` sets it to `SWARM_OPERATOR_CONTEXT_TOKEN` and `docs/PERCH-DEV.md` exports it.
+with a `docs/CONFIGURATION.md` paragraph: the stream token and the operator bearer were one env var; a deployment that relied on that sets `operator_surface.auth.context_token_env: SWARM_OPERATOR_TOKEN` explicitly. `rulesets-dev/perch-dev.yaml` sets it to `SWARM_OPERATOR_CONTEXT_TOKEN` and `docs/PERCH-DEV.md` exports it.
 
 - [ ] **Step 4: Run.**
 
@@ -4975,7 +4975,7 @@ Expected: green; the existing stream tests that relied on an anonymous read are 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add crates/swarm-ingest-runtime crates/swarm-runtime-http crates/swarm-core docs/CONFIGURATION.md rulesets/perch-dev.yaml rulesets/perch-dev.yaml.sig.json
+git add crates/swarm-ingest-runtime crates/swarm-runtime-http crates/swarm-core docs/CONFIGURATION.md rulesets-dev/perch-dev.yaml rulesets-dev/perch-dev.yaml.sig.json
 git commit -s -m "fix(swarm-ingest-runtime): require the context token on the event stream and scope the review session POST"
 ```
 
@@ -7708,7 +7708,7 @@ git commit -s -m "feat(desktop): drive the two-legged verdict write and publish 
 - Modify: `docs/plans/ambush-ui/integration/13-PLAN-THE-HOLD.md` (tick the exit criteria below with dates)
 
 **Interfaces:**
-- Consumes: everything above, a debug `swarm_detect --config rulesets/perch-dev.yaml --serve --bind 127.0.0.1:9090`, the compose relay stack, `scripts/provision-perch.sh`, the desktop dev build with `AMBUSH_PERCH_DAEMON_URL`, `AMBUSH_PERCH_DAEMON_TOKEN`, `AMBUSH_PERCH_OPERATOR_SEED` and `AMBUSH_PERCH_OPERATOR_ID` exported.
+- Consumes: everything above, a debug `swarm_detect --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9090`, the compose relay stack, `scripts/provision-perch.sh`, the desktop dev build with `AMBUSH_PERCH_DAEMON_URL`, `AMBUSH_PERCH_DAEMON_TOKEN`, `AMBUSH_PERCH_OPERATOR_SEED` and `AMBUSH_PERCH_OPERATOR_ID` exported.
 - Produces: the observable behaviours in "Exit criteria", each demonstrated once by hand and recorded.
 
 - [ ] **Step 1: Append the hold half to the demo script.**

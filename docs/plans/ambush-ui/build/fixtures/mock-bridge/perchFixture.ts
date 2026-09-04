@@ -100,13 +100,13 @@ export type SeedPerchDemoOptions = {
 };
 
 const MARKERS = {
-  finding: "<!-- ambush:finding:v1 -->",
-  escalation: "<!-- ambush:escalation:v1 -->",
-  hold: "<!-- ambush:hold:v1 -->",
-  verdict: "<!-- ambush:verdict:v1 -->",
-  receipt: "<!-- ambush:receipt:v1 -->",
-  lease: "<!-- ambush:lease:v1 -->",
-  rollback: "<!-- ambush:rollback:v1 -->",
+  finding: "<!-- swarm:finding:v1 -->",
+  escalation: "<!-- swarm:escalation:v1 -->",
+  hold: "<!-- swarm:hold:v1 -->",
+  verdict: "<!-- swarm:verdict:v1 -->",
+  receipt: "<!-- swarm:receipt:v1 -->",
+  lease: "<!-- swarm:lease:v1 -->",
+  rollback: "<!-- swarm:rollback:v1 -->",
 } as const;
 
 type CardKind = keyof typeof MARKERS;

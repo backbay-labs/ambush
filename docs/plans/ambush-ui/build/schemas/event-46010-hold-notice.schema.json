@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ambush.invalid/perch/wire/v1/event-46010-hold-notice.schema.json",
   "title": "kind:46010 \u2014 hold notice (the needs-action queue record)",
-  "description": "The ONE stored kind the relay fork admits. It is a QUEUE RECORD, not a timeline row: 10-RELAY-FORK.md decision RF-D3 establishes that Perch pays zero of the four client registration points and that the rendered row is the kind:9 ambush:hold:v1 card. This schema is therefore a schema over an EVENT (tags plus a content grammar), not over a JSON body \u2014 46010 carries no JSON at all.\n\nWHY NO JSON. Three reasons, each verified. (1) Nothing parses it: the desktop's needs-action queue is a hand-built {\"kinds\":[46010,46011,46012],\"#p\":[me],\"limit\":20} POSTed to /query from the Tauri process (desktop/src-tauri/src/commands/messages.rs:97-101), and the only TypeScript that knows the number is a headline switch at desktop/src/features/home/lib/inbox.ts:165 and an empty-content substitution at :186. (2) Its content IS FTS-indexed \u2014 schema.sql:223-227's privacy CASE nulls search_tsv for kinds {1059, 30179, 30300, 30350, 30622, 44100, 44101, 44200} and 46010 is not among them \u2014 so a human sentence here is what makes a hold findable in the Ledger, and a JSON blob is what makes an FTS snippet unreadable. (3) Buzz's shipped mobile app renders this content raw: mobile/lib/features/activity/feed_item.dart:83-88's displayContent returns content.trim() and substitutes 'A workflow is waiting for approval.' when it is empty \u2014 a false sentence containing a banned control label, shown to a Perch operator on a phone. An empty content is therefore not an option either.",
+  "description": "The ONE stored kind the relay fork admits. It is a QUEUE RECORD, not a timeline row: 10-RELAY-FORK.md decision RF-D3 establishes that Perch pays zero of the four client registration points and that the rendered row is the kind:9 swarm:hold:v1 card. This schema is therefore a schema over an EVENT (tags plus a content grammar), not over a JSON body \u2014 46010 carries no JSON at all.\n\nWHY NO JSON. Three reasons, each verified. (1) Nothing parses it: the desktop's needs-action queue is a hand-built {\"kinds\":[46010,46011,46012],\"#p\":[me],\"limit\":20} POSTed to /query from the Tauri process (desktop/src-tauri/src/commands/messages.rs:97-101), and the only TypeScript that knows the number is a headline switch at desktop/src/features/home/lib/inbox.ts:165 and an empty-content substitution at :186. (2) Its content IS FTS-indexed \u2014 schema.sql:223-227's privacy CASE nulls search_tsv for kinds {1059, 30179, 30300, 30350, 30622, 44100, 44101, 44200} and 46010 is not among them \u2014 so a human sentence here is what makes a hold findable in the Ledger, and a JSON blob is what makes an FTS snippet unreadable. (3) Buzz's shipped mobile app renders this content raw: mobile/lib/features/activity/feed_item.dart:83-88's displayContent returns content.trim() and substitutes 'A workflow is waiting for approval.' when it is empty \u2014 a false sentence containing a banned control label, shown to a Perch operator on a phone. An empty content is therefore not an option either.",
   "type": "object",
   "required": [
     "kind",
@@ -19,7 +19,7 @@
       "minLength": 1,
       "maxLength": 512,
       "pattern": "^hold [A-Za-z0-9][A-Za-z0-9_-]{7,63} \u00b7 ",
-      "description": "ONE LINE. The same human fallback line the ambush:hold:v1 card carries, verbatim, so the two never drift: `hold {hold_id} \u00b7 {action_kind} \u00b7 {SEVERITY} \u00b7 {scope_kind} {scope_value} \u00b7 expires {ISO-8601 with offset}`. No marker, no JSON, no newline. Separator is U+00B7 with a space either side. The leading hold_id segment is pinned to the same character class as common.schema.json#/$defs/HoldId, so a `hold:`-prefixed derived id fails the content pattern as well as the tag."
+      "description": "ONE LINE. The same human fallback line the swarm:hold:v1 card carries, verbatim, so the two never drift: `hold {hold_id} \u00b7 {action_kind} \u00b7 {SEVERITY} \u00b7 {scope_kind} {scope_value} \u00b7 expires {ISO-8601 with offset}`. No marker, no JSON, no newline. Separator is U+00B7 with a space either side. The leading hold_id segment is pinned to the same character class as common.schema.json#/$defs/HoldId, so a `hold:`-prefixed derived id fails the content pattern as well as the tag."
     },
     "tags": {
       "type": "array",
@@ -155,7 +155,7 @@
     },
     "card": {
       "cardinality": "0 or 1",
-      "value": "the 64-hex Nostr event id of the sibling ambush:hold:v1 card",
+      "value": "the 64-hex Nostr event id of the sibling swarm:hold:v1 card",
       "sql_pushed": false,
       "why": "Builds the buzz://message?channel={case}&id={card} deep link straight to the timeline row. Its presence forces a publish ORDER \u2014 the kind:9 card first, then the 46010 \u2014 which is the order we want anyway: the row exists before the queue points at it. Absent only if the card publish failed, which the console renders as a degraded queue row rather than dropping."
     },

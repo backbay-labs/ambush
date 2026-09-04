@@ -1590,16 +1590,16 @@ export type KillChainProps = {
    =========================================================================== */
 const ROW_KINDS = [
   ["ingest",            "substrate", "RuntimeEvent::Ingest, tallied at the bridge"],
-  ["finding",           "substrate", "ambush:finding:v1"],
+  ["finding",           "substrate", "swarm:finding:v1"],
   ["escalation",        "authority", "RuntimeEvent::Escalation"],
   ["mode_transition",   "authority", "RuntimeEvent::ModeTransition / kind 26003"],
   ["agent_health",      "evidence",  "kind 26002"],
-  ["response_execution","evidence",  "ambush:receipt:v1"],
+  ["response_execution","evidence",  "swarm:receipt:v1"],
   ["suppression",       "medium",    "a Dismiss marker deposit"],
-  ["hold",              "authority", "kind 46010 / ambush:hold:v1"],
-  ["decision",          "fg",        "ambush:verdict:v1"],
-  ["containment_open",  "evidence",  "ambush:lease:v1"],
-  ["containment_close", "evidence",  "ambush:rollback:v1"],
+  ["hold",              "authority", "kind 46010 / swarm:hold:v1"],
+  ["decision",          "fg",        "swarm:verdict:v1"],
+  ["containment_open",  "evidence",  "swarm:lease:v1"],
+  ["containment_close", "evidence",  "swarm:rollback:v1"],
 ];
 const RAIL = {
   substrate: "var(--perch-pillar-substrate-mark)",

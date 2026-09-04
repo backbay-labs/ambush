@@ -67,7 +67,7 @@ is the structural fix for that, and it is the only file here with authority over
 | [`gallery.html`](gallery.html) | 1 | this set's presentation of the drawn work | **open by double-clicking** |
 | [`tokens/`](tokens/) | 6 | `perch-tokens.css`, the Buzz-name bridge, the alias table, `severity.ts`, the Tailwind preset | `node tokens/perch-tokens.test.mjs` — 20/20 |
 | [`schemas/`](schemas/) | 18 | JSON Schema for the seven cards, the eight frames, `46010`, and the shared `$defs` | validated by `fixtures/validate.mjs` |
-| [`skeleton/perch-wire/`](skeleton/perch-wire/) | 25 | the wire crate: Rust types, a TypeScript mirror, zod decoders, 16 golden vectors, a pinned hash, a parity gate | `bash skeleton/perch-wire/parity-gate.sh` — 311 fields |
+| [`skeleton/perch-wire/`](skeleton/perch-wire/) | 25 | the wire crate: Rust types, a TypeScript mirror, zod decoders, 16 golden vectors, a pinned hash, a parity gate | `bash skeleton/perch-wire/parity-gate.sh` — 312 fields |
 | [`skeleton/swarm-perch-bridge/`](skeleton/swarm-perch-bridge/) | 20 | the bridge crate's module skeleton with its doc contracts | no — no crate to build into |
 | [`skeleton/desktop/`](skeleton/desktop/) | 8 | the client's new files: routes, keys, subscriptions, the Tauri surface, the boundary | no — drop-in sources |
 | [`skeleton/tools/`](skeleton/tools/), [`skeleton/scripts/`](skeleton/scripts/) | 13 | the CI gates, both halves of the copy gate, their shared ban list and fixture corpus | yes — all refuse to pass silently |
@@ -131,7 +131,7 @@ against plan prose, patches or PR bodies, which necessarily quote the words the 
 | Both relay patches | `git apply --check` exits 0 at `block/buzz@eed74bde2`, clean tree |
 | The fixture corpus | `fixtures/validate.mjs`: 0 failures, 14 envelope hashes recomputed and matched, 3 issuer chains intact; `shasum -c SHA256SUMS` clean |
 | The golden vectors | `GOLDEN.sha256` reproduces exactly: 16 vectors, sorted by filename, manifest excluded |
-| The wire parity gate | 311 declared fields across 17 schemas, present on both the Rust and zod sides, exit 0, no env overrides |
+| The wire parity gate | 312 declared fields across 17 schemas, present on both the Rust and zod sides, exit 0, no env overrides |
 | The token package | `perch-tokens.test.mjs` 20/20, including the new **T-M2** that asserts the `--perch-*` rename was *applied*, not merely tabled |
 | The palette | `viz/contrast.mjs`: 180 ink-on-surface pairs from the shipping CSS, **0 below bar in either theme**, lowest readable 4.74:1 |
 | The drawn surfaces | `viz/render-audit.mjs`: 36 render combinations clean; type census 594 nodes, 43.4% ≥14px, **0 at 8px** |

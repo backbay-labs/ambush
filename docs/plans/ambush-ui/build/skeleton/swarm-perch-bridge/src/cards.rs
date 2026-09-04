@@ -12,11 +12,11 @@ use crate::spool::GapCause;
 
 /// The four markers this crate produces. Three of the seven frozen markers are produced elsewhere:
 ///
-/// - `ambush:verdict:v1` -- the console, leg 1 of the two-legged write.
-/// - `ambush:rollback:v1` -- the console for an operator release; nobody for a TTL expiry until
+/// - `swarm:verdict:v1` -- the console, leg 1 of the two-legged write.
+/// - `swarm:rollback:v1` -- the console for an operator release; nobody for a TTL expiry until
 ///   the proposed **B1c** thirteenth `RuntimeEvent` variant lands
 ///   (`11-BRIDGE-CRATE.md` section 9.4).
-/// - `ambush:lease:v1` -- this crate, but from the containment-lease poll rather than a
+/// - `swarm:lease:v1` -- this crate, but from the containment-lease poll rather than a
 ///   `RuntimeEvent`, so it is listed here for completeness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Marker {
@@ -33,11 +33,11 @@ impl Marker {
     /// fallback line.
     pub const fn comment(self) -> &'static str {
         match self {
-            Self::Finding => "<!-- ambush:finding:v1 -->",
-            Self::Escalation => "<!-- ambush:escalation:v1 -->",
-            Self::Hold => "<!-- ambush:hold:v1 -->",
-            Self::Receipt => "<!-- ambush:receipt:v1 -->",
-            Self::Lease => "<!-- ambush:lease:v1 -->",
+            Self::Finding => "<!-- swarm:finding:v1 -->",
+            Self::Escalation => "<!-- swarm:escalation:v1 -->",
+            Self::Hold => "<!-- swarm:hold:v1 -->",
+            Self::Receipt => "<!-- swarm:receipt:v1 -->",
+            Self::Lease => "<!-- swarm:lease:v1 -->",
         }
     }
 
@@ -61,8 +61,8 @@ impl Marker {
 /// `13-WIRE-SCHEMAS.md`'s.
 ///
 /// ```text
-/// <!-- ambush:finding:v1 -->
-/// {"schema":"ambush.perch.finding.v1","seq":41,"issuer":{...},"finding":{...},"locator":{...}}
+/// <!-- swarm:finding:v1 -->
+/// {"schema":"swarm.perch.finding.v1","seq":41,"issuer":{...},"finding":{...},"locator":{...}}
 /// whisker-7a3f - dns_exfiltration - HIGH - conf 0.82 - host web-04 - finding f2c9...
 /// ```
 ///

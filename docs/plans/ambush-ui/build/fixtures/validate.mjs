@@ -60,7 +60,7 @@ const kindToSchema = new Map([
 function schemaFor(body) {
   const factSchema = body?.fact?.schema;
   if (typeof factSchema === "string") {
-    // "ambush.perch.hold.v1" -> "hold"
+    // "swarm.perch.hold.v1" -> "hold"
     return kTagToSchema.get(factSchema.split(".").at(-2));
   }
   if (typeof body?.kind === "number") return kindToSchema.get(String(body.kind));

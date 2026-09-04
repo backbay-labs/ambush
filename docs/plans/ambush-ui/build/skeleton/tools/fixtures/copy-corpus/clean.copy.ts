@@ -23,6 +23,6 @@ export const CORPUS_CLEAN = {
   daemonRuleName: "static.human_gate",
   capabilityIdToken: "lease:hunt-evt-1:isolate_host:1773738882600",
   huntIdentifier: "hunt-evt-1",
-  markerLiteral: "<!-- ambush:verdict:v1 -->",
+  markerLiteral: "<!-- swarm:verdict:v1 -->",
   hyphenCompound: "the dwell gate is repeat-proof",
 };

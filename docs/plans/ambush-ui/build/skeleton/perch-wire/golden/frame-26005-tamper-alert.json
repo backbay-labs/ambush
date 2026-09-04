@@ -4,7 +4,7 @@
   "fail_closed": true,
   "issuer": "swarm:ed25519:9f3c000000000000000000000000000000000000000000000000000000000000",
   "kind": 26005,
-  "schema": "ambush.perch.frame.tamper_alert.v1",
+  "schema": "swarm.perch.frame.tamper_alert.v1",
   "seq": 3,
   "tracer_pid": null,
   "unexpected_library_count": 2,

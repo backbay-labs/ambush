@@ -1,6 +1,6 @@
 {
   "kind": 26000,
-  "schema": "ambush.perch.frame.ingest_rate.v1",
+  "schema": "swarm.perch.frame.ingest_rate.v1",
   "issuer": "swarm:ed25519:5fa33029f70d52222fb3e88ab19ad1158158a8da7db100288a4b341e69774622",
   "seq": 1,
   "emitted_at_ms": 1773738873000,

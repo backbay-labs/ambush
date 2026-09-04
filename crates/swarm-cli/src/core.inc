@@ -5661,6 +5661,7 @@ mod tests {
             token_env: token_env.to_string(),
             token_expires_at_ms: None,
             scopes,
+            nostr_pubkey: None,
         }
     }
 

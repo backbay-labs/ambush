@@ -508,19 +508,40 @@ community-scoped subtree to unmount and remount with fresh state.
 **Module-level singletons must be explicitly reset.** React remounting only
 clears React state (useState, useRef, context). Module-level variables (Maps,
 class instances, cached promises) survive across remounts. Every community-scoped
-singleton needs a reset function wired into `resetCommunityState()` in
-`desktop/src/features/communities/useCommunityInit.ts`.
+singleton needs a reset function wired into the typed registry in
+`desktop/src/features/communities/communityScopedRegistry.ts`, which
+`resetCommunityState()` in `useCommunityInit.ts` runs on every switch.
 
-`resetCommunityState()` is the canonical inventory of community-scoped
-singletons. **If you add a new module-level cache, Map, or class instance that
-holds community-scoped data, add its reset there in the same change.** Failure
-to do so causes data from the old community to leak into the new one. Avoid
-duplicating its complete reset list here; the implementation is the source of
+`communityScopedRegistry.ts` is the canonical inventory of community-scoped
+singletons: `COMMUNITY_SCOPED_SINGLETONS` names each one in teardown order and
+`RESETTERS` maps every name to its reset function. **If you add a new
+module-level cache, Map, or class instance that holds community-scoped data,
+add its name to `COMMUNITY_SCOPED_SINGLETONS` and its resetter to `RESETTERS`
+in the same change.** A name without a resetter (or the reverse) is a type
+error and fails the exhaustiveness test in `communityScopedRegistry.test.mjs`.
+That type only keeps the registry's two halves in agreement, so a singleton
+that was never added type-checks fine — `pnpm check:community-resetters`
+(`desktop/scripts/check-community-resetters.mjs`, part of `pnpm check`) is the
+gate for that. It scans `desktop/src` for module-level mutable state paired
+with an exported `reset*`/`clear*` function and fails on any whose resetter the
+registry does not import; a store that genuinely is not community-scoped goes
+in that script's `ALLOWLIST` with a one-line reason.
+`runResetters()` runs the resetters in declaration order and stops on the first
+failure. Synchronous resetters run back to back in one uninterrupted turn (an
+`await` on a synchronous resetter still costs a microtask turn, which would let
+queued work re-populate a store that had already been cleared); only a resetter
+that returns a promise is awaited. Resetters gated on the boundary being
+crossed (avatar state on a relay or identity change, the tray menu on macOS
+Tauri only) read those flags from the `ResetContext` it receives. Failure to
+register a singleton causes data from the old community to leak into the new
+one. Avoid duplicating the complete list here; the registry is the source of
 truth.
 
 Key files:
 - `desktop/src/app/App.tsx` — community key, init gate, remount boundary
-- `desktop/src/features/communities/useCommunityInit.ts` — `resetCommunityState()`, applies config to Tauri backend
+- `desktop/src/features/communities/communityScopedRegistry.ts` — `COMMUNITY_SCOPED_SINGLETONS`, `RESETTERS`, `runResetters()`: the singleton inventory
+- `desktop/src/features/communities/useCommunityInit.ts` — `resetCommunityState()` (runs the registry with the boundary context), applies config to Tauri backend
+- `desktop/scripts/check-community-resetters.mjs` — `pnpm check:community-resetters`: fails on a community-scoped singleton the registry never took
 - `desktop/src/main.tsx` — provider hierarchy (`QueryClientProvider` > `App`)
 
 ---

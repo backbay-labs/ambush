@@ -438,6 +438,8 @@ jobs:
             -p ambush-test-client \
             --lib \
             --test e2e_event_reminder \
+            --test e2e_workflow_approval \
+            --test e2e_operator_alarm_pgate \
             --archive-file target/ci/backend-integration-tests.tar.zst
       - name: Save relay artifacts cache
         # PR-scoped exact-source entries cannot warm main or other PRs and churn
@@ -828,6 +830,22 @@ jobs:
           cargo nextest run \
             --archive-file target/ci/backend-integration-tests.tar.zst \
             -E 'binary(e2e_event_reminder)' \
+            --run-ignored ignored-only
+        env:
+          RELAY_URL: ws://localhost:3000
+      - name: Workflow approval (kind:46010) and operator alarm p-gate (kind:26006) e2e
+        # kind:46010 workflow approval requests are admitted channel-scoped
+        # (an h-less one is rejected, a global REQ never receives one, the p
+        # tag reaches the needs_action feed, a non-member cannot publish into a
+        # private channel) and kind:26006 operator alarm frames are fenced by
+        # P_GATED_KINDS (a global REQ without #p = self is CLOSED, a named
+        # principal receives the frame, an unnamed one does not, the frame is
+        # never stored). Both binaries need the live relay this job already
+        # started; the pure-function halves run in `just test-unit`.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'binary(e2e_workflow_approval) + binary(e2e_operator_alarm_pgate)' \
             --run-ignored ignored-only
         env:
           RELAY_URL: ws://localhost:3000

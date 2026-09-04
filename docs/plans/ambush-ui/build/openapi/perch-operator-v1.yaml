@@ -90,7 +90,7 @@ info:
 
     Perch never authorizes. A grant recorded here is leg 2 of a two-legged write:
     leg 1 is a signed `kind:9` card on the Buzz relay carrying the
-    `ambush:verdict:v1` marker, and this daemon re-derives authority from scratch
+    `swarm:verdict:v1` marker, and this daemon re-derives authority from scratch
     rather than trusting it.
 
 servers:
@@ -290,7 +290,7 @@ paths:
 
 
         IDEMPOTENCY. `nostr_intent_event_id` is the idempotency key: it is the 32-byte
-        id of the leg-1 `ambush:verdict:v1` card the operator already signed, and a
+        id of the leg-1 `swarm:verdict:v1` card the operator already signed, and a
         client retrying after a timeout re-sends the same value. The CAS at step 4
         stores it; the terminal outcome is written after execution returns, so a retry
         can never double-grant. See the response matrix under `409` and
@@ -1376,7 +1376,7 @@ components:
         nostr_intent_event_id:
           type: string
           description: >-
-            32-byte hex id of the leg-1 `ambush:verdict:v1` card. The idempotency key.
+            32-byte hex id of the leg-1 `swarm:verdict:v1` card. The idempotency key.
         signature:
           oneOf:
             - $ref: '#/components/schemas/DetachedSignature'
@@ -1628,7 +1628,7 @@ components:
         nostr_intent_event_id:
           type: string
           description: >-
-            32-byte lowercase hex. The id of the signed `ambush:verdict:v1` card
+            32-byte lowercase hex. The id of the signed `swarm:verdict:v1` card
             already published to the relay, and the idempotency key for this route.
             A retry after a timeout MUST re-send the same value.
 
@@ -1835,7 +1835,7 @@ components:
         verdict_event_id:
           type: string
           description: >-
-            32-byte lowercase hex id of the leg-1 `ambush:verdict:v1` card. Used to
+            32-byte lowercase hex id of the leg-1 `swarm:verdict:v1` card. Used to
             derive a deterministic `feedback_id`, which is what makes a retry
             idempotent: `upsert_false_positive_measurement` already replaces by
             `finding_id` (crates/swarm-spine/src/incident.rs:189-204), but

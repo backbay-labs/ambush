@@ -49,12 +49,12 @@ test.describe("Perch marker admission", () => {
     await openCase(page);
 
     const cases = [
-      { name: "exact", content: "<!-- ambush:finding:v1 -->\n{}", renders: true },
-      { name: "leading-space", content: " <!-- ambush:finding:v1 -->\n{}", renders: false },
-      { name: "trailing-text", content: "<!-- ambush:finding:v1 --> hello\n{}", renders: false },
-      { name: "second-line", content: "hello\n<!-- ambush:finding:v1 -->\n{}", renders: false },
+      { name: "exact", content: "<!-- swarm:finding:v1 -->\n{}", renders: true },
+      { name: "leading-space", content: " <!-- swarm:finding:v1 -->\n{}", renders: false },
+      { name: "trailing-text", content: "<!-- swarm:finding:v1 --> hello\n{}", renders: false },
+      { name: "second-line", content: "hello\n<!-- swarm:finding:v1 -->\n{}", renders: false },
       // \r\n: line 0 is trimEnd()-ed, so a CRLF producer still works.
-      { name: "crlf", content: "<!-- ambush:finding:v1 -->\r\n{}", renders: true },
+      { name: "crlf", content: "<!-- swarm:finding:v1 -->\r\n{}", renders: true },
     ] as const;
 
     let expectedCards = 0;
@@ -95,7 +95,7 @@ test.describe("Perch marker admission", () => {
     await openCase(page);
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:hold:v1",
+      marker: "swarm:hold:v1",
       signerPubkey: PERCH_UNADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: { hold_id: "h_unreconciled01", action_kind: "isolate_host", severity: "CRITICAL" },
@@ -124,7 +124,7 @@ test.describe("Perch marker admission", () => {
     await openCase(page);
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:verdict:v1",
+      marker: "swarm:verdict:v1",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_OTHER_CASE_CHANNEL,
       body: { hold_id: "h_elsewhere01", decision: "grant" },
@@ -144,14 +144,14 @@ test.describe("Perch marker admission", () => {
     await openCase(page);
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:teapot:v1",
+      marker: "swarm:teapot:v1",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: { anything: "[a link](javascript:alert(1))" },
     });
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:hold:v2",
+      marker: "swarm:hold:v2",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: { hold_id: "h_futureversion" },
@@ -176,7 +176,7 @@ test.describe("Perch marker admission", () => {
     const hostile = `isolate${RTL_OVERRIDE}host${ZERO_WIDTH_SPACE}\nsecond line`;
     await emitAmbushCard(page, {
       channelName: "case",
-      marker: "ambush:finding:v1",
+      marker: "swarm:finding:v1",
       signerPubkey: PERCH_ADMITTED_ISSUER,
       hTag: PERCH_CASE_CHANNEL,
       body: { finding_id: "f-1", summary: hostile, strategy_id: "port_scan" },

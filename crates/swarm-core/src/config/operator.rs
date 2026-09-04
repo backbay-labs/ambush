@@ -126,6 +126,12 @@ pub struct OperatorPrincipalConfig {
     /// Scopes granted to this principal.
     #[serde(default)]
     pub scopes: Vec<OperatorScope>,
+    /// The operator's Nostr public key (64 lowercase hex), used by the swarm bridge to
+    /// `p`-tag held actions and hold alarms so they reach this principal's console.
+    /// Optional: without it no hold can be addressed to this principal (00-DECISIONS D1;
+    /// 01-DESIGN §6 B0). It is configured, not proven -- see ADR 0016.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nostr_pubkey: Option<String>,
 }
 
 /// Authentication settings for the local operator surface.
@@ -147,9 +153,15 @@ pub struct OperatorAuthConfig {
     /// Optional unix timestamp in milliseconds after which the legacy single-principal bearer token is rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at_ms: Option<i64>,
+    /// The legacy single principal's Nostr public key (64 lowercase hex); see
+    /// [`OperatorPrincipalConfig::nostr_pubkey`]. Ignored when `principals` is non-empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nostr_pubkey: Option<String>,
 }
 
 impl OperatorAuthConfig {
+    /// The principals this surface authenticates: `principals` when configured, otherwise
+    /// one synthesized from the legacy single-principal fields with every scope granted.
     pub fn effective_principals(&self) -> Vec<OperatorPrincipalConfig> {
         if !self.principals.is_empty() {
             return self.principals.clone();
@@ -164,6 +176,7 @@ impl OperatorAuthConfig {
                 OperatorScope::Approve,
                 OperatorScope::Maintenance,
             ],
+            nostr_pubkey: self.nostr_pubkey.clone(),
         }]
     }
 
@@ -173,10 +186,65 @@ impl OperatorAuthConfig {
 }
 
 impl OperatorPrincipalConfig {
+    /// Whether this principal's bearer token has passed its configured expiry.
     pub fn token_is_expired(&self, now_ms: i64) -> bool {
         self.token_expires_at_ms
             .is_some_and(|expires_at_ms| now_ms > expires_at_ms)
     }
+
+    /// Validate this principal's self-contained fields, reporting failures against
+    /// its position `index` in `operator_surface.auth.principals`.
+    ///
+    /// Owns every rule that needs nothing but this principal: [`scopes`](Self::scopes)
+    /// must grant something, and the optional [`nostr_pubkey`](Self::nostr_pubkey) must
+    /// be exactly 64 lowercase hex characters when present. Cross-principal rules
+    /// (unique ids, unique token environments, at least one `read` scope) belong to
+    /// `SwarmConfig::validate`, which calls this for every effective principal and
+    /// propagates whatever it returns -- so a rule added here is reported against its
+    /// own field, with no caller change.
+    ///
+    /// Crate-internal like its `PlatformApiConfig` and `TlsConfig` siblings: the loader is
+    /// its only caller, and the phase-282 visibility baseline keeps it that way.
+    pub(super) fn validate(&self, index: usize) -> Result<(), ConfigValidationError> {
+        if self.scopes.is_empty() {
+            return Err(ConfigValidationError::InvalidField {
+                field: "operator_surface.auth.principals.scopes",
+                reason: format!("principal {index} must grant at least one scope"),
+            });
+        }
+        if let Some(key) = self.nostr_pubkey.as_deref()
+            && !is_nostr_pubkey_hex(key)
+        {
+            return Err(ConfigValidationError::InvalidField {
+                field: "operator_surface.auth.principals.nostr_pubkey",
+                reason: format!(
+                    "principal {index} (`{}`) nostr_pubkey must be exactly 64 lowercase hex characters",
+                    self.operator_id.trim()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// The configured Nostr public key decoded to its 32 raw bytes.
+    ///
+    /// `None` when no key is configured or when the value would fail
+    /// [`validate`](Self::validate); a malformed key never decodes to a partial array.
+    pub fn nostr_pubkey_bytes(&self) -> Option<[u8; 32]> {
+        let key = self.nostr_pubkey.as_deref()?;
+        if !is_nostr_pubkey_hex(key) {
+            return None;
+        }
+        hex::decode(key).ok()?.try_into().ok()
+    }
+}
+
+/// Exactly 64 lowercase hex characters: the canonical NIP-01 public-key encoding.
+fn is_nostr_pubkey_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 impl PlatformApiConfig {
@@ -291,6 +359,7 @@ impl Default for OperatorAuthConfig {
             operator_id: default_operator_id(),
             token_env: default_operator_token_env(),
             token_expires_at_ms: None,
+            nostr_pubkey: None,
         }
     }
 }
@@ -345,4 +414,98 @@ pub struct OperatorSurfacePaths {
     pub approval_ledger_results_dir: PathBuf,
     pub approval_verdict_results_dir: PathBuf,
     pub approval_receipt_pack_results_dir: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn principal_without_nostr_pubkey_still_loads() {
+        let yaml = "operator_id: ops\ntoken_env: SWARM_OPERATOR_TOKEN\nscopes: [approve]\n";
+        let p: OperatorPrincipalConfig =
+            serde_yaml::from_str(yaml).unwrap_or_else(|e| panic!("{e}"));
+        assert!(p.nostr_pubkey.is_none());
+        assert!(p.validate(0).is_ok());
+        assert!(p.nostr_pubkey_bytes().is_none());
+    }
+
+    #[test]
+    fn principal_with_nostr_pubkey_round_trips_and_validates() {
+        let hex = "a".repeat(64);
+        let yaml =
+            format!("operator_id: ops\ntoken_env: T\nscopes: [approve]\nnostr_pubkey: {hex}\n");
+        let p: OperatorPrincipalConfig =
+            serde_yaml::from_str(&yaml).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(p.nostr_pubkey.as_deref(), Some(hex.as_str()));
+        assert!(p.validate(0).is_ok());
+        assert_eq!(p.nostr_pubkey_bytes().map(|b| b.len()), Some(32));
+        assert_eq!(p.nostr_pubkey_bytes(), Some([0xaa; 32]));
+
+        let rendered = serde_yaml::to_string(&p).unwrap_or_else(|e| panic!("{e}"));
+        assert!(rendered.contains(&format!("nostr_pubkey: {hex}")));
+        let back: OperatorPrincipalConfig =
+            serde_yaml::from_str(&rendered).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back.nostr_pubkey, p.nostr_pubkey);
+    }
+
+    #[test]
+    fn malformed_nostr_pubkey_is_rejected_at_validation() {
+        for bad in [
+            "npub1abc",
+            &"A".repeat(64),
+            &"a".repeat(63),
+            &"a".repeat(65),
+            "",
+        ] {
+            let p = OperatorPrincipalConfig {
+                operator_id: "o".into(),
+                token_env: "T".into(),
+                token_expires_at_ms: None,
+                scopes: vec![OperatorScope::Approve],
+                nostr_pubkey: Some(bad.to_string()),
+            };
+            let Err(error) = p.validate(0) else {
+                panic!("{bad}: expected the malformed key to be rejected");
+            };
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("invalid field `operator_surface.auth.principals.nostr_pubkey`:"),
+                "{bad}: {error}"
+            );
+            assert!(p.nostr_pubkey_bytes().is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn legacy_single_principal_form_carries_the_pubkey_through() {
+        let auth = OperatorAuthConfig {
+            nostr_pubkey: Some("b".repeat(64)),
+            ..OperatorAuthConfig::default()
+        };
+        assert_eq!(
+            auth.effective_principals()[0].nostr_pubkey.as_deref(),
+            Some("b".repeat(64).as_str())
+        );
+
+        let bare = OperatorAuthConfig::default();
+        assert!(bare.effective_principals()[0].nostr_pubkey.is_none());
+    }
+
+    #[test]
+    fn absent_nostr_pubkey_is_omitted_from_serialized_principals() {
+        let p = OperatorPrincipalConfig {
+            operator_id: "ops".into(),
+            token_env: "T".into(),
+            token_expires_at_ms: None,
+            scopes: vec![OperatorScope::Read],
+            nostr_pubkey: None,
+        };
+        let rendered = serde_yaml::to_string(&p).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!rendered.contains("nostr_pubkey"), "{rendered}");
+        let auth =
+            serde_yaml::to_string(&OperatorAuthConfig::default()).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!auth.contains("nostr_pubkey"), "{auth}");
+    }
 }

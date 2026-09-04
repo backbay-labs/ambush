@@ -42,7 +42,7 @@
 | 6 H3 | `COMMUNITY_SCOPED_SINGLETONS`, `RESETTERS: Record<CommunityScopedSingleton, Resetter>`, `runResetters` in `features/communities/communityScopedRegistry.ts` | Task 18 |
 | 7 H7 | `workspace/crates/ambush-ws-client` with typed errors, under the engine panic gate | Tasks 3, 7 |
 | 8 B0 | `OperatorPrincipalConfig.nostr_pubkey: Option<String>`, `nostr_pubkey_bytes()` | Tasks 7, 13 |
-| 9 P0-22 | `rulesets/perch-dev.yaml` (+ `.sig.json`), `crates/swarm-runtime-http/src/bin/sign_dev_ruleset.rs` | Task 14 |
+| 9 P0-22 | `rulesets-dev/perch-dev.yaml` (+ `.sig.json`), `crates/swarm-runtime-http/src/bin/sign_dev_ruleset.rs` | Task 14 |
 | 10 P0-21 | `docker-compose.yml` with `relay`, `postgres`, `redis`; `scripts/provision-perch.sh` | Task 14 (amended: see D-FC-5) |
 | 11 | `getFeature("perch")` in `workspace/preview-features.json`, off by default | Tasks 16, 17 |
 | 12 | the `changes` job in `.github/workflows/ci.yml` | Tasks 2, 19, 24 |
@@ -79,7 +79,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
 | `crates/swarm-runtime-http/src/bin/swarm_detect.rs` | the bridge spawn, the metrics-router merge, the perch-router merge, the shutdown join |
 | `crates/swarm-runtime-http/tests/perch_walking_skeleton.rs` | the ADR 0018 verification test |
 | `Cargo.toml`, `deny.toml`, `tools/check-workspace-layering.sh`, `.github/workflows/ci.yml` | members, duplicate-version skips with reasons, the three-part TRUST_SENSITIVE edit, the gate steps |
-| `rulesets/perch-dev.yaml` (+ `.sig.json`), `docker-compose.yml`, `scripts/provision-perch.sh`, `docs/PERCH-DEV.md`, `.gitignore` | the `perch:` block, the seed env plumbing, provisioning amendments, the demo script |
+| `rulesets-dev/perch-dev.yaml` (+ `.sig.json`), `docker-compose.yml`, `scripts/provision-perch.sh`, `docs/PERCH-DEV.md`, `.gitignore` | the `perch:` block, the seed env plumbing, provisioning amendments, the demo script |
 | `tools/check-perch-write-allowlist.sh`, `tools/lib/perch-roots.sh`, `tools/perch-source-roots.tsv`, `tools/copy-scope.tsv`, `tools/check-copy-banned-terms.sh`, `tools/copy-ban-list.tsv`, `tools/copy-ban-allowlist.tsv`, `tools/fixtures/copy-corpus/**` | the two perch gates this milestone lands (H4, H8) |
 | `docs/plans/ambush-ui/build/schemas/card-swarm-finding-v1.schema.json`, `card-swarm-verdict-v1.schema.json`, `docs/plans/ambush-ui/build/openapi/perch-operator-v1.yaml` | the `gap` block, the `evidence_truncated` placement, the verdict `subject` amendment, W3-14 applied to B3i |
 
@@ -1422,7 +1422,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
 
 - [ ] **Step 3: Build and gate.** `cargo build -p swarm-runtime-http` → ok. `cargo clippy --workspace --all-targets -- -D warnings` → clean. `bash tools/check-workspace-layering.sh` → exit 0. `bash tools/check-runtime-panic-contract.sh` → exit 0. `bash tools/check-supply-chain.sh` → the skips from Task 3 cover every duplicate.
 
-- [ ] **Step 4: Runtime proof (needs Task 14's config; do it then, but record the expectation now):** `PERCH_BRIDGE_NOSTR_SEED=<64 hex> cargo run -p swarm-runtime-http --bin swarm_detect -- --config rulesets/perch-dev.yaml --serve --bind 127.0.0.1:9090` logs `perch bridge mounted` and `curl -sf http://127.0.0.1:9090/metrics/perch | grep -c perch_bridge_` prints a number ≥ 7; unsetting the seed makes the daemon exit non-zero with `environment variable \`PERCH_BRIDGE_NOSTR_SEED\` is unset or shorter than 32 bytes`.
+- [ ] **Step 4: Runtime proof (needs Task 14's config; do it then, but record the expectation now):** `PERCH_BRIDGE_NOSTR_SEED=<64 hex> cargo run -p swarm-runtime-http --bin swarm_detect -- --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9090` logs `perch bridge mounted` and `curl -sf http://127.0.0.1:9090/metrics/perch | grep -c perch_bridge_` prints a number ≥ 7; unsetting the seed makes the daemon exit non-zero with `environment variable \`PERCH_BRIDGE_NOSTR_SEED\` is unset or shorter than 32 bytes`.
 
 - [ ] **Step 5: Commit.** `git add Cargo.toml Cargo.lock crates/swarm-runtime-http tools/check-workspace-layering.sh && git commit -s -m "feat(swarm-detect): mount the perch bridge beside the containment router; bridge joins TRUST_SENSITIVE"`
 
@@ -2048,7 +2048,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
 > Records D-FC-5 (the bridge creates lanes) and amends Ground Task 10.
 
 **Files:**
-- Modify: `rulesets/perch-dev.yaml` (+ re-sign `rulesets/perch-dev.yaml.sig.json`), `docker-compose.yml` (`swarm-detect` env), `scripts/provision-perch.sh`, `.gitignore`, `docs/plans/ambush-ui/integration/00-DECISIONS.md` (D-FC-5 row), `docs/plans/ambush-ui/integration/11-PLAN-GROUND.md` (Task 10 step 2 note)
+- Modify: `rulesets-dev/perch-dev.yaml` (+ re-sign `rulesets-dev/perch-dev.yaml.sig.json`), `docker-compose.yml` (`swarm-detect` env), `scripts/provision-perch.sh`, `.gitignore`, `docs/plans/ambush-ui/integration/00-DECISIONS.md` (D-FC-5 row), `docs/plans/ambush-ui/integration/11-PLAN-GROUND.md` (Task 10 step 2 note)
 - Create: `docs/PERCH-DEV.md`, `.env.perch.example`
 - Test: the daemon starts against the compose stack and `curl http://127.0.0.1:9090/metrics/perch/identities` lists three identities; twelve lanes exist on the relay
 
@@ -2062,7 +2062,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
   ```
   and in `11-PLAN-GROUND.md` Task 10 step 2 append: `(Amended by 12-PLAN-FIRST-CARD.md D-FC-5: the lanes are created by the bridge; this script only prints the dev operator key and writes .perch-dev/.)`.
 
-- [ ] **Step 2: The `perch` block.** Append to `rulesets/perch-dev.yaml` (after `operator_surface:`):
+- [ ] **Step 2: The `perch` block.** Append to `rulesets-dev/perch-dev.yaml` (after `operator_surface:`):
   ```yaml
   perch:
     enabled: true
@@ -2087,14 +2087,14 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
       execution: "a30249d7-446b-4135-8e9f-8704a5a052b1"
       impact: "7e8f562f-5484-4e5f-9140-d071d7c4b60c"
   ```
-  Keep `runtime.mode: detect_only` (D4) and Ground's `operator_surface.enabled: true`, `correlation.enabled: true`, file-backed incident store, `recent_decisions_limit: 200`. Re-sign: `cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets/perch-dev.yaml && cargo run -p swarm-runtime-http --bin swarmctl -- validate --config rulesets/perch-dev.yaml` → valid. Commit the sidecar.
+  Keep `runtime.mode: detect_only` (D4) and Ground's `operator_surface.enabled: true`, `correlation.enabled: true`, file-backed incident store, `recent_decisions_limit: 200`. Re-sign: `cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets-dev/perch-dev.yaml && cargo run -p swarm-runtime-http --bin swarmctl -- validate --config rulesets-dev/perch-dev.yaml` → valid. Commit the sidecar.
 
 - [ ] **Step 3: The seed.** `.env.perch.example`:
   ```bash
   # Copy to .env.perch (git-ignored) and fill in. 32 bytes of hex; generate with:
   #   python3 -c 'import secrets; print(secrets.token_hex(32))'
   PERCH_BRIDGE_NOSTR_SEED=
-  # The operator surface bearer the console and curl send (rulesets/perch-dev.yaml operator_surface.auth.token_env).
+  # The operator surface bearer the console and curl send (rulesets-dev/perch-dev.yaml operator_surface.auth.token_env).
   SWARM_OPERATOR_TOKEN=dev-token-not-a-secret
   SWARM_PLATFORM_API_TOKEN=dev-platform-token
   ```
@@ -2110,7 +2110,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
   ````markdown
   # PERCH-DEV — the First-card walking skeleton, end to end
 
-  DEBUG BUILD ONLY: `rulesets/perch-dev.yaml` is signed with the in-repo debug key and a `--release` daemon refuses it (correct: production signs its own).
+  DEBUG BUILD ONLY: `rulesets-dev/perch-dev.yaml` is signed with the in-repo debug key and a `--release` daemon refuses it (correct: production signs its own).
 
   ```bash
   #!/usr/bin/env bash
@@ -2119,7 +2119,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
   set -a; . ./.env.perch; set +a            # PERCH_BRIDGE_NOSTR_SEED, SWARM_OPERATOR_TOKEN, SWARM_PLATFORM_API_TOKEN
 
   # 1. Sign the dev ruleset (idempotent; the sidecar is committed and this must leave the tree clean).
-  cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets/perch-dev.yaml
+  cargo run -p swarm-runtime-http --bin sign_dev_ruleset -- rulesets-dev/perch-dev.yaml
   test -z "$(git status --porcelain rulesets/)"
 
   # 2. The relay stack.
@@ -2130,7 +2130,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
   bash scripts/provision-perch.sh                       # writes .perch-dev/operator.nsec and prints the operator pubkey
 
   # 4. The daemon, detect-only, with the operator surface and the bridge.
-  cargo run -p swarm-runtime-http --bin swarm_detect -- --config rulesets/perch-dev.yaml --serve --bind 127.0.0.1:9090 > .perch-dev/daemon.log 2>&1 &
+  cargo run -p swarm-runtime-http --bin swarm_detect -- --config rulesets-dev/perch-dev.yaml --serve --bind 127.0.0.1:9090 > .perch-dev/daemon.log 2>&1 &
   DAEMON=$!; sleep 6
   curl -sf http://127.0.0.1:9090/readyz
   grep -q 'perch bridge mounted' .perch-dev/daemon.log
@@ -2148,7 +2148,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
   curl -sf -X POST http://127.0.0.1:9090/v1/ingest/events -H 'content-type: application/json' --data @.perch-dev/events.json | python3 -c 'import json,sys;print([r["status"] for r in json.load(sys.stdin)])'
 
   # 6. The card crossed the seam — read from the RELAY, out of process, before the app opens. Budget: two seconds.
-  LANE=$(python3 -c 'import yaml;print(yaml.safe_load(open("rulesets/perch-dev.yaml"))["perch"]["lane_channels"]["execution"])')
+  LANE=$(python3 -c 'import yaml;print(yaml.safe_load(open("rulesets-dev/perch-dev.yaml"))["perch"]["lane_channels"]["execution"])')
   sleep 2
   PERCH_TEST_RELAY_URL=ws://localhost:3000 PERCH_TEST_LANE_CHANNEL="$LANE" PERCH_TEST_EXPECT_AUTHOR="$INGEST_PUBKEY" \
     cargo test -p swarm-perch-bridge --test relay_live -- --ignored lane_carries_a_finding_card_from_the_ingest_identity
@@ -2194,7 +2194,7 @@ Five values are genuinely undecided by the wave-2 set and the wave-3 rulings. Ea
 - [ ] **Step 1: Record both rows.**
   ```markdown
   | **D-FC-2** — where the console learns the admitted-issuer set (INV-15) | **Default the plan builds under:** the daemon serves `GET /metrics/perch/identities` → `{colony_id, identities: [{slot, pubkey}]}` (public keys only, unauthenticated, on the same listener as `/metrics/perch`); the Tauri command `perch_admitted_issuers` reads it and the renderer caches it under the `daemon` query source with a five-minute stale time. The skeleton's `perchKeys.admittedIssuers` moves from the `relay` source to `daemon`. **Options:** (a) each bridge identity publishes a `kind:0` profile carrying a `swarm-agent` tag and the console trusts the relay's copy — rejected: the relay is not the record and a forged profile is one `MessagesWrite` away; (b) an operator pastes the provisioning report into Settings — kept for air-gapped consoles, Operator-complete; (c) a bearer-authenticated `/v1/operator/perch/identities` — rejected for now: public keys are public, and the metrics listener is reachable from the console's daemon URL already. **Dependents:** Tasks 17, 19. | project owner |
-  | **D-FC-4** — operator bearer, daemon URL and operator id on the console | **Default the plan builds under:** debug builds seed the keyring blob at startup from `AMBUSH_PERCH_DAEMON_URL` (default `http://127.0.0.1:9090`), `AMBUSH_PERCH_DAEMON_BEARER` and `AMBUSH_PERCH_OPERATOR_ID` (default `local-operator`, the id `rulesets/perch-dev.yaml`'s principal carries) when the corresponding keyring keys `perch.daemon_url`, `perch.daemon_bearer`, `perch.operator_id` are absent; a release build reads the keyring only and renders "daemon not configured" until a Settings surface (Operator-complete) stores them. The operator Ed25519 key (`perch.operator_ed25519`) is minted on first use and never leaves the process. **Options:** a Settings form now (0.5 d of UI with no design ground yet), or a deep-link `ambush://perch/configure?…` — both deferred. **Dependents:** Tasks 19, 21. | project owner |
+  | **D-FC-4** — operator bearer, daemon URL and operator id on the console | **Default the plan builds under:** debug builds seed the keyring blob at startup from `AMBUSH_PERCH_DAEMON_URL` (default `http://127.0.0.1:9090`), `AMBUSH_PERCH_DAEMON_BEARER` and `AMBUSH_PERCH_OPERATOR_ID` (default `local-operator`, the id `rulesets-dev/perch-dev.yaml`'s principal carries) when the corresponding keyring keys `perch.daemon_url`, `perch.daemon_bearer`, `perch.operator_id` are absent; a release build reads the keyring only and renders "daemon not configured" until a Settings surface (Operator-complete) stores them. The operator Ed25519 key (`perch.operator_ed25519`) is minted on first use and never leaves the process. **Options:** a Settings form now (0.5 d of UI with no design ground yet), or a deep-link `ambush://perch/configure?…` — both deferred. **Dependents:** Tasks 19, 21. | project owner |
   ```
 - [ ] **Step 2: Commit.** `git commit -s -am "docs(decisions): D-FC-2 admitted-issuer source and D-FC-4 console provisioning defaults"`
 

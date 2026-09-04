@@ -153,25 +153,25 @@ pub enum Stream {
 #[serde(tag = "schema")]
 pub enum Frame {
     /// `26000`
-    #[serde(rename = "ambush.perch.frame.ingest_rate.v1")]
+    #[serde(rename = "swarm.perch.frame.ingest_rate.v1")]
     IngestRate(FrameHeader, IngestRate),
     /// `26001`
-    #[serde(rename = "ambush.perch.frame.concentration.v1")]
+    #[serde(rename = "swarm.perch.frame.concentration.v1")]
     Concentration(FrameHeader, ConcentrationFrame),
     /// `26002`
-    #[serde(rename = "ambush.perch.frame.agent_health.v1")]
+    #[serde(rename = "swarm.perch.frame.agent_health.v1")]
     AgentHealth(FrameHeader, AgentHealthFrame),
     /// `26003`
-    #[serde(rename = "ambush.perch.frame.mode_transition.v1")]
+    #[serde(rename = "swarm.perch.frame.mode_transition.v1")]
     ModeTransition(FrameHeader, ModeTransitionFrame),
     /// `26004`
-    #[serde(rename = "ambush.perch.frame.governance_status.v1")]
+    #[serde(rename = "swarm.perch.frame.governance_status.v1")]
     GovernanceStatus(FrameHeader, GovernanceStatusFrame),
     /// `26005`
-    #[serde(rename = "ambush.perch.frame.tamper_alert.v1")]
+    #[serde(rename = "swarm.perch.frame.tamper_alert.v1")]
     TamperAlert(FrameHeader, TamperAlertFrame),
     /// `26006`
-    #[serde(rename = "ambush.perch.frame.hold_alarm.v1")]
+    #[serde(rename = "swarm.perch.frame.hold_alarm.v1")]
     HoldAlarm(FrameHeader, HoldAlarm),
 }
 
@@ -352,7 +352,7 @@ pub struct GovernanceStatusFrame {
 /// (`AMB crates/swarm-runtime/src/runtime_events.rs:249-256`) carries
 /// `unexpected_library_loads: Vec<String>` — host filesystem paths — and a
 /// free-form `details: String`. Neither crosses a community-global frame. Both
-/// are carried on the durable `ambush:escalation:v1` lane card with
+/// are carried on the durable `swarm:escalation:v1` lane card with
 /// `cause = tamper_fail_closed`, which is channel-scoped and membership-gated.
 /// The sha256 is on BOTH so the two can be joined without the frame disclosing
 /// anything.

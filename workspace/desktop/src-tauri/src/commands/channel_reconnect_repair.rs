@@ -3,8 +3,13 @@ use tauri::State;
 use crate::{app_state::AppState, relay::query_relay};
 
 const MAX_REPAIR_PAGE_LIMIT: u32 = 500;
-const CHANNEL_REPAIR_KINDS: [u32; 15] = [
-    5, 7, 9, 9005, 40001, 40002, 40003, 40008, 40099, 45001, 45003, 48100, 48101, 48102, 48103,
+// Kind 39005 is deliberately absent: `ambush_core::kind::is_relay_only_kind(39005)` is
+// true, the relay synthesizes thread summaries at query time and never stores them, and
+// this filter sets neither `top_level` nor `include_summaries`, so a repair query could
+// never return one. Summaries are recovered by re-issuing the window request, not here.
+const CHANNEL_REPAIR_KINDS: [u32; 17] = [
+    5, 7, 9, 9005, 40001, 40002, 40003, 40008, 40099, 40100, 45001, 45003, 46010, 48100, 48101,
+    48102, 48103,
 ];
 
 fn build_channel_reconnect_repair_filter(
@@ -94,6 +99,27 @@ mod tests {
         assert!(filter.get("top_level").is_none());
         assert!(filter.get("include_summaries").is_none());
         assert!(filter.get("include_aux").is_none());
+    }
+
+    /// 01-DESIGN §8 / 11-PLAN-GROUND Task 3: a reconnect must repair the
+    /// perch case-channel kinds a relay actually stores — held actions
+    /// (46010) and the case canvas (40100) — or a console that dropped its
+    /// socket during a hold would render a stale case. Thread summaries
+    /// (39005) are excluded: the relay synthesizes them at query time and
+    /// never stores them, so repairing them here is a guaranteed no-op (see
+    /// the constant's comment).
+    #[test]
+    fn repair_kinds_cover_perch_case_channel_kinds() {
+        for kind in [46010u32, 40100] {
+            assert!(
+                CHANNEL_REPAIR_KINDS.contains(&kind),
+                "kind {kind} must be repaired on reconnect"
+            );
+        }
+        assert!(
+            !CHANNEL_REPAIR_KINDS.contains(&39005),
+            "kind 39005 is relay-synthesized and never stored; repairing it cannot return a row"
+        );
     }
 
     #[test]

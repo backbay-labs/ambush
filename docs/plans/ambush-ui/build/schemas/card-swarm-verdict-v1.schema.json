@@ -1,0 +1,312 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ambush.invalid/perch/wire/v1/card-swarm-verdict-v1.schema.json",
+  "title": "swarm:verdict:v1",
+  "description": "LEG 1 OF THE TWO-LEGGED WRITE. A signed human intent record, published by the OPERATOR'S OWN Nostr key into the case channel. It is not an authorization and no daemon reads it as one: leg 2 is a separate POST to /v1/response/holds/{id}/decide over a process boundary, and the daemon re-derives authority from scratch.\n\nThis is the only card in the registry the operator publishes and the only one not produced by the bridge. It therefore carries NO spine envelope issuer the bridge controls, and its `envelope.issuer` is the operator's own spine identity \u2014 the same swarm:ed25519:{public_key_hex} that voter_id_from_public_key produces (crates/swarm-runtime/src/approval.rs:1783-1785) and that the decide route requires to equal the authenticated operator_id.\n\nTIER 1 FROM DAY ONE, conditional on B2's operator Ed25519 key existing. 08 section 6.2 files this card as tier 0 'until B1.6' (=B2o); that is one step too conservative. B2o is what puts the operator on the RECEIPT. The detached signature in `fact.signature` is produced by the console for leg 2 regardless of B2o, so the card is verifiable the moment leg 2 exists. See 13-WIRE-SCHEMAS.md section 9 amendment W-4.",
+  "allOf": [
+    {
+      "$ref": "card-envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "fact": {
+      "type": "object",
+      "required": [
+        "schema",
+        "issuer",
+        "emitted_at_ms",
+        "locator",
+        "decision",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "swarm.perch.verdict.v1"
+        },
+        "issuer": {
+          "$ref": "common.schema.json#/$defs/OperatorFactIssuer",
+          "description": "WHO PRODUCED THE FACT \u2014 here, a person. This card is the ONE in the registry whose fact a human produces, so it uses OperatorFactIssuer and NOT FactIssuer: `role` is `const: null` there, which makes `role: \"tom\"` on a human decision a schema error rather than a review note. AgentRole::Tom is 'Governance \u2014 enforces policy, manages lifecycle' (crates/swarm-core/src/agent.rs:26-27), the VETO actor, and APPENDIX-NORMATIVE.md section 7 rules that governance's veto and the operator's refuse are never conflated. See the envelope's `issuer` for who published it."
+        },
+        "emitted_at_ms": {
+          "$ref": "common.schema.json#/$defs/UnixMillis",
+          "description": "The RuntimeEvent's own emitted_at_ms, carried through unchanged. THE SORT KEY for every Perch surface. The Nostr event's `created_at` is a transport timestamp stamped at publish, because MAX_TIMESTAMP_DRIFT_SECS is 900 and REJECTS (crates/buzz-relay/src/handlers/ingest.rs:2224-2231) and `created_at` is inside the Nostr signature, so a spooled card carrying its true emit time becomes permanently unpublishable fifteen minutes after it was produced."
+        },
+        "locator": {
+          "type": "object",
+          "required": [
+            "hold_id",
+            "case_channel",
+            "hold_card_id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "hold_id": {
+              "$ref": "common.schema.json#/$defs/HoldId"
+            },
+            "case_channel": {
+              "$ref": "common.schema.json#/$defs/Uuid"
+            },
+            "hold_card_id": {
+              "$ref": "common.schema.json#/$defs/Hex64Lower",
+              "description": "Nostr event id of the open swarm:hold:v1 card. Also the `e` tag."
+            }
+          }
+        },
+        "decision": {
+          "type": "object",
+          "required": [
+            "decision",
+            "hold_id",
+            "decided_at_ms",
+            "operator_id",
+            "rationale_sha256"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "grant",
+                "refuse"
+              ]
+            },
+            "hold_id": {
+              "$ref": "common.schema.json#/$defs/HoldId"
+            },
+            "decided_at_ms": {
+              "$ref": "common.schema.json#/$defs/UnixMillis"
+            },
+            "operator_id": {
+              "type": "string",
+              "description": "The configured Ambush operator principal id (crates/swarm-core/src/config/operator.rs:118-129). The console asserts it equals voter_id_from_public_key(signature.public_key_hex) before publishing, because the decide route will."
+            },
+            "rationale_sha256": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/Hex64Lower"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "SHA-256 of the UTF-8 rationale string, or JSON null when rationale is absent. This binds the fourth member of the signing preimage without making free text part of its canonical JSON shape."
+            },
+            "rationale": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Free text the operator typed. Never parsed by anything."
+            }
+          }
+        },
+        "signature": {
+          "$ref": "common.schema.json#/$defs/DetachedSignature",
+          "description": "Ed25519 over the RFC 8785 canonical form of {decided_at_ms, decision, hold_id, rationale_sha256} \u2014 EXACTLY the preimage build/openapi/perch-operator-v1.yaml's decide route requires, so one signature serves both legs and a reviewer diffing them checks one thing. `rationale` and `operator_id` are deliberately OUTSIDE the preimage: rationale is bound by its digest, and operator_id is re-derived from public_key_hex."
+        },
+        "leg2": {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false,
+          "description": "The console's own record of what leg 2 did, published as an UPDATE card (a second swarm:verdict:v1 replying to the first). INV-33 forbids optimistic UI: every state is rendered as a distinct thing and none of them offers an undo.\n\nTWO OPERATORS, ONE HOLD. APPENDIX-NORMATIVE.md section 4 layer 1 p-tags EVERY OperatorScope::Approve principal and section 13's declined-amendment note confirms the watch claim does not narrow that, so more than one console can legitimately hold the same open hold. Leg 1 is published to the relay BEFORE leg 2 is POSTed (13-WIRE-SCHEMAS section 3.2's publish order), the relay has no compare-and-set, and a kind:9 event is immutable \u2014 so BOTH signed verdict cards land in the case channel and stay there. 12-BACKEND-BILL-API.md section 4.4 resolves the DAEMON side (409 hold_already_deciding / hold_already_decided); `superseded` is the relay side of the same event, and it is the console's obligation, not the daemon's: the losing console is the only party that knows both which card it published and which 409 it received. Without it the case channel and the Ledger export's holds/ directory contain two unqualified human-decision records for one hold and nothing marks the loser.",
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "sending",
+                "recorded",
+                "acknowledged",
+                "refused_late",
+                "superseded"
+              ],
+              "description": "sending \u2014 leg 1 is published and leg 2 has not answered. recorded \u2014 the daemon recorded the decision. acknowledged \u2014 a receipt id came back. refused_late \u2014 the daemon refused after leg 1 was already signed and published; the intent record stands and the action did not run. superseded \u2014 ANOTHER operator's decision was the one the daemon executed, and this card is a human intent record that did not become the decision. A console publishes `superseded` when its POST /decide returns 409 hold_already_deciding or 409 hold_already_decided with a decision id that is not its own leg-1 event id."
+            },
+            "receipt_id": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "refusal_check": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The named check that refused, verbatim from the daemon."
+            },
+            "superseded_by": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/Hex64Lower"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The WINNING leg-1 card's Nostr event id \u2014 the nostr_intent_event_id the daemon recorded as the decision, returned in the 409 body. REQUIRED NON-NULL when state is `superseded` and REQUIRED NULL otherwise (asserted by the allOf below), so a reader can always link the loser to the winner and a reconciler can always tell the two apart. 12-BACKEND-BILL-API.md commits nostr_intent_event_id as POST /decide's idempotency key, which is what makes this id available to the losing console at all."
+            },
+            "superseded_at_ms": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/UnixMillis"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When this console learned it had lost \u2014 its own clock at the 409, not the winner's decided_at_ms, which it does not observe. Null unless state is `superseded`."
+            }
+          },
+          "allOf": [
+            {
+              "title": "superseded carries its winner; no other state may",
+              "oneOf": [
+                {
+                  "properties": {
+                    "state": {
+                      "const": "superseded"
+                    },
+                    "superseded_by": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "superseded_by",
+                    "superseded_at_ms"
+                  ]
+                },
+                {
+                  "properties": {
+                    "state": {
+                      "enum": [
+                        "sending",
+                        "recorded",
+                        "acknowledged",
+                        "refused_late"
+                      ]
+                    },
+                    "superseded_by": {
+                      "type": "null"
+                    },
+                    "superseded_at_ms": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema": "swarm.spine.envelope.v1",
+      "issuer": "swarm:ed25519:bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+      "seq": 1,
+      "prev_envelope_hash": null,
+      "issued_at": "2026-03-17T09:16:19Z",
+      "capability_token": null,
+      "fact": {
+        "schema": "swarm.perch.verdict.v1",
+        "issuer": {
+          "swarm_agent_id": "perch-operator-1",
+          "role": null,
+          "nostr_pubkey": "684949a3287973d209a80c63057ff9e099ede5996b18288936db5e318fafbde5"
+        },
+        "emitted_at_ms": 1773738979000,
+        "locator": {
+          "hold_id": "h_a07aeacf",
+          "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+          "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c"
+        },
+        "decision": {
+          "decision": "grant",
+          "hold_id": "h_a07aeacf",
+          "decided_at_ms": 1773738979000,
+          "operator_id": "perch-operator-1",
+          "rationale_sha256": "1585784cc28d7aea3b5265880b27b4b0e851f6006b76e0d222a302bad5ba5ae5",
+          "rationale": "Office-spawned encoded PowerShell on host-ops-1, two detectors agreeing. Isolating."
+        },
+        "signature": {
+          "algorithm": "ed25519",
+          "key_id": "perch-operator-1",
+          "public_key_hex": "bcefbd06b2c7d3bc00587150b85deb7d241d3540a194ecd1c2d88b2afd203ded",
+          "signature_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "leg2": {
+          "state": "sending",
+          "receipt_id": null,
+          "refusal_check": null,
+          "superseded_by": null,
+          "superseded_at_ms": null
+        }
+      },
+      "envelope_hash": "0xabababababababababababababababababababababababababababababababab"
+    },
+    {
+      "schema": "swarm.spine.envelope.v1",
+      "issuer": "swarm:ed25519:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "seq": 2,
+      "prev_envelope_hash": "0xabababababababababababababababababababababababababababababababab",
+      "issued_at": "2026-03-17T09:16:21Z",
+      "capability_token": null,
+      "fact": {
+        "schema": "swarm.perch.verdict.v1",
+        "issuer": {
+          "swarm_agent_id": "perch-operator-2",
+          "role": null,
+          "nostr_pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "emitted_at_ms": 1773738979050,
+        "locator": {
+          "hold_id": "h_a07aeacf",
+          "case_channel": "27799e23-ab25-4659-b381-3de47ea7ca4d",
+          "hold_card_id": "b9220df5739062dfd79374e161806a9eecbed7a15e84a4524cc887c6dfe6998c"
+        },
+        "decision": {
+          "decision": "grant",
+          "hold_id": "h_a07aeacf",
+          "decided_at_ms": 1773738979050,
+          "operator_id": "perch-operator-2",
+          "rationale_sha256": "6ec22089809e9c2e8c5a2799c3a248e92d71c4c223b73101c9a768eb1615d1d2",
+          "rationale": "Same call, one tick later."
+        },
+        "signature": {
+          "algorithm": "ed25519",
+          "key_id": "perch-operator-2",
+          "public_key_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "signature_hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "leg2": {
+          "state": "superseded",
+          "receipt_id": null,
+          "refusal_check": null,
+          "superseded_by": "243aad87527a33433a60e2f990d83de1e84618a69e583fbd8172de4e8fe7d9d8",
+          "superseded_at_ms": 1773738979310
+        }
+      },
+      "envelope_hash": "0xabababababababababababababababababababababababababababababababab"
+    }
+  ]
+}

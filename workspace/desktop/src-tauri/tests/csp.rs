@@ -6,6 +6,11 @@
 //! non-obvious sources the frontend actually needs, so a future tightening
 //! fails here instead of in a signed build.
 //!
+//! The whole policy string is additionally pinned as a literal by
+//! `src/csp_pin_tests.rs` (INV-30 as narrowed by 00-DECISIONS W3-23): the
+//! shape checks here say what each directive must keep; the pin says nothing
+//! may be added without a reviewed edit.
+//!
 //! Kept as an integration test so the policy can be checked without the app
 //! crate having to declare a test-only module.
 
@@ -38,52 +43,24 @@ fn sources(directive: &str) -> Vec<String> {
 #[test]
 fn script_src_allows_wasm_instantiation() {
     // Shiki's default engine (Oniguruma) instantiates inlined WebAssembly for
-    // every code block; MediaPipe selfie segmentation does the same. Without
-    // this token both silently degrade — highlighting drops to plain text and
-    // animated avatars keep their background.
+    // every code block. Without this token highlighting silently drops to
+    // plain text.
     assert!(sources("script-src").contains(&"'wasm-unsafe-eval'".to_owned()));
 }
 
-/// The `MEDIAPIPE_WASM_BASE` literal the frontend hands to `FilesetResolver`.
-fn mediapipe_wasm_base() -> String {
-    const CAPTURE: &str = include_str!("../../src/features/profile/lib/animatedAvatarCapture.ts");
-
-    let after = CAPTURE
-        .split_once("const MEDIAPIPE_WASM_BASE =")
-        .expect("animatedAvatarCapture.ts declares MEDIAPIPE_WASM_BASE")
-        .1;
-    let url = after
-        .split_once('"')
-        .expect("MEDIAPIPE_WASM_BASE is a double-quoted string literal")
-        .1;
-    url.split_once('"')
-        .expect("MEDIAPIPE_WASM_BASE literal is terminated")
-        .0
-        .to_owned()
-}
-
-/// The npm scope the MediaPipe loader must come from. A CSP source ending in
-/// `/` is a path *prefix* — paths can't be wildcarded — so this admits any
-/// `@mediapipe` package while excluding the rest of what jsDelivr serves.
-const MEDIAPIPE_SCOPE: &str = "https://cdn.jsdelivr.net/npm/@mediapipe/";
-
 #[test]
-fn script_src_scopes_the_mediapipe_loader() {
-    // `FilesetResolver.forVisionTasks` loads `vision_wasm[_nosimd]_internal.js`
-    // via a `<script>` tag (which of the two depends on a runtime SIMD probe),
-    // so the loader URL the frontend builds has to fall inside the allowlisted
-    // prefix — checked here rather than discovered in a signed build.
-    let allowed = sources("script-src");
-    assert!(
-        allowed.contains(&MEDIAPIPE_SCOPE.to_owned()),
-        "script-src must allow {MEDIAPIPE_SCOPE}"
-    );
-
-    let base = mediapipe_wasm_base();
-    assert!(
-        base.starts_with(MEDIAPIPE_SCOPE),
-        "MEDIAPIPE_WASM_BASE ({base}) must sit under the allowlisted {MEDIAPIPE_SCOPE}"
-    );
+fn script_src_names_no_remote_host() {
+    // Every script the app runs ships inside the bundle. The animated-avatar
+    // capture feature was the only remote loader (a jsDelivr path prefix for
+    // the MediaPipe wasm); it was removed under W3-23, and no replacement may
+    // reintroduce a remote script source without a reviewed edit of the pin
+    // in `src/csp_pin_tests.rs`.
+    for source in sources("script-src") {
+        assert!(
+            source.starts_with('\''),
+            "script-src must stay keyword-only, found remote source `{source}`"
+        );
+    }
 }
 
 /// How many path segments a source narrows to past its origin.
@@ -126,8 +103,8 @@ fn pinned_script_source_rejects_broad_sources() {
     for allowed in [
         "'self'",
         "'wasm-unsafe-eval'",
-        MEDIAPIPE_SCOPE,
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm/vision_wasm_internal.js",
+        "https://cdn.jsdelivr.net/npm/@scope/",
+        "https://cdn.jsdelivr.net/npm/@scope/package@1.0.0/dist/index.js",
     ] {
         assert!(is_pinned_script_source(allowed), "{allowed} should pass");
     }
@@ -136,7 +113,7 @@ fn pinned_script_source_rejects_broad_sources() {
         "https://cdn.jsdelivr.net/",
         "https://cdn.jsdelivr.net/npm/",
         "https://cdn.jsdelivr.net/gh/",
-        "https://*.jsdelivr.net/npm/@mediapipe/",
+        "https://*.jsdelivr.net/npm/@scope/",
         "https:",
         "*",
     ] {

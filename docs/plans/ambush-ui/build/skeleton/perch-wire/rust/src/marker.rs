@@ -69,45 +69,45 @@ impl CardKind {
         }
     }
 
-    /// The whole marker line, e.g. `<!-- ambush:finding:v1 -->`.
+    /// The whole marker line, e.g. `<!-- swarm:finding:v1 -->`.
     #[must_use]
     pub const fn marker(self) -> &'static str {
         match self {
-            Self::Finding => "<!-- ambush:finding:v1 -->",
-            Self::Escalation => "<!-- ambush:escalation:v1 -->",
-            Self::Hold => "<!-- ambush:hold:v1 -->",
-            Self::Verdict => "<!-- ambush:verdict:v1 -->",
-            Self::Receipt => "<!-- ambush:receipt:v1 -->",
-            Self::Lease => "<!-- ambush:lease:v1 -->",
-            Self::Rollback => "<!-- ambush:rollback:v1 -->",
+            Self::Finding => "<!-- swarm:finding:v1 -->",
+            Self::Escalation => "<!-- swarm:escalation:v1 -->",
+            Self::Hold => "<!-- swarm:hold:v1 -->",
+            Self::Verdict => "<!-- swarm:verdict:v1 -->",
+            Self::Receipt => "<!-- swarm:receipt:v1 -->",
+            Self::Lease => "<!-- swarm:lease:v1 -->",
+            Self::Rollback => "<!-- swarm:rollback:v1 -->",
         }
     }
 
-    /// The fence info string, e.g. `ambush:finding:v1`.
+    /// The fence info string, e.g. `swarm:finding:v1`.
     #[must_use]
     pub const fn fence_info(self) -> &'static str {
         match self {
-            Self::Finding => "ambush:finding:v1",
-            Self::Escalation => "ambush:escalation:v1",
-            Self::Hold => "ambush:hold:v1",
-            Self::Verdict => "ambush:verdict:v1",
-            Self::Receipt => "ambush:receipt:v1",
-            Self::Lease => "ambush:lease:v1",
-            Self::Rollback => "ambush:rollback:v1",
+            Self::Finding => "swarm:finding:v1",
+            Self::Escalation => "swarm:escalation:v1",
+            Self::Hold => "swarm:hold:v1",
+            Self::Verdict => "swarm:verdict:v1",
+            Self::Receipt => "swarm:receipt:v1",
+            Self::Lease => "swarm:lease:v1",
+            Self::Rollback => "swarm:rollback:v1",
         }
     }
 
-    /// The `fact.schema` constant, e.g. `ambush.perch.finding.v1`.
+    /// The `fact.schema` constant, e.g. `swarm.perch.finding.v1`.
     #[must_use]
     pub const fn fact_schema(self) -> &'static str {
         match self {
-            Self::Finding => "ambush.perch.finding.v1",
-            Self::Escalation => "ambush.perch.escalation.v1",
-            Self::Hold => "ambush.perch.hold.v1",
-            Self::Verdict => "ambush.perch.verdict.v1",
-            Self::Receipt => "ambush.perch.receipt.v1",
-            Self::Lease => "ambush.perch.lease.v1",
-            Self::Rollback => "ambush.perch.rollback.v1",
+            Self::Finding => "swarm.perch.finding.v1",
+            Self::Escalation => "swarm.perch.escalation.v1",
+            Self::Hold => "swarm.perch.hold.v1",
+            Self::Verdict => "swarm.perch.verdict.v1",
+            Self::Receipt => "swarm.perch.receipt.v1",
+            Self::Lease => "swarm.perch.lease.v1",
+            Self::Rollback => "swarm.perch.rollback.v1",
         }
     }
 
@@ -273,14 +273,14 @@ mod tests {
     #[test]
     fn route_requires_the_marker_to_be_the_whole_first_line() {
         assert_eq!(
-            CardKind::route("<!-- ambush:finding:v1 -->\nx\n\n```ambush:finding:v1\n{}\n```"),
+            CardKind::route("<!-- swarm:finding:v1 -->\nx\n\n```swarm:finding:v1\n{}\n```"),
             Some(CardKind::Finding)
         );
         // INV-15: a marker that merely PREFIXES the first line does not route.
         // Buzz's own parseWaveMessageContent would accept this one.
-        assert_eq!(CardKind::route("<!-- ambush:finding:v1 --> and more"), None);
-        assert_eq!(CardKind::route("  <!-- ambush:finding:v1 -->"), None);
-        assert_eq!(CardKind::route("<!-- ambush:finding:v2 -->"), None);
+        assert_eq!(CardKind::route("<!-- swarm:finding:v1 --> and more"), None);
+        assert_eq!(CardKind::route("  <!-- swarm:finding:v1 -->"), None);
+        assert_eq!(CardKind::route("<!-- swarm:finding:v2 -->"), None);
         assert_eq!(CardKind::route("<!-- buzz:wave:v1 -->"), None);
     }
 
@@ -289,7 +289,7 @@ mod tests {
         // The version is in the MARKER, not only in the JSON, so a v1 renderer
         // meeting a v2 card routes to the prose fallback instead of parsing a
         // body it does not understand.
-        assert!(parse_content("<!-- ambush:hold:v2 -->\nx\n").is_err());
+        assert!(parse_content("<!-- swarm:hold:v2 -->\nx\n").is_err());
     }
 
     #[test]
@@ -305,9 +305,9 @@ mod tests {
     #[test]
     fn slugs_and_markers_agree() {
         for kind in CardKind::ALL {
-            assert_eq!(kind.marker(), format!("<!-- ambush:{}:v1 -->", kind.slug()));
-            assert_eq!(kind.fence_info(), format!("ambush:{}:v1", kind.slug()));
-            assert_eq!(kind.fact_schema(), format!("ambush.perch.{}.v1", kind.slug()));
+            assert_eq!(kind.marker(), format!("<!-- swarm:{}:v1 -->", kind.slug()));
+            assert_eq!(kind.fence_info(), format!("swarm:{}:v1", kind.slug()));
+            assert_eq!(kind.fact_schema(), format!("swarm.perch.{}.v1", kind.slug()));
         }
     }
 
