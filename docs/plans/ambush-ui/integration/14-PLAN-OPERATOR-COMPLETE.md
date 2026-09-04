@@ -5555,6 +5555,44 @@ Every `01-DESIGN.md` §6 / §7 / §9 / §12 item this milestone owns, and the `0
 6. `04` §2.7 assumes `policy.rules` is readable and names no route; none exists on 9090. Task 16 adds `GET /v1/operator/policy` (a read, outside the bill's labels) rather than serving the ruleset through a second process.
 7. The team brief describes `PerchOmnibox` as "named but never specified" and the canvas template as "no owner"; `17` revision 2 §6.13 and §6.14 specify both. This plan builds from `17` rev 2 and files no decision for either.
 
+## Implementation status
+
+Recorded 2026-09-04, on `codex/ambush-operator-complete`. **This milestone is
+not claimed as accepted**: the fifteen exit criteria below are observable
+behaviours on a running dev stack with the console, and the console half has
+not been driven against that stack — the same limitation The hold recorded, for
+the same reason (the console's daemon surface goes through Tauri commands
+holding the bearer and the operator's Ed25519 key, which a browser cannot
+call). The `perch` preview flag stays off by default.
+
+| Task | Landed | Not landed, and why |
+|---|---|---|
+| 1–3 open decisions | filed in `00-DECISIONS.md` §3 with the fallback each plan builds against | the decisions themselves are the owner's |
+| 4 B4 deposits | `perch_deposit_slice`, the engine op, the mounted route (seven paths) | OpenAPI regeneration — `generate_perch_openapi.rs` and `docs/openapi/perch-operator-v1.json` do not exist; the contract is hand-maintained YAML. A task, not a step |
+| 5 `ContainmentReleased` | the 13th runtime event, published from both release paths | — |
+| 6 partition stamp | both fields across five sides; parity 324 both ways | the provenance Playwright spec un-skips a file that does not exist |
+| 7 B6 spine | wire primitives, chain-head store, signer, `seal_at` | sealing is not yet on the publish path: the pacer restores `prev_envelope_hash` on a non-acked frame, so sealing at append would advance the head for a card the relay never took |
+| 8–9 | wire and bridge halves as landed in The hold | — |
+| 10 containment board | `/leases`, the state model, the timer, the rollback list | the release dialog, the partition section and its Playwright spec |
+| 11 lane screen | `laneLiveNumbers`, `laneCopy`, `LaneScreen`, `/lanes/$laneId` | the sidebar entry and the curve mount in the header slot |
+| 12 governance | `derivePerchGovernanceMode`, `governanceCopy`, `GovernanceStrip` | the hook-driven strip mount on every route |
+| 13 ledger and export | `buildLedgerQuery`, `planExportFiles`, `buildExportManifest`, `omniboxCommands`, `LedgerScreen`, `/ledger` | `perch_export.rs` / `perch_verify.rs`, the omnibox UI, the tier allowlist gate |
+| 14 tuning | `tuningProvenance`, `TuningScreen`, `/tuning` | the daemon reads behind it |
+| 15 gaps | `gapsCatalog`, `GapsScreen`, `/gaps` | — |
+| 16 policy | `policyEvaluation`, `PolicyScreen`, `/policy` | the daemon-side policy route; the screen renders an empty rule list until it exists |
+| 17 handoff | `reviewSession`, `watchClaim`, `shiftLedger`, `handoffPublish`, the frontier fold, `HandoffScreen`, `/handoff` | the daemon-side review session — see **W3-36**: the route cannot accept this body |
+| 18 case canvas | `caseTemplate`, `caseTtlClock`, `killChainLayout`, `CaseScreen`, `CaseCanvasTab`, `KillChainGraph`, the terminal pin in TS **and** Rust | the Playwright specs; agent rows on the graph (blocked on Task 1) |
+| 19 Watchfloor | `concentration`, `scales`, `curveGeometry`, `hostHeat`, `sourceAttribution`, `viz.css` + tokens, three charts, `WatchfloorScreen`, `/watch-floor`, two gates | the bridge's frame prelude (step 0); the 72-hour soak, which is manual |
+| 20 CI gates | route-tree, surface-count and notification-field gates, all wired, all with fixtures | the SVG asset rewrite |
+| 21 packaging | the compose gate (which found two real defects), the relay chart dependency, NetworkPolicy, perch secret, 12 chart tests, the deployment section | `docker compose up` and `helm install` — no working Docker daemon and no cluster here. Image digests are **not** pinned and the gate says so on every run |
+| 22 sidecar (optional) | supervisor with group-kill, three commands, health poll, settings panel, opt-in bundling | never bundled or run: it needs an engine release build and a Tauri bundle |
+
+**Amendment W3-36** records the one place the plan and the implementation
+could not be reconciled: Task 17's END WATCH block cannot go to
+`POST /v1/operator/review/sessions`, because that route refuses an empty ref
+list and resolves every ref against the review workbench's own evidence stores,
+and a case channel is not one of those.
+
 ## Exit criteria
 
 Observable behaviours, each checkable by a person with the dev stack and the console:
