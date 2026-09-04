@@ -44,5 +44,6 @@ pub mod substrate;
 pub use jetstream::JetStreamPheromoneSubstrate;
 pub use substrate::{
     ConfiguredPheromoneSubstrate, DepositQuery, DepositSigningPayload, InMemoryPheromoneSubstrate,
-    LocalJournalPheromoneSubstrate, PheromoneSubstrate, SubstrateError, SubstrateHealth,
+    LocalJournalPheromoneSubstrate, PerchDepositSlice, PerchSuppressionRecord, PheromoneSubstrate,
+    SubstrateError, SubstrateHealth, perch_deposit_slice,
 };
