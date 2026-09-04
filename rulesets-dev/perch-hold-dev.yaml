@@ -382,6 +382,17 @@ operator_surface:
         # sha256("ambush-perch-dev-operator-v1") as a secp256k1 secret; see
         # scripts/provision-perch.sh.
         nostr_pubkey: 1fa40f70991b6b985253eb8c143e372b77df5d571e2263702af2c84082f02905
+        # The Ed25519 key the decide route binds this principal to (B2, and the
+        # 00-DECISIONS operator-verdict-key row, option (a)). A DIFFERENT curve
+        # and a different job from nostr_pubkey above: that one addresses this
+        # operator's console over the relay, this one says which key may decide.
+        #
+        # The same dev secret material, through the Ed25519 derivation:
+        # `Ed25519Signer::from_secret_material("ambush-perch-dev-operator-v1")`.
+        # A release deployment pastes the public half its own console minted.
+        # `dev_operator_verdict_key_matches_the_documented_seed` asserts this
+        # value against that derivation, so the two cannot drift.
+        verdict_public_key_hex: c6e5010572535d01b679633b2c1f4c5a2238ea12a4cd0ea280dd25a67a458042
 
 # The versioned platform READ api (`/v2/api/*`), which is where the daemon's
 # tuning report lives -- the thing a Dismiss has to move for the milestone to

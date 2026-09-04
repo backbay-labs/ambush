@@ -1145,3 +1145,27 @@ async fn the_route_validates_the_hold_id_and_the_intent_id() {
             .contains("nostr_intent_event_id")
     );
 }
+
+/// The hold dev profile's verdict key IS the documented dev seed, run through
+/// the real derivation.
+///
+/// Without this the hex in the YAML is an unexplained 64-character literal that
+/// nobody can regenerate: an operator debugging a 403 cannot tell whether the
+/// key is wrong or their console is. The seed string is the same one
+/// `nostr_pubkey` uses; only the curve and the derivation differ.
+#[test]
+fn dev_operator_verdict_key_matches_the_documented_seed() {
+    const DEV_OPERATOR_SECRET_MATERIAL: &str = "ambush-perch-dev-operator-v1";
+    let profile = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../rulesets-dev/perch-hold-dev.yaml"),
+    )
+    .expect("the hold dev profile is checked in beside this crate");
+    let expected = swarm_crypto::Ed25519Signer::from_secret_material(DEV_OPERATOR_SECRET_MATERIAL)
+        .public_key_hex()
+        .to_string();
+    assert!(
+        profile.contains(&format!("verdict_public_key_hex: {expected}")),
+        "the profile's verdict_public_key_hex is not the documented seed's key ({expected})"
+    );
+}
