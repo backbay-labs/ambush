@@ -622,15 +622,34 @@ impl SpoolSet {
     /// # Errors
     ///
     /// Whatever [`Spool::append`] returns for the routed spool.
+    /// The slot a telemetry record occupies, decoded from its own payload.
+    ///
+    /// A record whose payload does not decode, or whose event has no frame,
+    /// lands in one shared `other` slot rather than being dropped: the spool's
+    /// job is to hold the last of each thing, and silently discarding a record
+    /// it could not classify would lose telemetry with nothing to show for it.
+    fn telemetry_slot_key_for(record: &Record) -> &'static str {
+        serde_json::from_slice::<swarm_runtime::runtime_events::RuntimeEvent>(&record.payload)
+            .ok()
+            .and_then(|event| crate::coalesce::telemetry_slot_key(&event))
+            .unwrap_or("other")
+    }
+
     pub fn append(&mut self, stream: Stream, record: Record) -> Result<Option<Seq>, BridgeError> {
         match stream {
             Stream::Evidence => self.evidence.append(record).map(Some),
             Stream::Alarm => self.alarm.append(record).map(Some),
             Stream::Telemetry => {
-                // Depth 1 per issuer until Operator-complete's 26000-26005 reducers supply the
-                // per-frame key (00-DECISIONS W3-29). No telemetry publisher exists in this
-                // milestone, so nothing reads these slots yet.
-                let key = record.issuer.to_string();
+                // One slot per FRAME KIND, from `coalesce::telemetry_slot_key`
+                // (W3-29). Not per issuer: keying by issuer makes two agents'
+                // health reports evict each other, and 26002 is a list of
+                // agents rather than one agent's row.
+                //
+                // The key is derived from the record's own payload rather than
+                // taken as an argument, because the receive loop appends
+                // without knowing what a frame is -- its whole discipline is
+                // that it may not name the publisher side.
+                let key = Self::telemetry_slot_key_for(&record).to_string();
                 self.telemetry.put(key, record);
                 Ok(None)
             }

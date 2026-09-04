@@ -45,6 +45,34 @@ use crate::stream::{agent_role_to_wire, concentration_to_wire, threat_class_to_w
 /// `window_ms`, so all four frames describe the same slice of time.
 pub const COALESCE_WINDOW_MS: u32 = 1_000;
 
+/// The telemetry spool slot a runtime event belongs to.
+///
+/// `MemorySpool` is last-wins per key, so the key decides what coalescing
+/// means for a frame. One key per FRAME KIND, not per issuer: keying by issuer
+/// makes two agents' health reports evict each other, and the 26002 frame is a
+/// list of agents rather than one agent's row.
+///
+/// `Ingest` has no key and never appears here. It is classified
+/// `DroppedAtSource`, so it never reaches this spool at all — which means the
+/// 26000 gauge cannot be built from spool contents and needs a windowed
+/// counter fed at classification time. Recorded rather than papered over: a
+/// key here would be a slot that always holds one ingest event, and a gauge
+/// computed from it would report `accepted: 1` for a window that carried
+/// three thousand.
+pub fn telemetry_slot_key(event: &RuntimeEvent) -> Option<&'static str> {
+    match event {
+        RuntimeEvent::ConcentrationSnapshot { .. } => Some("26001"),
+        // Both feed one frame, so they share a slot -- and that is exactly why
+        // the tally cannot survive here either: a window of ten actions
+        // collapses to the last one. `agent_health_frame` takes a window for
+        // that reason, and the caller must hold it.
+        RuntimeEvent::AgentHealth { .. } | RuntimeEvent::AgentAction { .. } => Some("26002"),
+        RuntimeEvent::ModeTransition { .. } => Some("26003"),
+        RuntimeEvent::TamperAlert { .. } => Some("26005"),
+        _ => None,
+    }
+}
+
 /// A collector name that looks like a host is a bridge configuration error.
 ///
 /// `by_source` is keyed by COLLECTOR, and the aggregates-only rule for a

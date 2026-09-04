@@ -217,3 +217,54 @@ fn every_mode_transition_survives_the_window() {
 fn a_window_with_no_transition_produces_no_frames() {
     assert!(mode_transitions(&[ingest("s", true)]).is_empty());
 }
+
+#[test]
+fn the_telemetry_key_is_the_frame_kind_and_never_the_issuer() {
+    // Keying by issuer makes two agents' health reports evict each other, and
+    // 26002 is a list of agents rather than one agent's row.
+    assert_eq!(
+        telemetry_slot_key(&snapshot(0, SwarmMode::Normal, 1.0)),
+        Some("26001")
+    );
+    assert_eq!(
+        telemetry_slot_key(&RuntimeEvent::AgentHealth {
+            emitted_at_ms: 0,
+            agent_id: "a1".into(),
+            role: AgentRole::Whisker,
+            from: None,
+            to: AgentHealth::Healthy,
+        }),
+        Some("26002")
+    );
+    assert_eq!(
+        telemetry_slot_key(&RuntimeEvent::AgentAction {
+            emitted_at_ms: 0,
+            agent_id: "a2".into(),
+            role: AgentRole::Pouncer,
+            action_kind: "isolate".into(),
+            hunt_id: None,
+            details: serde_json::Value::Null,
+        }),
+        Some("26002"),
+        "health and actions feed one frame, so they share one slot"
+    );
+    assert_eq!(
+        telemetry_slot_key(&RuntimeEvent::ModeTransition {
+            emitted_at_ms: 0,
+            from: SwarmMode::Normal,
+            to: SwarmMode::Alert,
+            triggering_threat_class: None,
+            reason: "r".into(),
+        }),
+        Some("26003")
+    );
+}
+
+#[test]
+fn ingest_has_no_telemetry_slot_because_a_slot_would_lie() {
+    // `Ingest` is classified DroppedAtSource and never reaches this spool. A
+    // key here would be a slot that always holds ONE ingest event, and a gauge
+    // computed from it would report `accepted: 1` for a window that carried
+    // three thousand.
+    assert_eq!(telemetry_slot_key(&ingest("syslog-collector", true)), None);
+}
