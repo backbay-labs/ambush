@@ -47,6 +47,10 @@ const ALLOWLIST = new Map([
     "Panel open/closed chrome plus session channel ids that `TerminalBootstrap` re-derives from live sessions on mount; its only resetter is explicitly test-only.",
   ],
   [
+    "src/testing/perch/e2ePerchBridge.ts",
+    "Mock Tauri bridge fixture state, compiled in only under `--mode e2e` (see `installE2eBridgeIfConfigured` in src/main.tsx) and reset by `resetPerchMock` between specs. It is never present in a production build, so no community switch can carry it.",
+  ],
+  [
     "src/shared/theme/communityThemePreference.ts",
     "The module-level `Set`s are frozen validation tables, never mutated; `clearCommunityThemeOutbox` is a keyed localStorage helper, not a store reset.",
   ],
