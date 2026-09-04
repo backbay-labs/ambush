@@ -1330,7 +1330,27 @@ git commit -s -m "feat(ingest): stamp partition state at hold and at execution (
 
 ---
 
-### Task 7: B6 — signed spine envelopes on the bridge's publish path
+#### Tasks 5 and 6 status — 2026-09-04
+
+**Task 5 is complete.** `RuntimeEvent::ContainmentReleased` exists in all seven places, both
+release paths publish it, the daemon hands the sweep its broadcaster, and the bridge classifies
+it as `Stream::Evidence` with a test pinning that choice rather than only its existence.
+
+**Task 6 landed its Rust and wire halves.** The two stamps, the `current_partition_state`
+accessor, the wire-crate mirrors, both JSON-schema declarations, `zod.ts` and `types.ts`. The
+parity gate reports 324 fields on both sides, up from 322, and every golden vector is
+byte-identical because both fields skip serialization when absent.
+
+Two of its steps are **not done**, for the same reason Task 4 stopped:
+
+- the OpenAPI half (`HeldActionView` and `HoldDecisionRecord` in the YAML, then a regenerated
+  JSON) needs `generate_perch_openapi.rs`, which does not exist. See the Task 4 status note.
+- Step 5 un-skips `workspace/desktop/tests/e2e/perch-provenance.spec.ts`. That file does not
+  exist either; First card's E2E set is `perch-finding-card` and `perch-marker-admission`, and
+  The hold added four more. The rendering half of INV-08 therefore has no spec yet, and this
+  task does not claim one.
+
+## Task 7: B6 — signed spine envelopes on the bridge's publish path
 
 **Files:**
 - Modify: `crates/swarm-core/src/config/perch.rs` (`PerchBridgeConfig.spine_seed_env`)
