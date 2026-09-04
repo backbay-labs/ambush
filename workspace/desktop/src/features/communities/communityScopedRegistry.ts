@@ -1,10 +1,12 @@
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { resetActiveAgentTurnsStore } from "@/features/agents/activeAgentTurnsStore";
 import { resetAgentWorkingSignal } from "@/features/agents/agentWorkingSignal";
+import { resetCardMintStore } from "@/features/agents/cardMintStore";
 import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 import { resetBackgroundMediaUploads } from "@/features/messages/lib/backgroundMediaUploadStore";
 import { resetLinkPreviewPreparations } from "@/features/messages/lib/linkPreviewPreparationStore";
 import { resetPersistentAgentAudienceStore } from "@/features/messages/lib/persistentAgentAudience";
+import { clearTimeoutState } from "@/features/moderation/lib/timeoutStore";
 import { resetRenderScopedReactionHydration } from "@/features/messages/lib/renderScopedReactions";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
@@ -28,9 +30,14 @@ import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
  * React key-based remounting only clears React state; module-level Maps,
  * class instances, and cached promises survive it. Every such singleton
  * must appear here **and** in {@link RESETTERS} — the `Record` type makes a
- * missing or extra resetter a compile error, and
- * `communityScopedRegistry.test.mjs` checks the two agree at runtime.
- * Hook-managed singletons (e.g. `ChannelMuteSyncManager`,
+ * missing or extra resetter a compile error.
+ *
+ * That type only keeps the two halves of *this* file in agreement; it cannot
+ * see a singleton that was never added. `pnpm check:community-resetters`
+ * (`scripts/check-community-resetters.mjs`) is the gate for that: it scans
+ * `src/` for module-level mutable state paired with an exported
+ * `reset*`/`clear*` function and fails on any whose resetter this file does
+ * not import. Hook-managed singletons (e.g. `ChannelMuteSyncManager`,
  * `ChannelSectionSyncManager`) are destroyed via effect cleanup and do not
  * need entries. See CLAUDE.md "Community Switching" for the full contract.
  *
@@ -42,10 +49,12 @@ export const COMMUNITY_SCOPED_SINGLETONS = [
   "relayClient",
   "navigationDeepLinkDrain",
   "rateLimitGate",
+  "moderationTimeout",
   "drafts",
   "agentObserverStore",
   "activeAgentTurnsStore",
   "agentWorkingSignal",
+  "cardMintStore",
   "trayAgentActivity",
   "avatarProfileSync",
   "avatarPresentations",
@@ -107,10 +116,12 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
   relayClient: () => relayClient.disconnect(),
   navigationDeepLinkDrain: () => resetNavigationDeepLinkDrain(),
   rateLimitGate: () => resetRateLimitGate(),
+  moderationTimeout: () => clearTimeoutState(),
   drafts: () => clearAllDrafts(),
   agentObserverStore: () => resetAgentObserverStore(),
   activeAgentTurnsStore: () => resetActiveAgentTurnsStore(),
   agentWorkingSignal: () => resetAgentWorkingSignal(),
+  cardMintStore: () => resetCardMintStore(),
   // Fire-and-forget: the tray clear is an IPC round trip whose result the
   // switch never needed to wait for.
   trayAgentActivity: () => {
@@ -132,12 +143,24 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
 };
 
 /**
+ * True when a resetter returned something that has to be awaited. Synchronous
+ * resetters return `undefined` and are *not* awaited: `await undefined` still
+ * costs a microtask turn, and yielding between every store would let queued
+ * work re-populate one that has already been cleared — exactly what the
+ * declaration-order contract above exists to prevent.
+ */
+function isThenable(value: void | Promise<void>): value is Promise<void> {
+  return typeof (value as Promise<void> | undefined)?.then === "function";
+}
+
+/**
  * Runs every applicable resetter in {@link COMMUNITY_SCOPED_SINGLETONS}
- * order, one at a time, awaiting each before starting the next. Avatar
- * resetters are skipped unless `ctx.resetAvatarState`; the tray resetter is
- * skipped unless `ctx.isMacTauri`. The first rejection aborts the run and
- * propagates, so a caller can refuse to render the new community on top of
- * a half-cleared one.
+ * order, one at a time. Synchronous resetters run back to back in a single
+ * uninterrupted turn; an asynchronous one is awaited before the next starts.
+ * Avatar resetters are skipped unless `ctx.resetAvatarState`; the tray
+ * resetter is skipped unless `ctx.isMacTauri`. The first rejection aborts the
+ * run and propagates, so a caller can refuse to render the new community on
+ * top of a half-cleared one.
  *
  * `resetters` defaults to {@link RESETTERS}; tests inject fakes to observe
  * ordering without touching the real singletons.
@@ -149,6 +172,7 @@ export async function runResetters(
   for (const key of COMMUNITY_SCOPED_SINGLETONS) {
     if (AVATAR_ONLY.has(key) && !ctx.resetAvatarState) continue;
     if (MAC_TAURI_ONLY.has(key) && !ctx.isMacTauri) continue;
-    await resetters[key](ctx);
+    const result = resetters[key](ctx);
+    if (isThenable(result)) await result;
   }
 }

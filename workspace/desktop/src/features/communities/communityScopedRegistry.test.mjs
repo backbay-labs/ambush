@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  getCardGalleryOpen,
+  getCardMintJobs,
+  runCardMintJob,
+  setCardGalleryOpen,
+} from "@/features/agents/cardMintStore";
+import {
+  getTimeoutSnapshot,
+  recordTimeoutFromRejection,
+} from "@/features/moderation/lib/timeoutStore";
+
+import {
   COMMUNITY_SCOPED_SINGLETONS,
   RESETTERS,
   runResetters,
@@ -127,4 +138,72 @@ test("every real resetter receives the reset context", async () => {
   for (const [, received] of seen) {
     assert.equal(received, ctx);
   }
+});
+
+// The real resetter for `key`, with every other singleton faked out. Exercises
+// the actual teardown loop (so removing `key` from the inventory fails the
+// test) without disconnecting the relay client or touching the tray.
+function realResetterFor(...keys) {
+  const fakes = fakeResetters([]);
+  for (const key of keys) {
+    fakes[key] = RESETTERS[key];
+  }
+  return fakes;
+}
+
+test("a community timeout does not survive a community switch", async () => {
+  // Learned reactively from a relay send rejection in community A.
+  recordTimeoutFromRejection(
+    `restricted: you are timed out until ${Math.floor(Date.now() / 1000) + 3600}`,
+  );
+  assert.equal(getTimeoutSnapshot().active, true);
+
+  await runResetters(
+    { resetAvatarState: false, isMacTauri: false },
+    realResetterFor("moderationTimeout"),
+  );
+
+  // Community B must start writable: the only other thing that clears this is
+  // an accepted send, which the disabled composer cannot make.
+  assert.deepEqual(getTimeoutSnapshot(), { active: false, expiresAtMs: null });
+});
+
+test("card mints do not survive a community switch", async () => {
+  await runCardMintJob({ agentId: "agent-1", agentName: "Eva" }, () =>
+    Promise.resolve({
+      cardPngBase64: "aGVsbG8=",
+      fileName: "eva.agent.png",
+      designerNotes: "notes",
+      locked: false,
+      memoryLevel: "none",
+    }),
+  );
+  setCardGalleryOpen(true);
+  assert.equal(getCardMintJobs().length, 1);
+
+  await runResetters(
+    { resetAvatarState: false, isMacTauri: false },
+    realResetterFor("cardMintStore"),
+  );
+
+  assert.deepEqual(getCardMintJobs(), []);
+  assert.equal(getCardGalleryOpen(), false);
+});
+
+test("synchronous resetters run without yielding to the microtask queue", async () => {
+  const order = [];
+  const run = runResetters(
+    { resetAvatarState: true, isMacTauri: true },
+    fakeResetters(order),
+  );
+  // Queued after runResetters has run as far as it can synchronously. If the
+  // loop awaited every (synchronous) resetter, this microtask would interleave
+  // between resetters instead of landing after all of them.
+  void Promise.resolve().then(() => {
+    order.push("microtask");
+  });
+
+  await run;
+
+  assert.deepEqual(order, [...COMMUNITY_SCOPED_SINGLETONS, "microtask"]);
 });
