@@ -5574,9 +5574,9 @@ call). The `perch` preview flag stays off by default.
 | 7 B6 spine | wire primitives, chain-head store, signer, `seal_at` | sealing is not yet on the publish path: the pacer restores `prev_envelope_hash` on a non-acked frame, so sealing at append would advance the head for a card the relay never took |
 | 8–9 | wire and bridge halves as landed in The hold | — |
 | 10 containment board | `/leases`, the state model, the timer, the rollback list | the release dialog, the partition section and its Playwright spec |
-| 11 lane screen | `laneLiveNumbers`, `laneCopy`, `LaneScreen`, `/lanes/$laneId` | the sidebar entry and the curve mount in the header slot |
-| 12 governance | `derivePerchGovernanceMode`, `governanceCopy`, `GovernanceStrip` | the hook-driven strip mount on every route |
-| 13 ledger and export | `buildLedgerQuery`, `planExportFiles`, `buildExportManifest`, `omniboxCommands`, `LedgerScreen`, `/ledger` | `perch_export.rs` / `perch_verify.rs`, the omnibox UI, the tier allowlist gate |
+| 11 lane screen | `laneLiveNumbers`, `laneCopy`, `LaneScreen`, `/lanes/$laneId`, the regime-B curve in the header slot, and `PerchNav` making all ten routes reachable | — |
+| 12 governance | `derivePerchGovernanceMode`, `governanceCopy`, `GovernanceStrip`, mounted above the outlet on every route including the Watchfloor's bare chrome | — |
+| 13 ledger and export | `buildLedgerQuery`, `planExportFiles`, `buildExportManifest`, `omniboxCommands`, `LedgerScreen`, `/ledger`, the tier allowlist gate (clean over 7 cards) | `perch_export.rs` / `perch_verify.rs`, the ⌘K omnibox UI |
 | 14 tuning | `tuningProvenance`, `TuningScreen`, `/tuning` | the daemon reads behind it |
 | 15 gaps | `gapsCatalog`, `GapsScreen`, `/gaps` | — |
 | 16 policy | `policyEvaluation`, `PolicyScreen`, `/policy` | the daemon-side policy route; the screen renders an empty rule list until it exists |
