@@ -8,12 +8,26 @@ Every claim names the command that produced it. A row marked *not verified* is a
 not a green check. Where the plan and the code disagreed, the disagreement is recorded here and
 ruled in `00-DECISIONS.md`, never resolved silently.
 
-## What the milestone claims
+## What the milestone claims, and what it does not
 
-One real detector finding leaves `swarm_detect` in process, crosses the bridge, is stored by the
-relay, renders as a `swarm:finding:v1` card in the desktop, `E` promotes it into a case the
-daemon mints, and `D` records a verdict as two separate legs. That path was exercised end to end
-against a live relay; the ids are in the walking-skeleton section.
+The milestone's exit narrative is one real detector finding leaving `swarm_detect` in process,
+crossing the bridge, stored by the relay, rendered as a `swarm:finding:v1` card in the desktop,
+`E` promoting it into a case the daemon mints, and `D` recording a verdict as two separate legs.
+
+**That full path has NOT been run end to end as one continuous demonstration, so this milestone
+is not claimed as accepted.** The implementation of all 24 tasks is complete and every gate
+below is green. What was exercised live, and what was not:
+
+| Segment | Evidence |
+|---|---|
+| daemon → bridge → relay → stored card | **live.** Real telemetry through `/v1/ingest/events` produced `kind:9` cards on `lane-execution` with line 0 exactly `<!-- swarm:finding:v1 -->`, authored by the ingest identity. The bridge's `relay_live` suite published a finding card (`f1d7b629a1b3d006…`) and provisioned a case channel (`ccd6d6b75e63910e…`, `85071b25430d13ba…`) with its metadata (`e7412a1c0f5bcec7…`) |
+| lane provisioning and recovery | **live.** Twelve lanes at their committed UUIDs with 24 memberships, idempotent across four daemon starts, recreated after a full relay-database wipe |
+| the three operator routes | **live** at the HTTP layer via the walking-skeleton test; B3r, B3i and B3 against a running daemon |
+| the hold sequence across the relay | **live.** A separate suite published the 9007/9000/9/46010/26006 sequence in the bridge's order and proved the notice reaches only the named operator |
+| card rendering, `E` promote, `D` two-legged verdict | **mock bridge only.** Every leg-1 publish, leg-2 POST and case-channel probe in these specs ran against the Playwright mock or paused-clock unit tests. No desktop build has been driven against a real relay and daemon together |
+
+The roadmap's stop condition is explicit that a mock-only demonstration is not a milestone exit.
+Task 24's walking-skeleton run is therefore **outstanding**, and this record does not assert it.
 
 ## Toolchains and services
 
