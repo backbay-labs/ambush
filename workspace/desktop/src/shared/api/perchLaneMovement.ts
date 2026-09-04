@@ -2,8 +2,12 @@ import * as React from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
-import { usePerchLaneChannelIds } from "@/features/perch-evidence/lib/admittedIssuers";
+import {
+  ensureAdmittedIssuersLoaded,
+  usePerchLaneChannelIds,
+} from "@/features/perch-evidence/lib/admittedIssuers";
 import { parseCardContent } from "@/features/perch/wire";
+import { perchAdmittedIssuers } from "@/shared/api/tauriPerch";
 import { getChannelIdFromTags } from "@/features/messages/lib/threading";
 import { useIdentityQuery } from "@/shared/api/hooks";
 
@@ -149,6 +153,13 @@ export function usePerchSubscriptionsMount(enabled = true): void {
 
   React.useEffect(() => {
     if (!enabled) return;
+    // The admitted set and the lane ids arrive together (D-FC-2), and the
+    // REQ set cannot be built without the lanes. Rate-limited inside
+    // `ensureAdmittedIssuersLoaded`, so many mounted rows cost one read.
+    void ensureAdmittedIssuersLoaded(async () => {
+      const answer = await perchAdmittedIssuers();
+      return { issuers: [...answer.issuers], lanes: { ...answer.lanes } };
+    });
     mountCount += 1;
     queryClientForSink = queryClient;
     setPerchEventSink(laneMovementSink);

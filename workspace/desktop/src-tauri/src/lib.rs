@@ -36,6 +36,11 @@ mod native_websocket_batch;
 mod nostr_bind;
 pub mod nostr_convert;
 mod observed_unread;
+// Crate-private on purpose: `perch::daemon_client` names `AppState` in its
+// signatures, and a `pub mod` would make `AppState` -- and through it every
+// `pub(crate)` type its public fields carry -- reachable at `pub`, which the
+// `private_interfaces` lint refuses under `-D warnings`.
+mod perch;
 pub mod perch_sign_gate;
 #[cfg(test)]
 mod perch_sign_gate_inventory_tests;
@@ -532,6 +537,12 @@ pub fn run() {
                     }
                 });
             }
+            // D-FC-4: in debug builds the daemon URL, bearer and operator id
+            // come from the environment when the keyring has none. A release
+            // build reads no such variable; Operator-complete adds the
+            // Settings surface. None of these values ever crosses IPC.
+            perch::daemon_client::seed_daemon_settings_from_env_in_debug();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -879,6 +890,10 @@ pub fn run() {
             tray_menu::take_tray_actions,
             #[cfg(target_os = "macos")]
             tray_menu::update_tray_agent_activity,
+            perch_reviewed_findings,
+            perch_admitted_issuers,
+            perch_finding_feedback,
+            perch_mint_incident,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

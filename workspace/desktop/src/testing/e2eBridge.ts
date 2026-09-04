@@ -25,6 +25,10 @@ import type {
   RelayEvent,
 } from "@/shared/api/types";
 import { getMarkdownParseCount } from "@/shared/ui/markdown/nodeCache";
+import {
+  handleMockPerchCommand,
+  isMockPerchCommand,
+} from "@/testing/perch/e2ePerchBridge";
 import { syncAgentTurnsFromEvents } from "@/features/agents/activeAgentTurnsStore";
 import { recordTimeoutFromRejection } from "@/features/moderation/lib/timeoutStore";
 import {
@@ -14645,6 +14649,11 @@ export function maybeInstallE2eTauriMocks() {
         return null;
       }
       default:
+        // The perch command set is closed and answered by its own module, so
+        // the bridge keeps one guard here instead of a growing block of arms.
+        if (isMockPerchCommand(command)) {
+          return handleMockPerchCommand(command, payload);
+        }
         throw new Error(`Unsupported mocked Tauri command: ${command}`);
     }
   };

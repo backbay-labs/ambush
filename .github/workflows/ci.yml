@@ -234,6 +234,23 @@ jobs:
       - name: Check Perch wire field-set parity
         run: bash tools/check-perch-wire-parity.sh
 
+      # INV-01. "Perch never authorizes" is a claim about a SET: the non-GET
+      # requests the console process can issue to a daemon host. A claim about
+      # a set is only true if the set is enumerable, so the console has one
+      # Tauri command per route with the route string compiled into Rust, and
+      # this asserts that shape holds -- set equality against the five, both
+      # directions, plus no generic passthrough and no URL literal in the
+      # renderer. The runtime half is the Rust test that drives an unlisted
+      # (method, path) and proves it returns Err before a socket opens.
+      #
+      # The scanner runs a fixture on every invocation: a good table it must
+      # reproduce, and a six-route table it must reject. A gate that has never
+      # been observed to fail is not a gate.
+      - name: Check the Perch write allowlist (INV-01)
+        env:
+          PERCH_DESKTOP_ROOT: ${{ github.workspace }}/workspace/desktop
+        run: bash tools/check-perch-write-allowlist.sh
+
       # BFT-03 / phase 321 criterion 3. The criterion reads "no production path
       # holds more than one governor signing key in memory" and names no method
       # of checking it, which makes it satisfiable by assertion -- the exact
