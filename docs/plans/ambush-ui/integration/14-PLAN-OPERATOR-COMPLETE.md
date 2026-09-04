@@ -5573,7 +5573,7 @@ call). The `perch` preview flag stays off by default.
 | 6 partition stamp | both fields across five sides; parity 324 both ways | the provenance Playwright spec un-skips a file that does not exist |
 | 7 B6 spine | wire primitives, chain-head store, signer, sealing on the publish path with the durable head advancing only on ACK, and the console's `perch_verify_envelope` | — |
 | 8–9 | wire and bridge halves as landed in The hold | — |
-| 10 containment board | `/leases`, the state model, the timer, the rollback list | the release dialog, the partition section and its Playwright spec |
+| 10 containment board | `/leases`, the state model, the timer, the rollback list, the release confirmation dialog and the partition section | its Playwright spec |
 | 11 lane screen | `laneLiveNumbers`, `laneCopy`, `LaneScreen`, `/lanes/$laneId`, the regime-B curve in the header slot, and `PerchNav` making all ten routes reachable | — |
 | 12 governance | `derivePerchGovernanceMode`, `governanceCopy`, `GovernanceStrip`, mounted above the outlet on every route including the Watchfloor's bare chrome | — |
 | 13 ledger and export | `buildLedgerQuery`, `planExportFiles`, `buildExportManifest`, `omniboxCommands`, `LedgerScreen`, `/ledger`, the tier allowlist gate, `perch_verify.rs`, `perch_export.rs` | the ⌘K omnibox UI |

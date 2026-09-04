@@ -23,8 +23,14 @@ export type RollbackStepListProps = {
     status: RollbackStepStatus;
     reason?: string;
   }[];
-  /** From the release response's BODY, never the HTTP status. */
-  fullyReversed: boolean;
+  /**
+   * From the release response's BODY, never the HTTP status.
+   *
+   * `null` when the daemon did not say. Coercing it to `false` would put this
+   * console's answer where the daemon's belongs, and "not fully reversed" is a
+   * finding — it must come from the daemon or not at all.
+   */
+  fullyReversed: boolean | null;
 };
 
 /**
@@ -83,12 +89,14 @@ export function RollbackStepList({
         data-perch-fully-reversed={String(fullyReversed)}
         className="text-xs text-[hsl(var(--perch-foreground-muted))]"
       >
-        {fullyReversed
-          ? ROLLBACK_SUMMARY.fullyReversed
-          : ROLLBACK_SUMMARY.notFullyReversed
-              .replace("{n}", String(reversed))
-              .replace("{total}", String(steps.length))
-              .replace("{breakdown}", breakdown)}
+        {fullyReversed === null
+          ? ROLLBACK_SUMMARY.reversalNotReported
+          : fullyReversed
+            ? ROLLBACK_SUMMARY.fullyReversed
+            : ROLLBACK_SUMMARY.notFullyReversed
+                .replace("{n}", String(reversed))
+                .replace("{total}", String(steps.length))
+                .replace("{breakdown}", breakdown)}
       </p>
     </div>
   );

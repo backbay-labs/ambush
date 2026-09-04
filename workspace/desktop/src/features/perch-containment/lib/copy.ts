@@ -75,6 +75,12 @@ export const ROLLBACK_STATUS = {
 
 export const ROLLBACK_SUMMARY = {
   fullyReversed: "Fully reversed — every step reported Reversed.",
+  /**
+   * The daemon did not report `fully_reversed`. Not "partially reversed":
+   * that is a finding, and a finding must come from the daemon or not at all.
+   */
+  reversalNotReported:
+    "The daemon did not report whether the reversal completed. The steps above are what it did say.",
   notFullyReversed:
     "Not fully reversed. {n} of {total} steps: {breakdown}. fully_reversed() requires every step to be Reversed; Simulated and Irreversible do not count.",
 } as const;
