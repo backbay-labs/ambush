@@ -33,7 +33,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use swarm_core::ThreatClass;
 use swarm_core::agent::{AgentHealthEntry, SwarmModeState};
 use swarm_core::config::{
-    OperatorSurfaceConfig, ResponseAdapterConfig, RuntimeAntiTamperConfig, RuntimeMode, SwarmConfig,
+    OperatorSurfaceConfig, ResponseAdapterConfig, ResponseHoldSettings, RuntimeAntiTamperConfig,
+    RuntimeMode, SwarmConfig,
 };
 use swarm_core::http_rate_limit::HttpRateLimiter;
 use swarm_core::pheromone::EscalationRecord;
@@ -68,6 +69,7 @@ use swarm_runtime::evolution::{
     EvolutionProposalReviewState, FormalSafetyGate, StrategyGenome,
 };
 use swarm_runtime::evolution_status::DefaultEvolutionStatusHarness;
+use swarm_runtime::held_action::HeldActionStore;
 use swarm_runtime::investigation::{InvestigationCoordinator, SummaryInvestigator};
 use swarm_runtime::mutation::DefaultEvolutionMutationHarness;
 use swarm_runtime::providence::{
@@ -117,6 +119,10 @@ type HeapSnapshotProvider = Arc<dyn Fn() -> Option<HeapPressureSnapshot> + Send 
 
 struct IngestRuntimeRequestResponseRouter {
     runtime: Arc<ArcSwap<IngestRequestRuntime>>,
+    /// B1. `None` until `swarm_detect` attaches the daemon's one hold store.
+    hold_capture: Option<Arc<perch_ops::holds::HoldCapture>>,
+    /// The stack, for the rehearsal preview a hold's BLAST RADIUS slot needs.
+    stack: Arc<ArcSwap<IngestRuntimeStack>>,
 }
 
 /// Moved verbatim from `swarm_runtime::dispatcher::approval_context_now` in SPLIT-05.
@@ -145,9 +151,27 @@ impl RequestResponseRouter for IngestRuntimeRequestResponseRouter {
         let runtime = self.runtime.load_full();
         let context = approval_context_now(runtime.mode() == RuntimeMode::LiveResponse);
         let detection = routed_detection_from_request(&request);
-        runtime
+        let audit = runtime
             .audit_authorize_and_execute(&detection, &request, &context)
-            .await
+            .await?;
+        // B1. Post-hoc on the RETURNED trail, so the capture reads the same
+        // verdict and the same response record the audit lane recorded. Both
+        // match clauses live inside `capture_hold`, which is the only place
+        // that decides what a hold is.
+        if let Some(capture) = &self.hold_capture {
+            let rehearsal = self
+                .stack
+                .load_full()
+                .service
+                .rehearsal_preview(
+                    &request,
+                    &format!("hold:{}", request.hunt_id.0),
+                    context.now_ms,
+                )
+                .ok();
+            capture.capture_hold(&request, &detection, &audit, rehearsal, context.now_ms);
+        }
+        Ok(audit)
     }
 
     async fn route_governance_veto(
@@ -1000,7 +1024,7 @@ fn attach_formal_safety_bundle_hashes(
     Ok(())
 }
 
-fn threat_class_slug(threat_class: &ThreatClass) -> String {
+pub(crate) fn threat_class_slug(threat_class: &ThreatClass) -> String {
     serde_json::to_value(threat_class)
         .ok()
         .and_then(|value| value.as_str().map(ToString::to_string))
@@ -1025,7 +1049,7 @@ fn strategy_status_label(config: &SwarmConfig) -> String {
     config.detection.active_strategies().join(", ")
 }
 
-fn routed_detection_from_request(request: &ActionRequest) -> DetectionFinding {
+pub(crate) fn routed_detection_from_request(request: &ActionRequest) -> DetectionFinding {
     let event_id = request
         .evidence
         .get("lineage")
@@ -1396,6 +1420,8 @@ pub struct IngestState {
     startup_attestation: Option<Arc<StartupAttestationReport>>,
     anti_tamper_report: Arc<ArcSwap<AntiTamperReport>>,
     runtime_degradation: Arc<ArcSwap<RuntimeDegradationStatus>>,
+    /// B1's hold store and broadcaster, attached once by `swarm_detect`.
+    hold_capture: Option<Arc<perch_ops::holds::HoldCapture>>,
 }
 
 impl IngestState {
@@ -1496,6 +1522,7 @@ impl IngestState {
                     transitioned_at_ms: now_ms(),
                 }),
             )),
+            hold_capture: None,
         };
         state.install_notification_payload_builder();
         Ok(state)
@@ -1730,6 +1757,47 @@ impl IngestState {
         self
     }
 
+    /// Attach the daemon's one hold store (B1). Called once by `swarm_detect`
+    /// after the store is built from `runtime.response`, and BEFORE
+    /// `current_request_response_router` is read: the router is built from a
+    /// snapshot of this state, so a router taken before this call would carry
+    /// no capture and every `RequireHuman` would be skipped silently.
+    ///
+    /// Must run after [`Self::with_runtime_events`], whose broadcaster the
+    /// capture clones for its `ResponseHeld` publications.
+    pub fn with_hold_store(mut self, store: Arc<dyn HeldActionStore>) -> Self {
+        let settings = self.current_hold_settings();
+        self.hold_capture = Some(Arc::new(perch_ops::holds::HoldCapture::new(
+            store,
+            self.runtime_events.clone(),
+            settings,
+        )));
+        self
+    }
+
+    /// The hold store, if one was attached.
+    pub fn current_hold_store(&self) -> Option<Arc<dyn HeldActionStore>> {
+        self.hold_capture
+            .as_ref()
+            .map(|capture| Arc::clone(capture.store()))
+    }
+
+    /// The hold capture bundle, for the sweep and the decide engine.
+    pub fn current_hold_capture(&self) -> Option<Arc<perch_ops::holds::HoldCapture>> {
+        self.hold_capture.clone()
+    }
+
+    /// `runtime.response` from the current config.
+    pub fn current_hold_settings(&self) -> ResponseHoldSettings {
+        self.stack
+            .load_full()
+            .service
+            .config
+            .runtime
+            .response
+            .clone()
+    }
+
     /// Install the governance authority whose quorum health `/healthz` reports.
     ///
     /// Takes `Arc<impl GovernanceAuthority>` rather than `Arc<dyn ..>` for the same
@@ -1838,6 +1906,8 @@ impl IngestState {
     pub fn current_request_response_router(&self) -> Arc<dyn RequestResponseRouter> {
         Arc::new(IngestRuntimeRequestResponseRouter {
             runtime: Arc::clone(&self.request_runtime),
+            hold_capture: self.hold_capture.clone(),
+            stack: Arc::clone(&self.stack),
         })
     }
 

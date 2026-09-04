@@ -176,6 +176,12 @@ jobs:
       - name: Check visibility baseline
         run: bash tools/check-visibility-baseline.sh
 
+      # B1 commitment C4: `authorize_and_execute` has no non-test caller, so a
+      # RequireHuman can only reach the runtime through the routed path that
+      # captures it as a hold.
+      - name: Check no unrouted authorize_and_execute caller
+        run: bash tools/check-no-unrouted-authorize.sh
+
       # Task #15. Three check scripts existed for months and were invoked by no
       # workflow at all, and tools/verify-release-hardening.sh -- which proves
       # the flags that harden the two binaries the container ships -- had never

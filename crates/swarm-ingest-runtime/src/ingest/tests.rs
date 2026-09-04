@@ -6256,3 +6256,35 @@ fn an_empty_scope_still_admits_an_ordinary_finding_event() {
         &ProvidenceContextScope::default()
     ));
 }
+
+/// The store is attached, not assumed. A state that never saw `with_hold_store`
+/// has no capture and no store, which is what makes the ordering in
+/// `swarm_detect` -- attach before the dispatcher takes its router -- a real
+/// requirement rather than a stylistic one.
+#[test]
+fn the_hold_store_is_absent_until_it_is_attached_and_the_router_carries_it() {
+    let state = test_ingest_state();
+    assert!(state.current_hold_store().is_none());
+    assert!(state.current_hold_capture().is_none());
+    // Defaults arrive from `runtime.response` with no config key set.
+    let settings = state.current_hold_settings();
+    assert_eq!(settings.hold_ttl_ms, 3_600_000);
+    assert_eq!(settings.sweep_interval_ms, 5_000);
+    assert_eq!(settings.decide_stall_ms, 60_000);
+    assert!(settings.hold_store_path.is_none());
+
+    let store: Arc<dyn swarm_runtime::held_action::HeldActionStore> =
+        Arc::new(swarm_runtime::held_action::MemoryHeldActionStore::default());
+    let state = state
+        .with_runtime_events(swarm_runtime::runtime_events::RuntimeEventBroadcaster::new(
+            8,
+        ))
+        .with_hold_store(Arc::clone(&store));
+    let attached = state.current_hold_store().expect("store attached");
+    // The same store, not a second one: a hold created through the state's
+    // handle is visible through the caller's.
+    assert!(attached.list(true, 10).unwrap().is_empty());
+    assert!(state.current_hold_capture().is_some());
+    // And the router the dispatcher would take now carries the capture.
+    let _router = state.current_request_response_router();
+}

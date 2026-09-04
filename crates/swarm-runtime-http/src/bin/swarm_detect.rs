@@ -753,6 +753,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_runtime_events(runtime_events.clone())
             .with_governance_policy(Arc::clone(&governance_policy))
             .with_approval_harness(approval_harness);
+        // B1. The daemon's ONE hold store, built from `runtime.response` the way
+        // the containment store is built from `runtime.containment`. A relative
+        // path resolves against the config file's directory.
+        //
+        // This sits ABOVE the dispatcher, not beside the containment sweep: the
+        // dispatcher takes its router from `state.current_request_response_router()`
+        // on the next line, and a router built before `with_hold_store` carries no
+        // capture, so every RequireHuman would be skipped with nothing recorded and
+        // nothing logged. Every later `state.clone()` sees the store.
+        let hold_config_dir = cli
+            .config
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let hold_settings = state.current_hold_settings();
+        let hold_store: Arc<dyn swarm_runtime::held_action::HeldActionStore> = Arc::new(
+            swarm_runtime::held_action::ConfiguredHeldActionStore::from_settings(
+                &hold_settings,
+                &hold_config_dir,
+            )?,
+        );
+        if hold_settings.hold_store_path.is_none() {
+            tracing::warn!(
+                module = module_path!(),
+                "runtime.response.hold_store_path is unset; holds are in memory and a restart forgets every open hold"
+            );
+        }
+        let state = state.with_hold_store(Arc::clone(&hold_store));
         let dispatcher_shutdown = shutdown_rx.clone();
         let monitor_shutdown = shutdown_rx.clone();
         let mut dispatcher = AgentDispatcher::new(
