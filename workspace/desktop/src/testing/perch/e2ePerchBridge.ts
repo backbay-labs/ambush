@@ -770,6 +770,24 @@ function mintIncident(payload: unknown): PerchMintIncidentResponse {
     case_id: mintedCaseId(findingId),
   };
   s.minted.set(findingId, ids);
+  if (existing === undefined && typeof window !== "undefined") {
+    // The bridge creates the case channel after the daemon mints the case
+    // (the daemon has no relay client). Thirty days is the profile's default
+    // case TTL, so the TTL clock has a real deadline to read.
+    (
+      window as Window & {
+        __AMBUSH_E2E_CREATE_CASE_CHANNEL__?: (
+          id: string,
+          name: string,
+          ttlSeconds: number | null,
+        ) => void;
+      }
+    ).__AMBUSH_E2E_CREATE_CASE_CHANNEL__?.(
+      ids.case_id,
+      `case-${ids.case_id.slice(0, 8)}`,
+      2_592_000,
+    );
+  }
   return {
     schema_version: 1,
     incident_id: ids.incident_id,

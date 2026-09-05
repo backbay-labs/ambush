@@ -190,6 +190,8 @@ export default defineConfig({
         "**/perch-omnibox.spec.ts",
         "**/perch-settings.spec.ts",
         "**/perch-policy.spec.ts",
+        "**/perch-case-canvas.spec.ts",
+        "**/perch-terminal.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

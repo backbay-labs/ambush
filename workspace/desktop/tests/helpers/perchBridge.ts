@@ -130,6 +130,8 @@ export async function installPerchBridge(
     autoConnectDefaultRelay?: boolean;
     skipOnboardingSeed?: boolean;
     skipCommunitySeed?: boolean;
+    /** The main mock bridge's own options (canvas content, read errors…). */
+    mock?: Parameters<typeof installMockBridge>[1];
   },
 ): Promise<void> {
   if (fixture) {
@@ -137,8 +139,9 @@ export async function installPerchBridge(
       window.__AMBUSH_E2E_PERCH__ = seed;
     }, fixture);
   }
-  await installMockBridge(page, undefined, {
-    ...options,
+  const { mock, ...rest } = options ?? {};
+  await installMockBridge(page, mock, {
+    ...rest,
     enableFeatures: ["perch"],
   });
 }

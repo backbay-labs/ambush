@@ -12,8 +12,13 @@ export type CaseScreenProps = {
   nowMs: number;
   /** The channel surface, rendered under the Timeline tab. */
   timeline: React.ReactNode;
-  members: React.ReactNode;
-  evidence: React.ReactNode;
+  /**
+   * Members and evidence tabs exist only when their content does. A tab
+   * whose body says "not built" is a placeholder, and the case surface
+   * carries none; the tab appears the day the content does.
+   */
+  members?: React.ReactNode;
+  evidence?: React.ReactNode;
 };
 
 const TABS: { id: CaseScreenTab; label: string }[] = [
@@ -42,6 +47,11 @@ export function CaseScreen({
   evidence,
 }: CaseScreenProps): React.ReactElement {
   const [tab, setTab] = React.useState<CaseScreenTab>("timeline");
+  const tabs = TABS.filter(
+    (entry) =>
+      (entry.id !== "members" || members !== undefined) &&
+      (entry.id !== "evidence" || evidence !== undefined),
+  );
 
   return (
     <section
@@ -50,7 +60,7 @@ export function CaseScreen({
       className="flex h-full flex-col"
     >
       <div role="tablist" className="flex gap-1 border-b border-border px-3">
-        {TABS.map((entry) => (
+        {tabs.map((entry) => (
           <button
             key={entry.id}
             type="button"

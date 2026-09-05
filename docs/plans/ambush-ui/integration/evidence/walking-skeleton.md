@@ -110,6 +110,9 @@ the record's timestamp moving only on the acknowledged leg, never a count.
   not ruled.
 - `perch_list_holds` returns every hold the daemon has, decided and expired included; the console
   filters. Noted for whoever reads the raw list.
+- Three components were built and mounted nowhere — the sidecar settings panel, `CaseScreen` (so the
+  Canvas tab and the TTL clock were unreachable), and `KillChainGraph` (W3-42). The first two are
+  mounted now; the third waits on a daemon read that carries the decisions it draws.
 - `perch-hold-dev.yaml` lacked the `spine_seed_env` the spine requires; the profile is re-signed
   with it and step 12 of the recipe exports the seed.
 
