@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { deriveTuningProvenance, incidentOrigin } from "./tuningProvenance.ts";
+import {
+  deriveTuningProvenance,
+  incidentOrigin,
+  tuningIncidentFrom,
+} from "./tuningProvenance.ts";
 
 test("the two id schemes cannot collide, and an unknown one is unresolved", () => {
   assert.equal(
@@ -110,4 +114,51 @@ test("a verdict exactly at the window start is inside it", () => {
     100,
   );
   assert.equal(provenance.thisWeekVerdicts, 1);
+});
+
+test("the daemon's minted-case id is analyst-promoted, as the plan's bare form is", () => {
+  assert.equal(
+    incidentOrigin({
+      incident_id: "incident:perch-case:27799e23-ab25-4659-b381-3de47ea7ca4d",
+    }),
+    "analyst-promoted",
+  );
+});
+
+test("measurements come off the daemon's read with only Dismiss as a false positive, and malformed ones are dropped", () => {
+  const incident = tuningIncidentFrom({
+    incident_id: "incident:perch-case:c-1",
+    false_positive_measurements: [
+      {
+        finding_id: "f1",
+        strategy_id: "s",
+        reviewed_at_ms: 10,
+        action: "dismiss",
+      },
+      {
+        finding_id: "f2",
+        strategy_id: "s",
+        reviewed_at_ms: 11,
+        action: "confirm",
+      },
+      {
+        finding_id: "f3",
+        strategy_id: "s",
+        reviewed_at_ms: 12,
+        action: "investigate",
+      },
+      { finding_id: "f4", strategy_id: "s" },
+    ],
+  });
+  assert.deepEqual(
+    incident.false_positive_measurements.map((m) => [
+      m.finding_id,
+      m.false_positive,
+    ]),
+    [
+      ["f1", true],
+      ["f2", false],
+      ["f3", false],
+    ],
+  );
 });

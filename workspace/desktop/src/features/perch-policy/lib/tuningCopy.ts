@@ -25,10 +25,17 @@ export const TUNING = {
     },
   },
   cap: "capped at 6 recommendations",
+  origin: {
+    "analyst-promoted": "from verdicts on analyst-promoted cases",
+    "correlation-produced": "from verdicts on correlation-produced incidents",
+    unresolved: "incident origin not resolvable from its id",
+  },
   basis: "{fp} of {reviewed} · {rate}",
   basisLabel: "false positives of reviewed findings · rate",
-  timestampsNotServed:
-    "The daemon's status read carries counts, not verdict timestamps; how many of these verdicts are from this week is not computed here.",
+  noIncidentsServed:
+    "The daemon served no incidents to read verdicts from; how many of these verdicts are from this week is not computed.",
+  noVerdictsForDetector:
+    "No operator verdict on a served incident names this detector; the daemon's counts above come from measurements this console was not served.",
   linkVerdicts: "See the verdicts in the Ledger",
   none: {
     title: "No recommendations yet",

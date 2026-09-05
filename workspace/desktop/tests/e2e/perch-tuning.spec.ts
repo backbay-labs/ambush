@@ -36,7 +36,13 @@ test("a recommendation renders every field the daemon carries, numbers with deno
   await expect(
     page.getByTestId("perch-tuning-signals-0").locator("li"),
   ).toHaveCount(1);
-  await expect(card).toContainText("not verdict timestamps");
+  await expect(page.getByTestId("perch-tuning-provenance-0")).toHaveAttribute(
+    "data-origin",
+    "analyst-promoted",
+  );
+  await expect(page.getByTestId("perch-tuning-provenance-0")).toContainText(
+    "from verdicts on analyst-promoted cases · 1 of 2 verdicts this week",
+  );
   await expect(page.getByTestId("perch-tuning-ledger-0")).toHaveAttribute(
     "href",
     /\/ledger\?q=agent%3Asuspicious_process_tree/,

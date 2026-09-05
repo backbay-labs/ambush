@@ -4,11 +4,19 @@ import type * as React from "react";
 import type { PerchOperatorStatus } from "@/shared/api/tauriPerch";
 
 import { fillTuning, TUNING } from "../lib/tuningCopy";
+import {
+  deriveTuningProvenance,
+  type TuningIncident,
+} from "../lib/tuningProvenance";
 import { TuningRecommendationCard } from "./TuningRecommendationCard";
 
 export type TuningScreenProps = {
   /** The daemon's runtime status; null until it has answered. */
   status: PerchOperatorStatus | null;
+  /** The incidents the daemon served, with their measurements; null until read. */
+  incidents: readonly TuningIncident[] | null;
+  /** Monday 00:00 UTC of the current week. */
+  weekStartMs: number;
 };
 
 /**
@@ -21,6 +29,8 @@ export type TuningScreenProps = {
  */
 export function TuningScreen({
   status,
+  incidents,
+  weekStartMs,
 }: TuningScreenProps): React.ReactElement {
   const report = status?.alert_tuning ?? null;
   return (
@@ -62,6 +72,19 @@ export function TuningScreen({
                 key={`${recommendation.kind}-${recommendation.strategy_id ?? ""}-${recommendation.host_id ?? ""}`}
                 index={index}
                 recommendation={recommendation}
+                provenance={
+                  incidents === null
+                    ? null
+                    : deriveTuningProvenance(
+                        {
+                          kind: recommendation.kind,
+                          strategy_id: recommendation.strategy_id ?? "",
+                          host_id: recommendation.host_id ?? null,
+                        },
+                        incidents,
+                        weekStartMs,
+                      )
+                }
               />
             ))}
           </ul>

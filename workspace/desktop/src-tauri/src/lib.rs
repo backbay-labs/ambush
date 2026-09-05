@@ -915,6 +915,7 @@ pub fn run() {
             perch_policy,
             perch_operator_status,
             perch_get_incident,
+            perch_list_incidents,
             perch_release_containment,
             perch_get_hold,
             perch_configure_daemon,

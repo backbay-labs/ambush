@@ -24,7 +24,11 @@ export function incidentOrigin(incident: {
   incident_id: string;
 }): IncidentOrigin {
   const id = incident.incident_id;
-  if (id.startsWith("perch-case:")) return "analyst-promoted";
+  // The daemon mints a promoted case as `incident:perch-case:<case>`; the
+  // bare `perch-case:` form is the plan's spelling and is kept for it.
+  if (id.startsWith("incident:perch-case:") || id.startsWith("perch-case:")) {
+    return "analyst-promoted";
+  }
   if (id.startsWith("incident:")) return "correlation-produced";
   return "unresolved";
 }
@@ -84,5 +88,41 @@ export function deriveTuningProvenance(
     totalVerdicts: total,
     thisWeekVerdicts: thisWeek,
     fractionThisWeek: total === 0 ? null : thisWeek / total,
+  };
+}
+
+/**
+ * The measurements the daemon persisted on an incident, as the provenance
+ * reads them. Only Dismiss is a false positive; Confirm and Investigate count
+ * toward the denominator and not the numerator.
+ */
+export function tuningIncidentFrom(read: {
+  incident_id: string;
+  false_positive_measurements: readonly Record<string, unknown>[];
+}): TuningIncident {
+  return {
+    incident_id: read.incident_id,
+    false_positive_measurements: read.false_positive_measurements.flatMap(
+      (measurement) => {
+        const findingId = measurement.finding_id;
+        const strategyId = measurement.strategy_id;
+        const reviewedAt = measurement.reviewed_at_ms;
+        if (
+          typeof findingId !== "string" ||
+          typeof strategyId !== "string" ||
+          typeof reviewedAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            finding_id: findingId,
+            strategy_id: strategyId,
+            reviewed_at_ms: reviewedAt,
+            false_positive: measurement.action === "dismiss",
+          },
+        ];
+      },
+    ),
   };
 }

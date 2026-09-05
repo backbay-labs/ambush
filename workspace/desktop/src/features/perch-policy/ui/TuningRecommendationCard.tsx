@@ -6,10 +6,17 @@ import { AdversaryString } from "@/shared/ui/perch/AdversaryString";
 import { DerivedMarker } from "@/shared/viz/markers";
 
 import { fillTuning, TUNING } from "../lib/tuningCopy";
+import type { TuningProvenance } from "../lib/tuningProvenance";
 
 type TuningRecommendationCardProps = {
   index: number;
   recommendation: PerchAlertTuningRecommendation;
+  /**
+   * Derived from the incidents the daemon served, or null when it served
+   * none — in which case the card says so rather than rendering a fraction
+   * from nothing.
+   */
+  provenance: TuningProvenance | null;
 };
 
 /**
@@ -23,6 +30,7 @@ type TuningRecommendationCardProps = {
 export function TuningRecommendationCard({
   index,
   recommendation,
+  provenance,
 }: TuningRecommendationCardProps): React.ReactElement {
   const kind = TUNING.kinds[recommendation.kind] ?? {
     label: recommendation.kind,
@@ -91,8 +99,17 @@ export function TuningRecommendationCard({
           ))}
         </ul>
       ) : null}
-      <p className="mt-2 text-2xs text-muted-foreground">
-        {TUNING.timestampsNotServed}
+      <p
+        data-testid={`perch-tuning-provenance-${index}`}
+        data-origin={provenance?.origin ?? "none"}
+        className="mt-2 text-2xs text-muted-foreground"
+      >
+        {provenance === null
+          ? TUNING.noIncidentsServed
+          : provenance.totalVerdicts === 0
+            ? TUNING.noVerdictsForDetector
+            : `${TUNING.origin[provenance.origin]} · ${provenance.thisWeekVerdicts} of ${provenance.totalVerdicts} verdicts this week`}{" "}
+        <DerivedMarker />
       </p>
       {query ? (
         <Link

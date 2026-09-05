@@ -124,9 +124,9 @@ which is why they came first.
 - **`docker compose up` and `helm install` were not run**; no working Docker daemon and no cluster.
   Image digests are deliberately unpinned and `check-perch-compose` says so on every run.
 - **Both daemon-side reads landed on 2026-09-05.** The tuning bench reads the daemon's status and
-  renders every recommendation field with its denominators; what it does not say is how many of
-  those verdicts are from this week, because the daemon's reads carry counts and not verdict
-  timestamps (W3-43). The policy read landed on
+  renders every recommendation field with its denominators; the provenance line reads the
+  incidents' persisted measurements through the incident read, so "N of M verdicts this week" is
+  a measurement and not a guess (W3-43 closed). The policy read landed on
   2026-09-05 — `GET /v1/operator/policy` serves the rules in file order and evaluates a triple
   with the gate's own predicate, and the screen shows the daemon's verdicts, not its own guess.
 - **The partition stamp is rendered** (2026-09-05): the rollback presenter's attestation badge is qualified by

@@ -536,6 +536,7 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_policy",
   "perch_operator_status",
   "perch_get_incident",
+  "perch_list_incidents",
 ]);
 
 /**
@@ -1032,6 +1033,30 @@ export function handlePerchMockCommand(
         ?.triple;
       return mockPolicyResponse(triple ?? null);
     }
+    case "perch_list_incidents": {
+      s.log.push(command);
+      // Every seeded incident, every minted case's incident, and — so the
+      // bench has verdicts to read on a fresh fixture — the fixture case's.
+      const ids = new Set<string>();
+      const rows: unknown[] = [];
+      for (const incident of s.incidents) {
+        const id = String(incident.incident_id ?? "");
+        if (id && !ids.has(id)) {
+          ids.add(id);
+          rows.push({ incident_id: id, summary: incident.summary ?? "" });
+        }
+      }
+      for (const minted of s.minted.values()) {
+        if (!ids.has(minted.incident_id)) {
+          ids.add(minted.incident_id);
+          rows.push({ incident_id: minted.incident_id, summary: "" });
+        }
+      }
+      const fixtureCase = `incident:perch-case:${PERCH_CASE_CHANNEL}`;
+      if (!ids.has(fixtureCase))
+        rows.push({ incident_id: fixtureCase, summary: "" });
+      return rows;
+    }
     case "perch_get_incident": {
       s.log.push(command);
       const incidentId = String(
@@ -1371,6 +1396,31 @@ function mockIncidentFor(incidentId: string): unknown {
         ],
       },
     ],
-    false_positive_measurements: [],
+    // Two verdicts on the fixture detector: one Dismiss an hour ago, one
+    // Confirm thirty days ago — "1 of 2 verdicts this week" for the bench.
+    false_positive_measurements: [
+      {
+        finding_id: PERCH_FINDING_ID,
+        hunt_id: "hunt-evt-1",
+        strategy_id: "suspicious_process_tree",
+        host_id: "host-ops-1",
+        feedback_id: "fb-1",
+        reviewed_at_ms: Date.now() - 3_600_000,
+        analyst_id: "console",
+        action: "dismiss",
+        reason: "looked like the backup job",
+      },
+      {
+        finding_id: "network_connect:hunt-evt-2",
+        hunt_id: "hunt-evt-2",
+        strategy_id: "suspicious_process_tree",
+        host_id: "host-ops-1",
+        feedback_id: "fb-2",
+        reviewed_at_ms: Date.now() - 30 * 86_400_000,
+        analyst_id: "console",
+        action: "confirm",
+        reason: null,
+      },
+    ],
   };
 }

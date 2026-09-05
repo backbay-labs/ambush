@@ -27,6 +27,7 @@ const ROUTE_EVASION_COVERAGE: &str = "/v2/api/evasion/coverage";
 /// not on `swarmctl serve`'s `/v1/operator/status`.
 const ROUTE_OPERATOR_STATUS: &str = "/v2/api/runtime/status";
 const ROUTE_INCIDENT: &str = "/v1/operator/incidents/{incident_id}";
+const ROUTE_INCIDENTS_PAGE: &str = "/v2/api/incidents";
 
 /// The daemon's honest review window: findings it has already ruled on, so the
 /// console can show what its own verdicts did.
@@ -332,4 +333,31 @@ pub async fn perch_get_incident(
         404 => Ok(None),
         _ => Err(daemon_response_error(&r)),
     }
+}
+
+/// `GET /v2/api/incidents?page_size=N` — the first page of incident summaries,
+/// which the tuning bench walks to read each incident's measurements through
+/// `perch_get_incident`. Ids only matter here; the summaries carry no
+/// measurements (W3-43).
+#[tauri::command]
+pub async fn perch_list_incidents(
+    page_size: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let page_size = page_size.unwrap_or(50).clamp(1, 200);
+    let r = perch_daemon_get(
+        &state,
+        &DaemonRoute {
+            template: ROUTE_INCIDENTS_PAGE,
+            path: format!("{ROUTE_INCIDENTS_PAGE}?page_size={page_size}"),
+        },
+    )
+    .await?;
+    if r.status != 200 {
+        return Err(daemon_response_error(&r));
+    }
+    Ok(r.body
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(Vec::new())))
 }

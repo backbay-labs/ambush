@@ -169,7 +169,22 @@ export const PERCH_READ_COMMANDS = [
   "perch_policy",
   "perch_operator_status",
   "perch_get_incident",
+  "perch_list_incidents",
 ] as const;
+
+/** One row of `GET /v2/api/incidents`; only the id is read here. */
+export type PerchIncidentSummary = {
+  readonly incident_id: string;
+  readonly summary?: string;
+  readonly created_at_ms?: number;
+};
+
+/** The first page of incidents, ids the bench walks through `perchGetIncident`. */
+export function perchListIncidents(pageSize = 50) {
+  return invokeTauri<readonly PerchIncidentSummary[]>("perch_list_incidents", {
+    pageSize,
+  });
+}
 
 export type PerchIncidentGraphDimension =
   | "temporal"
