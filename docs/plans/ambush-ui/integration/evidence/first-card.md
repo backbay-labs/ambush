@@ -14,6 +14,12 @@ The milestone's exit narrative is one real detector finding leaving `swarm_detec
 crossing the bridge, stored by the relay, rendered as a `swarm:finding:v1` card in the desktop,
 `E` promoting it into a case the daemon mints, and `D` recording a verdict as two separate legs.
 
+**Update, 2026-09-05:** the console half has since been driven against the live stack through
+Tauri's own IPC layer — `E`, `D` as two legs, the daemon-down-between-legs recovery and the
+unadmitted-signer control, every id joined — in `evidence/walking-skeleton.md`. The rendered
+React tree on a real window remains the one seam that record names. Acceptance on that record
+is the owner's read. The paragraph and table below are left as written on 2026-09-04.
+
 **That full path has NOT been run end to end as one continuous demonstration, so this milestone
 is not claimed as accepted.** The implementation of all 24 tasks is complete and every gate
 below is green. What was exercised live, and what was not:
@@ -27,7 +33,8 @@ below is green. What was exercised live, and what was not:
 | card rendering, `E` promote, `D` two-legged verdict | **mock bridge only.** Every leg-1 publish, leg-2 POST and case-channel probe in these specs ran against the Playwright mock or paused-clock unit tests. No desktop build has been driven against a real relay and daemon together |
 
 The roadmap's stop condition is explicit that a mock-only demonstration is not a milestone exit.
-Task 24's walking-skeleton run is therefore **outstanding**, and this record does not assert it.
+Task 24's walking-skeleton run was outstanding when this was written; it ran on 2026-09-05 and is
+recorded in `evidence/walking-skeleton.md`.
 
 ## Toolchains and services
 

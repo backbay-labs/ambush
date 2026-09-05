@@ -17,8 +17,12 @@ those, and so every one of the 46 perch Playwright specs runs against the mock b
 exit criteria are behaviours on a running dev stack with the console, and the console half has not
 been driven against that stack. The `perch` preview flag stays off by default.
 
-Three milestones are now blocked on that one fact, and the walking skeleton through a real Tauri
-build is the single piece of work that would move all three.
+Three milestones were blocked on that one fact when this was written. **Update, 2026-09-05:** the
+console half has since been driven against the live stack through Tauri's own IPC layer — the
+hold path and the finding path, with both of Task 24's controls — in `evidence/walking-skeleton.md`.
+That run found and fixed two wire-shape defects on the hold path (`4ce2dcdb1`), filed W3-38 through
+W3-40, and names the one seam left: the rendered React tree on a real window. Acceptance of the
+three milestones on that record is the owner's read.
 
 ## Toolchains and services
 
@@ -114,8 +118,9 @@ which is why they came first.
 
 ## Known limitations
 
-- **The walking skeleton through a real Tauri build has not been run.** This is the blocker on
-  acceptance for three milestones and is stated as the next piece of work, not as a footnote.
+- **The walking skeleton ran headless, not through a real window** (2026-09-05,
+  `evidence/walking-skeleton.md`): the real commands, IPC, keyring, relay and daemon; the React
+  tree above them still against the mock. That seam is the remaining limitation.
 - **`docker compose up` and `helm install` were not run**; no working Docker daemon and no cluster.
   Image digests are deliberately unpinned and `check-perch-compose` says so on every run.
 - **Two daemon-side reads were not built** and the screens say so in their own copy: the policy

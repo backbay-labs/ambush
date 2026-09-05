@@ -5559,8 +5559,12 @@ Every `01-DESIGN.md` §6 / §7 / §9 / §12 item this milestone owns, and the `0
 
 Recorded 2026-09-04, on `codex/ambush-operator-complete`. **This milestone is
 not claimed as accepted**: the fifteen exit criteria below are observable
-behaviours on a running dev stack with the console, and the console half has
-not been driven against that stack — the same limitation The hold recorded, for
+behaviours on a running dev stack with the console, and the console half had
+not been driven against that stack when this was written. **Update,
+2026-09-05:** it has been, headless through Tauri's own IPC layer
+(`evidence/walking-skeleton.md`); the rendered tree on a real window is the
+seam that remains, and acceptance is the owner's read. The original reason
+follows — the same limitation The hold recorded, for
 the same reason (the console's daemon surface goes through Tauri commands
 holding the bearer and the operator's Ed25519 key, which a browser cannot
 call). The `perch` preview flag stays off by default.

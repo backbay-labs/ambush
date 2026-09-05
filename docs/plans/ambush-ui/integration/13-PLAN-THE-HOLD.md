@@ -7854,20 +7854,22 @@ Each is observable, not a task; each is demonstrated once on the dev stack by Ta
 Branch `codex/ambush-hold-watch`, built by merging the four tracks onto the First card head.
 Full record in `evidence/the-hold.md`. **The milestone is not claimed as accepted**: the
 daemon-and-relay half ran live, the CONSOLE half did not, and the roadmap's stop condition
-says a mock-only demonstration is not an exit.
+says a mock-only demonstration is not an exit. **Update, 2026-09-05:** the console's commands
+have since been driven live through Tauri's own IPC layer (`evidence/walking-skeleton.md`); rows
+marked *console half 2026-09-05* below reflect that run, and acceptance is the owner's read.
 
 | # | Status |
 |---|---|
 | 1 | **partly live.** `GET /v1/response/holds` listed the hold with `store_durable: true`, `state: notified`, `action_kind: isolate_host`. The same list read through `swarmctl` and through The Watch was **not** checked |
 | 2 | **live, except membership and the two-second bound.** The case channel exists, one `swarm:hold:v1` card is stored, and every `46010` carries exactly `card`, `h`, `hold`, `p` and **no `e`** — RF-D1 held by the producer, on five notices. One `26006` reached the operator's own REQ and, in the bridge's live suite, no other subscriber. `notified_at_ms` and `case_channel` are populated. Channel MEMBERSHIP of the bridge and operator was not read back, and the two-second bound was not timed |
-| 3 | **daemon half live.** The decide route answered `state: refused`, `outcome: refused_by_operator`, operator `console`, no receipt and no lease. The signed card, the `signature_hex` equality between card and record, and the console's `sending → recorded → acknowledged` rendering were **not** exercised live |
-| 4 | **daemon half live, criterion corrected.** A grant returned `state: executed`, `outcome: granted_executed`, a receipt, an `audit_trail_id` and a capability lease expiring exactly 60 000 ms after the daemon's decision instant. The lease has no `issued_at_ms` (**W3-34**). The dwell gate, `approved_by.hold_id` and `governance_clearance` were **not** exercised live |
-| 5 | **not reproduced.** With `runtime.containment` removed entirely and the ruleset re-signed, a granted `isolate_host` still executed with a lease (**W3-35**). The code path is unit-covered; no live recipe for it exists |
+| 3 | **daemon half live; console half 2026-09-05.** The decide route answered `state: refused`, `outcome: refused_by_operator`, operator `console`, no receipt and no lease. The signed card, the `signature_hex` equality between card and record, and the console's `sending → recorded → acknowledged` rendering were **not** exercised live |
+| 4 | **daemon half live, criterion corrected; console half 2026-09-05** (grant → `executed` with receipt and audit trail through the console; the containment lease 900 000 ms after the decision instant in the daemon log; the 60 000 ms capability lease is the daemon's response body, which the console's outcome does not carry). A grant returned `state: executed`, `outcome: granted_executed`, a receipt, an `audit_trail_id` and a capability lease expiring exactly 60 000 ms after the daemon's decision instant. The lease has no `issued_at_ms` (**W3-34**). The dwell gate, `approved_by.hold_id` and `governance_clearance` were **not** exercised live |
+| 5 | **not reproduced via containment; the outcome reproduced live 2026-09-05** by `policy.scope_rate_limit`, rule carried. With `runtime.containment` removed entirely and the ruleset re-signed, a granted `isolate_host` still executed with a lease (**W3-35**). The code path is unit-covered; no live recipe for it exists |
 | 6 | **not run.** The expiry sweep was not driven to `expired` on the live stack |
 | 7 | **not run.** The daemon was not killed between the compare-and-set and the outcome write |
-| 8 | **replay half live.** The same body twice answered 200 `replayed: true` with the state unchanged, and a different decision on a decided hold answered 409 `hold_already_decided`, "re-read the hold". The 422 malformed-signature and 403 missing-`Approve` cases were **not** run live |
+| 8 | **replay half live; console half 2026-09-05** (replay through the console's leg 2 → `replayed: true`). The same body twice answered 200 `replayed: true` with the state unchanged, and a different decision on a decided hold answered 409 `hold_already_decided`, "re-read the hold". The 422 malformed-signature and 403 missing-`Approve` cases were **not** run live |
 | 9 | **not run.** An unreconciled `46010` and an unadmitted frame are console behaviours |
-| 10 | **conflict half live** (the 409 above). The `superseded` update card and the two-screen rendering were not exercised live |
+| 10 | **conflict half live; the console's leg 2 live 2026-09-05** (the 409 above). The `superseded` update card and the two-screen rendering were not exercised live |
 | 11 | **unit and mock-bridge only.** The fifteen-variant snapshot and the Playwright DOM-order test pass |
 | 12 | **live.** Every engine and workspace gate exits 0; the copy gate is clean over 51 perch files |
 | 13 | **mock-bridge only.** A spec asserts Home still renders with the flag off. The flag stays **off** by default: flipping it is Task 28's own step and belongs with a console pass that has actually run |
