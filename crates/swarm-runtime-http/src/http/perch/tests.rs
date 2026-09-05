@@ -469,10 +469,11 @@ async fn feedback_requires_the_approve_scope() {
 
 #[test]
 fn perch_paths_are_disjoint_from_the_containment_router() {
-    // Seven since B4 mounted the deposits read (W3-28). The count is written
-    // down so a route added without a path entry, or a path entry without a
-    // route, fails here rather than at the first request that misses.
-    assert_eq!(PERCH_ROUTER_PATHS.len(), 7);
+    // Eight since Task 16 mounted the policy read (seven since B4's deposits,
+    // W3-28). The count is written down so a route added without a path
+    // entry, or a path entry without a route, fails here rather than at the
+    // first request that misses.
+    assert_eq!(PERCH_ROUTER_PATHS.len(), 8);
     for path in PERCH_ROUTER_PATHS {
         // Two prefixes now: the operator surface, and the hold reads B2r
         // mounts under `/v1/response/` because they are the daemon's answer
@@ -855,9 +856,10 @@ fn perch_router_paths_are_disjoint_from_the_local_operator_surface() {
     );
     let overlap: Vec<_> = perch.intersection(&local).collect();
     assert!(overlap.is_empty(), "same path on two ports: {overlap:?}");
-    // Seven after B4. The `threat-class-configs` path on 7766 is a sibling in
-    // spelling only and must never join this set.
-    assert_eq!(perch.len(), 7);
+    // Eight after Task 16's policy read (seven after B4). The
+    // `threat-class-configs` path on 7766 is a sibling in spelling only and
+    // must never join this set.
+    assert_eq!(perch.len(), 8);
 }
 
 // ── B2: the decide route ───────────────────────────────────────────────────
@@ -1173,4 +1175,78 @@ fn dev_operator_verdict_key_matches_the_documented_seed() {
         profile.contains(&format!("verdict_public_key_hex: {expected}")),
         "the profile's verdict_public_key_hex is not the documented seed's key ({expected})"
     );
+}
+
+/// The policy read: rules in file order, the daemon's own evaluation of one
+/// triple, a partial triple refused, and the shipped C2 rule outranking the
+/// human gate at CRITICAL — the case the surface exists for.
+#[tokio::test]
+async fn policy_read_serves_rules_in_file_order_and_evaluates_a_triple() {
+    let (mut config, root) = perch_config();
+    let shipped: SwarmConfig = serde_yaml::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../rulesets/default.yaml"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    config.policy = shipped.policy;
+    let state = IngestState::from_config(root.join("inline"), config.clone()).unwrap();
+    let auth =
+        OperatorAuthState::for_test("local-operator", vec![OperatorScope::Read], "secret-token");
+    let app = perch_operator_router_for_test(&config, state, auth);
+    let get = |uri: &str| {
+        Request::builder()
+            .uri(uri)
+            .header(AUTHORIZATION, "Bearer secret-token")
+            .header("x-swarm-schema-version", "1")
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let rules_only = app
+        .clone()
+        .oneshot(get("/v1/operator/policy"))
+        .await
+        .unwrap();
+    assert_eq!(rules_only.status(), StatusCode::OK);
+    let body = json_body(rules_only).await;
+    assert_eq!(body["human_gate_severity"], "HIGH");
+    assert_eq!(body["lease_ttl_ms"], 60_000);
+    assert!(body["evaluation"].is_null());
+    let rules = body["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 3);
+    assert_eq!(rules[1]["name"], "command-and-control-emergency-block");
+    assert_eq!(rules[1]["index"], 1);
+    assert_eq!(rules[1]["decision"], "allow");
+    assert_eq!(
+        rules[1]["actions"],
+        serde_json::json!(["block_egress", "escalate"])
+    );
+    assert_eq!(rules[2]["time_window_utc"], serde_json::Value::Null);
+
+    let partial = app
+        .clone()
+        .oneshot(get("/v1/operator/policy?threat_class=execution"))
+        .await
+        .unwrap();
+    assert_eq!(partial.status(), StatusCode::BAD_REQUEST);
+
+    let evaluated = app
+        .oneshot(get(
+            "/v1/operator/policy?threat_class=command_and_control&severity=CRITICAL&action=block_egress",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(evaluated.status(), StatusCode::OK);
+    let body = json_body(evaluated).await;
+    let evaluation = &body["evaluation"];
+    assert_eq!(evaluation["triple"]["action"], "block_egress");
+    assert_eq!(evaluation["verdicts"][0]["verdict"], "not_matched");
+    assert_eq!(evaluation["verdicts"][1]["verdict"], "decides");
+    assert_eq!(evaluation["verdicts"][2]["verdict"], "not_reached");
+    assert!(evaluation["fallthrough"].is_null());
+    assert_eq!(evaluation["outranks_human_gate"], true);
+    assert_eq!(evaluation["warning"], "request_carried_selectors");
 }

@@ -1873,6 +1873,12 @@ impl IngestState {
         self.stack.load_full().service.config.pheromone.clone()
     }
 
+    /// The policy the CURRENT runtime decides with — rules in file order —
+    /// for the operator surface's read-only `/policy`.
+    pub fn current_policy_config(&self) -> swarm_core::config::PolicyConfig {
+        self.stack.load_full().service.config.policy.clone()
+    }
+
     /// The lease store the CURRENT runtime writes containment leases to.
     ///
     /// Must be read from the runtime rather than rebuilt from config: for an

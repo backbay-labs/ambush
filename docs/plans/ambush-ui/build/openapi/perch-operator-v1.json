@@ -1317,6 +1317,275 @@
         ],
         "type": "object"
       },
+      "PolicyEvaluation": {
+        "additionalProperties": false,
+        "properties": {
+          "fallthrough": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PolicyFallthrough"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outranks_human_gate": {
+            "description": "The deciding rule is `allow`, the action is one of the twelve destructive kinds, and the severity is at or above `human_gate_severity`.",
+            "type": "boolean"
+          },
+          "triple": {
+            "$ref": "#/components/schemas/PolicyTripleEcho"
+          },
+          "verdicts": {
+            "description": "One per rule, in file order. Empty when `action` is not a kind the daemon knows.",
+            "items": {
+              "$ref": "#/components/schemas/PolicyRuleVerdict"
+            },
+            "type": "array"
+          },
+          "warning": {
+            "enum": [
+              "request_carried_selectors"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "triple",
+          "verdicts",
+          "fallthrough",
+          "outranks_human_gate",
+          "warning"
+        ],
+        "type": "object"
+      },
+      "PolicyFallthrough": {
+        "additionalProperties": false,
+        "description": "Where a triple no rule matched ends up.",
+        "properties": {
+          "gate": {
+            "enum": [
+              "static"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "require_human",
+              "allow"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate",
+          "verdict",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "PolicyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "evaluation": {
+            "description": "Present only when a triple was asked about.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PolicyEvaluation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "human_gate_severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "lease_ttl_ms": {
+            "description": "The capability lease's authorization window, not the containment lease's TTL.",
+            "type": "integer"
+          },
+          "max_actions_per_scope_per_minute": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRuleView"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PolicySource"
+          }
+        },
+        "required": [
+          "schema_version",
+          "human_gate_severity",
+          "lease_ttl_ms",
+          "max_actions_per_scope_per_minute",
+          "source",
+          "rules",
+          "evaluation"
+        ],
+        "type": "object"
+      },
+      "PolicyRuleVerdict": {
+        "additionalProperties": false,
+        "properties": {
+          "rule_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "enum": [
+              "decides",
+              "not_matched",
+              "not_reached"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_index",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "PolicyRuleView": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "description": "`ResponseAction` kind slugs; empty means every action.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "decision": {
+            "enum": [
+              "allow",
+              "deny"
+            ],
+            "type": "string"
+          },
+          "index": {
+            "description": "Position in file order, which is evaluation order.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_actions_per_agent_per_minute": {
+            "oneOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "min_severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "name": {
+            "type": "string"
+          },
+          "threat_class": {
+            "$ref": "#/components/schemas/ThreatClass"
+          },
+          "time_window_utc": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PolicyTimeWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "index",
+          "name",
+          "decision",
+          "threat_class",
+          "actions",
+          "min_severity",
+          "max_severity"
+        ],
+        "type": "object"
+      },
+      "PolicySource": {
+        "additionalProperties": false,
+        "properties": {
+          "attested": {
+            "description": "Whether a `.sig.json` sibling exists beside the profile — the reason the surface is read-only.",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "The profile path the runtime started on.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "attested"
+        ],
+        "type": "object"
+      },
+      "PolicyTimeWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "end_hour_utc": {
+            "maximum": 24,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_hour_utc": {
+            "maximum": 24,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_hour_utc",
+          "end_hour_utc"
+        ],
+        "type": "object"
+      },
+      "PolicyTripleEcho": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "threat_class": {
+            "$ref": "#/components/schemas/ThreatClass"
+          }
+        },
+        "required": [
+          "threat_class",
+          "severity",
+          "action"
+        ],
+        "type": "object"
+      },
       "PolicyVerdict": {
         "description": "`swarm_policy::PolicyVerdict` (crates/swarm-policy/src/lib.rs:85-92). `deny` is the POLICY verb; the operator verb is `refuse` and they are not interchangeable.",
         "enum": [
@@ -2113,6 +2382,88 @@
         "summary": "Read the post-suppression, post-evaporation deposit slice",
         "tags": [
           "pheromone"
+        ]
+      }
+    },
+    "/v1/operator/policy": {
+      "get": {
+        "description": "Read-only. The profile is sha256-pinned inside a signed attestation whose key is not in this repository, so an edit here would produce a config the runtime refuses to start on; the console shows the policy and never edits it.\n\nShadowing is a property of a triple, not of a rule: the same rule decides one triple and is `not_matched` for another. So the evaluation is always for a named triple — `threat_class`, `severity` and `action`, all three or none — and it is computed by the daemon with the configurable gate's own selector predicate, never re-implemented by a client. Every rule gets one of three words: `decides` (first match in file order), `not_matched` (looked at, did not select), `not_reached` (after the one that decided). When no rule matches, `fallthrough` spells out the static gate's answer.\n\n`outranks_human_gate` is the case the surface exists for: the deciding rule is `allow`, the action is one of the twelve destructive kinds, and the severity is at or above `human_gate_severity` — a rule that lets a destructive action through without the human the static gate would have asked. `warning` is permanent: `threat_class` and `severity` are supplied by the requesting agent, so this evaluation reads what a request would SAY.",
+        "operationId": "read_policy",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "in": "query",
+            "name": "threat_class",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ThreatClass"
+            }
+          },
+          {
+            "in": "query",
+            "name": "severity",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Severity"
+            }
+          },
+          {
+            "description": "A `ResponseAction` kind slug, e.g. `block_egress`.",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyResponse"
+                }
+              }
+            },
+            "description": "The policy, with an evaluation when a triple was given."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A partial triple, or an unknown query field."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or wrong bearer."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The principal lacks the `read` scope."
+          }
+        },
+        "summary": "The policy in file order, and the daemon's own evaluation of one triple",
+        "tags": [
+          "policy"
         ]
       }
     },

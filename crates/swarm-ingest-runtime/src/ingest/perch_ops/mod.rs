@@ -10,6 +10,7 @@ pub mod deposits;
 pub mod feedback;
 pub mod holds;
 pub mod mint;
+pub mod policy;
 pub mod reviewed;
 
 #[cfg(test)]
