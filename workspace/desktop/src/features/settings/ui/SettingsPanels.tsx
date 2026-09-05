@@ -13,6 +13,7 @@ import {
   MessagesSquare,
   MonitorCog,
   Moon,
+  Radar,
   ShieldAlert,
   Smartphone,
   Smile,
@@ -73,6 +74,7 @@ import { MobilePairingCard } from "./MobilePairingCard";
 import { ModerationQueueCard } from "./ModerationQueueCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { AgentsSettingsPanel } from "./AgentsSettingsPanel";
+import { PerchDetectorSettings } from "./PerchDetectorSettings";
 import { HostedCommunitiesSettingsCard } from "./HostedCommunitiesSettingsCard";
 import {
   SettingsOptionGroup,
@@ -101,7 +103,8 @@ export type SettingsSection =
   | "custom-emoji"
   | "local-archive"
   | "mobile"
-  | "updates";
+  | "updates"
+  | "detector";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
@@ -122,6 +125,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "local-archive",
   "mobile",
   "updates",
+  "detector",
 ];
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
@@ -185,6 +189,12 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     label: "Agents",
     icon: Bot,
     featureGate: "managed-agents",
+  },
+  {
+    value: "detector",
+    label: "Detector",
+    icon: Radar,
+    featureGate: "perch",
   },
   {
     value: "channel-templates",
@@ -864,6 +874,8 @@ export function renderSettingsSection(
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "updates":
       return <UpdateChecker />;
+    case "detector":
+      return <PerchDetectorSettings />;
     default: {
       const exhaustiveCheck: never = section;
       return exhaustiveCheck;

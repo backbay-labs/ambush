@@ -5589,7 +5589,7 @@ call). The `perch` preview flag stays off by default.
 | 19 Watchfloor | the whole of it: the shared layer, three charts, `WatchfloorScreen`, `/watch-floor`, two gates, the four reducers, and the telemetry publisher that drains and signs them once per tick | the 72-hour soak, which is manual |
 | 20 CI gates | route-tree, surface-count and notification-field gates, all wired, all with fixtures | the SVG asset rewrite |
 | 21 packaging | the compose gate (which found two real defects), the relay chart dependency, NetworkPolicy, perch secret, 12 chart tests, the deployment section | `docker compose up` and `helm install` — no working Docker daemon and no cluster here. Image digests are **not** pinned and the gate says so on every run |
-| 22 sidecar (optional) | supervisor with group-kill, three commands, health poll, settings panel, opt-in bundling | never bundled or run: it needs an engine release build and a Tauri bundle |
+| 22 sidecar (optional) | supervisor with group-kill, three commands, health poll, settings panel (mounted under Settings → Detector on 2026-09-05; it had been built and mounted nowhere), opt-in bundling | never bundled or run: it needs an engine release build and a Tauri bundle |
 
 **Amendment W3-36** records the one place the plan and the implementation
 could not be reconciled: Task 17's END WATCH block cannot go to

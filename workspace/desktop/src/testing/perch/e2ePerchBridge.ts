@@ -517,6 +517,7 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_sidecar_start",
   "perch_sidecar_stop",
   "perch_sidecar_status",
+  "perch_operator_identity",
 ]);
 
 /**
@@ -989,6 +990,12 @@ export function handlePerchMockCommand(
       s.log.push(command);
       if (s.sidecar) s.sidecar = { ...s.sidecar, healthz: "stopped" };
       return null;
+    case "perch_operator_identity":
+      s.log.push(command);
+      return {
+        public_key_hex: "dd".repeat(32),
+        key_id: mockEventId("operator-key-id"),
+      };
     case "perch_sidecar_status":
       s.log.push(command);
       return s.sidecar ? { ...s.sidecar } : null;

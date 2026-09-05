@@ -165,7 +165,25 @@ export const PERCH_READ_COMMANDS = [
   "perch_configure_daemon",
   "perch_list_containments",
   "perch_evasion_coverage",
+  "perch_operator_identity",
 ] as const;
+
+/** The public half of this console's decision key. Never the seed. */
+export type PerchOperatorIdentity = {
+  /** 64 lowercase hex — what the daemon pins as `verdict_public_key_hex`. */
+  readonly public_key_hex: string;
+  /** `sha256(public_key)`, which is what the daemon's verifier names. */
+  readonly key_id: string;
+};
+
+/**
+ * The console's Ed25519 public key, minted on first use and held in the
+ * keyring. The operator pastes it into the daemon's principal entry; until a
+ * daemon pins it, every decision this console signs is refused as unknown.
+ */
+export function perchOperatorIdentity() {
+  return invokeTauri<PerchOperatorIdentity>("perch_operator_identity");
+}
 
 // ===========================================================================
 // LEG 1 — THE RELAY WRITE. In `commands/perch_verdict.rs`, deliberately not in

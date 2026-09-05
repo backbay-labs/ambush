@@ -102,8 +102,9 @@ the record's timestamp moving only on the acknowledged leg, never a count.
   with no notice until the spool was set aside.
 - **W3-39** — a hold whose alarm steps were lost with the spool is never re-filed; the sweep ran
   for twenty-five minutes and the daemon still called it durable. It expired at its TTL.
-- **W3-40** — `perch_operator_identity` has no renderer caller; the dev flow provisions keys out
-  of band, and a production operator has no surface that shows the public key the daemon pins.
+- **W3-40** — `perch_operator_identity` had no renderer caller; the dev flow provisions keys out
+  of band, and a production operator had no surface that shows the public key the daemon pins.
+  Settings → Detector now shows it (and mounts the sidecar panel, which was also unmounted).
 - The bridge's relay socket dropped at four publish moments (`Connection closed unexpectedly`,
   `IO error`) and re-authenticated two seconds later each time; every step then landed. Recorded,
   not ruled.
