@@ -273,6 +273,10 @@ const EVENTS_INVENTORY: &[(&str, usize, usize)] = &[
     ("src/archive/mod_tests.rs", 1, 0),
     ("src/managed_agents/persona_events/tests.rs", 1, 0),
     ("src/commands/team_snapshot/tests.rs", 1, 0),
+    // The live walking-skeleton driver (ignored, env-gated) posts telemetry to
+    // the DAEMON's `/v1/ingest/events`; that is not a relay events URL and no
+    // production code path runs it.
+    ("src/commands/perch_live_tests.rs", 1, 0),
     // Mock-relay route in its in-file tests; production publish goes through
     // the guarded boundary-1 funnel (`submit_signed_event_at_with_keys`).
     ("src/commands/personas/sharing.rs", 1, 0),
