@@ -1,6 +1,6 @@
 # The walking skeleton — the console half, driven headless
 
-**Recorded:** 2026-09-05, on `codex/ambush-hold-watch` (PR #16's head). **Driver:**
+**Recorded:** 2026-09-05, on `codex/ambush-hold-watch` (PR #16's head; CI 16/16 green at `53b4f79fc`). **Driver:**
 `workspace/desktop/src-tauri/src/commands/perch_live_tests.rs`. **Stack:** the native dev stack of
 `docs/PERCH-DEV.md`, on a fresh relay database.
 
