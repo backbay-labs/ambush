@@ -56,6 +56,8 @@ export const perchKeys = {
     key("daemon", "reviewed-findings", sinceMs),
   /** B4 GET /v1/operator/pheromone/deposits — post-suppression, post-evaporation. */
   deposits: (threatClass: string) => key("daemon", "deposits", threatClass),
+  /** GET /v1/operator/policy — the rules, and the daemon's evaluation of one triple. */
+  policy: (triple: string | null) => key("daemon", "policy", triple ?? "rules"),
   /** GET /v1/operator/status — alert_tuning + false_positive_tracking. */
   operatorStatus: () => key("daemon", "operator-status"),
   /** Re-fetch of one artifact for the PROVENANCE block's byte diff. */
@@ -163,6 +165,12 @@ export const PERCH_FRESHNESS = {
     poll: false,
     invalidatesOnWrite: [],
     why: "The detector coverage catalog changes when the evasion suite does, which is a deploy rather than a second. Polling it would ask the daemon the same question three hundred times between two answers that could differ.",
+  },
+  policy: {
+    staleTime: 60_000,
+    poll: false,
+    invalidatesOnWrite: [],
+    why: "The policy changes when the signed profile does, which is a restart rather than a second; a triple's evaluation is a pure function of it. Fetched on open and per triple, never polled.",
   },
   deposits: {
     staleTime: 1_000,

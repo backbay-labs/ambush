@@ -123,9 +123,10 @@ which is why they came first.
   tree above them still against the mock. That seam is the remaining limitation.
 - **`docker compose up` and `helm install` were not run**; no working Docker daemon and no cluster.
   Image digests are deliberately unpinned and `check-perch-compose` says so on every run.
-- **Two daemon-side reads were not built** and the screens say so in their own copy: the policy
-  screen states the daemon's default is unknown rather than serving rules the console reads
-  independently, and the tuning screen renders no recommendations rather than fabricating them.
+- **One daemon-side read was not built** and the screen says so in its own copy: the tuning
+  screen renders no recommendations rather than fabricating them. The policy read landed on
+  2026-09-05 — `GET /v1/operator/policy` serves the rules in file order and evaluates a triple
+  with the gate's own predicate, and the screen shows the daemon's verdicts, not its own guess.
 - **The SVG asset rewrite landed on 2026-09-05** (forty hits across twelve diagrams, each render checked; `docs/assets` is `required` in the copy gate now). **The OpenAPI generator landed on 2026-09-05** (`generate_perch_openapi` renders the authoring YAML, refuses a document whose paths are not exactly `PERCH_ROUTER_PATHS`, and `tools/check-perch-openapi.sh` gates the JSON in CI). **The 72-hour soak** has no target in this
   tree, need a browser check, or are manual respectively.
 - **Task 22's sidecar was never bundled or run**: it needs an engine release build and a Tauri

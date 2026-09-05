@@ -166,7 +166,69 @@ export const PERCH_READ_COMMANDS = [
   "perch_list_containments",
   "perch_evasion_coverage",
   "perch_operator_identity",
+  "perch_policy",
 ] as const;
+
+/** The triple `/policy` evaluates: all three, or the call sends none. */
+export type PerchPolicyTriple = {
+  readonly threatClass: string;
+  readonly severity: string;
+  readonly action: string;
+};
+
+/**
+ * `GET /v1/operator/policy` — the rules in file order and, when a triple is
+ * given, the daemon's own evaluation of it. The daemon computes the verdicts
+ * with its gate's own predicate; the console's local mirror is a reading of
+ * the policy, this is the decision.
+ */
+export function perchPolicy(triple?: PerchPolicyTriple) {
+  return invokeTauri<PerchPolicyResponse>("perch_policy", {
+    triple: triple ?? null,
+  });
+}
+
+export type PerchPolicyRuleVerdict = "decides" | "not_matched" | "not_reached";
+
+export type PerchPolicyResponse = {
+  readonly schema_version: number;
+  readonly human_gate_severity: string;
+  readonly lease_ttl_ms: number;
+  readonly max_actions_per_scope_per_minute: number;
+  readonly source: { readonly path: string; readonly attested: boolean };
+  readonly rules: readonly {
+    readonly index: number;
+    readonly name: string;
+    readonly decision: string;
+    readonly threat_class: string;
+    readonly actions: readonly string[];
+    readonly min_severity: string;
+    readonly max_severity: string;
+    readonly time_window_utc: {
+      readonly start_hour_utc: number;
+      readonly end_hour_utc: number;
+    } | null;
+    readonly max_actions_per_agent_per_minute: number | null;
+  }[];
+  readonly evaluation: {
+    readonly triple: {
+      readonly threat_class: string;
+      readonly severity: string;
+      readonly action: string;
+    };
+    readonly verdicts: readonly {
+      readonly rule_index: number;
+      readonly verdict: PerchPolicyRuleVerdict;
+    }[];
+    readonly fallthrough: {
+      readonly gate: string;
+      readonly verdict: string;
+      readonly reason: string;
+    } | null;
+    readonly outranks_human_gate: boolean;
+    readonly warning: string;
+  } | null;
+};
 
 /** The public half of this console's decision key. Never the seed. */
 export type PerchOperatorIdentity = {

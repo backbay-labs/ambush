@@ -1,5 +1,8 @@
-import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import * as React from "react";
+import { perchKeys } from "@/shared/api/perchKeys";
+import { type PerchPolicyResponse, perchPolicy } from "@/shared/api/tauriPerch";
 
 import {
   useFeatureEnabled,
@@ -19,15 +22,18 @@ export const Route = createFileRoute("/policy")({
 function PolicyRouteComponent() {
   const enabled = useFeatureEnabled("perch");
   usePreviewFeatureWarning("perch");
+  const policy = useQuery<PerchPolicyResponse>({
+    queryKey: perchKeys.policy(null),
+    queryFn: () => perchPolicy(),
+    enabled,
+    staleTime: 60_000,
+  });
   if (!enabled) {
     return null;
   }
   return (
     <React.Suspense fallback={<ViewLoadingFallback kind="containments" />}>
-      {/* The daemon's rules are not served to the console yet (Task 16's
-          route). Until they are, the screen renders an empty rule list, which
-          says "no rule matches" rather than inventing a decision. */}
-      <PolicyScreen rules={[]} />
+      <PolicyScreen policy={policy.data ?? null} />
     </React.Suspense>
   );
 }

@@ -10,6 +10,7 @@ import {
   type PerchMintIncidentResponse,
   type PerchReviewedFinding,
   type PerchReviewedFindingsResponse,
+  type PerchPolicyTriple,
 } from "@/shared/api/tauriPerch";
 
 /**
@@ -518,6 +519,7 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_sidecar_stop",
   "perch_sidecar_status",
   "perch_operator_identity",
+  "perch_policy",
 ]);
 
 /**
@@ -990,6 +992,12 @@ export function handlePerchMockCommand(
       s.log.push(command);
       if (s.sidecar) s.sidecar = { ...s.sidecar, healthz: "stopped" };
       return null;
+    case "perch_policy": {
+      s.log.push(command);
+      const triple = (payload as { triple?: PerchPolicyTriple | null } | null)
+        ?.triple;
+      return mockPolicyResponse(triple ?? null);
+    }
     case "perch_operator_identity":
       s.log.push(command);
       return {
@@ -1054,4 +1062,141 @@ export function installPerchControlSeams(target: Window): void {
 
 if (typeof window !== "undefined") {
   installPerchControlSeams(window);
+}
+
+// ── /policy: the shipped three rules, evaluated the way the daemon evaluates ──
+
+type MockPolicyRule = {
+  readonly index: number;
+  readonly name: string;
+  readonly decision: "allow" | "deny";
+  readonly threat_class: string;
+  readonly actions: readonly string[];
+  readonly min_severity: string;
+  readonly max_severity: string;
+  readonly time_window_utc: {
+    readonly start_hour_utc: number;
+    readonly end_hour_utc: number;
+  } | null;
+  readonly max_actions_per_agent_per_minute: number | null;
+};
+
+/** `rulesets/default.yaml`'s policy block, as `/v1/operator/policy` serves it. */
+const MOCK_POLICY_RULES: readonly MockPolicyRule[] = [
+  {
+    index: 0,
+    name: "execution-after-hours-autorespond",
+    decision: "allow",
+    threat_class: "execution",
+    actions: ["deploy_decoy", "escalate"],
+    min_severity: "HIGH",
+    max_severity: "CRITICAL",
+    time_window_utc: { start_hour_utc: 0, end_hour_utc: 24 },
+    max_actions_per_agent_per_minute: 4,
+  },
+  {
+    index: 1,
+    name: "command-and-control-emergency-block",
+    decision: "allow",
+    threat_class: "command_and_control",
+    actions: ["block_egress", "escalate"],
+    min_severity: "CRITICAL",
+    max_severity: "CRITICAL",
+    time_window_utc: { start_hour_utc: 0, end_hour_utc: 24 },
+    max_actions_per_agent_per_minute: 2,
+  },
+  {
+    index: 2,
+    name: "credential-access-destructive-deny",
+    decision: "deny",
+    threat_class: "credential_access",
+    actions: ["revoke_credential"],
+    min_severity: "LOW",
+    max_severity: "HIGH",
+    time_window_utc: null,
+    max_actions_per_agent_per_minute: null,
+  },
+];
+
+const MOCK_DESTRUCTIVE_KINDS = new Set([
+  "block_egress",
+  "isolate_host",
+  "revoke_credential",
+  "sinkhole_dns",
+  "terminate_user_session",
+  "inject_firewall_rule",
+  "quarantine_file",
+  "kill_process",
+  "suspend_process",
+  "disable_user_account",
+  "force_password_reset",
+  "remove_scheduled_task",
+]);
+
+const MOCK_SEVERITY_ORDER = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+
+/** First match in file order decides; the rest is not_matched / not_reached. */
+function mockPolicyResponse(triple: PerchPolicyTriple | null): unknown {
+  const humanGate = "HIGH";
+  let evaluation: unknown = null;
+  if (triple) {
+    const rank = MOCK_SEVERITY_ORDER.indexOf(triple.severity);
+    let decided: MockPolicyRule | null = null;
+    const verdicts: { rule_index: number; verdict: string }[] = [];
+    for (const rule of MOCK_POLICY_RULES) {
+      if (decided !== null) {
+        verdicts.push({ rule_index: rule.index, verdict: "not_reached" });
+        continue;
+      }
+      const matches =
+        rule.threat_class === triple.threatClass &&
+        rank >= MOCK_SEVERITY_ORDER.indexOf(rule.min_severity) &&
+        rank <= MOCK_SEVERITY_ORDER.indexOf(rule.max_severity) &&
+        (rule.actions.length === 0 || rule.actions.includes(triple.action));
+      if (matches) {
+        decided = rule;
+        verdicts.push({ rule_index: rule.index, verdict: "decides" });
+      } else {
+        verdicts.push({ rule_index: rule.index, verdict: "not_matched" });
+      }
+    }
+    const destructive = MOCK_DESTRUCTIVE_KINDS.has(triple.action);
+    const atGate = rank >= MOCK_SEVERITY_ORDER.indexOf(humanGate);
+    evaluation = {
+      triple: {
+        threat_class: triple.threatClass,
+        severity: triple.severity,
+        action: triple.action,
+      },
+      verdicts,
+      fallthrough: decided
+        ? null
+        : destructive && atGate
+          ? {
+              gate: "static",
+              verdict: "require_human",
+              reason: "authorized but held for human approval",
+            }
+          : {
+              gate: "static",
+              verdict: "allow",
+              reason: "static.default_allow",
+            },
+      outranks_human_gate:
+        decided !== null &&
+        decided.decision === "allow" &&
+        destructive &&
+        atGate,
+      warning: "request_carried_selectors",
+    };
+  }
+  return {
+    schema_version: 1,
+    human_gate_severity: humanGate,
+    lease_ttl_ms: 60_000,
+    max_actions_per_scope_per_minute: 5,
+    source: { path: "rulesets/default.yaml", attested: true },
+    rules: MOCK_POLICY_RULES,
+    evaluation,
+  };
 }

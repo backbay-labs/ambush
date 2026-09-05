@@ -189,6 +189,7 @@ export default defineConfig({
         "**/perch-handoff.spec.ts",
         "**/perch-omnibox.spec.ts",
         "**/perch-settings.spec.ts",
+        "**/perch-policy.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

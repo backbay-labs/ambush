@@ -3,6 +3,7 @@
 //! non-GET surface (INV-01). Neither takes a path from the renderer: the route
 //! is a `&'static str` constant in this file.
 
+use serde::Deserialize;
 use tauri::State;
 
 use crate::app_state::AppState;
@@ -12,6 +13,7 @@ use crate::perch::daemon_client::{
 };
 
 const ROUTE_REVIEWED: &str = "/v1/operator/findings/reviewed";
+const ROUTE_POLICY: &str = "/v1/operator/policy";
 const ROUTE_LIST_HOLDS: &str = "/v1/response/holds";
 const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
 
@@ -223,6 +225,63 @@ pub async fn perch_evasion_coverage(
     .await?;
     if r.status != 200 {
         return Err(daemon_response_error(&r));
+    }
+    Ok(r.body)
+}
+
+/// The triple `/policy` evaluates. All three or none; the daemon refuses a
+/// partial one with a 400 and this command forwards that word.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyTripleInput {
+    pub threat_class: String,
+    pub severity: String,
+    pub action: String,
+}
+
+/// `GET /v1/operator/policy[?threat_class=&severity=&action=]` — the rules in
+/// file order, and the daemon's own evaluation of the triple when one is given.
+#[tauri::command]
+pub async fn perch_policy(
+    triple: Option<PolicyTripleInput>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let mut path = ROUTE_POLICY.to_string();
+    if let Some(triple) = triple {
+        for (name, value) in [
+            ("threat_class", &triple.threat_class),
+            ("severity", &triple.severity),
+            ("action", &triple.action),
+        ] {
+            if value.is_empty()
+                || !value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                return Err(format!(
+                    "policy triple field `{name}` must be a slug, got {value:?}"
+                ));
+            }
+        }
+        path.push_str(&format!(
+            "?threat_class={}&severity={}&action={}",
+            triple.threat_class, triple.severity, triple.action
+        ));
+    }
+    let r = perch_daemon_get(
+        &state,
+        &DaemonRoute {
+            template: ROUTE_POLICY,
+            path,
+        },
+    )
+    .await?;
+    if r.status != 200 {
+        return Err(format!(
+            "daemon answered {}: {}",
+            r.status,
+            r.body["message"].as_str().unwrap_or("")
+        ));
     }
     Ok(r.body)
 }

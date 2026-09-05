@@ -1,7 +1,15 @@
+import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 
 import { STANDARD_THREAT_CLASSES } from "@/features/perch/wire/types";
+import { perchKeys } from "@/shared/api/perchKeys";
+import {
+  type PerchPolicyResponse,
+  type PerchPolicyRuleVerdict,
+  perchPolicy,
+} from "@/shared/api/tauriPerch";
 
+import { fill, POLICY } from "../lib/policyCopy";
 import {
   evaluateTripleLocally,
   SEVERITY_ORDER,
@@ -10,19 +18,32 @@ import {
 } from "../lib/policyEvaluation";
 
 export type PolicyScreenProps = {
-  /** The rules the daemon serves, in the order it evaluates them. */
-  rules: PolicyRule[];
+  /** The daemon's policy as `/v1/operator/policy` serves it; null until it has. */
+  policy: PerchPolicyResponse | null;
 };
 
-const VERDICT_LABEL = {
-  decides: "decides",
-  not_matched: "not matched",
-  not_reached: "not reached",
-} as const;
+/** The fifteen `ResponseAction` kinds, as the daemon spells them. */
+const ACTION_KINDS = [
+  "block_egress",
+  "isolate_host",
+  "revoke_credential",
+  "sinkhole_dns",
+  "terminate_user_session",
+  "trigger_edr_scan",
+  "inject_firewall_rule",
+  "quarantine_file",
+  "kill_process",
+  "suspend_process",
+  "disable_user_account",
+  "force_password_reset",
+  "remove_scheduled_task",
+  "deploy_decoy",
+  "escalate",
+] as const;
 
 /**
  * S7, `/policy`. Which rule decides a given triple, and what happened to the
- * rest.
+ * rest — as the DAEMON evaluates it.
  *
  * The screen asks for a triple before it says anything, because shadowing is a
  * property of a triple and not of a rule. A rule that decides
@@ -31,18 +52,41 @@ const VERDICT_LABEL = {
  * would assert something true of no particular decision an operator will ever
  * make.
  *
- * `not matched` and `not reached` are kept apart for the same reason: the
- * first rule is a statement about this rule, the second is a statement about
- * an earlier one. Collapsing them into "inactive" loses which rule to edit.
+ * Two evaluations are on the screen. The console's own mirror renders at
+ * once, over the rules the daemon served, so a triple change is never a blank
+ * row; the daemon's evaluation replaces it when it arrives and is the one the
+ * verdict words and the outranks sentence are taken from. When the daemon does
+ * not answer, the mirror stays and says it is a reading, not a decision.
  */
-export function PolicyScreen({ rules }: PolicyScreenProps): React.ReactElement {
+export function PolicyScreen({
+  policy,
+}: PolicyScreenProps): React.ReactElement {
   const [threatClass, setThreatClass] = React.useState<string>(
-    STANDARD_THREAT_CLASSES[0],
+    "command_and_control",
   );
-  const [severity, setSeverity] = React.useState<PolicySeverity>("HIGH");
-  const [action, setAction] = React.useState("isolate_host");
-
-  const evaluation = React.useMemo(
+  const [severity, setSeverity] = React.useState<PolicySeverity>("CRITICAL");
+  const [action, setAction] = React.useState<string>("block_egress");
+  const rules: PolicyRule[] = React.useMemo(
+    () =>
+      (policy?.rules ?? []).map((rule) => ({
+        index: rule.index,
+        name: rule.name,
+        decision: rule.decision,
+        threat_class: rule.threat_class,
+        actions: [...rule.actions],
+        min_severity: rule.min_severity as PolicySeverity,
+        max_severity: rule.max_severity as PolicySeverity,
+      })),
+    [policy],
+  );
+  const tripleKey = `${threatClass}/${severity}/${action}`;
+  const daemon = useQuery<PerchPolicyResponse>({
+    queryKey: perchKeys.policy(tripleKey),
+    queryFn: () => perchPolicy({ threatClass, severity, action }),
+    enabled: policy !== null,
+    staleTime: 60_000,
+  });
+  const local = React.useMemo(
     () =>
       evaluateTripleLocally(rules, {
         threat_class: threatClass,
@@ -51,17 +95,57 @@ export function PolicyScreen({ rules }: PolicyScreenProps): React.ReactElement {
       }),
     [rules, threatClass, severity, action],
   );
-  const decider = evaluation.find((row) => row.verdict === "decides") ?? null;
+  const evaluation = daemon.data?.evaluation ?? null;
+  const verdictOf = (index: number): PerchPolicyRuleVerdict | null =>
+    evaluation
+      ? (evaluation.verdicts.find((v) => v.rule_index === index)?.verdict ??
+        null)
+      : (local.find((row) => row.index === index)?.verdict ?? null);
+  const deciderIndex = rules.find(
+    (rule) => verdictOf(rule.index) === "decides",
+  )?.index;
+  const decider =
+    deciderIndex === undefined
+      ? null
+      : (rules.find((rule) => rule.index === deciderIndex) ?? null);
+  const humanGateSeverity = policy?.human_gate_severity ?? "?";
 
   return (
     <section data-testid="perch-policy" className="p-4">
-      <h2 className="text-base font-medium">Policy</h2>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Shadowing is a property of a triple, not of a rule. Name the triple and
-        this shows which rule decides it.
+      <h2 className="text-base font-medium">{POLICY.title}</h2>
+      {policy === null ? (
+        <p data-testid="perch-policy-empty" className="mt-1 text-xs">
+          {POLICY.noPolicy}
+        </p>
+      ) : (
+        <>
+          <p
+            data-testid="perch-policy-source"
+            className="mt-1 text-xs text-muted-foreground"
+          >
+            {fill(
+              policy.source.attested ? POLICY.readOnly : POLICY.unattested,
+              {
+                path: policy.source.path,
+              },
+            )}
+          </p>
+          <p
+            data-testid="perch-policy-header"
+            className="mt-1 font-mono text-2xs text-muted-foreground"
+          >
+            {fill(POLICY.header, {
+              humanGateSeverity: policy.human_gate_severity,
+              leaseTtlMs: policy.lease_ttl_ms,
+              scopeLimit: policy.max_actions_per_scope_per_minute,
+            })}
+          </p>
+        </>
+      )}
+      <p className="mt-3 text-2xs tracking-wide text-muted-foreground">
+        {POLICY.evaluate}
       </p>
-
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-1 flex flex-wrap gap-2">
         <label className="text-xs">
           <span className="mr-1 text-muted-foreground">threat class</span>
           <select
@@ -96,39 +180,79 @@ export function PolicyScreen({ rules }: PolicyScreenProps): React.ReactElement {
         </label>
         <label className="text-xs">
           <span className="mr-1 text-muted-foreground">action</span>
-          <input
+          <select
             data-testid="perch-policy-action"
             className="rounded border border-border px-1 py-0.5 text-xs"
             value={action}
             onChange={(event) => setAction(event.target.value)}
-          />
+          >
+            {ACTION_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
-
-      <p data-testid="perch-policy-decider" className="mt-3 text-sm">
+      {policy !== null && rules.length === 0 ? (
+        <p data-testid="perch-policy-no-rules" className="mt-3 text-sm">
+          <span className="font-medium">{POLICY.noRules.title}</span>{" "}
+          {fill(POLICY.noRules.body, { humanGateSeverity })}
+        </p>
+      ) : null}
+      <p
+        data-testid="perch-policy-decider"
+        data-source={evaluation ? "daemon" : "console"}
+        className="mt-3 text-sm"
+      >
         {decider
-          ? `Rule ${decider.index} (${decider.name}) decides this triple.`
-          : "No rule matches this triple. The daemon's default applies, and this screen does not know what that is."}
+          ? fill(POLICY.decider, { index: decider.index, name: decider.name })
+          : evaluation?.fallthrough
+            ? fill(POLICY.fallthrough, {
+                verdict: evaluation.fallthrough.verdict,
+                reason: evaluation.fallthrough.reason,
+                humanGateSeverity,
+              })
+            : evaluation && evaluation.verdicts.length === 0
+              ? fill(POLICY.unknownAction, { action })
+              : "No rule matches this triple; the daemon's own answer follows when it arrives."}
       </p>
-
+      {evaluation?.outranks_human_gate ? (
+        <p
+          data-testid="perch-policy-outranks"
+          className="mt-2 rounded border border-border p-2 text-sm"
+        >
+          {fill(POLICY.outranks, { action, humanGateSeverity, severity })}
+        </p>
+      ) : null}
       <ol className="mt-2 space-y-1">
-        {evaluation.map((row) => (
-          <li
-            key={row.index}
-            data-testid={`perch-policy-rule-${row.index}`}
-            data-verdict={row.verdict}
-            className="text-xs"
-          >
-            <span className="font-mono">{`${row.index}. ${row.name}`}</span>
-            {" · "}
-            {VERDICT_LABEL[row.verdict]}
-          </li>
-        ))}
+        {rules.map((rule) => {
+          const verdict = verdictOf(rule.index);
+          return (
+            <li
+              key={rule.index}
+              data-testid={`perch-policy-rule-${rule.index}`}
+              data-verdict={verdict ?? "unknown"}
+              className="text-xs"
+            >
+              <span className="font-mono">{`${rule.index}. ${rule.name}`}</span>
+              {" · "}
+              <code>{rule.decision}</code>
+              {" · "}
+              {verdict ? POLICY.verdicts[verdict] : "—"}
+            </li>
+          );
+        })}
       </ol>
-
-      <p className="mt-3 text-xs text-muted-foreground">
-        This evaluation is the console's own, over the rules the daemon served.
-        It is a reading of the policy, not the decision the daemon will make.
+      <p
+        data-testid="perch-policy-standing"
+        className="mt-3 text-xs text-muted-foreground"
+      >
+        {daemon.isPending && policy !== null
+          ? POLICY.daemonPending
+          : daemon.isError
+            ? POLICY.daemonUnavailable
+            : POLICY.requestCarried}
       </p>
     </section>
   );
