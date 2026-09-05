@@ -771,6 +771,8 @@ export type PerchDecideOutcome = {
   readonly winning_decision: PerchHoldVerdict | "unknown" | null;
   /** True when this call replayed an existing record rather than deciding. */
   readonly replayed: boolean;
+  /** Whether the daemon actually ran the action. Distinct from `outcome`. */
+  readonly dispatched: boolean;
 };
 
 /**
@@ -782,12 +784,21 @@ export type PerchDecideOutcome = {
 export function perchDecideHold(input: {
   holdId: string;
   decision: PerchHoldVerdict;
-  /** Verbatim from `perchRecordVerdict`. */
+  /** Verbatim from `perchRecordHoldVerdict`. */
   nostrIntentEventId: string;
+  /** Verbatim from `perchRecordHoldVerdict`; it is inside the signature. */
+  decidedAtMs: number;
+  /** Verbatim from `perchRecordHoldVerdict`. Leg 2 forwards it, never re-signs. */
+  signature: PerchDetachedSignature;
   rationale: string | null;
   armedAtMs: number | null;
 }) {
-  return invokeTauri<PerchDecideOutcome>("perch_decide_hold", input);
+  // `{ input }`, not `input`: the Rust command binds ONE parameter named
+  // `input`, like `perch_record_verdict`. Sent flat, Tauri answers "missing
+  // required key input" and the decision never reaches the daemon. Found by
+  // reading the Rust signature against this wrapper while preparing the live
+  // walking skeleton; the mock now refuses flat arguments so a test finds it.
+  return invokeTauri<PerchDecideOutcome>("perch_decide_hold", { input });
 }
 
 /**
@@ -833,5 +844,7 @@ export function perchRecordHoldVerdict(input: {
     readonly signature: PerchDetachedSignature;
     /** Read from the daemon's own hold record, not from the input. */
     readonly hold_id: string;
+    /** The case channel the card was published into. */
+    readonly case_channel: string;
   }>("perch_record_hold_verdict", { input });
 }

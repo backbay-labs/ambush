@@ -213,8 +213,9 @@ pub enum DecideOutcomeKind {
 }
 
 /// What leg 2 tells the renderer.
+// NO `rename_all`, for the reason on `RecordHoldVerdictOutput`: the renderer
+// reads `receipt_id`, `decided_at_ms`, `superseded_by` and `winning_decision`.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DecideOutcome {
     /// Which of the six outcomes this was.
     pub outcome: DecideOutcomeKind,
@@ -230,6 +231,10 @@ pub struct DecideOutcome {
     /// Populated ONLY on `Superseded`, and only from a RE-READ of the hold
     /// (W3-17). Never synthesised from the 409 body, which carries no winner.
     pub superseded_by: Option<String>,
+    /// The decision that won when this one was superseded — `grant` or
+    /// `refuse` — so the row can say what happened rather than only that
+    /// something did. `None` unless superseded.
+    pub winning_decision: Option<String>,
     /// Whether the daemon replayed a decision it already held.
     pub replayed: bool,
     /// Whether the runtime attempted the response at all. Carried from the
@@ -284,6 +289,7 @@ fn map_success(body: &serde_json::Value) -> DecideOutcome {
         receipt_id: decision["receipt_id"].as_str().map(str::to_string),
         decided_at_ms: decision["decided_at_ms"].as_i64().unwrap_or_default(),
         superseded_by: None,
+        winning_decision: None,
         replayed: body["replayed"].as_bool().unwrap_or(false),
         dispatched: decision["dispatched"].as_bool().unwrap_or(false),
     }
@@ -322,6 +328,9 @@ fn map_conflict(error: &str, own_intent: &str, re_read: &serde_json::Value) -> D
             .as_i64()
             .unwrap_or_default(),
         superseded_by: superseded.then(|| winner.to_string()),
+        winning_decision: superseded
+            .then(|| hold["decision"]["decision"].as_str().map(str::to_string))
+            .flatten(),
         replayed: false,
         dispatched: false,
     }
@@ -374,6 +383,7 @@ where
                     receipt_id: None,
                     decided_at_ms: input.decided_at_ms,
                     superseded_by: None,
+                    winning_decision: None,
                     replayed: false,
                     dispatched: false,
                 });

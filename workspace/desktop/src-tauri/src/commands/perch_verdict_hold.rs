@@ -62,8 +62,13 @@ pub struct RecordHoldVerdictInput {
 }
 
 /// What leg 2 needs from leg 1, and nothing else.
+// NO `rename_all`: the renderer reads this snake_case, exactly as it reads the
+// finding path's `RecordVerdictOutput`. A camelCase rename here survived every
+// hold E2E because the mock spoke snake_case while this struct emitted
+// `decidedAtMs` — `leg1.decided_at_ms` would have been `undefined` in a real
+// build. Found by reading this signature against the wrapper while preparing
+// the live walking skeleton, not by any test.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RecordHoldVerdictOutput {
     /// The published card's event id. Leg 2's idempotency key.
     pub nostr_intent_event_id: String,

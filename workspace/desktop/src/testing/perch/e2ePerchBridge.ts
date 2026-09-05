@@ -592,8 +592,28 @@ function mockEventId(seed: string): string {
  * The leg-2 answer, optionally delayed so a spec can observe
  * `sending -> recorded -> acknowledged` as three states rather than one.
  */
-async function decideAfterDelay(): Promise<unknown> {
+async function decideAfterDelay(payload: unknown): Promise<unknown> {
   const s = current();
+  // The Rust command binds ONE parameter named `input`. A renderer that sends
+  // the fields flat gets "missing required key input" from Tauri and the
+  // decision never reaches the daemon — and a mock that answered anyway is
+  // how that defect stayed hidden through forty-five E2E specs until the
+  // Rust signature was read against the wrapper.
+  const input = (payload as { input?: Record<string, unknown> } | null)?.input;
+  if (!input) {
+    throw new Error("perch_decide_hold expects { input }; arguments were flat");
+  }
+  for (const key of [
+    "holdId",
+    "decision",
+    "nostrIntentEventId",
+    "decidedAtMs",
+    "signature",
+  ]) {
+    if (input[key] === undefined) {
+      throw new Error(`perch_decide_hold input is missing ${key}`);
+    }
+  }
   if (s.decideDelayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, s.decideDelayMs));
   }
@@ -631,6 +651,7 @@ function recordHoldVerdict(payload: unknown): unknown {
       signature_hex: mockEventId(`sig:${nostrIntentEventId}`).repeat(2),
     },
     hold_id: holdId,
+    case_channel: String(input?.caseChannel ?? ""),
   };
 }
 
@@ -873,7 +894,7 @@ export function handlePerchMockCommand(
       return recordHoldVerdict(payload);
     case "perch_decide_hold":
       s.log.push(command);
-      return decideAfterDelay();
+      return decideAfterDelay(payload);
     case "perch_publish_verdict_update":
       s.log.push(command);
       return publishVerdictUpdate(payload);

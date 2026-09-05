@@ -6,6 +6,7 @@ import {
   perchDecideHold,
   perchPublishVerdictUpdate,
   perchRecordHoldVerdict,
+  type PerchDetachedSignature,
   type PerchHoldVerdict,
 } from "@/shared/api/tauriPerch";
 import { useRelayConnection } from "@/shared/api/useRelayConnection";
@@ -68,6 +69,8 @@ export function useVerdictWrite(holdId: string): VerdictWriteResult {
     async (
       decision: PerchHoldVerdict,
       nostrIntentEventId: string,
+      decidedAtMs: number,
+      signature: PerchDetachedSignature,
       rationale: string | null,
       armedAtMs: number | null,
     ) => {
@@ -76,6 +79,8 @@ export function useVerdictWrite(holdId: string): VerdictWriteResult {
           holdId,
           decision,
           nostrIntentEventId,
+          decidedAtMs,
+          signature,
           rationale,
           armedAtMs,
         });
@@ -105,6 +110,8 @@ export function useVerdictWrite(holdId: string): VerdictWriteResult {
             holdId,
             decision,
             nostrIntentEventId,
+            decidedAtMs,
+            signature,
             rationale,
             armedAtMs,
             firstAttemptAtMs: Date.now(),
@@ -140,6 +147,8 @@ export function useVerdictWrite(holdId: string): VerdictWriteResult {
       await sendLeg2(
         decision,
         leg1.nostr_intent_event_id,
+        leg1.decided_at_ms,
+        leg1.signature,
         rationale,
         armedAtMs,
       );
@@ -161,6 +170,8 @@ export function useVerdictWrite(holdId: string): VerdictWriteResult {
       void sendLeg2(
         entry.decision,
         entry.nostrIntentEventId,
+        entry.decidedAtMs,
+        entry.signature,
         entry.rationale,
         entry.armedAtMs,
       );
