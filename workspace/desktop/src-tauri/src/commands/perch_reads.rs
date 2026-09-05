@@ -23,6 +23,9 @@ const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
 const HOLD_PAGE: usize = 200;
 const ROUTE_LIST_CONTAINMENTS: &str = "/v1/operator/containment/leases";
 const ROUTE_EVASION_COVERAGE: &str = "/v2/api/evasion/coverage";
+/// The tuning report an operator can read lives on the daemon's `/v2/api`,
+/// not on `swarmctl serve`'s `/v1/operator/status`.
+const ROUTE_OPERATOR_STATUS: &str = "/v2/api/runtime/status";
 
 /// The daemon's honest review window: findings it has already ruled on, so the
 /// console can show what its own verdicts did.
@@ -284,4 +287,28 @@ pub async fn perch_policy(
         ));
     }
     Ok(r.body)
+}
+
+/// `GET /v2/api/runtime/status` — the daemon's own status page, of which the
+/// tuning bench reads `alert_tuning` and `false_positive_tracking`. The route
+/// answers a page; this returns its first item, which is the runtime.
+#[tauri::command]
+pub async fn perch_operator_status(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let r = perch_daemon_get(
+        &state,
+        &DaemonRoute {
+            template: ROUTE_OPERATOR_STATUS,
+            path: ROUTE_OPERATOR_STATUS.to_string(),
+        },
+    )
+    .await?;
+    if r.status != 200 {
+        return Err(daemon_response_error(&r));
+    }
+    Ok(match r.body.get("data").and_then(|d| d.as_array()) {
+        Some(items) if !items.is_empty() => items[0].clone(),
+        _ => r.body,
+    })
 }

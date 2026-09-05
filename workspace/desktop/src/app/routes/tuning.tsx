@@ -1,6 +1,12 @@
-import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import * as React from "react";
 
+import { perchKeys } from "@/shared/api/perchKeys";
+import {
+  type PerchOperatorStatus,
+  perchOperatorStatus,
+} from "@/shared/api/tauriPerch";
 import {
   useFeatureEnabled,
   usePreviewFeatureWarning,
@@ -12,13 +18,6 @@ const TuningScreen = React.lazy(async () => {
   return { default: module.TuningScreen };
 });
 
-/** Monday 00:00 UTC of the current week, which is what "this week" means here. */
-function weekStartMs(nowMs: number): number {
-  const d = new Date(nowMs);
-  const day = (d.getUTCDay() + 6) % 7;
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day);
-}
-
 export const Route = createFileRoute("/tuning")({
   component: TuningRouteComponent,
 });
@@ -26,16 +25,19 @@ export const Route = createFileRoute("/tuning")({
 function TuningRouteComponent() {
   const enabled = useFeatureEnabled("perch");
   usePreviewFeatureWarning("perch");
+  // On demand only: the report changes when verdicts do, not by the second.
+  const status = useQuery<PerchOperatorStatus>({
+    queryKey: perchKeys.operatorStatus(),
+    queryFn: () => perchOperatorStatus(),
+    enabled,
+    staleTime: 60_000,
+  });
   if (!enabled) {
     return null;
   }
   return (
     <React.Suspense fallback={<ViewLoadingFallback kind="containments" />}>
-      <TuningScreen
-        recommendations={[]}
-        incidents={[]}
-        weekStartMs={weekStartMs(Date.now())}
-      />
+      <TuningScreen status={status.data ?? null} />
     </React.Suspense>
   );
 }

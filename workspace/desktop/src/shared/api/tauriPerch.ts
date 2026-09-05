@@ -167,7 +167,48 @@ export const PERCH_READ_COMMANDS = [
   "perch_evasion_coverage",
   "perch_operator_identity",
   "perch_policy",
+  "perch_operator_status",
 ] as const;
+
+/** One recommendation the daemon computed, every field it carries. */
+export type PerchAlertTuningRecommendation = {
+  readonly kind:
+    | "host_exclusion_review"
+    | "detector_threshold_review"
+    | "detector_rule_review";
+  readonly priority: "high" | "medium" | "low";
+  readonly summary: string;
+  readonly next_step: string;
+  readonly strategy_id?: string | null;
+  readonly host_id?: string | null;
+  readonly reviewed_findings: number;
+  readonly false_positive_findings: number;
+  readonly false_positive_rate: number;
+  readonly supporting_signals: readonly string[];
+};
+
+export type PerchAlertTuningReport = {
+  readonly reviewed_findings: number;
+  readonly false_positive_findings: number;
+  readonly recommendation_count: number;
+  readonly recommendations: readonly PerchAlertTuningRecommendation[];
+};
+
+/** The daemon's runtime status, as far as the tuning bench reads it. */
+export type PerchOperatorStatus = {
+  readonly captured_at_ms?: number;
+  readonly alert_tuning?: PerchAlertTuningReport | null;
+  readonly false_positive_tracking?: Record<string, unknown> | null;
+};
+
+/**
+ * `GET /v2/api/runtime/status`, first item. On demand only: the report changes
+ * when verdicts do, and polling it would ask the same question between the
+ * same two answers.
+ */
+export function perchOperatorStatus() {
+  return invokeTauri<PerchOperatorStatus>("perch_operator_status");
+}
 
 /** The triple `/policy` evaluates: all three, or the call sends none. */
 export type PerchPolicyTriple = {

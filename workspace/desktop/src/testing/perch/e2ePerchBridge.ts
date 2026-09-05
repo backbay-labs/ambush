@@ -158,6 +158,8 @@ export type PerchMockFixture = {
   containments?: readonly Record<string, unknown>[];
   /** The coverage snapshot `perch_evasion_coverage` reports. */
   evasionCoverage?: Record<string, unknown> | null;
+  /** `GET /v2/api/runtime/status`'s first item; null answers with the default. */
+  operatorStatus?: Record<string, unknown> | null;
   /** The body `perch_release_containment` answers with. */
   release?: Record<string, unknown> | null;
   /** The leg-2 outcome `perch_decide_hold` answers with. */
@@ -235,6 +237,7 @@ type MockState = {
   daemonError: string | null;
   containments: Record<string, unknown>[];
   evasionCoverage: Record<string, unknown> | null;
+  operatorStatus: Record<string, unknown> | null;
   release: Record<string, unknown> | null;
   decide: MockDecideOutcome | null;
   decideDelayMs: number;
@@ -284,6 +287,7 @@ function defaults(): MockState {
     daemonError: null,
     containments: [],
     evasionCoverage: null,
+    operatorStatus: null,
     release: null,
     decide: null,
     decideDelayMs: 0,
@@ -372,6 +376,9 @@ function applyFixture(target: MockState, fixture: PerchMockFixture): void {
   }
   if (fixture.evasionCoverage !== undefined) {
     target.evasionCoverage = fixture.evasionCoverage;
+  }
+  if (fixture.operatorStatus !== undefined) {
+    target.operatorStatus = fixture.operatorStatus;
   }
   if (fixture.release !== undefined) target.release = fixture.release;
   if (fixture.decide !== undefined) target.decide = fixture.decide;
@@ -520,6 +527,7 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_sidecar_status",
   "perch_operator_identity",
   "perch_policy",
+  "perch_operator_status",
 ]);
 
 /**
@@ -1016,6 +1024,9 @@ export function handlePerchMockCommand(
         ?.triple;
       return mockPolicyResponse(triple ?? null);
     }
+    case "perch_operator_status":
+      s.log.push(command);
+      return s.operatorStatus ?? MOCK_OPERATOR_STATUS;
     case "perch_operator_identity":
       s.log.push(command);
       return {
@@ -1218,3 +1229,42 @@ function mockPolicyResponse(triple: PerchPolicyTriple | null): unknown {
     evaluation,
   };
 }
+
+// ── /tuning: the daemon's status, as far as the bench reads it ──────────────
+
+/**
+ * One detector-rule review for the fixture's own detector — the report a
+ * daemon computes after three verdicts, two of them Dismiss.
+ */
+const MOCK_OPERATOR_STATUS = {
+  captured_at_ms: 1_773_100_000_000,
+  alert_tuning: {
+    reviewed_findings: 3,
+    false_positive_findings: 2,
+    recommendation_count: 1,
+    recommendations: [
+      {
+        kind: "detector_rule_review",
+        priority: "high",
+        summary:
+          "suspicious_process_tree is dismissed more often than it is confirmed on host-ops-1.",
+        next_step:
+          "Review the rule's parent-process allowlist against the two dismissed findings before changing its threshold.",
+        strategy_id: "suspicious_process_tree",
+        host_id: "host-ops-1",
+        reviewed_findings: 3,
+        false_positive_findings: 2,
+        false_positive_rate: 0.67,
+        supporting_signals: [
+          "2 of 3 verdicts on host-ops-1 were Dismiss (backup job)",
+        ],
+      },
+    ],
+  },
+  false_positive_tracking: {
+    reviewed_findings: 3,
+    false_positive_findings: 2,
+    false_positive_rate: 0.67,
+    latest_feedback_at_ms: 1_773_099_000_000,
+  },
+};

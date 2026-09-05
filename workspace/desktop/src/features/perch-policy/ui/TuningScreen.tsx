@@ -1,92 +1,73 @@
+import { Link } from "@tanstack/react-router";
 import type * as React from "react";
 
-import { DerivedMarker } from "@/shared/viz/markers";
+import type { PerchOperatorStatus } from "@/shared/api/tauriPerch";
 
-import {
-  deriveTuningProvenance,
-  type TuningIncident,
-  type TuningRecommendation,
-} from "../lib/tuningProvenance";
+import { fillTuning, TUNING } from "../lib/tuningCopy";
+import { TuningRecommendationCard } from "./TuningRecommendationCard";
 
 export type TuningScreenProps = {
-  recommendations: TuningRecommendation[];
-  incidents: TuningIncident[];
-  weekStartMs: number;
+  /** The daemon's runtime status; null until it has answered. */
+  status: PerchOperatorStatus | null;
 };
-
-const ORIGIN_LABEL = {
-  "analyst-promoted": "promoted by an analyst",
-  "correlation-produced": "produced by correlation",
-  unresolved: "provenance unresolved",
-} as const;
 
 /**
  * S10, `/tuning`. What the daemon suggests changing, and on whose evidence.
  *
- * Every row states its provenance, because "the machine tuned itself" and "we
- * cannot tell who tuned this" lead to different decisions and a screen that
- * showed neither would get the second treated as the first.
- *
- * A recommendation with no verdicts behind it says so in words rather than
- * rendering 0%. A fraction of zero over zero is not "none of it is recent" —
- * it is "there is nothing to be recent", and under a recommendation to weaken
- * a detector those read very differently.
+ * Every card carries the daemon's own counts with their denominators. The
+ * one thing this surface does not say is how many of those verdicts are from
+ * this week: the status read carries counts, not verdict timestamps, and a
+ * fraction computed from nothing would be a measurement that never happened.
  */
 export function TuningScreen({
-  recommendations,
-  incidents,
-  weekStartMs,
+  status,
 }: TuningScreenProps): React.ReactElement {
+  const report = status?.alert_tuning ?? null;
   return (
-    <section data-testid="perch-tuning" className="p-4">
-      <h2 className="text-base font-medium">Tuning bench</h2>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Recommendations the daemon computed. Nothing here changes a detector;
-        applying one is a change to the ruleset, made outside this console.
-      </p>
-
-      {recommendations.length === 0 ? (
-        <p data-testid="perch-tuning-empty" className="mt-3 text-sm">
-          The daemon has recommended no changes. That is a statement about its
-          measurements, not about whether the detectors are well tuned.
+    <section data-testid="perch-tuning-screen" className="p-4">
+      <h2 className="text-base font-medium">{TUNING.title}</h2>
+      <p className="mt-1 text-xs text-muted-foreground">{TUNING.subtitle}</p>
+      {report === null ? (
+        <p data-testid="perch-tuning-no-status" className="mt-3 text-sm">
+          {TUNING.noStatus}
         </p>
+      ) : report.recommendations.length === 0 ? (
+        <div data-testid="perch-tuning-empty" className="mt-3 text-sm">
+          <p className="font-medium">{TUNING.none.title}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {fillTuning(TUNING.none.body, {
+              reviewed: report.reviewed_findings,
+              fp: report.false_positive_findings,
+            })}
+          </p>
+          <Link
+            to={TUNING.none.action.href}
+            data-testid="perch-tuning-open-watch"
+            className="mt-2 inline-block text-xs underline"
+          >
+            {TUNING.none.action.label}
+          </Link>
+        </div>
       ) : (
-        <ul className="mt-3 space-y-3">
-          {recommendations.map((recommendation) => {
-            const provenance = deriveTuningProvenance(
-              recommendation,
-              incidents,
-              weekStartMs,
-            );
-            return (
-              <li
-                key={`${recommendation.kind}-${recommendation.strategy_id}-${recommendation.host_id ?? "all-hosts"}`}
-                data-testid={`perch-tuning-${recommendation.strategy_id}`}
-                data-origin={provenance.origin}
-                className="rounded-md border border-border p-3"
-              >
-                <p className="text-sm">
-                  <span className="font-mono">
-                    {recommendation.strategy_id}
-                  </span>
-                  {" · "}
-                  {recommendation.kind}
-                  {" · "}
-                  {recommendation.host_id ?? "every host"}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {ORIGIN_LABEL[provenance.origin]}
-                  {" · "}
-                  {provenance.totalVerdicts === 0
-                    ? "no operator verdicts stand behind this recommendation"
-                    : `${provenance.thisWeekVerdicts} of ${provenance.totalVerdicts} operator verdicts are from this week`}{" "}
-                  <DerivedMarker />
-                </p>
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <p
+            data-testid="perch-tuning-report"
+            className="mt-3 font-mono text-xs text-muted-foreground"
+          >
+            {`${report.false_positive_findings} of ${report.reviewed_findings} reviewed findings were false positives · ${report.recommendation_count} recommendation${report.recommendation_count === 1 ? "" : "s"} · ${TUNING.cap}`}
+          </p>
+          <ul className="mt-3 space-y-3">
+            {report.recommendations.map((recommendation, index) => (
+              <TuningRecommendationCard
+                key={`${recommendation.kind}-${recommendation.strategy_id ?? ""}-${recommendation.host_id ?? ""}`}
+                index={index}
+                recommendation={recommendation}
+              />
+            ))}
+          </ul>
+        </>
       )}
+      <p className="mt-3 text-2xs text-muted-foreground">{TUNING.c9Restated}</p>
     </section>
   );
 }

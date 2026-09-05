@@ -192,6 +192,7 @@ export default defineConfig({
         "**/perch-policy.spec.ts",
         "**/perch-case-canvas.spec.ts",
         "**/perch-terminal.spec.ts",
+        "**/perch-tuning.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

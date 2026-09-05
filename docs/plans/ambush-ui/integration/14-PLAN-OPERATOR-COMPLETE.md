@@ -5581,7 +5581,7 @@ call). The `perch` preview flag stays off by default.
 | 11 lane screen | `laneLiveNumbers`, `laneCopy`, `LaneScreen`, `/lanes/$laneId`, the regime-B curve in the header slot, and `PerchNav` making all ten routes reachable | — |
 | 12 governance | `derivePerchGovernanceMode`, `governanceCopy`, `GovernanceStrip`, mounted above the outlet on every route including the Watchfloor's bare chrome | — |
 | 13 ledger and export | `buildLedgerQuery`, `planExportFiles`, `buildExportManifest`, `omniboxCommands`, `LedgerScreen`, `/ledger`, the tier allowlist gate, `perch_verify.rs`, `perch_export.rs`, the ⌘K omnibox | — |
-| 14 tuning | `tuningProvenance`, `TuningScreen`, `/tuning` | the daemon reads behind it |
+| 14 tuning | `tuningProvenance`, `TuningScreen`, `/tuning`; `perch_operator_status` (`GET /v2/api/runtime/status`), `TuningRecommendationCard` with every field and its denominators, the spec (2026-09-05) | the verdict provenance line — the daemon's reads carry counts, not verdict timestamps or per-incident measurements, so "N of M this week" is not computed and the card says so (**W3-43**) |
 | 15 gaps | `gapsCatalog`, `GapsScreen`, `/gaps` | — |
 | 16 policy | `policyEvaluation`, `PolicyScreen`, `/policy`; `GET /v1/operator/policy` with the daemon's own per-triple evaluation (`evaluate_triple` on the gate's predicate), the route in the contract, `perch_policy`, the mock evaluating the way the daemon does, and the Playwright spec (2026-09-05) | — |
 | 17 handoff | `reviewSession`, `watchClaim`, `shiftLedger`, `handoffPublish`, the frontier fold, `HandoffScreen`, `/handoff` | the daemon-side review session — see **W3-36**: the route cannot accept this body |
