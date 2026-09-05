@@ -129,6 +129,9 @@ which is why they came first.
   timestamps (W3-43). The policy read landed on
   2026-09-05 — `GET /v1/operator/policy` serves the rules in file order and evaluates a triple
   with the gate's own predicate, and the screen shows the daemon's verdicts, not its own guess.
+- **The partition stamp is rendered** (2026-09-05): the rollback presenter's attestation badge is qualified by
+  `partition_state_at_execution`, the hold card shows `partition_state_at_hold`, and `null` reads as the
+  state the console could not establish, never as healthy.
 - **The SVG asset rewrite landed on 2026-09-05** (forty hits across twelve diagrams, each render checked; `docs/assets` is `required` in the copy gate now). **The OpenAPI generator landed on 2026-09-05** (`generate_perch_openapi` renders the authoring YAML, refuses a document whose paths are not exactly `PERCH_ROUTER_PATHS`, and `tools/check-perch-openapi.sh` gates the JSON in CI). **The 72-hour soak** has no target in this
   tree, need a browser check, or are manual respectively.
 - **Task 22's sidecar was never bundled or run**: it needs an engine release build and a Tauri

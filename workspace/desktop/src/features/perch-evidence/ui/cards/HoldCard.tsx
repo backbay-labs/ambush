@@ -121,6 +121,14 @@ export function HoldCardPresenter({
               : "a capability lease at the decision instant"}
           </Row>
           <Row term="hold id">{hold.hold_id}</Row>
+          <Row term="partition at hold">
+            <span
+              data-testid={`perch-hold-partition-${hold.partition_state_at_hold ?? "unknown"}`}
+            >
+              {hold.partition_state_at_hold ??
+                "not established · the console could not establish the partition state"}
+            </span>
+          </Row>
           <Row term="expires">
             {new Date(hold.expires_at_ms).toLocaleString()}
           </Row>

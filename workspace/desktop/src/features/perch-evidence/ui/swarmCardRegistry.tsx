@@ -8,6 +8,7 @@ import type {
 } from "../lib/markerTypes";
 import { findingCardEntry } from "./cards/FindingCard";
 import { holdCardEntry } from "./cards/HoldCard";
+import { rollbackCardEntry } from "./cards/RollbackCard";
 import { verdictCardEntry } from "./cards/VerdictCard";
 import { NotYetRenderedCard } from "./NotYetRenderedCard";
 import {
@@ -46,7 +47,7 @@ export const SWARM_CARD_REGISTRY = {
   verdict: verdictCardEntry,
   receipt: notYetRendered("receipt", "evidence", ["case"], 2),
   lease: notYetRendered("lease", "evidence", ["case"], 2),
-  rollback: notYetRendered("rollback", "evidence", ["case"], 1),
+  rollback: rollbackCardEntry,
 } satisfies Record<SwarmMarkerKind, SwarmCardEntry>;
 
 /** Every parse outcome that renders a card or a refusal; never prose. */
