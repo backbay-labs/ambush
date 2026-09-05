@@ -5574,7 +5574,7 @@ call). The `perch` preview flag stays off by default.
 | 1–3 open decisions | filed in `00-DECISIONS.md` §3 with the fallback each plan builds against | the decisions themselves are the owner's |
 | 4 B4 deposits | `perch_deposit_slice`, the engine op, the mounted route (seven paths); `generate_perch_openapi` and the gated `docs/openapi/perch-operator-v1.json` (2026-09-05), with `tools/check-perch-openapi.sh` in CI | — |
 | 5 `ContainmentReleased` | the 13th runtime event, published from both release paths | — |
-| 6 partition stamp | both fields across five sides; parity 324 both ways | the provenance Playwright spec un-skips a file that does not exist |
+| 6 partition stamp | both fields across five sides; parity 324 both ways | the console's rendering of the stamp — the rollback presenter and the per-state UNATTESTED badges the plan's provenance spec would assert (`perch-attestation-badge-rollback-*`) — is not built, and neither `HoldCard` nor any card reads `partition_state_at_*`; the spec file the plan un-skips does not exist because the presenter it targets does not |
 | 7 B6 spine | wire primitives, chain-head store, signer, sealing on the publish path with the durable head advancing only on ACK, and the console's `perch_verify_envelope` | — |
 | 8–9 | wire and bridge halves as landed in The hold | — |
 | 10 containment board | `/leases`, the state model, the timer, the rollback list, the release confirmation dialog, the partition section and its Playwright spec | — |

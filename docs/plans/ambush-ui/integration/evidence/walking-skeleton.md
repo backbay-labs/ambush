@@ -61,7 +61,7 @@ command is "not allowed" with no capabilities — so `lib.rs` now exposes the on
 | Step | Evidence |
 |---|---|
 | operator identity | `perch_operator_identity` → `public_key_hex` = `c6e50105…8042`, the key `perch-hold-dev.yaml` pins as `verdict_public_key_hex`; the seed is the well-known dev material in the driver's own keyring blob |
-| grant, leg 1 | `perch_record_hold_verdict` on `hold_7665ad0e-a1c6-476f-815a-bb4ec094a7e9` → card `c0bd867343a023bcb401c2a29c018658130522c2f1a4ab3bdae0337742776715` in case `d29fadb1-a867-423c-995e-f7a0b9f007c3`, signed by the operator's nostr key `1fa40f70991b6b98…`, `decided_at_ms 1788619264945` |
+| grant, leg 1 (first run) | `perch_record_hold_verdict` on `hold_7665ad0e-a1c6-476f-815a-bb4ec094a7e9` → card `c0bd867343a023bcb401c2a29c018658130522c2f1a4ab3bdae0337742776715` in case `d29fadb1-a867-423c-995e-f7a0b9f007c3`, signed by the operator's nostr key `1fa40f70991b6b98…`, `decided_at_ms 1788619264945` |
 | grant, leg 2 | `perch_decide_hold` forwarding leg 1 verbatim → `outcome: dispatched`, `dispatched: true`, receipt `resp:hunt-evt-2-r19199:lease:hunt-evt-2-r19199:isolate_host:1788619264963`; the daemon's record: `state: executed`, `outcome: granted_executed`, `audit_trail_id: trail:hunt-evt-2-r19199:1788619264963`, `governance_clearance: receipt_signature_ok`, `nostr_intent_event_id` = leg 1's card |
 | the leases | daemon log 14:41:04.968 `containment leased`, `lease_id containment:hunt-evt-2-r19199:isolate_host:…`, `scope host-ops-1`, `expires_at_ms 1788620164963` — the runtime's containment TTL, **900,000 ms** after the decision instant `1788619264963`. The decision's *capability* lease (`policy.lease_ttl_ms: 60000`, W3-34's restated criterion 2) is in the daemon's decide response body; the console's `DecideOutcome` maps the receipt and not the lease, so this driver does not see it and does not claim it |
 | refuse, leg 1 + 2 | `hold_031eb921-bd9c-4f32-a481-3e63deba0898` → card `671b86bb5de369eac15ceead71c5d8b510e61dffde57563d0d66e315c92d6a0b` in case `877f238f-0075-4c93-9ac3-f1aadfb89388`; leg 2 `outcome: dispatched`, `dispatched: false`, no receipt; record `state: refused`, `outcome: refused_by_operator` |
@@ -79,6 +79,25 @@ and its rule intact. That is The hold's exit criterion 5 *outcome* reproduced li
 different rule than the plan's containment-refusal recipe, which still does not reproduce
 (W3-35). The driver now waits out the minute before a grant, because the executed path is the
 one it is there to walk; the late refusal remains a legitimate answer it accepts and records.
+
+## The conflict, and the signature that covers the rationale
+
+Run at 17:2x UTC on the restarted daemon, same driver. The console's own leg 1 refuses to publish
+an intent for a hold that is already decided ("this hold is `refused` and cannot be decided"), so
+the conflict the plan describes is a **race**: two consoles each publish an intent while the hold
+is open, the daemon takes the first leg 2, and the second draws the 409 the command turns into
+`superseded` by re-reading the hold.
+
+| Step | Evidence |
+|---|---|
+| two open intents | on `hold_44eed66a-456e-44b5-9771-cac326a482c8`: refuse `c38717583cffd82c57b55e7750f8bbe6427abfc6b9c70687b148114658c66144` and grant `34036408de2f479f6ccf4cca8c00d77156664d8212176386f2f81da1553eb0a8`, both published while the hold was `notified` |
+| the signature covers the rationale | a leg 2 for the first intent carrying a different rationale than the signed one: **`daemon answered 422: Invalid signature`** — the daemon verifies `rationale_sha256` inside the signed preimage, so a tampered rationale never reaches a decision |
+| the first leg 2 | `outcome: dispatched`, the hold `refused` |
+| the second leg 2 | `outcome: superseded`, `superseded_by` = the first intent, `winning_decision: refuse`, `dispatched: false` — the 409 body says only which kind of conflict happened; the command re-read the hold for what is true (W3-17) |
+| the supersession update | `perch_publish_verdict_update` against the losing console's own card → `7560cb4ef1b4e06c8cf1c25a3e4ef2b16163a0d3bc4c8dd1224fea8e7cd96dd2`, read back from the case channel under the operator's key, line 0 `<!-- swarm:verdict:v1 -->` |
+
+The same run also granted `hold_d5d8216a-e346-4b34-bdb1-9b1fd647efd9` to `executed` and refused `hold_b34a92dc-039c-41cd-b9a8-a87966eecd89`. The two-screen
+rendering of a superseded verdict remains the mock's.
 
 ## The finding path (First card, Task 24 steps 4 and 5)
 

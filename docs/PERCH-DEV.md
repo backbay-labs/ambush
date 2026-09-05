@@ -482,6 +482,12 @@ export PERCH_LIVE_INGEST_EVENTS=$PWD/.perch-dev/events-grant.json,$PWD/.perch-de
 cd workspace/desktop/src-tauri && cargo test --lib -- ipc_tests live_tests --include-ignored --nocapture --test-threads=1
 ```
 
+**After every rebuild of the test binary, delete the driver's keychain item first**
+(`security delete-generic-password -s ambush-desktop-dev.perch-live-driver`): macOS lets the
+binary that created an item read it, and a rebuilt binary is a different binary, so the
+first keyring read blocks on a permission dialog no headless run can answer — the test sits
+silent for as long as you let it. A fresh item is created without a prompt.
+
 The keyring service is read once per process, so it MUST be set in the shell, and it must take
 the `ambush-desktop-dev.<scope>` form; the driver seeds that blob with the daemon settings and
 the well-known dev operator seed, and asserts `perch_operator_identity` returns the key the

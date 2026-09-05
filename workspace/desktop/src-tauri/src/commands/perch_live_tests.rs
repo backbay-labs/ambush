@@ -90,6 +90,7 @@ fn webview(live: &Live) -> tauri::WebviewWindow<MockRuntime> {
             crate::commands::perch_reads::perch_get_hold,
             crate::commands::perch_verdict_hold::perch_record_hold_verdict,
             super::perch_decide_hold,
+            crate::commands::perch_verdict_hold::perch_publish_verdict_update,
             crate::commands::perch_reads::perch_admitted_issuers,
             crate::commands::perch_reads::perch_reviewed_findings,
             super::perch_mint_incident,
@@ -478,9 +479,125 @@ fn the_console_half_of_the_walking_skeleton_against_the_live_stack() {
             "leg2": leg2, "state_after": hold_now["state"], "decision_record": hold_now["decision"],
         }));
     }
+    // The conflict is a RACE, not a late second decision: the console's own
+    // leg 1 refuses to publish an intent for a hold that is already decided
+    // ("this hold is `refused` and cannot be decided"). So two consoles each
+    // publish an intent card while the hold is still open; the daemon takes
+    // the first leg 2 and answers the second with a 409, which the command
+    // turns into `superseded` — the winning intent and its word from a
+    // re-read — and the losing console publishes the supersession update
+    // against its own card.
+    let contested = next_notified_hold(&webview, &live, &decided);
+    let contested_id = contested["hold_id"].as_str().expect("hold id").to_string();
+    decided.push(contested_id.clone());
+    let first = call(
+        &webview,
+        "perch_record_hold_verdict",
+        serde_json::json!({"input": {"holdId": contested_id, "decision": "refuse", "rationale": "walking skeleton: the first console"}}),
+    )
+    .expect("the first console's leg 1 publishes");
+    let second = call(
+        &webview,
+        "perch_record_hold_verdict",
+        serde_json::json!({"input": {"holdId": contested_id, "decision": "grant", "rationale": "walking skeleton: the second console"}}),
+    )
+    .expect("the second console's leg 1 publishes while the hold is open");
+    // Leg 2 carries leg 1's rationale verbatim: the signature covers its
+    // hash, and the daemon answered `422 Invalid signature` to a leg 2 whose
+    // rationale differed — a tampered rationale never reaches a decision.
+    let leg2_for = |leg1: &serde_json::Value, decision: &str, rationale: &str| {
+        serde_json::json!({"input": {
+            "holdId": contested_id,
+            "decision": decision,
+            "nostrIntentEventId": leg1["nostr_intent_event_id"],
+            "decidedAtMs": leg1["decided_at_ms"],
+            "signature": leg1["signature"],
+            "rationale": rationale,
+            "armedAtMs": null
+        }})
+    };
+    let tampered = call(
+        &webview,
+        "perch_decide_hold",
+        leg2_for(&first, "refuse", "a different rationale"),
+    )
+    .expect_err("a leg 2 whose rationale is not the signed one is refused");
+    assert!(
+        tampered.contains("422"),
+        "the daemon refuses a tampered rationale: {tampered}"
+    );
+    let won = call(
+        &webview,
+        "perch_decide_hold",
+        leg2_for(&first, "refuse", "walking skeleton: the first console"),
+    )
+    .expect("the first leg 2 reaches the daemon");
+    assert_eq!(
+        won["outcome"], "dispatched",
+        "the first decision stands: {won}"
+    );
+    let lost = call(
+        &webview,
+        "perch_decide_hold",
+        leg2_for(&second, "grant", "walking skeleton: the second console"),
+    )
+    .expect("the second leg 2 is answered, not errored");
+    assert_eq!(
+        lost["outcome"], "superseded",
+        "a different decision after the first: {lost}"
+    );
+    let winner = first["nostr_intent_event_id"]
+        .as_str()
+        .expect("winner")
+        .to_string();
+    assert_eq!(
+        lost["superseded_by"], winner,
+        "the winner is the first intent: {lost}"
+    );
+    assert_eq!(
+        lost["winning_decision"], "refuse",
+        "the winning word is the first decision: {lost}"
+    );
+    assert_eq!(lost["dispatched"], false);
+    let update = call(
+        &webview,
+        "perch_publish_verdict_update",
+        serde_json::json!({"input": {
+            "holdId": contested_id,
+            "ownIntentEventId": second["nostr_intent_event_id"],
+            "supersededBy": winner,
+            "supersededAtMs": lost["decided_at_ms"]
+        }}),
+    )
+    .expect("the supersession update publishes");
+    let update_id = update["nostr_intent_event_id"]
+        .as_str()
+        .expect("update id")
+        .to_string();
+    let case_channel = first["case_channel"].as_str().expect("case");
+    let stored = relay_card(&live, case_channel, &operator, &update_id);
+    assert_eq!(
+        stored["content"].as_str().and_then(|c| c.lines().next()),
+        Some("<!-- swarm:verdict:v1 -->")
+    );
+    let conflict = serde_json::json!({
+        "hold_id": contested_id,
+        "first_intent_event_id": first["nostr_intent_event_id"],
+        "second_intent_event_id": second["nostr_intent_event_id"],
+        "tampered_rationale_refusal": tampered,
+        "first_leg2": won,
+        "second_leg2": lost,
+        "update_event_id": update_id,
+    });
+
     println!(
         "PERCH_LIVE_EVIDENCE {}",
-        serde_json::json!({"operator_nostr_pubkey": operator, "operator_ed25519": identity, "decisions": evidence})
+        serde_json::json!({
+            "operator_nostr_pubkey": operator,
+            "operator_ed25519": identity,
+            "decisions": evidence,
+            "conflict": conflict,
+        })
     );
 }
 
