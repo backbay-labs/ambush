@@ -160,6 +160,8 @@ export type PerchMockFixture = {
   evasionCoverage?: Record<string, unknown> | null;
   /** `GET /v2/api/runtime/status`'s first item; null answers with the default. */
   operatorStatus?: Record<string, unknown> | null;
+  /** Incidents `perch_get_incident` answers with, by id; a minted case's incident is synthesised when absent. */
+  incidents?: readonly Record<string, unknown>[];
   /** The body `perch_release_containment` answers with. */
   release?: Record<string, unknown> | null;
   /** The leg-2 outcome `perch_decide_hold` answers with. */
@@ -238,6 +240,7 @@ type MockState = {
   containments: Record<string, unknown>[];
   evasionCoverage: Record<string, unknown> | null;
   operatorStatus: Record<string, unknown> | null;
+  incidents: Record<string, unknown>[];
   release: Record<string, unknown> | null;
   decide: MockDecideOutcome | null;
   decideDelayMs: number;
@@ -288,6 +291,7 @@ function defaults(): MockState {
     containments: [],
     evasionCoverage: null,
     operatorStatus: null,
+    incidents: [],
     release: null,
     decide: null,
     decideDelayMs: 0,
@@ -379,6 +383,9 @@ function applyFixture(target: MockState, fixture: PerchMockFixture): void {
   }
   if (fixture.operatorStatus !== undefined) {
     target.operatorStatus = fixture.operatorStatus;
+  }
+  if (fixture.incidents !== undefined) {
+    target.incidents = fixture.incidents.map((incident) => ({ ...incident }));
   }
   if (fixture.release !== undefined) target.release = fixture.release;
   if (fixture.decide !== undefined) target.decide = fixture.decide;
@@ -528,6 +535,7 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_operator_identity",
   "perch_policy",
   "perch_operator_status",
+  "perch_get_incident",
 ]);
 
 /**
@@ -1024,6 +1032,15 @@ export function handlePerchMockCommand(
         ?.triple;
       return mockPolicyResponse(triple ?? null);
     }
+    case "perch_get_incident": {
+      s.log.push(command);
+      const incidentId = String(
+        (payload as { incidentId?: string } | null)?.incidentId ?? "",
+      );
+      const seeded = s.incidents.find((i) => i.incident_id === incidentId);
+      if (seeded) return seeded;
+      return mockIncidentFor(incidentId);
+    }
     case "perch_operator_status":
       s.log.push(command);
       return s.operatorStatus ?? MOCK_OPERATOR_STATUS;
@@ -1268,3 +1285,92 @@ const MOCK_OPERATOR_STATUS = {
     latest_feedback_at_ms: 1_773_099_000_000,
   },
 };
+
+// ── /cases: the correlated incident behind a minted case ────────────────────
+
+/**
+ * The incident the daemon would serve for a case this mock minted: the
+ * fixture finding as the seed, one more member the correlation joined on the
+ * host, and one it refused with its reason. Anything else is `null`, the
+ * daemon's 404.
+ */
+function mockIncidentFor(incidentId: string): unknown {
+  const prefix = "incident:perch-case:";
+  if (!incidentId.startsWith(prefix)) return null;
+  const caseId = incidentId.slice(prefix.length);
+  return {
+    schema_version: 1,
+    incident_id: incidentId,
+    case_id: caseId,
+    summary: "Office-spawned encoded PowerShell on host-ops-1",
+    created_at_ms: PERCH_NOW_MS - 60_000,
+    window_start_ms: PERCH_NOW_MS - 600_000,
+    window_end_ms: PERCH_NOW_MS - 60_000,
+    trigger_finding_id: PERCH_FINDING_ID,
+    trigger_strategy_id: "suspicious_process_tree",
+    threat_class: "execution",
+    severity: "HIGH",
+    confidence_score: 0.82,
+    graph_dimensions: ["temporal", "entity"],
+    correlation_keys: ["host:host-ops-1"],
+    included_members: [
+      {
+        finding_id: PERCH_FINDING_ID,
+        hunt_id: "hunt-evt-1",
+        investigation_id: "inv-1",
+        reason: "trigger finding; the escalation that promoted this case",
+        confidence_score: 0.9,
+        host_id: "host-ops-1",
+        strategy_id: "suspicious_process_tree",
+        shared_keys: ["host:host-ops-1"],
+        evidence_links: [],
+      },
+      {
+        finding_id: "network_connect:hunt-evt-2",
+        hunt_id: "hunt-evt-2",
+        investigation_id: "inv-2",
+        reason: "same host within the window; egress to the same domain",
+        confidence_score: 0.74,
+        host_id: "host-ops-1",
+        strategy_id: "suspicious_process_tree",
+        shared_keys: ["host:host-ops-1", "domain:evil.test"],
+        evidence_links: [
+          {
+            dimension: "temporal",
+            explanation: "41 s after the trigger",
+            shared_values: ["window"],
+            weight: 2,
+          },
+          {
+            dimension: "entity",
+            explanation: "shares host:host-ops-1",
+            shared_values: ["host:host-ops-1"],
+            weight: 3,
+          },
+        ],
+      },
+    ],
+    rejected_members: [
+      {
+        finding_id: "suspicious_scripting:hunt-evt-9",
+        hunt_id: "hunt-evt-9",
+        investigation_id: "inv-9",
+        reason:
+          "different host and no shared entity; temporal overlap alone is below the join threshold",
+        confidence_score: 0.31,
+        host_id: "host-ops-2",
+        strategy_id: "suspicious_process_tree",
+        shared_keys: ["host:host-ops-2"],
+        evidence_links: [
+          {
+            dimension: "temporal",
+            explanation: "inside the window, nothing else",
+            shared_values: ["window"],
+            weight: 1,
+          },
+        ],
+      },
+    ],
+    false_positive_measurements: [],
+  };
+}

@@ -127,3 +127,21 @@ test("the TTL is a wall clock, never a progress bar", async ({ page }) => {
     page.getByTestId("perch-case-canvas").locator("progress"),
   ).toHaveCount(0);
 });
+
+test("the kill-chain figure draws what the correlation joined and refused, reasons in full", async ({
+  page,
+}) => {
+  await openCase(page);
+  await openCanvasTab(page);
+  const figure = page.getByTestId("perch-kill-chain");
+  await expect(figure).toBeVisible();
+  // The joined members and the refused one, its reason untruncated in the table.
+  await page.getByTestId("perch-kill-chain-table-toggle").click();
+  const table = page.getByTestId("perch-kill-chain-table");
+  await expect(table).toContainText("network_connect:hunt-evt-2");
+  await expect(table).toContainText("suspicious_scripting:hunt-evt-9");
+  await expect(table).toContainText(
+    "different host and no shared entity; temporal overlap alone is below the join threshold",
+  );
+  await expect(page.getByTestId("perch-kill-chain-absent")).toHaveCount(0);
+});

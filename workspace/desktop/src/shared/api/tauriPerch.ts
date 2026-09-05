@@ -168,7 +168,66 @@ export const PERCH_READ_COMMANDS = [
   "perch_operator_identity",
   "perch_policy",
   "perch_operator_status",
+  "perch_get_incident",
 ] as const;
+
+export type PerchIncidentGraphDimension =
+  | "temporal"
+  | "causal"
+  | "entity"
+  | "semantic";
+
+export type PerchIncidentEvidenceLink = {
+  readonly dimension: PerchIncidentGraphDimension;
+  readonly explanation: string;
+  readonly shared_values: readonly string[];
+  readonly weight: number;
+};
+
+/** One member decision — joined or refused — as the daemon recorded it. */
+export type PerchIncidentMember = {
+  readonly finding_id: string;
+  readonly hunt_id: string;
+  readonly investigation_id: string;
+  readonly reason: string;
+  readonly confidence_score: number;
+  readonly host_id: string | null;
+  readonly strategy_id: string | null;
+  readonly shared_keys: readonly string[];
+  readonly evidence_links: readonly PerchIncidentEvidenceLink[];
+};
+
+/** `GET /v1/operator/incidents/{incident_id}`. */
+export type PerchIncidentRead = {
+  readonly schema_version: number;
+  readonly incident_id: string;
+  readonly case_id: string | null;
+  readonly summary: string;
+  readonly created_at_ms: number;
+  readonly window_start_ms: number;
+  readonly window_end_ms: number;
+  readonly trigger_finding_id: string | null;
+  readonly trigger_strategy_id: string | null;
+  readonly threat_class: string | null;
+  readonly severity: string | null;
+  readonly confidence_score: number;
+  readonly graph_dimensions: readonly PerchIncidentGraphDimension[];
+  readonly correlation_keys: readonly string[];
+  readonly included_members: readonly PerchIncidentMember[];
+  readonly rejected_members: readonly PerchIncidentMember[];
+  readonly false_positive_measurements: readonly Record<string, unknown>[];
+};
+
+/**
+ * The correlated incident behind a case: what the correlation joined, what
+ * it refused and why, and every measurement against it. `null` when the
+ * daemon has no such incident — an absence the canvas states, never draws.
+ */
+export function perchGetIncident(incidentId: string) {
+  return invokeTauri<PerchIncidentRead | null>("perch_get_incident", {
+    incidentId,
+  });
+}
 
 /** One recommendation the daemon computed, every field it carries. */
 export type PerchAlertTuningRecommendation = {

@@ -26,6 +26,7 @@ const ROUTE_EVASION_COVERAGE: &str = "/v2/api/evasion/coverage";
 /// The tuning report an operator can read lives on the daemon's `/v2/api`,
 /// not on `swarmctl serve`'s `/v1/operator/status`.
 const ROUTE_OPERATOR_STATUS: &str = "/v2/api/runtime/status";
+const ROUTE_INCIDENT: &str = "/v1/operator/incidents/{incident_id}";
 
 /// The daemon's honest review window: findings it has already ruled on, so the
 /// console can show what its own verdicts did.
@@ -311,4 +312,24 @@ pub async fn perch_operator_status(
         Some(items) if !items.is_empty() => items[0].clone(),
         _ => r.body,
     })
+}
+
+/// `GET /v1/operator/incidents/{incident_id}` — the correlated incident with
+/// its member decisions, reasons, evidence links and measurements (W3-42,
+/// W3-43). `None` when the daemon has no such incident.
+#[tauri::command]
+pub async fn perch_get_incident(
+    incident_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    let r = perch_daemon_get(
+        &state,
+        &crate::perch::daemon_client::route(ROUTE_INCIDENT, &[("incident_id", &incident_id)])?,
+    )
+    .await?;
+    match r.status {
+        200 => Ok(Some(r.body)),
+        404 => Ok(None),
+        _ => Err(daemon_response_error(&r)),
+    }
 }

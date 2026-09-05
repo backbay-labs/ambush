@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 
 import {
@@ -5,6 +6,11 @@ import {
   useSetCanvasMutation,
 } from "@/features/channels/hooks";
 import { ChannelCanvas } from "@/features/channels/ui/ChannelCanvas";
+import { perchKeys } from "@/shared/api/perchKeys";
+import {
+  type PerchIncidentRead,
+  perchGetIncident,
+} from "@/shared/api/tauriPerch";
 
 import { PERCH_CASE_TEMPLATE, shouldSeed } from "../lib/caseTemplate";
 import {
@@ -12,7 +18,9 @@ import {
   markCaseCanvasSeeded,
 } from "../lib/caseCanvasSeeded";
 
+import { caseIncidentId, killChainFromIncident } from "../lib/caseIncident";
 import { CaseTtlClock } from "./CaseTtlClock";
+import { KillChainGraph } from "./KillChainGraph";
 
 type CaseCanvasTabProps = {
   caseChannelId: string;
@@ -69,6 +77,16 @@ export function CaseCanvasTab({
     void mutateAsync(PERCH_CASE_TEMPLATE).catch(() => setSeedFailed(true));
   }, [content, isSuccess, canEdit, caseChannelId, mutateAsync]);
 
+  const incidentId = caseIncidentId(caseChannelId);
+  const incident = useQuery<PerchIncidentRead | null>({
+    queryKey: perchKeys.incident(incidentId),
+    queryFn: () => perchGetIncident(incidentId),
+    staleTime: 60_000,
+  });
+  const chain = React.useMemo(
+    () => (incident.data ? killChainFromIncident(incident.data) : null),
+    [incident.data],
+  );
   const retrySeed = React.useCallback(() => {
     setSeedFailed(false);
     void mutateAsync(PERCH_CASE_TEMPLATE).catch(() => setSeedFailed(true));
@@ -103,6 +121,28 @@ export function CaseCanvasTab({
         canEdit={canEdit}
         isArchived={isArchived}
       />
+      {chain ? (
+        <KillChainGraph
+          incidentId={incidentId}
+          included={chain.included}
+          rejected={chain.rejected}
+          edges={chain.edges}
+        />
+      ) : (
+        <p
+          data-testid="perch-kill-chain-absent"
+          data-state={
+            incident.isPending ? "pending" : incident.isError ? "error" : "none"
+          }
+          className="mt-4 text-xs text-muted-foreground"
+        >
+          {incident.isPending
+            ? "Asking the daemon for this case's incident…"
+            : incident.isError
+              ? "The daemon did not answer for this case's incident; nothing is drawn."
+              : "The daemon has no incident for this case, so there is no kill chain to draw."}
+        </p>
+      )}
     </section>
   );
 }

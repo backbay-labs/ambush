@@ -56,6 +56,8 @@ export const perchKeys = {
     key("daemon", "reviewed-findings", sinceMs),
   /** B4 GET /v1/operator/pheromone/deposits — post-suppression, post-evaporation. */
   deposits: (threatClass: string) => key("daemon", "deposits", threatClass),
+  /** GET /v1/operator/incidents/{id} — the correlated incident behind a case. */
+  incident: (incidentId: string) => key("daemon", "incident", incidentId),
   /** GET /v1/operator/policy — the rules, and the daemon's evaluation of one triple. */
   policy: (triple: string | null) => key("daemon", "policy", triple ?? "rules"),
   /** GET /v1/operator/status — alert_tuning + false_positive_tracking. */
@@ -165,6 +167,12 @@ export const PERCH_FRESHNESS = {
     poll: false,
     invalidatesOnWrite: [],
     why: "The detector coverage catalog changes when the evasion suite does, which is a deploy rather than a second. Polling it would ask the daemon the same question three hundred times between two answers that could differ.",
+  },
+  incident: {
+    staleTime: 60_000,
+    poll: false,
+    invalidatesOnWrite: ["caseTimeline"],
+    why: "An incident's member decisions are fixed at correlation; its measurements change when a verdict lands, which invalidates the case timeline too. Fetched when the canvas opens, never polled.",
   },
   policy: {
     staleTime: 60_000,

@@ -124,14 +124,16 @@ the record's timestamp moving only on the acknowledged leg, never a count.
 - **W3-40** — `perch_operator_identity` had no renderer caller; the dev flow provisions keys out
   of band, and a production operator had no surface that shows the public key the daemon pins.
   Settings → Detector now shows it (and mounts the sidecar panel, which was also unmounted).
+- **W3-42** — `KillChainGraph` was mounted nowhere because no read served the member decisions it
+  draws; `GET /v1/operator/incidents/{incident_id}` now does, and the Canvas tab draws it.
 - The bridge's relay socket dropped at four publish moments (`Connection closed unexpectedly`,
   `IO error`) and re-authenticated two seconds later each time; every step then landed. Recorded,
   not ruled.
 - `perch_list_holds` returns every hold the daemon has, decided and expired included; the console
   filters. Noted for whoever reads the raw list.
 - Three components were built and mounted nowhere — the sidecar settings panel, `CaseScreen` (so the
-  Canvas tab and the TTL clock were unreachable), and `KillChainGraph` (W3-42). The first two are
-  mounted now; the third waits on a daemon read that carries the decisions it draws.
+  Canvas tab and the TTL clock were unreachable), and `KillChainGraph`. All three are mounted now;
+  the third took a daemon read that did not exist (W3-42).
 - `perch-hold-dev.yaml` lacked the `spine_seed_env` the spine requires; the profile is re-signed
   with it and step 12 of the recipe exports the seed.
 
