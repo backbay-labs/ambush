@@ -1,0 +1,35 @@
+# tools/perch-tier-allowlist.tsv -- which card types may declare maxTier > 0, and what each ceiling depends on.
+#
+# `maxTier` is a CEILING, not a reading. The tier a card actually renders comes
+# from the envelope it carries; this bounds it, so a card whose evidence chain
+# does not exist yet cannot display a badge for one.
+#
+# Read by tools/check-perch-tier-allowlist.sh, which asserts EQUALITY in both
+# directions against the `maxTier:` declarations in the desktop card registry
+# and the card modules it composes.
+#
+# WHY THE FIVE B6 ROWS ARE 2
+#   Both halves now hold. The pacer seals every evidence envelope under its
+#   slot's spine identity, and `commit_chain_head` advances the durable head
+#   ONLY on the relay's acknowledgement -- so a card the relay never took
+#   cannot advance a chain that survives restart. And the console can check the
+#   result: `perch_verify_envelope` recomputes the RFC 8785 hash, verifies the
+#   Ed25519 signature over the same bytes, and reports the chain link, deriving
+#   the tier from all three.
+#
+#   A ceiling is not a reading. An envelope that is unsigned, or whose chain
+#   this console has not yet established, still renders tier 1 -- the verifier
+#   decides, and these numbers only bound what it may conclude.
+#
+# COLUMNS, tab-separated:
+#   card         the SwarmMarkerKind
+#   maxTier      0 | 1 | 2 -- the highest tier this card may ever claim
+#   precondition what the ceiling depends on, and whether it holds today
+card	maxTier	precondition
+rollback	1	holds -- verify_release_attestation ships today
+verdict	1	holds -- B2 landed and provisions the operator's Ed25519 key
+finding	2	holds -- the pacer seals on publish and the console verifies
+escalation	2	holds -- as finding
+hold	2	holds -- as finding
+receipt	2	holds -- as finding
+lease	2	holds -- as finding

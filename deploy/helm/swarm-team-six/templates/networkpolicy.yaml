@@ -1,0 +1,54 @@
+{{- /*
+Default-deny egress for the detect server.
+
+The daemon's job is to watch. It reaches exactly three places: the relay it
+files into, the NATS it reads telemetry from, and DNS. Everything else is
+denied, so a compromised detector cannot become an exfiltration path out of the
+cluster it was deployed to protect -- which is the failure mode that turns a
+security tool into the incident.
+
+Ingress is narrowed to the operator port from labelled namespaces only. The
+operator surface is authenticated, but an authenticated surface reachable from
+every pod in the cluster is still a surface reachable from every pod.
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "swarm-team-six.fullname" . }}
+  labels:
+    {{- include "swarm-team-six.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "swarm-team-six.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.operatorNamespaceSelectors }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+  egress:
+    # DNS. Without it every other rule below fails to resolve, and the daemon
+    # reports a relay that is down rather than a policy that is too tight.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- range .Values.networkPolicy.egress }}
+    - {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}

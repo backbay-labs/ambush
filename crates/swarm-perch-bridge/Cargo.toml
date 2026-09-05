@@ -27,6 +27,10 @@ swarm-core.workspace = true
 swarm-perch-wire.workspace = true
 swarm-response.workspace = true
 swarm-runtime.workspace = true
+# B6. The spine builds and verifies the signed envelope; the bridge holds the
+# key and the chain head. Naming it here rather than re-implementing the
+# envelope keeps ONE definition of what a signed record is.
+swarm-spine.workspace = true
 # THE HOLD. `HeldAction` -- the record the `swarm:hold:v1` card projects -- carries an
 # `ActionRequest` and a `PolicyDecision` from `swarm-policy` and a `DetachedSignature` from
 # `swarm-crypto`. Both are already in this crate's resolved graph through `swarm-runtime`; these
@@ -59,6 +63,7 @@ ambush-ws-client = { version = "0.1.0", path = "../../workspace/crates/ambush-ws
 nostr = { version = "0.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+async-trait.workspace = true
 # The W3-27 differential control: the wire crate's RFC 8785 bytes and keyless
 # hash must agree with the engine's spine envelope byte for byte.
 swarm-spine.workspace = true

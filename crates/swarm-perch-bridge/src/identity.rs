@@ -233,6 +233,18 @@ impl IdentityTable {
             .join("\n")
     }
 
+    /// Every slot label, in table order.
+    ///
+    /// B6 derives one spine keypair per label, so this is the list the signer
+    /// is built from and the set of issuers whose chains the head store tracks.
+    #[must_use]
+    pub fn slot_labels(&self) -> Vec<String> {
+        self.slots
+            .iter()
+            .map(|identity| identity.slot.label().to_string())
+            .collect()
+    }
+
     /// `(slot label, hex public key)` for every slot — what
     /// `GET /metrics/perch/identities` serves under decision D-FC-2. Public halves only.
     pub fn public_identities(&self) -> Vec<(String, String)> {

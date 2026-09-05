@@ -498,3 +498,174 @@ mod tests {
         assert_eq!(whisker.role, Some(WireAgentRole::Whisker));
     }
 }
+
+// ═════════════════════════════════════════════ chain verification (B6)
+//
+// Transport-neutral and KEYLESS. This crate performs no signature operation and
+// names no crypto type: it says what a well-formed link looks like, and the
+// bridge — which does hold a key — says whether the signature over those bytes
+// is good. Splitting it this way is what lets a console verify the CHAIN
+// without shipping a verifier for the engine's key material.
+
+/// The last envelope this issuer published, as a verifier remembers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssuerChainHead {
+    /// `swarm:ed25519:{64 hex}`.
+    pub issuer: String,
+    /// The `seq` of that envelope.
+    pub seq: u64,
+    /// Its `envelope_hash`, which the next link must name as `prev_envelope_hash`.
+    pub envelope_hash: String,
+}
+
+/// Why a link did or did not continue its chain.
+///
+/// Four outcomes rather than a bool: an operator told only "invalid" cannot
+/// tell a replay from a gap from a fork, and those need different responses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainLinkVerdict {
+    /// The link continues the chain.
+    Valid,
+    /// The envelope names a different issuer than the head.
+    IssuerMismatch,
+    /// `seq` is not exactly one past the head's.
+    SequenceGap,
+    /// `prev_envelope_hash` does not name the head's hash.
+    HashMismatch,
+}
+
+/// The envelope as it is HASHED and SIGNED: itself, without the two fields that
+/// are derived from it.
+///
+/// Exposed because a verifier must rebuild exactly these bytes, and rebuilding
+/// them by hand somewhere else is how the two sides drift.
+///
+/// # Errors
+///
+/// [`EnvelopeError::EnvelopeNotObject`] when `envelope` is not a JSON object.
+pub fn unsigned_envelope_value(envelope: &Value) -> Result<Value, EnvelopeError> {
+    let Value::Object(map) = envelope else {
+        return Err(EnvelopeError::EnvelopeNotObject);
+    };
+    let mut unsigned = map.clone();
+    unsigned.remove("envelope_hash");
+    unsigned.remove("signature");
+    Ok(Value::Object(unsigned))
+}
+
+/// Whether `envelope` continues `head`'s chain, and if not, how it failed.
+///
+/// Checks only the three structural facts a chain is: same issuer, the next
+/// sequence number, and a back-pointer at the head's hash. It does NOT check
+/// the signature, because this crate holds no keys.
+#[must_use]
+pub fn verify_chain_link(head: &IssuerChainHead, envelope: &CardEnvelope) -> ChainLinkVerdict {
+    if envelope.issuer != head.issuer {
+        return ChainLinkVerdict::IssuerMismatch;
+    }
+    if envelope.seq != head.seq.saturating_add(1) {
+        return ChainLinkVerdict::SequenceGap;
+    }
+    if envelope.prev_envelope_hash.as_deref() != Some(head.envelope_hash.as_str()) {
+        return ChainLinkVerdict::HashMismatch;
+    }
+    ChainLinkVerdict::Valid
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod chain_tests {
+    use super::*;
+
+    fn head() -> IssuerChainHead {
+        IssuerChainHead {
+            issuer: format!("swarm:ed25519:{}", "ab".repeat(32)),
+            seq: 4,
+            envelope_hash: format!("0x{}", "cd".repeat(32)),
+        }
+    }
+
+    fn link(head: &IssuerChainHead) -> CardEnvelope {
+        CardEnvelope {
+            schema: ENVELOPE_SCHEMA_V1.to_string(),
+            issuer: head.issuer.clone(),
+            seq: head.seq + 1,
+            prev_envelope_hash: Some(head.envelope_hash.clone()),
+            issued_at: "2026-09-04T00:00:00Z".to_string(),
+            capability_token: Value::Null,
+            fact: serde_json::json!({}),
+            envelope_hash: format!("0x{}", "ef".repeat(32)),
+            signature: None,
+        }
+    }
+
+    #[test]
+    fn a_well_formed_link_continues_the_chain() {
+        let head = head();
+        assert_eq!(
+            verify_chain_link(&head, &link(&head)),
+            ChainLinkVerdict::Valid
+        );
+    }
+
+    /// Each failure is named, not collapsed into "invalid". A replay, a gap and
+    /// a fork need different responses from whoever is reading.
+    #[test]
+    fn each_way_a_link_can_break_is_reported_as_itself() {
+        let head = head();
+
+        let mut foreign = link(&head);
+        foreign.issuer = format!("swarm:ed25519:{}", "11".repeat(32));
+        assert_eq!(
+            verify_chain_link(&head, &foreign),
+            ChainLinkVerdict::IssuerMismatch
+        );
+
+        let mut skipped = link(&head);
+        skipped.seq = head.seq + 2;
+        assert_eq!(
+            verify_chain_link(&head, &skipped),
+            ChainLinkVerdict::SequenceGap
+        );
+
+        // A replay of the head itself is a gap, not a valid link.
+        let mut replayed = link(&head);
+        replayed.seq = head.seq;
+        assert_eq!(
+            verify_chain_link(&head, &replayed),
+            ChainLinkVerdict::SequenceGap
+        );
+
+        let mut forked = link(&head);
+        forked.prev_envelope_hash = Some(format!("0x{}", "99".repeat(32)));
+        assert_eq!(
+            verify_chain_link(&head, &forked),
+            ChainLinkVerdict::HashMismatch
+        );
+
+        // A first-link envelope arriving against an existing head is a fork too.
+        let mut rooted = link(&head);
+        rooted.prev_envelope_hash = None;
+        assert_eq!(
+            verify_chain_link(&head, &rooted),
+            ChainLinkVerdict::HashMismatch
+        );
+    }
+
+    /// The bytes a verifier rebuilds are the bytes the hash was taken over.
+    #[test]
+    fn the_unsigned_value_is_what_the_hash_is_computed_from() {
+        let head = head();
+        let envelope = link(&head);
+        let value = serde_json::to_value(&envelope).unwrap();
+        let unsigned = unsigned_envelope_value(&value).unwrap();
+        assert!(unsigned.get("envelope_hash").is_none());
+        assert!(unsigned.get("signature").is_none());
+        assert_eq!(
+            compute_envelope_hash_hex(&value).unwrap(),
+            compute_envelope_hash_hex(&unsigned).unwrap(),
+            "removing the derived fields twice must not change the digest"
+        );
+    }
+}

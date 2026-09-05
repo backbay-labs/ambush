@@ -1065,7 +1065,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // ingest surface hold, so a release is co-signed on
                             // the same receipt chain as the governance decision
                             // that authorized the containment.
-                            .with_governance(Arc::clone(&governance_policy) as Arc<_>),
+                            .with_governance(Arc::clone(&governance_policy) as Arc<_>)
+                            // B1c. Without this the sweep releases leases that
+                            // no operator ever hears about: `run_until_shutdown`
+                            // consumes its own report, so the broadcaster is the
+                            // only way a release leaves this process.
+                            .with_runtime_events(runtime_events.clone()),
                         )),
                         Err(error) => {
                             // Loud, not fatal: the runtime still refuses containments

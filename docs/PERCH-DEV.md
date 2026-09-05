@@ -385,6 +385,9 @@ cargo run -p swarm-runtime --example attest_debug_binary -- ./target/debug/swarm
 ```bash
 export SWARM_OPERATOR_TOKEN=perch-dev-operator-token
 export PERCH_BRIDGE_NOSTR_SEED=$(python3 -c 'import hashlib;print(hashlib.sha256(b"ambush-perch-bridge-dev-v1").hexdigest())')
+# The spine (B6) root. A different domain string from the Nostr seed on purpose:
+# `perch.spine_seed_env` is required, and the daemon refuses to start without it.
+export PERCH_BRIDGE_SPINE_SEED=$(python3 -c 'import hashlib;print(hashlib.sha256(b"ambush-perch-spine-dev-v1").hexdigest())')
 ./target/debug/swarm_detect --config rulesets-dev/perch-hold-dev.yaml --serve --bind 127.0.0.1:9090
 ```
 
@@ -460,12 +463,50 @@ half; it must equal the profile's `verdict_public_key_hex`.
   decided under another intent; re-read the hold" — the conflict W3-17 has the console
   re-read rather than retry.
 
-## 16. What this half does NOT demonstrate
+## 16. The console half, headless
 
-- **The console.** Every step above talks to the daemon and the relay over HTTP. The
-  desktop's hold surface goes through Tauri commands that hold the daemon bearer and the
-  operator's signing key, so a browser cannot drive it and the Playwright specs run against
-  the mock bridge. Selecting a hold, the dwell-gated two-stroke grant and the rendered
-  two-leg states have not been driven against this live stack.
+The desktop's hold and finding surfaces go through Tauri commands that hold the daemon bearer
+and the operator's Ed25519 key, so a browser cannot drive them. Tauri's own test runtime can:
+`perch_live_tests.rs` builds the app on `tauri::test::mock_builder()` with the real command
+handlers and the generated capabilities, and sends each request through `get_ipc_response`
+exactly as the renderer's `invokeTauri` sends it. The commands then sign with the keyring key,
+publish over `POST /events`, call the daemon and map its answers, all for real.
+
+```bash
+set -a; . .perch-dev/operator.env; set +a          # AMBUSH_PRIVATE_KEY = the operator's nsec (step 3)
+export AMBUSH_DEV_KEYRING_SERVICE=ambush-desktop-dev.perch-live-driver   # the driver's OWN keychain blob
+export PERCH_LIVE_DAEMON_URL=http://127.0.0.1:9090 PERCH_LIVE_DAEMON_BEARER=$SWARM_OPERATOR_TOKEN
+export PERCH_LIVE_VERDICT_PUBKEY=$(python3 -c "import yaml;print(yaml.safe_load(open('rulesets-dev/perch-hold-dev.yaml'))['operator_surface']['auth']['principals'][0]['verdict_public_key_hex'])")
+export PERCH_LIVE_OPERATOR_ID=console PERCH_LIVE_RELAY_URL=ws://localhost:3000
+export PERCH_LIVE_INGEST_EVENTS=$PWD/.perch-dev/events-grant.json,$PWD/.perch-dev/events.json
+cd workspace/desktop/src-tauri && cargo test --lib -- ipc_tests live_tests --include-ignored --nocapture --test-threads=1
+```
+
+**After every rebuild of the test binary, delete the driver's keychain item first**
+(`security delete-generic-password -s ambush-desktop-dev.perch-live-driver`): macOS lets the
+binary that created an item read it, and a rebuilt binary is a different binary, so the
+first keyring read blocks on a permission dialog no headless run can answer — the test sits
+silent for as long as you let it. A fresh item is created without a prompt.
+
+The keyring service is read once per process, so it MUST be set in the shell, and it must take
+the `ambush-desktop-dev.<scope>` form; the driver seeds that blob with the daemon settings and
+the well-known dev operator seed, and asserts `perch_operator_identity` returns the key the
+profile pins. It produces its own holds by ingesting the fixtures with per-run-unique
+`event_id`/`host_id` (telemetry the daemon has already escalated on raises no new hold), grants
+first after waiting out the daemon's per-scope minute (a grant inside it is a legitimate
+`refused_late`, `policy.scope_rate_limit`), refuses second, replays each, and reads both cards
+back from the relay. The finding path promotes the newest admitted card, publishes the verdict,
+fails leg 2 against a closed port, retries it with the same verdict id, watches the daemon's
+review move only then, and has a forged copy of the card refused as an unadmitted signer. Every
+id is printed on `PERCH_LIVE_EVIDENCE` and `PERCH_LIVE_EVIDENCE_FINDING` lines; the record of
+one run is `docs/plans/ambush-ui/integration/evidence/walking-skeleton.md`.
+
+## 17. What is still NOT demonstrated
+
+- **The rendered React tree on a real window.** Selecting a hold, the dwell-gated two-stroke
+  grant and the rendered two-leg states run against the Playwright mock, which now refuses the
+  shapes the Rust side refuses. A real window is the one layer above what §16 drives.
 - **`refused_late` from a containment refusal.** Removing `runtime.containment` and
-  re-signing does not produce it; a granted `isolate_host` still executes. See W3-35.
+  re-signing does not produce it; a granted `isolate_host` still executes. See W3-35. The
+  outcome itself does reproduce, by `policy.scope_rate_limit`, when a scope has seen five
+  actions in a minute.

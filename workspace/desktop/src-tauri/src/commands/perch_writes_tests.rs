@@ -432,3 +432,35 @@ fn the_decide_route_is_allowlisted_and_the_re_read_is_not_a_write() {
         "the 409 re-read is a GET and must never appear on the write table"
     );
 }
+
+/// The renderer reads `receipt_id`, `decided_at_ms`, `superseded_by` and
+/// `winning_decision`. A `rename_all` on `DecideOutcome` would leave every one
+/// of them `undefined` in a real build while the snake_case mock kept the E2E
+/// suite green — which is how the rename went unnoticed until the Rust
+/// signature was read against the wrapper.
+#[test]
+fn decide_outcome_serializes_snake_case_for_the_renderer() {
+    let outcome = map_success(&serde_json::json!({
+        "decision": {"outcome": "granted_executed", "receipt_id": "r-1", "dispatched": true},
+        "decided_at_ms": 1_700_000_000_000_u64,
+        "replayed": false
+    }));
+    let value = serde_json::to_value(&outcome).expect("serializes");
+    for key in [
+        "outcome",
+        "rule",
+        "reason",
+        "receipt_id",
+        "decided_at_ms",
+        "superseded_by",
+        "winning_decision",
+        "replayed",
+        "dispatched",
+    ] {
+        assert!(value.get(key).is_some(), "missing wire key {key}: {value}");
+    }
+    assert!(
+        value.get("decidedAtMs").is_none(),
+        "camelCase leaked: {value}"
+    );
+}

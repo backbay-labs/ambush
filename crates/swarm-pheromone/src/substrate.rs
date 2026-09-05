@@ -316,6 +316,13 @@ pub struct DepositQuery {
     pub since_timestamp: Option<i64>,
     pub host_id: Option<String>,
     pub limit: usize,
+    /// Return the rows a Dismiss marker suppressed, as well as the live ones.
+    ///
+    /// Off by default, so every existing caller keeps reading exactly what the
+    /// concentration reduction counts. The operator console turns it on to
+    /// SHOW an operator what their own Dismiss removed, which is the one place
+    /// a suppressed deposit is the answer rather than noise.
+    pub include_suppressed: bool,
 }
 
 impl DepositQuery {
@@ -325,6 +332,7 @@ impl DepositQuery {
             since_timestamp: None,
             host_id: None,
             limit,
+            include_suppressed: false,
         }
     }
 }
@@ -1265,6 +1273,129 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
     }
 }
 
+/// One suppressed group: a Dismiss marker and the deposits it removed.
+///
+/// `marker_timestamp` is in SECONDS, the unit `PheromoneDeposit::timestamp`
+/// carries, and is the marker's own instant rather than the removed deposits'.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerchSuppressionRecord {
+    /// The event the marker names.
+    pub event_id: String,
+    /// The class the marker was filed under; suppression never crosses classes.
+    pub threat_class: ThreatClass,
+    /// The marker's own timestamp, in seconds.
+    pub marker_timestamp: i64,
+    /// How many deposits this marker removed from the reduction.
+    pub removed_deposit_count: usize,
+    /// The analyst the marker names, when it names one.
+    pub analyst_id: Option<String>,
+}
+
+/// What the console needs to render one threat class: the rows that count, the
+/// rows a Dismiss removed, and the sources behind the number.
+#[derive(Debug, Clone, Default)]
+pub struct PerchDepositSlice {
+    /// Exactly the deposits `concentration_for` sums, newest first.
+    pub kept: Vec<PheromoneDeposit>,
+    /// One record per Dismiss marker that actually removed something.
+    pub suppressed: Vec<PerchSuppressionRecord>,
+    /// The distinct agent ids behind `kept`, sorted.
+    pub source_ids: Vec<String>,
+}
+
+/// The reduction the operator console reads, agreeing with `concentration_for`
+/// by construction.
+///
+/// # Why this is not a second filter
+///
+/// The console shows a number and the rows behind it. If the rows were selected
+/// by a filter written separately from the one that computes the number, the
+/// two would drift and the surface whose job is to be trustworthy would show a
+/// total that its own list does not add up to. This walks the SAME predicates
+/// in the same order — class, evaporation, feedback suppression, positive
+/// strength — and a test asserts the sum of `kept` equals `total_strength` and
+/// that `source_ids.len()` equals `distinct_sources`.
+#[must_use]
+pub fn perch_deposit_slice(
+    deposits: &[PheromoneDeposit],
+    threat_class: &ThreatClass,
+    now: i64,
+    policy: &ThreatClassPolicy,
+) -> PerchDepositSlice {
+    let suppression = latest_feedback_suppression_states(deposits);
+    let mut kept = Vec::new();
+    let mut sources = std::collections::BTreeSet::new();
+    let mut removed: BTreeMap<FeedbackSuppressionKey, usize> = BTreeMap::new();
+
+    for deposit in deposits
+        .iter()
+        .filter(|deposit| &deposit.threat_class == threat_class)
+    {
+        if deposit.is_evaporated(now, policy.evaporation_threshold) {
+            continue;
+        }
+        if is_suppressed_by_feedback(deposit, &suppression) {
+            if let Some(key) = deposit_suppression_key(deposit) {
+                *removed.entry(key).or_default() += 1;
+            }
+            continue;
+        }
+        if deposit.strength_at(now) <= 0.0 {
+            continue;
+        }
+        sources.insert(deposit.agent_id.0.clone());
+        kept.push(deposit.clone());
+    }
+    kept.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp));
+
+    // Only markers that removed something are reported. A Dismiss on an event
+    // with nothing left to remove is not a suppression the console can show.
+    let mut suppressed = Vec::new();
+    for (key, count) in removed {
+        let Some((_, marker_timestamp)) = suppression.get(&key) else {
+            continue;
+        };
+        suppressed.push(PerchSuppressionRecord {
+            event_id: key.event_id.clone(),
+            threat_class: key.threat_class.clone(),
+            marker_timestamp: *marker_timestamp,
+            removed_deposit_count: count,
+            analyst_id: analyst_id_for_marker(deposits, &key),
+        });
+    }
+    suppressed.sort_by(|a, b| {
+        b.marker_timestamp
+            .cmp(&a.marker_timestamp)
+            .then_with(|| a.event_id.cmp(&b.event_id))
+    });
+
+    PerchDepositSlice {
+        kept,
+        suppressed,
+        source_ids: sources.into_iter().collect(),
+    }
+}
+
+/// The analyst named by the newest marker for `key`, when it names one.
+fn analyst_id_for_marker(
+    deposits: &[PheromoneDeposit],
+    key: &FeedbackSuppressionKey,
+) -> Option<String> {
+    deposits
+        .iter()
+        .filter(|deposit| {
+            feedback_suppression_marker(deposit).is_some_and(|(marker, _)| &marker == key)
+        })
+        .max_by_key(|deposit| deposit.timestamp)
+        .and_then(|deposit| {
+            deposit
+                .indicator
+                .get("analyst_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+}
+
 pub(crate) fn concentration_for(
     deposits: &[PheromoneDeposit],
     threat_class: &ThreatClass,
@@ -1322,7 +1453,7 @@ pub(crate) fn filter_deposits(
                     .host_id
                     .as_deref()
                     .is_none_or(|host_id| deposit_host_id(deposit) == Some(host_id))
-                && !is_suppressed_by_feedback(deposit, &suppression)
+                && (query.include_suppressed || !is_suppressed_by_feedback(deposit, &suppression))
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1773,12 +1904,14 @@ fn threat_intel_key(indicator_type: &ThreatIntelIndicatorType, value: &str) -> T
 mod tests {
     use super::{
         ConfiguredPheromoneSubstrate, DepositQuery, InMemoryPheromoneSubstrate,
-        LocalJournalPheromoneSubstrate, PheromoneSubstrate,
+        LocalJournalPheromoneSubstrate, PheromoneSubstrate, concentration_for, filter_deposits,
+        perch_deposit_slice,
     };
     use ed25519_dalek::{Signer, SigningKey};
     use sha2::{Digest, Sha256};
     use swarm_core::agent::SwarmMode;
     use swarm_core::config::{PheromoneBackendConfig, PheromoneConfig, ResponsePlaybookConfig};
+    use swarm_core::pheromone::ThreatClassPolicy;
     use swarm_core::pheromone::{
         BehavioralBaselineSnapshot, BehavioralFrequencyEntry, BehavioralHostBaseline,
         BehavioralIdentityBaseline, BehavioralPeerGroupBaseline, BehavioralRoleToolFrequencyEntry,
@@ -2193,6 +2326,7 @@ mod tests {
                 since_timestamp: Some(50),
                 host_id: None,
                 limit: 10,
+                include_suppressed: false,
             })
             .await
             .unwrap();
@@ -2231,6 +2365,7 @@ mod tests {
                 since_timestamp: None,
                 host_id: Some("host-b".to_string()),
                 limit: 10,
+                include_suppressed: false,
             })
             .await
             .unwrap();
@@ -3184,6 +3319,7 @@ mod tests {
                 since_timestamp: None,
                 host_id: None,
                 limit: 0,
+                include_suppressed: false,
             })
             .await
             .unwrap();
@@ -3485,5 +3621,155 @@ mod tests {
             .await
             .unwrap();
         assert!(entry.is_none());
+    }
+
+    fn perch_test_deposit(
+        event_id: &str,
+        agent: &str,
+        confidence: f64,
+        timestamp: i64,
+        indicator_extra: serde_json::Value,
+    ) -> PheromoneDeposit {
+        let mut indicator = serde_json::json!({ "event_id": event_id, "host_id": "host-ops-1" });
+        if let (Some(base), Some(extra)) = (indicator.as_object_mut(), indicator_extra.as_object())
+        {
+            for (k, v) in extra {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
+            indicator,
+            threat_class: ThreatClass::Execution,
+            severity: Severity::Critical,
+            confidence,
+            timestamp,
+            decay_half_life: 3600.0,
+            agent_id: AgentId(agent.to_string()),
+            agent_identity: String::new(),
+            agent_role: None,
+            signature: Vec::new(),
+            agent_key: Vec::new(),
+        }
+    }
+
+    /// The console's list and the console's number are one reduction.
+    ///
+    /// A list built by a filter written separately from the sum would drift,
+    /// and the surface whose whole job is to be trustworthy would show a total
+    /// its own rows do not add up to.
+    #[test]
+    fn perch_deposit_slice_agrees_with_concentration_for() {
+        let now = 1_773_739_125;
+        let policy = ThreatClassPolicy {
+            half_life_secs: 3600.0,
+            evaporation_threshold: 0.01,
+            min_sources_for_escalation: 2,
+            alert_threshold: 2.0,
+            incident_threshold: 5.0,
+        };
+        let key = "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470";
+        let deposits = vec![
+            perch_test_deposit(
+                "hunt-evt-1",
+                &format!("{key}:suspicious_process_tree"),
+                0.9,
+                1_773_738_872,
+                serde_json::json!({}),
+            ),
+            perch_test_deposit(
+                "hunt-evt-1",
+                &format!("{key}:suspicious_scripting"),
+                0.9,
+                1_773_738_872,
+                serde_json::json!({}),
+            ),
+            perch_test_deposit(
+                "hunt-evt-2",
+                &format!("{key}:suspicious_process_tree"),
+                0.9,
+                1_773_738_881,
+                serde_json::json!({}),
+            ),
+            // the Dismiss marker: schema + action, keyed on (execution, hunt-evt-1)
+            perch_test_deposit(
+                "hunt-evt-1",
+                key,
+                0.0,
+                1_773_739_124,
+                serde_json::json!({
+                    "schema": swarm_core::types::SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                    "action": "dismiss",
+                    "analyst_id": "perch-operator-1"
+                }),
+            ),
+        ];
+
+        let served = concentration_for(&deposits, &ThreatClass::Execution, now, &policy);
+        let slice = perch_deposit_slice(&deposits, &ThreatClass::Execution, now, &policy);
+
+        let summed: f64 = slice.kept.iter().map(|d| d.strength_at(now)).sum();
+        assert!(
+            (summed - served.total_strength).abs() < 1e-9,
+            "{summed} != {}",
+            served.total_strength
+        );
+        assert_eq!(slice.source_ids.len(), served.distinct_sources);
+        assert_eq!(
+            slice.kept.len(),
+            1,
+            "two deposits left under the dismiss marker"
+        );
+        assert_eq!(slice.suppressed.len(), 1);
+        assert_eq!(slice.suppressed[0].event_id, "hunt-evt-1");
+        assert_eq!(slice.suppressed[0].removed_deposit_count, 2);
+        assert_eq!(slice.suppressed[0].marker_timestamp, 1_773_739_124);
+        assert_eq!(
+            slice.suppressed[0].analyst_id.as_deref(),
+            Some("perch-operator-1")
+        );
+    }
+
+    /// The raw read is opt-in. Every existing caller keeps seeing exactly what
+    /// the reduction counts; the console asks for the dismissed rows because
+    /// showing an operator what their own Dismiss removed is the one place a
+    /// suppressed deposit is the answer.
+    #[test]
+    fn include_suppressed_returns_the_dismissed_rows_too() {
+        let key = "swarm:ed25519:18085f16811dba240c5bf9ef0c0d0bc6f359e7812cdedf86e7519852307ce470";
+        let deposits = vec![
+            perch_test_deposit(
+                "hunt-evt-1",
+                &format!("{key}:suspicious_process_tree"),
+                0.9,
+                1_773_738_872,
+                serde_json::json!({}),
+            ),
+            perch_test_deposit(
+                "hunt-evt-1",
+                key,
+                0.0,
+                1_773_739_124,
+                serde_json::json!({
+                    "schema": swarm_core::types::SWARM_PROVIDENCE_FEEDBACK_SCHEMA,
+                    "action": "dismiss"
+                }),
+            ),
+        ];
+        let default_query = DepositQuery {
+            threat_class: Some(ThreatClass::Execution),
+            ..DepositQuery::default()
+        };
+        assert_eq!(
+            filter_deposits(&deposits, default_query).len(),
+            1,
+            "marker only"
+        );
+        let raw = DepositQuery {
+            threat_class: Some(ThreatClass::Execution),
+            include_suppressed: true,
+            ..DepositQuery::default()
+        };
+        assert_eq!(filter_deposits(&deposits, raw).len(), 2);
     }
 }

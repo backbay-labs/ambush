@@ -97,6 +97,7 @@ pub fn build_finding_card(
     chain: &mut SeqChain,
     gaps: &[GapCause],
     now_ms: i64,
+    signer: Option<&crate::spine::SpineSigner>,
 ) -> Result<Option<CardBody>, BridgeError> {
     let RuntimeEvent::Finding {
         emitted_at_ms,
@@ -137,7 +138,13 @@ pub fn build_finding_card(
         gap: gaps.first().map(|cause| gap_block(cause, now_ms)),
     };
 
-    let spine_issuer = format!("swarm:ed25519:{}", issuer.keys.public_key().to_hex());
+    // With a signer the envelope is issued under the SPINE identity, which is a
+    // different key from the Nostr one that publishes it: one says who put the
+    // event on the relay, the other who attests the record.
+    let spine_issuer = signer.map_or_else(
+        || format!("swarm:ed25519:{}", issuer.keys.public_key().to_hex()),
+        |signer| signer.issuer(issuer.slot.label()).to_string(),
+    );
     let issued_at = issued_at_secs(now_ms);
     let mut json = seal(
         &card,
@@ -145,6 +152,7 @@ pub fn build_finding_card(
         record.seq,
         chain.prev_envelope_hash.clone(),
         &issued_at,
+        signer.map(|signer| (signer, issuer.slot.label())),
     )?;
 
     // The evidence blob is the only unbounded field in the registry and it is built from
@@ -165,6 +173,7 @@ pub fn build_finding_card(
             record.seq,
             chain.prev_envelope_hash.clone(),
             &issued_at,
+            signer.map(|signer| (signer, issuer.slot.label())),
         )?;
     }
 
@@ -195,24 +204,36 @@ pub fn build_finding_card(
 }
 
 /// Wraps the card in a spine envelope and returns its one-line JSON.
+///
+/// With a signer the envelope is SIGNED under the slot's spine identity (B6);
+/// without one it is sealed unsigned, which is what the fixture generator and
+/// the tests that predate B6 use. The chain head is NOT advanced here: the
+/// pacer restores `prev_envelope_hash` on a frame the relay did not take, so
+/// the durable head is committed on acknowledgement instead.
 fn seal(
     card: &FindingCard,
     spine_issuer: &str,
     seq: Seq,
     prev_envelope_hash: Option<String>,
     issued_at: &str,
+    signer: Option<(&crate::spine::SpineSigner, &str)>,
 ) -> Result<String, BridgeError> {
     let fact = serde_json::to_value(Card::Finding(Box::new(card.clone())))
         .map_err(|error| BridgeError::Encode(error.to_string()))?;
-    let envelope = CardEnvelope::seal_unsigned(
-        CardKind::Finding,
-        spine_issuer,
-        seq,
-        prev_envelope_hash,
-        issued_at.to_string(),
-        fact,
-    )
-    .map_err(|error| BridgeError::Encode(error.to_string()))?;
+    let envelope = match signer {
+        Some((signer, slot)) => {
+            signer.seal_at(slot, CardKind::Finding, seq, prev_envelope_hash, fact)?
+        }
+        None => CardEnvelope::seal_unsigned(
+            CardKind::Finding,
+            spine_issuer,
+            seq,
+            prev_envelope_hash,
+            issued_at.to_string(),
+            fact,
+        )
+        .map_err(|error| BridgeError::Encode(error.to_string()))?,
+    };
     serde_json::to_string(&envelope).map_err(|error| BridgeError::Encode(error.to_string()))
 }
 
@@ -354,6 +375,7 @@ pub fn hold_view_from_record(hold: &HeldAction) -> Result<WireHeldAction, Bridge
         deciding_intent_event_id: _,
         cas_instant_ms: _,
         prior_state: _,
+        partition_state_at_hold,
     } = hold;
     Ok(WireHeldAction {
         hold_id: hold_id.clone(),
@@ -369,6 +391,8 @@ pub fn hold_view_from_record(hold: &HeldAction) -> Result<WireHeldAction, Bridge
         rehearsal: rehearsal.as_ref().map(rehearsal_to_wire),
         inverse_resolution: Vec::new(),
         decision: decision.as_ref().map(hold_decision_record_to_wire),
+        partition_state_at_hold: partition_state_at_hold
+            .map(crate::stream::partition_state_to_wire),
     })
 }
 
@@ -443,21 +467,36 @@ pub fn hold_card(
     chain: &mut SeqChain,
     covers: (IssuerIdx, Seq),
     now_ms: i64,
+    signer: Option<&crate::spine::SpineSigner>,
 ) -> Result<CardBody, BridgeError> {
     let card = hold_card_fact(hold, case_channel, finding_card_id)?;
     let human = card.human_line();
-    let spine_issuer = format!("swarm:ed25519:{}", issuer.keys.public_key().to_hex());
+    // With a signer the envelope is issued under the SPINE identity, a
+    // different key from the Nostr one that publishes it.
+    let spine_issuer = signer.map_or_else(
+        || format!("swarm:ed25519:{}", issuer.keys.public_key().to_hex()),
+        |signer| signer.issuer(issuer.slot.label()).to_string(),
+    );
     let fact = serde_json::to_value(Card::Hold(Box::new(card)))
         .map_err(|error| BridgeError::Encode(error.to_string()))?;
-    let envelope = CardEnvelope::seal_unsigned(
-        CardKind::Hold,
-        &spine_issuer,
-        seq,
-        chain.prev_envelope_hash.clone(),
-        issued_at_secs(now_ms),
-        fact,
-    )
-    .map_err(|error| BridgeError::Encode(error.to_string()))?;
+    let envelope = match signer {
+        Some(signer) => signer.seal_at(
+            issuer.slot.label(),
+            CardKind::Hold,
+            seq,
+            chain.prev_envelope_hash.clone(),
+            fact,
+        )?,
+        None => CardEnvelope::seal_unsigned(
+            CardKind::Hold,
+            &spine_issuer,
+            seq,
+            chain.prev_envelope_hash.clone(),
+            issued_at_secs(now_ms),
+            fact,
+        )
+        .map_err(|error| BridgeError::Encode(error.to_string()))?,
+    };
     let json =
         serde_json::to_string(&envelope).map_err(|error| BridgeError::Encode(error.to_string()))?;
     let content = build_content(CardKind::Hold, &human, &json)
@@ -658,6 +697,7 @@ mod tests {
             &mut chain,
             &[],
             1_700_000_005_000,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -726,6 +766,7 @@ mod tests {
             &mut chain,
             &[],
             1,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -751,6 +792,7 @@ mod tests {
             &mut chain,
             &[],
             1,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -778,6 +820,7 @@ mod tests {
             &mut SeqChain::default(),
             &gaps,
             1,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -804,6 +847,7 @@ mod tests {
             &mut SeqChain::default(),
             &evicted,
             1,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -833,6 +877,7 @@ mod tests {
             &mut SeqChain::default(),
             &[],
             1,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -871,7 +916,8 @@ mod tests {
                 &config,
                 &mut SeqChain::default(),
                 &[],
-                1
+                1,
+                None,
             )
             .unwrap()
             .is_none()
@@ -893,6 +939,7 @@ mod tests {
             &mut SeqChain::default(),
             &[],
             1,
+            None,
         )
         .unwrap_err();
         assert!(
@@ -935,6 +982,7 @@ mod tests {
             &mut chain,
             (0, 3),
             1_773_738_882_700,
+            None,
         )
         .unwrap();
 
@@ -970,7 +1018,20 @@ mod tests {
             json["fact"]["hold"]["action_request"]["action"],
             serde_json::json!({"type": "isolate_host", "host_id": "host-ops-1"})
         );
-        // T-16: no card body this crate builds names a signature, a signer or a verification.
+        // T-16, narrowed by B6. The ENVELOPE now carries a `signature` when a
+        // signer is wired — that is the spine attesting the record, and it is
+        // the point of B6. What must never appear is a signature, a signer or a
+        // verification claim inside the FACT: the card states what happened,
+        // and a card that vouched for itself would be asking a reader to trust
+        // the thing under examination.
+        let fact = json["fact"].as_object().expect("the fact is an object");
+        for banned in ["signature", "signed_by", "verified"] {
+            assert!(
+                !fact.contains_key(banned),
+                "the fact must not carry {banned}"
+            );
+        }
+        // This body was built with no signer, so its envelope is unsigned too.
         assert!(json.get("signature").is_none());
         assert!(!body.content.contains("signed_by") && !body.content.contains("verified"));
         // The two clock-derived `HeldActionView` fields are NOT on an immutable card (INV-06).
@@ -1063,6 +1124,7 @@ mod tests {
             &mut SeqChain::default(),
             (0, 4),
             1_773_738_882_700,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1106,6 +1168,7 @@ mod tests {
             &mut SeqChain::default(),
             (0, 5),
             1,
+            None,
         )
         .unwrap();
         assert!(
@@ -1128,6 +1191,7 @@ mod tests {
             &mut SeqChain::default(),
             (0, 6),
             1,
+            None,
         )
         .unwrap();
         assert!(
@@ -1331,6 +1395,7 @@ mod tests {
             &mut SeqChain::default(),
             (0, 1),
             1,
+            None,
         )
         .unwrap();
         let content = hold_notice_content(&body);
@@ -1439,5 +1504,87 @@ mod tests {
         );
         assert_eq!(role_of(&Slot::Alarm), None);
         assert_eq!(role_of(&Slot::Telemetry), None);
+    }
+
+    /// T-16b. A card built with a signer carries a signature that verifies, and
+    /// the envelope is issued under the SPINE identity rather than the Nostr
+    /// one that publishes it.
+    ///
+    /// Without this the wiring could be present and inert: `seal_at` returns an
+    /// envelope either way, and nothing else in the build path reads the
+    /// signature.
+    #[test]
+    fn a_card_built_with_a_signer_carries_a_signature_that_verifies() {
+        let (identity, config) = fixture();
+        let signer = crate::spine::SpineSigner::from_seed_hex(
+            &"3a".repeat(32),
+            "c",
+            &[identity.slot.label().to_string()],
+        )
+        .expect("the seed is 32 bytes");
+        let event = finding_event("f1", "execution", "HIGH");
+        let record = Record::from_event(&event, 0).expect("a finding record");
+
+        let body = build_finding_card(
+            &record,
+            &event,
+            &identity,
+            "c",
+            &config,
+            &mut SeqChain::default(),
+            &[],
+            1,
+            Some(&signer),
+        )
+        .expect("the card builds")
+        .expect("a finding produces a card");
+
+        // Through the wire crate's own parser, so this test is not coupled to
+        // where in the body the fence happens to start.
+        let parts =
+            swarm_perch_wire::marker::parse_content(&body.content).expect("the card body parses");
+        let envelope: serde_json::Value =
+            serde_json::from_str(parts.json).expect("the envelope parses");
+
+        assert_eq!(
+            envelope["issuer"].as_str(),
+            Some(signer.issuer(identity.slot.label())),
+            "the envelope is issued under the spine identity"
+        );
+        assert!(
+            envelope.get("signature").is_some(),
+            "a signed envelope carries its signature"
+        );
+        assert!(
+            swarm_spine::envelope::verify_envelope(&envelope).expect("the envelope verifies"),
+            "the signature must verify under the issuer it names"
+        );
+    }
+
+    /// The same card with no signer is unsigned, which is what the pre-B6 tests
+    /// and the fixture generator construct.
+    #[test]
+    fn a_card_built_without_a_signer_carries_no_signature() {
+        let (identity, config) = fixture();
+        let event = finding_event("f1", "execution", "HIGH");
+        let record = Record::from_event(&event, 0).expect("a finding record");
+        let body = build_finding_card(
+            &record,
+            &event,
+            &identity,
+            "c",
+            &config,
+            &mut SeqChain::default(),
+            &[],
+            1,
+            None,
+        )
+        .expect("the card builds")
+        .expect("a finding produces a card");
+        let parts =
+            swarm_perch_wire::marker::parse_content(&body.content).expect("the card body parses");
+        let envelope: serde_json::Value =
+            serde_json::from_str(parts.json).expect("the envelope parses");
+        assert!(envelope.get("signature").is_none());
     }
 }

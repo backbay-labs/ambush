@@ -133,6 +133,8 @@ export function HoldCardPresenter({
 export const holdCardEntry = defineSwarmCard<HoldPayload>({
   pillar: "authority",
   homeSurface: ["case"],
+  // See FindingCard: a ceiling, not a reading.
+  maxTier: 2,
   decode: decodeHold,
   Presenter: HoldCardPresenter,
 });

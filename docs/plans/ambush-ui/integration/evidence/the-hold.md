@@ -15,10 +15,13 @@ hold, filed by the bridge into a case channel on the relay, addressed to a named
 and then decided by that operator with the daemon executing or refusing on their word.
 
 **The daemon-and-relay half of that path ran live, end to end, on this tree.** The CONSOLE
-half did not: the desktop's hold surface goes through Tauri commands that hold the daemon
-bearer and the operator's Ed25519 key, so a browser cannot drive it and every desktop spec
-runs against the Playwright mock. This milestone therefore claims its backend path as
-demonstrated and its console path as implemented and unit-covered, not accepted.
+half did not at the time: the desktop's hold surface goes through Tauri commands that hold the
+daemon bearer and the operator's Ed25519 key, so a browser cannot drive it and every desktop
+spec runs against the Playwright mock. **Update, 2026-09-05:** those commands have since been
+driven against the live stack through Tauri's own IPC layer — grant to `executed` with a lease,
+refuse, replay, both cards read back from the relay — in `evidence/walking-skeleton.md`, which
+also found two wire-shape defects on this very path (`4ce2dcdb1`). The rendered React tree on a
+real window remains the seam that record names; acceptance on it is the owner's read.
 
 | Segment | Evidence |
 |---|---|
@@ -29,8 +32,8 @@ demonstrated and its console path as implemented and unit-covered, not accepted.
 | decide: grant | **live.** `state: executed`, `outcome: granted_executed`, a receipt in `enforced` mode, an `audit_trail_id`, and a capability lease expiring exactly 60 000 ms after the daemon's decision instant |
 | decide: replay and conflict | **live.** The same body twice → `replayed: true`, state unchanged. A different decision on a decided hold → HTTP 409 `hold_already_decided`, "re-read the hold" |
 | restart recovery | **live.** An open hold survived a full daemon restart onto a re-signed profile, still `notified`, still `store_durable: true` |
-| the console: select, dwell-gated grant, two-leg rendering | **mock bridge only.** 40 perch Playwright specs pass, all against the mock |
-| `refused_late` from a containment refusal | **not reproduced.** See W3-35 |
+| the console: select, dwell-gated grant, two-leg rendering | **commands live through Tauri IPC (2026-09-05, `evidence/walking-skeleton.md`); the rendered tree mock bridge only.** 45 perch Playwright specs pass against a mock that now refuses the shapes the Rust side refuses |
+| `refused_late` from a containment refusal | **not reproduced** via containment (W3-35); the **outcome reproduced live 2026-09-05** by `policy.scope_rate_limit`, rule carried to the console intact |
 
 ## Toolchains and services
 

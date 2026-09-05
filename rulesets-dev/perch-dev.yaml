@@ -401,6 +401,9 @@ perch:
   # bridge in the same record.
   relay_url: "ws://localhost:3000"
   nostr_seed_env: PERCH_BRIDGE_NOSTR_SEED
+  # B6. The SPINE root, distinct from the Nostr root above: one says who
+  # published to the relay, the other who attests the record.
+  spine_seed_env: PERCH_BRIDGE_SPINE_SEED
   # MUST resolve outside the repository (tools/check-worktree-clean.sh sweeps with find).
   spool_dir: "/tmp/ambush-perch-dev/spool"
   case_ttl_seconds:

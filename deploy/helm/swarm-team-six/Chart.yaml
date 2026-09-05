@@ -9,3 +9,13 @@ dependencies:
     version: 0.1.0
     repository: file://charts/nats
     condition: nats.enabled
+  # The Ambush relay the Perch bridge files into. A file:// dependency on the
+  # chart in this repository rather than a registry reference, so the version
+  # installed is the one this commit was tested against -- a registry range
+  # would let a relay the daemon has never run beside arrive on an upgrade.
+  # Off by default (`ambush.enabled: false`): most deployments already have a
+  # relay, and a chart that shipped one would install a second.
+  - name: ambush
+    version: 0.1.8
+    repository: file://../../../workspace/deploy/charts/ambush
+    condition: ambush.enabled

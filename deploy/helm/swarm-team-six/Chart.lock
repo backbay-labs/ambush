@@ -1,0 +1,9 @@
+dependencies:
+- name: nats
+  repository: file://charts/nats
+  version: 0.1.0
+- name: ambush
+  repository: file://../../../workspace/deploy/charts/ambush
+  version: 0.1.8
+digest: sha256:77a541924e3fad845bd99ce25bb1804b54afea72c8e390cf8cfe59cb0c30267a
+generated: "2026-09-04T14:47:56.828036-04:00"

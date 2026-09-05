@@ -30,6 +30,9 @@ pub struct AppState {
     pub managed_agent_runtime_transition: Mutex<()>,
     pub managed_agents_store_lock: Mutex<()>,
     pub channel_templates_store_lock: Mutex<()>,
+    /// The locally supervised `swarm_detect`, when the laptop demo is in use.
+    /// Local process control, not an Ambush write, so it sits outside INV-01.
+    pub perch_sidecar: std::sync::Arc<crate::perch_sidecar::PerchSidecar>,
     pub managed_agent_processes: Mutex<HashMap<ManagedAgentRuntimeKey, ManagedAgentPairRuntime>>,
     pub provider_deploy_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub huddle_state: Mutex<HuddleState>,

@@ -47,4 +47,4 @@
 #   reason  why it is in that state, naming the ruling. Mandatory, reviewed.
 #
 scope	status	reason
-docs/assets	deferred	W3-24: rewrite and require in Operator-complete Task 20
+docs/assets	required	W3-24 landed 2026-09-05: the twelve diagrams rewritten to the product's vocabulary (Operator-complete Task 20); every SVG is scanned

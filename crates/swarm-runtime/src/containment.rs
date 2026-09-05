@@ -493,6 +493,9 @@ pub struct ContainmentSweep {
     executor: Arc<dyn RollbackExecutor>,
     mode: ExecutionMode,
     governance: Option<Arc<dyn GovernanceAuthority>>,
+    /// B1c. `None` publishes nothing, which is the pre-B1c behaviour and what
+    /// every existing test constructs.
+    runtime_events: Option<crate::runtime_events::RuntimeEventBroadcaster>,
 }
 
 impl std::fmt::Debug for ContainmentSweep {
@@ -502,6 +505,7 @@ impl std::fmt::Debug for ContainmentSweep {
             .field("executor", &self.executor)
             .field("mode", &self.mode)
             .field("governance", &self.governance.is_some())
+            .field("runtime_events", &self.runtime_events.is_some())
             .finish()
     }
 }
@@ -517,6 +521,7 @@ impl ContainmentSweep {
             executor,
             mode,
             governance: None,
+            runtime_events: None,
         }
     }
 
@@ -543,12 +548,65 @@ impl ContainmentSweep {
     }
 
     /// Release one named lease early. Same function the sweep uses.
+    /// Attach the daemon's broadcaster so every release — manual or expiry —
+    /// leaves the process as a `RuntimeEvent::ContainmentReleased`.
+    ///
+    /// The bridge turns it into the `swarm:rollback:v1` card, and nothing else
+    /// can: the `RollbackReceipt` is produced inside this module and
+    /// `run_until_shutdown` consumes the sweep report internally, so a release
+    /// that is not published here is a release no operator ever sees.
+    #[must_use]
+    pub fn with_runtime_events(
+        mut self,
+        events: crate::runtime_events::RuntimeEventBroadcaster,
+    ) -> Self {
+        self.runtime_events = Some(events);
+        self
+    }
+
+    /// One publish per release, AFTER the store has been re-read.
+    ///
+    /// `lease_closed` is computed rather than assumed from a successful
+    /// receipt: a failed inverse leaves the lease open, and a console told
+    /// "released" about a lease that is still open has been told the one thing
+    /// it must never be told.
+    fn publish_release(&self, receipt: &RollbackReceipt, trigger: RollbackTrigger, now_ms: i64) {
+        let Some(events) = self.runtime_events.as_ref() else {
+            return;
+        };
+        let lease_closed = self
+            .store
+            .open_leases()
+            .map(|leases| {
+                !leases
+                    .iter()
+                    .any(|lease| lease.lease_id() == receipt.lease_id)
+            })
+            .unwrap_or(false);
+        let (attestation_verified, attestation_error) = match verify_release_attestation(receipt) {
+            Ok(_) => (true, None),
+            Err(error) => (false, Some(error.to_string())),
+        };
+        events.publish(crate::runtime_events::RuntimeEvent::ContainmentReleased {
+            emitted_at_ms: now_ms,
+            lease_id: receipt.lease_id.clone(),
+            trigger,
+            receipt: receipt.clone(),
+            lease_closed,
+            attestation_verified,
+            attestation_error,
+            partition_state_at_execution: self
+                .governance()
+                .map(|authority| authority.status_report().partition_state),
+        });
+    }
+
     pub async fn release(
         &self,
         lease_id: &str,
         now_ms: i64,
     ) -> Result<RollbackReceipt, ContainmentReleaseError> {
-        release_lease(
+        let receipt = release_lease(
             self.store.as_ref(),
             self.executor.as_ref(),
             self.mode,
@@ -557,7 +615,9 @@ impl ContainmentSweep {
             now_ms,
             self.governance(),
         )
-        .await
+        .await?;
+        self.publish_release(&receipt, RollbackTrigger::Manual, now_ms);
+        Ok(receipt)
     }
 
     /// Release every lease expired at `now_ms`.
@@ -594,7 +654,10 @@ impl ContainmentSweep {
             )
             .await
             {
-                Ok(receipt) => report.receipts.push(receipt),
+                Ok(receipt) => {
+                    self.publish_release(&receipt, RollbackTrigger::Expiry, now_ms);
+                    report.receipts.push(receipt);
+                }
                 Err(error) => {
                     tracing::warn!(
                         module = module_path!(),
@@ -1166,5 +1229,75 @@ mod tests {
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].trigger, RollbackTrigger::Expiry);
         assert!(executor.calls.load(Ordering::SeqCst) >= 1);
+    }
+
+    /// Every release leaves the process, by BOTH paths.
+    ///
+    /// `run_until_shutdown` consumes the sweep report internally, so a release
+    /// that is not published here is a containment undone that no operator ever
+    /// hears about. Manual and expiry are separate call sites and each is
+    /// asserted; a publish added to one and forgotten in the other is the whole
+    /// failure this test exists for.
+    #[tokio::test]
+    async fn every_release_publishes_a_containment_released_event() {
+        let events = crate::runtime_events::RuntimeEventBroadcaster::new(16);
+        let mut rx = events.subscribe();
+        let executor = Arc::new(RecordingExecutor::default());
+        let store = Arc::new(MemoryContainmentLeaseStore::new());
+        let sweep = ContainmentSweep::new(store.clone(), executor, ExecutionMode::Enforced)
+            .with_runtime_events(events);
+
+        store
+            .open_lease(&lease("cl_manual", 1_000, 900_000))
+            .unwrap();
+        let receipt = sweep.release("cl_manual", 5_000).await.unwrap();
+        match rx.try_recv().unwrap() {
+            crate::runtime_events::RuntimeEvent::ContainmentReleased {
+                lease_id,
+                trigger,
+                lease_closed,
+                receipt: carried,
+                attestation_verified,
+                partition_state_at_execution,
+                ..
+            } => {
+                assert_eq!(lease_id, "cl_manual");
+                assert_eq!(trigger, RollbackTrigger::Manual);
+                // Re-read from the store, not inferred from the call returning.
+                assert!(lease_closed);
+                assert_eq!(carried.rollback_id, receipt.rollback_id);
+                assert!(!attestation_verified, "no governance wired, so unattested");
+                assert_eq!(
+                    partition_state_at_execution, None,
+                    "no governance wired, so no partition state"
+                );
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
+
+        store.open_lease(&lease("cl_expiry", 1_000, 2_000)).unwrap();
+        let report = sweep.sweep(3_001).await;
+        assert_eq!(report.expired, 1);
+        match rx.try_recv().unwrap() {
+            crate::runtime_events::RuntimeEvent::ContainmentReleased {
+                lease_id, trigger, ..
+            } => {
+                assert_eq!(lease_id, "cl_expiry");
+                assert_eq!(trigger, RollbackTrigger::Expiry);
+            }
+            other => panic!("wrong event: {other:?}"),
+        }
+    }
+
+    /// A sweep with no broadcaster publishes nothing and still works. Every
+    /// existing caller constructs it that way.
+    #[tokio::test]
+    async fn a_sweep_without_a_broadcaster_still_releases() {
+        let executor = Arc::new(RecordingExecutor::default());
+        let (store, sweep) = sweep_with(executor);
+        store.open_lease(&lease("cl_quiet", 1_000, 2_000)).unwrap();
+        let report = sweep.sweep(3_001).await;
+        assert_eq!(report.expired, 1);
+        assert_eq!(report.receipts.len(), 1);
     }
 }

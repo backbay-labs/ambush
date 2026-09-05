@@ -10,6 +10,7 @@ import {
   type PerchMintIncidentResponse,
   type PerchReviewedFinding,
   type PerchReviewedFindingsResponse,
+  type PerchPolicyTriple,
 } from "@/shared/api/tauriPerch";
 
 /**
@@ -153,6 +154,14 @@ export type PerchMockFixture = {
    * message-carrying variant, for a daemon that answered with its own words.
    */
   daemonError?: string | null;
+  /** The containment leases `perch_list_containments` reports. */
+  containments?: readonly Record<string, unknown>[];
+  /** The coverage snapshot `perch_evasion_coverage` reports. */
+  evasionCoverage?: Record<string, unknown> | null;
+  /** `GET /v2/api/runtime/status`'s first item; null answers with the default. */
+  operatorStatus?: Record<string, unknown> | null;
+  /** The body `perch_release_containment` answers with. */
+  release?: Record<string, unknown> | null;
   /** The leg-2 outcome `perch_decide_hold` answers with. */
   decide?: MockDecideOutcome | null;
   /** Hold leg 2 open this long, so `sending` is observable as its own state. */
@@ -203,6 +212,16 @@ export type PerchMockFixture = {
   feedbackDelayMs?: number;
 };
 
+/** What `perch_verify_envelope` answers. Mirrors `PerchEnvelopeVerification`. */
+type MockVerification = {
+  hash_matches: boolean;
+  signature_present: boolean;
+  signature_valid: boolean | null;
+  chain: string | null;
+  tier: number;
+  reason: string;
+};
+
 type MockState = {
   issuers: string[];
   lanes: Record<string, string>;
@@ -216,6 +235,10 @@ type MockState = {
   holds: MockPerchHold[];
   openCount: number | null;
   daemonError: string | null;
+  containments: Record<string, unknown>[];
+  evasionCoverage: Record<string, unknown> | null;
+  operatorStatus: Record<string, unknown> | null;
+  release: Record<string, unknown> | null;
   decide: MockDecideOutcome | null;
   decideDelayMs: number;
   legOneError: string | null;
@@ -232,6 +255,20 @@ type MockState = {
   log: string[];
   /** How many relay verdict cards this session published. */
   verdicts: number;
+  /**
+   * The laptop sidecar's last reported status, or `null` for never started.
+   * `null` and a `stopped` status are different, and the panel renders them
+   * differently, so the mock keeps them apart too.
+   */
+  /** A scripted envelope verification, or `null` for the tier-1 default. */
+  verification: MockVerification | null;
+  sidecar: {
+    pid: number;
+    started_at_ms: number;
+    healthz: "starting" | "ready" | "unhealthy" | "stopped";
+    profile_path: string;
+    seeds_present: { nostr: boolean; spine: boolean };
+  } | null;
 };
 
 function defaults(): MockState {
@@ -248,6 +285,10 @@ function defaults(): MockState {
     holds: [],
     openCount: null,
     daemonError: null,
+    containments: [],
+    evasionCoverage: null,
+    operatorStatus: null,
+    release: null,
     decide: null,
     decideDelayMs: 0,
     legOneError: null,
@@ -260,6 +301,8 @@ function defaults(): MockState {
     feedback: new Map(),
     log: [],
     verdicts: 0,
+    verification: null,
+    sidecar: null,
   };
 }
 
@@ -287,6 +330,9 @@ declare global {
       setDaemonError: (message: string | null) => void;
       setDecide: (outcome: MockDecideOutcome | null, delayMs?: number) => void;
       setLegOneError: (message: string | null) => void;
+      /** Script the envelope verification a spec needs; `null` restores the
+          tier-1 default, which is this fixture's honest steady state. */
+      setVerification: (verification: MockVerification | null) => void;
       reset: () => void;
     };
   }
@@ -325,6 +371,16 @@ function applyFixture(target: MockState, fixture: PerchMockFixture): void {
   if (fixture.daemonError !== undefined) {
     target.daemonError = fixture.daemonError;
   }
+  if (fixture.containments) {
+    target.containments = fixture.containments.map((lease) => ({ ...lease }));
+  }
+  if (fixture.evasionCoverage !== undefined) {
+    target.evasionCoverage = fixture.evasionCoverage;
+  }
+  if (fixture.operatorStatus !== undefined) {
+    target.operatorStatus = fixture.operatorStatus;
+  }
+  if (fixture.release !== undefined) target.release = fixture.release;
   if (fixture.decide !== undefined) target.decide = fixture.decide;
   if (fixture.decideDelayMs !== undefined) {
     target.decideDelayMs = fixture.decideDelayMs;
@@ -461,6 +517,17 @@ export const PERCH_HANDLED_COMMANDS: readonly string[] = Object.freeze([
   "perch_record_hold_verdict",
   "perch_decide_hold",
   "perch_publish_verdict_update",
+  "perch_list_containments",
+  "perch_release_containment",
+  "perch_evasion_coverage",
+  "perch_export_bundle",
+  "perch_verify_envelope",
+  "perch_sidecar_start",
+  "perch_sidecar_stop",
+  "perch_sidecar_status",
+  "perch_operator_identity",
+  "perch_policy",
+  "perch_operator_status",
 ]);
 
 /**
@@ -536,8 +603,28 @@ function mockEventId(seed: string): string {
  * The leg-2 answer, optionally delayed so a spec can observe
  * `sending -> recorded -> acknowledged` as three states rather than one.
  */
-async function decideAfterDelay(): Promise<unknown> {
+async function decideAfterDelay(payload: unknown): Promise<unknown> {
   const s = current();
+  // The Rust command binds ONE parameter named `input`. A renderer that sends
+  // the fields flat gets "missing required key input" from Tauri and the
+  // decision never reaches the daemon — and a mock that answered anyway is
+  // how that defect stayed hidden through forty-five E2E specs until the
+  // Rust signature was read against the wrapper.
+  const input = (payload as { input?: Record<string, unknown> } | null)?.input;
+  if (!input) {
+    throw new Error("perch_decide_hold expects { input }; arguments were flat");
+  }
+  for (const key of [
+    "holdId",
+    "decision",
+    "nostrIntentEventId",
+    "decidedAtMs",
+    "signature",
+  ]) {
+    if (input[key] === undefined) {
+      throw new Error(`perch_decide_hold input is missing ${key}`);
+    }
+  }
   if (s.decideDelayMs > 0) {
     await new Promise((resolve) => setTimeout(resolve, s.decideDelayMs));
   }
@@ -575,6 +662,7 @@ function recordHoldVerdict(payload: unknown): unknown {
       signature_hex: mockEventId(`sig:${nostrIntentEventId}`).repeat(2),
     },
     hold_id: holdId,
+    case_channel: String(input?.caseChannel ?? ""),
   };
 }
 
@@ -690,6 +778,24 @@ function mintIncident(payload: unknown): PerchMintIncidentResponse {
     case_id: mintedCaseId(findingId),
   };
   s.minted.set(findingId, ids);
+  if (existing === undefined && typeof window !== "undefined") {
+    // The bridge creates the case channel after the daemon mints the case
+    // (the daemon has no relay client). Thirty days is the profile's default
+    // case TTL, so the TTL clock has a real deadline to read.
+    (
+      window as Window & {
+        __AMBUSH_E2E_CREATE_CASE_CHANNEL__?: (
+          id: string,
+          name: string,
+          ttlSeconds: number | null,
+        ) => void;
+      }
+    ).__AMBUSH_E2E_CREATE_CASE_CHANNEL__?.(
+      ids.case_id,
+      `case-${ids.case_id.slice(0, 8)}`,
+      2_592_000,
+    );
+  }
   return {
     schema_version: 1,
     incident_id: ids.incident_id,
@@ -817,13 +923,119 @@ export function handlePerchMockCommand(
       return recordHoldVerdict(payload);
     case "perch_decide_hold":
       s.log.push(command);
-      return decideAfterDelay();
+      return decideAfterDelay(payload);
     case "perch_publish_verdict_update":
       s.log.push(command);
       return publishVerdictUpdate(payload);
+    case "perch_evasion_coverage":
+      s.log.push(command);
+      return (
+        s.evasionCoverage ?? {
+          generated_at_ms: Date.now(),
+          suite_name: "evasion-breadth-v1",
+          suite_path: "scenario-suites/evasion-breadth-v1.yaml",
+          corpus_version: "1",
+          detectors: [],
+        }
+      );
+    case "perch_list_containments":
+      s.log.push(command);
+      return {
+        schema_version: 1,
+        observed_at_ms: Date.now(),
+        leases: s.containments.map((lease) => ({ ...lease })),
+      };
+    case "perch_release_containment":
+      s.log.push(command);
+      // The default is a release whose inverse worked. A spec that wants the
+      // 200-with-`lease_closed: false` case seeds it, because that outcome is
+      // the one the board must never render as success.
+      return (
+        s.release ?? {
+          lease_closed: true,
+          fully_reversed: true,
+          attestation_verified: true,
+          attestation_error: null,
+          steps: [],
+        }
+      );
     case "perch_record_verdict":
       s.log.push(command);
       return after(s.verdictDelayMs, () => recordVerdict(payload));
+    // The export writes no files in a browser. It reports what it was asked
+    // to write, so a spec can assert the PLAN — which is the part the console
+    // owns — without asserting a filesystem the mock does not have.
+    case "perch_export_bundle": {
+      s.log.push(command);
+      const request = payload as {
+        directory?: string;
+        files?: { path: string }[];
+      } | null;
+      const files = request?.files ?? [];
+      return {
+        directory: request?.directory ?? "",
+        written: files.map((file) => file.path),
+        bytes: 0,
+      };
+    }
+    // Envelope verification. The mock answers tier 1 by default: an unsigned
+    // envelope whose hash matches is the honest steady state of this fixture,
+    // and a mock that answered tier 2 would let a spec assert a badge the
+    // product cannot yet render.
+    case "perch_verify_envelope":
+      s.log.push(command);
+      return (
+        s.verification ?? {
+          hash_matches: true,
+          signature_present: false,
+          signature_valid: null,
+          chain: null,
+          tier: 1,
+          reason:
+            "attestation matches this body; the envelope carries no signature",
+        }
+      );
+    // The laptop sidecar. Local process control, so the mock's job is only to
+    // let the settings panel render its three states without a real daemon.
+    // The default is `null` -- never started -- because a mock that reported a
+    // running daemon would let a spec assert a stop control the product would
+    // not have shown.
+    case "perch_sidecar_start":
+      s.log.push(command);
+      s.sidecar = {
+        pid: 4242,
+        started_at_ms: s.nowMs,
+        healthz: "starting",
+        profile_path: String(
+          (payload as { configPath?: string } | null)?.configPath ?? "",
+        ),
+        // Presence only. A mock that carried a seed value would let a spec
+        // pass while the product leaked one (INV-22).
+        seeds_present: { nostr: true, spine: true },
+      };
+      return { ...s.sidecar };
+    case "perch_sidecar_stop":
+      s.log.push(command);
+      if (s.sidecar) s.sidecar = { ...s.sidecar, healthz: "stopped" };
+      return null;
+    case "perch_policy": {
+      s.log.push(command);
+      const triple = (payload as { triple?: PerchPolicyTriple | null } | null)
+        ?.triple;
+      return mockPolicyResponse(triple ?? null);
+    }
+    case "perch_operator_status":
+      s.log.push(command);
+      return s.operatorStatus ?? MOCK_OPERATOR_STATUS;
+    case "perch_operator_identity":
+      s.log.push(command);
+      return {
+        public_key_hex: "dd".repeat(32),
+        key_id: mockEventId("operator-key-id"),
+      };
+    case "perch_sidecar_status":
+      s.log.push(command);
+      return s.sidecar ? { ...s.sidecar } : null;
     case "perch_finding_feedback":
       s.log.push(command);
       return after(s.feedbackDelayMs, () => findingFeedback(payload));
@@ -870,6 +1082,9 @@ export function installPerchControlSeams(target: Window): void {
     setLegOneError: (message) => {
       current().legOneError = message;
     },
+    setVerification: (verification) => {
+      current().verification = verification;
+    },
     reset: () => resetPerchMock(),
   };
 }
@@ -877,3 +1092,179 @@ export function installPerchControlSeams(target: Window): void {
 if (typeof window !== "undefined") {
   installPerchControlSeams(window);
 }
+
+// ── /policy: the shipped three rules, evaluated the way the daemon evaluates ──
+
+type MockPolicyRule = {
+  readonly index: number;
+  readonly name: string;
+  readonly decision: "allow" | "deny";
+  readonly threat_class: string;
+  readonly actions: readonly string[];
+  readonly min_severity: string;
+  readonly max_severity: string;
+  readonly time_window_utc: {
+    readonly start_hour_utc: number;
+    readonly end_hour_utc: number;
+  } | null;
+  readonly max_actions_per_agent_per_minute: number | null;
+};
+
+/** `rulesets/default.yaml`'s policy block, as `/v1/operator/policy` serves it. */
+const MOCK_POLICY_RULES: readonly MockPolicyRule[] = [
+  {
+    index: 0,
+    name: "execution-after-hours-autorespond",
+    decision: "allow",
+    threat_class: "execution",
+    actions: ["deploy_decoy", "escalate"],
+    min_severity: "HIGH",
+    max_severity: "CRITICAL",
+    time_window_utc: { start_hour_utc: 0, end_hour_utc: 24 },
+    max_actions_per_agent_per_minute: 4,
+  },
+  {
+    index: 1,
+    name: "command-and-control-emergency-block",
+    decision: "allow",
+    threat_class: "command_and_control",
+    actions: ["block_egress", "escalate"],
+    min_severity: "CRITICAL",
+    max_severity: "CRITICAL",
+    time_window_utc: { start_hour_utc: 0, end_hour_utc: 24 },
+    max_actions_per_agent_per_minute: 2,
+  },
+  {
+    index: 2,
+    name: "credential-access-destructive-deny",
+    decision: "deny",
+    threat_class: "credential_access",
+    actions: ["revoke_credential"],
+    min_severity: "LOW",
+    max_severity: "HIGH",
+    time_window_utc: null,
+    max_actions_per_agent_per_minute: null,
+  },
+];
+
+const MOCK_DESTRUCTIVE_KINDS = new Set([
+  "block_egress",
+  "isolate_host",
+  "revoke_credential",
+  "sinkhole_dns",
+  "terminate_user_session",
+  "inject_firewall_rule",
+  "quarantine_file",
+  "kill_process",
+  "suspend_process",
+  "disable_user_account",
+  "force_password_reset",
+  "remove_scheduled_task",
+]);
+
+const MOCK_SEVERITY_ORDER = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+
+/** First match in file order decides; the rest is not_matched / not_reached. */
+function mockPolicyResponse(triple: PerchPolicyTriple | null): unknown {
+  const humanGate = "HIGH";
+  let evaluation: unknown = null;
+  if (triple) {
+    const rank = MOCK_SEVERITY_ORDER.indexOf(triple.severity);
+    let decided: MockPolicyRule | null = null;
+    const verdicts: { rule_index: number; verdict: string }[] = [];
+    for (const rule of MOCK_POLICY_RULES) {
+      if (decided !== null) {
+        verdicts.push({ rule_index: rule.index, verdict: "not_reached" });
+        continue;
+      }
+      const matches =
+        rule.threat_class === triple.threatClass &&
+        rank >= MOCK_SEVERITY_ORDER.indexOf(rule.min_severity) &&
+        rank <= MOCK_SEVERITY_ORDER.indexOf(rule.max_severity) &&
+        (rule.actions.length === 0 || rule.actions.includes(triple.action));
+      if (matches) {
+        decided = rule;
+        verdicts.push({ rule_index: rule.index, verdict: "decides" });
+      } else {
+        verdicts.push({ rule_index: rule.index, verdict: "not_matched" });
+      }
+    }
+    const destructive = MOCK_DESTRUCTIVE_KINDS.has(triple.action);
+    const atGate = rank >= MOCK_SEVERITY_ORDER.indexOf(humanGate);
+    evaluation = {
+      triple: {
+        threat_class: triple.threatClass,
+        severity: triple.severity,
+        action: triple.action,
+      },
+      verdicts,
+      fallthrough: decided
+        ? null
+        : destructive && atGate
+          ? {
+              gate: "static",
+              verdict: "require_human",
+              reason: "authorized but held for human approval",
+            }
+          : {
+              gate: "static",
+              verdict: "allow",
+              reason: "static.default_allow",
+            },
+      outranks_human_gate:
+        decided !== null &&
+        decided.decision === "allow" &&
+        destructive &&
+        atGate,
+      warning: "request_carried_selectors",
+    };
+  }
+  return {
+    schema_version: 1,
+    human_gate_severity: humanGate,
+    lease_ttl_ms: 60_000,
+    max_actions_per_scope_per_minute: 5,
+    source: { path: "rulesets/default.yaml", attested: true },
+    rules: MOCK_POLICY_RULES,
+    evaluation,
+  };
+}
+
+// ── /tuning: the daemon's status, as far as the bench reads it ──────────────
+
+/**
+ * One detector-rule review for the fixture's own detector — the report a
+ * daemon computes after three verdicts, two of them Dismiss.
+ */
+const MOCK_OPERATOR_STATUS = {
+  captured_at_ms: 1_773_100_000_000,
+  alert_tuning: {
+    reviewed_findings: 3,
+    false_positive_findings: 2,
+    recommendation_count: 1,
+    recommendations: [
+      {
+        kind: "detector_rule_review",
+        priority: "high",
+        summary:
+          "suspicious_process_tree is dismissed more often than it is confirmed on host-ops-1.",
+        next_step:
+          "Review the rule's parent-process allowlist against the two dismissed findings before changing its threshold.",
+        strategy_id: "suspicious_process_tree",
+        host_id: "host-ops-1",
+        reviewed_findings: 3,
+        false_positive_findings: 2,
+        false_positive_rate: 0.67,
+        supporting_signals: [
+          "2 of 3 verdicts on host-ops-1 were Dismiss (backup job)",
+        ],
+      },
+    ],
+  },
+  false_positive_tracking: {
+    reviewed_findings: 3,
+    false_positive_findings: 2,
+    false_positive_rate: 0.67,
+    latest_feedback_at_ms: 1_773_099_000_000,
+  },
+};

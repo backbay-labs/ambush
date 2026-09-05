@@ -1059,6 +1059,7 @@ async fn platform_asset_posture_handler(
             since_timestamp: None,
             host_id: Some(host_id.clone()),
             limit: 0,
+            include_suppressed: false,
         })
         .await
         .map_err(|error| PlatformApiError::internal(error.to_string()))?;

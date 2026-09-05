@@ -182,7 +182,11 @@ pub struct BehavioralRoleToolFrequencyEntry {
 }
 
 /// Effective pheromone policy after base config plus threat-class override resolution.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Serialize` because B4 serves it beside the concentration: a console that
+/// renders a number against a threshold has to be shown the threshold that was
+/// actually applied, not the one in a config file it cannot read.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ThreatClassPolicy {
     pub half_life_secs: f64,
     pub evaporation_threshold: f64,
@@ -317,7 +321,10 @@ impl PheromoneConfig {
 }
 
 /// Aggregated pheromone concentration for a threat class in a region.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` because B4 serves the number the monitor acts on, so a console
+/// never has to recompute it and reach a different answer.
+#[derive(Debug, Clone, Serialize)]
 pub struct PheromoneConcentration {
     pub threat_class: ThreatClass,
     /// Sum of effective strengths from distinct agents.

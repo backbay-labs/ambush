@@ -21,6 +21,12 @@ reqwest.workspace = true
 rustls-pemfile = "2"
 serde.workspace = true
 serde_json.workspace = true
+# The OpenAPI generator binary reads the authoring YAML
+# (docs/plans/ambush-ui/build/openapi/perch-operator-v1.yaml) and emits the
+# gated JSON; 12-BACKEND-BILL-API.md §14 keeps ONE source of truth, and a
+# generator that carried a second copy of a 2,000-line contract would not.
+serde_yaml.workspace = true
+anyhow.workspace = true
 swarm-agents.workspace = true
 swarm-core.workspace = true
 swarm-crypto.workspace = true
@@ -53,7 +59,6 @@ zeroize.workspace = true
 # Neither appears in this crate's non-test code.
 async-trait.workspace = true
 rcgen = "0.13"
-serde_yaml.workspace = true
 swarm-consensus.workspace = true
 # Dev-only: the decide route tests build the same signed preimage the console
 # would, through the wire crate rather than a hand-rolled copy.

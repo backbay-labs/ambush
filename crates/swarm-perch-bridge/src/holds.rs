@@ -99,6 +99,9 @@ pub struct HoldPublisher {
     issuer: Identity,
     issuer_idx: IssuerIdx,
     chain: SeqChain,
+    /// B6. The spine identity hold cards are sealed under, when the bridge was
+    /// built with a signing profile.
+    spine: Option<Arc<crate::spine::SpineSigner>>,
     alarm_seq: u64,
     metrics: BridgeMetrics,
 }
@@ -127,9 +130,18 @@ impl HoldPublisher {
             issuer,
             issuer_idx,
             chain: SeqChain::default(),
+            spine: None,
             alarm_seq: 0,
             metrics,
         }
+    }
+
+    /// Attach B6's signer, so every hold card is sealed under the spine
+    /// identity rather than published unsigned.
+    #[must_use]
+    pub fn with_spine(mut self, spine: Arc<crate::spine::SpineSigner>) -> Self {
+        self.spine = Some(spine);
+        self
     }
 
     /// The routing sidecar, for the case-promotion path that shares it.
@@ -480,6 +492,7 @@ impl HoldPublisher {
             &mut chain,
             (self.issuer_idx, seq),
             now_ms,
+            self.spine.as_deref(),
         )?;
         self.chain = chain;
         Ok(body)

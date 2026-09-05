@@ -954,7 +954,31 @@ git commit -s -m "feat(http): GET /v1/operator/pheromone/deposits (B4) with the 
 
 ---
 
-### Task 5: B1c — `RuntimeEvent::ContainmentReleased`
+#### Task 4 status — 2026-09-04
+
+Steps 1-14 landed: the reduction and its two tests in `swarm-pheromone`, the engine op and its
+two tests in `swarm-ingest-runtime`, and the mounted route with the path inventory grown to
+seven. Root `cargo clippy --workspace --all-targets -- -D warnings` is clean and
+`cargo test --workspace` is 1,547 passing.
+
+**Steps 15 and 16 are blocked on two First card artifacts that never landed**, and are not
+claimed:
+
+- Step 15 regenerates `docs/openapi/perch-operator-v1.json` with
+  `crates/swarm-runtime-http/src/bin/generate_perch_openapi.rs`. Neither exists. The only
+  OpenAPI generator in the tree is `generate_platform_openapi.rs`, for the v2 platform API, and
+  the only document under `docs/openapi/` is `v2-platform-openapi.json`. The perch contract
+  lives at `build/openapi/perch-operator-v1.yaml` and is hand-maintained, so **nothing today
+  checks the served shape against it**. Writing the generator is a task in its own right and
+  should be one.
+- Step 16 wires "the desktop wrapper's return type", describing `perchDeposits(threatClass)` as
+  "already a wrapper". There is no `perchDeposits` in `shared/api/tauriPerch.ts`, and no
+  `perch_deposits` Tauri command. Adding one means a new command, a new entry in
+  `PERCH_TAURI_COMMANDS`, and a new arm in the E2E mock's closed set — all three of which the
+  cross-language guards added in The hold now enforce together. It belongs with the surface
+  that consumes it (Task 14, the tuning bench) rather than ahead of it.
+
+## Task 5: B1c — `RuntimeEvent::ContainmentReleased`
 
 **Files:**
 - Modify: `crates/swarm-runtime/src/runtime_events.rs:127-139`, `:142-173`, `:214-305`, `:308-338`
@@ -1306,7 +1330,27 @@ git commit -s -m "feat(ingest): stamp partition state at hold and at execution (
 
 ---
 
-### Task 7: B6 — signed spine envelopes on the bridge's publish path
+#### Tasks 5 and 6 status — 2026-09-04
+
+**Task 5 is complete.** `RuntimeEvent::ContainmentReleased` exists in all seven places, both
+release paths publish it, the daemon hands the sweep its broadcaster, and the bridge classifies
+it as `Stream::Evidence` with a test pinning that choice rather than only its existence.
+
+**Task 6 landed its Rust and wire halves.** The two stamps, the `current_partition_state`
+accessor, the wire-crate mirrors, both JSON-schema declarations, `zod.ts` and `types.ts`. The
+parity gate reports 324 fields on both sides, up from 322, and every golden vector is
+byte-identical because both fields skip serialization when absent.
+
+Two of its steps are **not done**, for the same reason Task 4 stopped:
+
+- the OpenAPI half (`HeldActionView` and `HoldDecisionRecord` in the YAML, then a regenerated
+  JSON) needs `generate_perch_openapi.rs`, which does not exist. See the Task 4 status note.
+- Step 5 un-skips `workspace/desktop/tests/e2e/perch-provenance.spec.ts`. That file does not
+  exist either; First card's E2E set is `perch-finding-card` and `perch-marker-admission`, and
+  The hold added four more. The rendering half of INV-08 therefore has no spec yet, and this
+  task does not claim one.
+
+## Task 7: B6 — signed spine envelopes on the bridge's publish path
 
 **Files:**
 - Modify: `crates/swarm-core/src/config/perch.rs` (`PerchBridgeConfig.spine_seed_env`)
@@ -1733,7 +1777,39 @@ git commit -s -m "feat(bridge): sign every envelope with a provisioned spine ide
 
 ---
 
-### Task 8: Bridge — response receipts first, then `swarm:lease:v1` from the 1 Hz containment sweep poll
+#### Task 7 status — 2026-09-04
+
+Steps 1 through 13 landed, plus the startup half of step 14. The wire crate's keyless chain
+primitives, the durable chain-head store, the spine signer, and construction of both in
+`PerchBridge::build` — so a signing profile with an unusable seed **refuses to start**, which is
+the security property the task exists for. Engine gates green: 1,566 tests, clippy `-D warnings`,
+layering and panic-contract.
+
+**Step 14 landed for the evidence path.** The pacer signs at append through
+`SpineSigner::seal_at` and commits the durable head on ACKNOWLEDGEMENT and nowhere else. That
+split is the design point: the pacer restores `prev_envelope_hash` when a frame is not
+acknowledged, precisely so an unpublished card never advances the chain, and a seal that wrote
+the durable head at append would advance it for a card the relay never took — the next real card
+would then chain from a link nobody can fetch, a broken chain produced by the mechanism meant to
+guarantee it. A head that cannot be advanced is logged rather than propagated: the card IS
+published, so returning an error would re-send a frame the relay already took; the next seal
+reads the stale head, produces a duplicate `seq`, and the store refuses it — visible, not a
+silent fork.
+
+The envelope is issued under the SPINE identity rather than the Nostr key that publishes it, and
+`a_card_built_with_a_signer_carries_a_signature_that_verifies` asserts the signature verifies
+under the issuer it names. Without a signer the envelope is unsigned, which is what the fixture
+generator and the pre-B6 tests construct.
+
+**Task 7 is complete.** The hold path seals under the spine too — a hold is the record an
+operator acts on, so it is the last card that should be publishable without attestation. The
+`bridge_envelopes_signed{issuer}` metric is registered and incremented where the seal happens, so
+an operator comparing it with `bridge_source_events_published` can see whether what reached the
+relay was signed rather than taking it on faith. T-16 is narrowed: the ENVELOPE now carries a
+signature, which is the point of B6, and the ban applies to the FACT — a card that vouched for
+itself would be asking a reader to trust the thing under examination.
+
+## Task 8: Bridge — response receipts first, then `swarm:lease:v1` from the 1 Hz containment sweep poll
 
 **Files:**
 - Create: `crates/swarm-perch-bridge/src/leases.rs` (working watcher and card body; copied skeleton text may be used as a starting point but no `todo!()` is committed)
@@ -2065,7 +2141,25 @@ git commit -s -m "feat(bridge): swarm:rollback:v1 from ContainmentReleased, repl
 
 ---
 
-### Task 10: Containments — `/leases`
+#### Tasks 8 and 9 status — 2026-09-04
+
+**Task 8's read half landed**: `LeaseWatcher` reports transitions rather than state, distinguishes
+"no store" from "an empty store", and leaves its view untouched when a read fails so a transient
+error does not report every lease as disappeared. `lease_card_body` reads no clock.
+
+**Task 9's card landed**: `rollback_card_body` and `rollback_tags`, with `release_response` riding
+only on a manual release — an expiry comes from the sweep with no request behind it, and a card
+that invented one would describe a request nobody made. `fully_reversed` is passed through
+rather than recomputed, so "we undid it" and "we went through the motions" stay distinguishable.
+
+**Not landed, and both blocked on the same missing piece:** the receive-side arms that PUBLISH
+these cards. Task 8 step 0 requires a `receipt_id → hunt_id` map recorded on acknowledgement and
+`CaseRouting::case_for_receipt`, and Task 9's arm needs a `LeaseCardIndex` keyed on `lease_id` to
+supply the `e` tag's parent. Both are routing state that has to be written on ACK for the same
+reason the chain head is (Task 7): a card the relay did not take must not leave a route behind
+pointing at it. The card bodies above are complete and tested; wiring them is the routing work.
+
+## Task 10: Containments — `/leases`
 
 **Files:**
 - Create: `workspace/desktop/src/shared/ui/perch/ContainmentTimer.tsx`, `containmentTimer.test.mjs`
@@ -5460,6 +5554,48 @@ Every `01-DESIGN.md` §6 / §7 / §9 / §12 item this milestone owns, and the `0
 5. `tauriPerch.ts`'s skeleton comment reads `GET /v1/operator/status` for `perch_operator_status`; that route is on `swarmctl serve` (7766). `20` §1.4 is right: the daemon serves the tuning report at `/v2/api/runtime/status`. Task 14 pins the constant.
 6. `04` §2.7 assumes `policy.rules` is readable and names no route; none exists on 9090. Task 16 adds `GET /v1/operator/policy` (a read, outside the bill's labels) rather than serving the ruleset through a second process.
 7. The team brief describes `PerchOmnibox` as "named but never specified" and the canvas template as "no owner"; `17` revision 2 §6.13 and §6.14 specify both. This plan builds from `17` rev 2 and files no decision for either.
+
+## Implementation status
+
+Recorded 2026-09-04, on `codex/ambush-operator-complete`. **This milestone is
+not claimed as accepted**: the fifteen exit criteria below are observable
+behaviours on a running dev stack with the console, and the console half had
+not been driven against that stack when this was written. **Update,
+2026-09-05:** it has been, headless through Tauri's own IPC layer
+(`evidence/walking-skeleton.md`); the rendered tree on a real window is the
+seam that remains, and acceptance is the owner's read. The original reason
+follows — the same limitation The hold recorded, for
+the same reason (the console's daemon surface goes through Tauri commands
+holding the bearer and the operator's Ed25519 key, which a browser cannot
+call). The `perch` preview flag stays off by default.
+
+| Task | Landed | Not landed, and why |
+|---|---|---|
+| 1–3 open decisions | filed in `00-DECISIONS.md` §3 with the fallback each plan builds against | the decisions themselves are the owner's |
+| 4 B4 deposits | `perch_deposit_slice`, the engine op, the mounted route (seven paths); `generate_perch_openapi` and the gated `docs/openapi/perch-operator-v1.json` (2026-09-05), with `tools/check-perch-openapi.sh` in CI | — |
+| 5 `ContainmentReleased` | the 13th runtime event, published from both release paths | — |
+| 6 partition stamp | both fields across five sides; parity 324 both ways | the console's rendering of the stamp — the rollback presenter and the per-state UNATTESTED badges the plan's provenance spec would assert (`perch-attestation-badge-rollback-*`) — is not built, and neither `HoldCard` nor any card reads `partition_state_at_*`; the spec file the plan un-skips does not exist because the presenter it targets does not |
+| 7 B6 spine | wire primitives, chain-head store, signer, sealing on the publish path with the durable head advancing only on ACK, and the console's `perch_verify_envelope` | — |
+| 8–9 | wire and bridge halves as landed in The hold | — |
+| 10 containment board | `/leases`, the state model, the timer, the rollback list, the release confirmation dialog, the partition section and its Playwright spec | — |
+| 11 lane screen | `laneLiveNumbers`, `laneCopy`, `LaneScreen`, `/lanes/$laneId`, the regime-B curve in the header slot, and `PerchNav` making all ten routes reachable | — |
+| 12 governance | `derivePerchGovernanceMode`, `governanceCopy`, `GovernanceStrip`, mounted above the outlet on every route including the Watchfloor's bare chrome | — |
+| 13 ledger and export | `buildLedgerQuery`, `planExportFiles`, `buildExportManifest`, `omniboxCommands`, `LedgerScreen`, `/ledger`, the tier allowlist gate, `perch_verify.rs`, `perch_export.rs`, the ⌘K omnibox | — |
+| 14 tuning | `tuningProvenance`, `TuningScreen`, `/tuning`; `perch_operator_status` (`GET /v2/api/runtime/status`), `TuningRecommendationCard` with every field and its denominators, the spec (2026-09-05) | the verdict provenance line — the daemon's reads carry counts, not verdict timestamps or per-incident measurements, so "N of M this week" is not computed and the card says so (**W3-43**) |
+| 15 gaps | `gapsCatalog`, `GapsScreen`, `/gaps` | — |
+| 16 policy | `policyEvaluation`, `PolicyScreen`, `/policy`; `GET /v1/operator/policy` with the daemon's own per-triple evaluation (`evaluate_triple` on the gate's predicate), the route in the contract, `perch_policy`, the mock evaluating the way the daemon does, and the Playwright spec (2026-09-05) | — |
+| 17 handoff | `reviewSession`, `watchClaim`, `shiftLedger`, `handoffPublish`, the frontier fold, `HandoffScreen`, `/handoff` | the daemon-side review session — see **W3-36**: the route cannot accept this body |
+| 18 case canvas | `caseTemplate`, `caseTtlClock`, `killChainLayout`, `CaseScreen`, `CaseCanvasTab`, `KillChainGraph`, the terminal pin in TS **and** Rust; `CaseScreen` mounted on `/cases/$caseId` (2026-09-05 — it had been built and mounted nowhere, so the Canvas tab and the TTL clock were unreachable), ⌘J on a case spawns in the case (the terminal context override), `perch-case-canvas.spec.ts` (4) and `perch-terminal.spec.ts` (2), the mock creating the case channel at mint and storing canvases | `KillChainGraph` is still mounted nowhere: its `included`/`rejected` member decisions with reasons live on the daemon's correlated incident and no read route serves them (**W3-42**); agent rows on the graph (blocked on Task 1) |
+| 19 Watchfloor | the whole of it: the shared layer, three charts, `WatchfloorScreen`, `/watch-floor`, two gates, the four reducers, and the telemetry publisher that drains and signs them once per tick | the 72-hour soak, which is manual |
+| 20 CI gates | route-tree, surface-count and notification-field gates, all wired, all with fixtures; the twelve SVG assets rewritten and `docs/assets` flipped to `required` (2026-09-05) | — |
+| 21 packaging | the compose gate (which found two real defects), the relay chart dependency, NetworkPolicy, perch secret, 12 chart tests, the deployment section | `docker compose up` and `helm install` — no working Docker daemon and no cluster here. Image digests are **not** pinned and the gate says so on every run |
+| 22 sidecar (optional) | supervisor with group-kill, three commands, health poll, settings panel (mounted under Settings → Detector on 2026-09-05; it had been built and mounted nowhere), opt-in bundling | never bundled or run: it needs an engine release build and a Tauri bundle |
+
+**Amendment W3-36** records the one place the plan and the implementation
+could not be reconciled: Task 17's END WATCH block cannot go to
+`POST /v1/operator/review/sessions`, because that route refuses an empty ref
+list and resolves every ref against the review workbench's own evidence stores,
+and a case channel is not one of those.
 
 ## Exit criteria
 

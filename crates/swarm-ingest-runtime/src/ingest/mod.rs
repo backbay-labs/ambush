@@ -815,7 +815,11 @@ fn runtime_event_matches_scope(event: &RuntimeEvent, scope: &ProvidenceContextSc
         // guard at the top of this function already returned -- and kept
         // because this match has no `_` arm, so the compiler, not review, is
         // what notices a new variant.
-        | RuntimeEvent::ResponseHeld { .. } => false,
+        | RuntimeEvent::ResponseHeld { .. }
+        // B1c. A rollback receipt names a host and a governance attestation, so
+        // it belongs on no Providence-scoped stream and, until B5, no anonymous
+        // one either.
+        | RuntimeEvent::ContainmentReleased { .. } => false,
     }
 }
 
@@ -1773,11 +1777,14 @@ impl IngestState {
     /// capture clones for its `ResponseHeld` publications.
     pub fn with_hold_store(mut self, store: Arc<dyn HeldActionStore>) -> Self {
         let settings = self.current_hold_settings();
-        self.hold_capture = Some(Arc::new(perch_ops::holds::HoldCapture::new(
-            store,
-            self.runtime_events.clone(),
-            settings,
-        )));
+        let mut capture =
+            perch_ops::holds::HoldCapture::new(store, self.runtime_events.clone(), settings);
+        // B2g-p. The same authority the dispatcher holds, so a hold and the
+        // decision that resolves it are stamped from one reading of the quorum.
+        if let Some(governance) = self.governance_policy.as_ref() {
+            capture = capture.with_governance(Arc::clone(governance));
+        }
+        self.hold_capture = Some(Arc::new(capture));
         self
     }
 
@@ -1846,12 +1853,30 @@ impl IngestState {
         self.detector.load_full()
     }
 
+    /// The governance authority's current partition state, or `None` when no
+    /// authority is wired.
+    ///
+    /// `None` means "could not establish" and must never be rendered as
+    /// healthy: the whole point of stamping it is that an operator can tell a
+    /// reading from its absence.
+    pub fn current_partition_state(&self) -> Option<swarm_policy::governance::PartitionState> {
+        self.governance_policy
+            .as_ref()
+            .map(|policy| policy.status_report().partition_state)
+    }
+
     pub fn current_substrate(&self) -> swarm_pheromone::ConfiguredPheromoneSubstrate {
         self.stack.load_full().substrate.clone()
     }
 
     pub fn current_pheromone_config(&self) -> swarm_core::config::PheromoneConfig {
         self.stack.load_full().service.config.pheromone.clone()
+    }
+
+    /// The policy the CURRENT runtime decides with — rules in file order —
+    /// for the operator surface's read-only `/policy`.
+    pub fn current_policy_config(&self) -> swarm_core::config::PolicyConfig {
+        self.stack.load_full().service.config.policy.clone()
     }
 
     /// The lease store the CURRENT runtime writes containment leases to.

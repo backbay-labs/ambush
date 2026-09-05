@@ -3451,6 +3451,7 @@ name = "swarm-perch-bridge"
 version = "0.1.0"
 dependencies = [
  "ambush-ws-client",
+ "async-trait",
  "axum",
  "chrono",
  "futures-util",
@@ -3585,6 +3586,7 @@ dependencies = [
 name = "swarm-runtime-http"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "arc-swap",
  "async-trait",
  "axum",

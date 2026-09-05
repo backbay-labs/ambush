@@ -35,6 +35,7 @@ impl StaticApprovalGate {
     }
 
     fn destructive_action(request: &ActionRequest) -> bool {
+        // Kept in step with `destructive_action_kinds()` by a test.
         matches!(
             request.action,
             ResponseAction::BlockEgress { .. }
@@ -322,6 +323,27 @@ impl ApprovalGate for StaticApprovalGate {
             scope: scope_for_response_action(&request.action),
         })
     }
+}
+
+/// The twelve destructive action kinds, as `ResponseAction::kind()` slugs, in
+/// the order `destructive_action` matches them. Public so the operator surface
+/// (`/v1/operator/policy`) can say whether a triple's action is one the human
+/// gate would hold, without re-spelling the list.
+pub fn destructive_action_kinds() -> &'static [&'static str] {
+    &[
+        "block_egress",
+        "isolate_host",
+        "revoke_credential",
+        "sinkhole_dns",
+        "terminate_user_session",
+        "inject_firewall_rule",
+        "quarantine_file",
+        "kill_process",
+        "suspend_process",
+        "disable_user_account",
+        "force_password_reset",
+        "remove_scheduled_task",
+    ]
 }
 
 #[cfg(test)]

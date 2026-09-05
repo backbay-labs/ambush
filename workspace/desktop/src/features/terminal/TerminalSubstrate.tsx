@@ -14,6 +14,7 @@ import {
   stepSession,
 } from "./terminalState";
 import { buildTerminalBanner } from "./terminalBanner";
+import { TERMINAL_BANNER_LINE } from "./terminalCaseScope";
 import { paintTerminalBanner } from "./terminalBannerPainter";
 import { buildBannerColorTable, phaseAt } from "./terminalBannerWave";
 import {
@@ -39,6 +40,13 @@ export type TerminalSessionTab = {
 
 type TerminalSubstrateProps = {
   channelName: string | null;
+  /**
+   * The case this shell is pinned to, when one is open. Rendered beside the
+   * non-fiction line: an operator has to be able to tell a real host shell
+   * from a chat surface before they type into it, and which case its
+   * artifacts will land under.
+   */
+  pinnedCaseLabel?: string;
   frame?: TerminalFrame;
   sessionFrames?: readonly { sessionId: string; frame: TerminalFrame }[];
   sessions: readonly TerminalSessionTab[];
@@ -78,6 +86,7 @@ const NOOP = () => {};
 const SPLASH_DURATION_MS = 2_500;
 
 export function TerminalSubstrate({
+  pinnedCaseLabel,
   frame,
   sessionFrames,
   sessions,
@@ -601,6 +610,14 @@ export function TerminalSubstrate({
         />
       ) : null}
       <div className="ambush-terminal-contract-bar">
+        <p
+          className="ambush-terminal-banner"
+          data-testid="perch-terminal-banner"
+        >
+          {pinnedCaseLabel
+            ? `${TERMINAL_BANNER_LINE} pinned to ${pinnedCaseLabel}`
+            : TERMINAL_BANNER_LINE}
+        </p>
         <div className="ambush-terminal-tabs" role="tablist">
           {sessions.map((session, index) => (
             <div

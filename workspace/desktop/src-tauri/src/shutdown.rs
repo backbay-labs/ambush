@@ -126,6 +126,15 @@ pub(crate) fn shutdown_mesh_runtime(app: &tauri::AppHandle) {
 
 pub(crate) fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
+    // The locally supervised daemon goes FIRST, and unconditionally.
+    //
+    // It is not a managed agent and is not in the records loaded below, so
+    // nothing further down would ever stop it. A detector left running after
+    // the app that started it has quit has no surface anywhere that can stop
+    // it, and it holds the operator port the next launch will try to bind.
+    if let Err(error) = state.perch_sidecar.stop() {
+        eprintln!("ambush-desktop: failed to stop the perch sidecar: {error}");
+    }
     let _restore_transition = state
         .managed_agent_runtime_transition
         .lock()

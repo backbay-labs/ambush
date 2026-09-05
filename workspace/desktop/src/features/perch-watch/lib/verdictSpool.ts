@@ -13,11 +13,20 @@
 // exists and no signing material at all.
 
 /** One undelivered leg 2. */
+import type { PerchDetachedSignature } from "@/shared/api/tauriPerch";
+
 export type SpooledLeg2 = {
   readonly holdId: string;
   readonly decision: "grant" | "refuse";
   /** Leg 1's card id. The idempotency key, and the reason a retry is safe. */
   readonly nostrIntentEventId: string;
+  /**
+   * Leg 1's stamp and signature, carried so a retry can complete leg 2
+   * without re-signing. Without them a reconnect replay had nothing to send,
+   * and the "never re-signs" rule made the spool a dead letter.
+   */
+  readonly decidedAtMs: number;
+  readonly signature: PerchDetachedSignature;
   readonly rationale: string | null;
   readonly armedAtMs: number | null;
   readonly firstAttemptAtMs: number;

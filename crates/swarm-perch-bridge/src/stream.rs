@@ -109,6 +109,9 @@ pub fn classify(event: &RuntimeEvent) -> Stream {
         // action is exactly the event an operator is waiting on, and the
         // 26006 frame it drives must never be coalesced or shed (R-1).
         RuntimeEvent::ResponseHeld { .. } => Stream::Alarm,
+        // B1c. A rollback receipt is durable evidence: never coalesced,
+        // spooled to disk, and the only record that a containment was undone.
+        RuntimeEvent::ContainmentReleased { .. } => Stream::Evidence,
         RuntimeEvent::ModeTransition { .. } => Stream::Alarm,
         RuntimeEvent::TamperAlert { .. } => Stream::Alarm,
 
@@ -580,6 +583,24 @@ pub fn hold_decision_to_wire(decision: HoldDecision) -> WireDecision {
     }
 }
 
+/// The engine's partition state on the wire.
+///
+/// A total match, not a string round trip: the two enums are the same four
+/// states and a new one on either side must fail to compile here rather than
+/// serialize as something the console does not know how to render (INV-08).
+pub fn partition_state_to_wire(
+    state: swarm_policy::governance::PartitionState,
+) -> swarm_perch_wire::cards::WirePartitionState {
+    use swarm_perch_wire::cards::WirePartitionState as Wire;
+    use swarm_policy::governance::PartitionState as Engine;
+    match state {
+        Engine::Healthy => Wire::Healthy,
+        Engine::Degraded => Wire::Degraded,
+        Engine::Partitioned => Wire::Partitioned,
+        Engine::Healing => Wire::Healing,
+    }
+}
+
 /// The wire form of a stored decision.
 ///
 /// NARROWING, and every dropped field is a daemon-side fact with no place on a card that
@@ -604,8 +625,10 @@ pub fn hold_decision_record_to_wire(record: &HoldDecisionRecord) -> WireHoldDeci
         receipt_id,
         audit_trail_id: _,
         refusal,
+        partition_state_at_execution,
     } = record;
     WireHoldDecisionRecord {
+        partition_state_at_execution: partition_state_at_execution.map(partition_state_to_wire),
         decision: hold_decision_to_wire(*decision),
         operator_id: operator_id.clone(),
         decided_at_ms: *decided_at_ms,
@@ -661,6 +684,39 @@ mod tests {
             "summary": "promoted"
         }));
         assert_eq!(classify(&promoted), Stream::Alarm);
+    }
+
+    /// A release is EVIDENCE, not an alarm.
+    ///
+    /// The compiler forces an arm to exist; this pins which one. An alarm
+    /// bypasses the pacer and is never shed, which is right for a hold waiting
+    /// on a human and wrong for a receipt that records something already done.
+    #[test]
+    fn a_containment_release_is_durable_evidence_and_not_an_alarm() {
+        let released = event(serde_json::json!({
+            "event_type": "containment_released",
+            "emitted_at_ms": 7,
+            "lease_id": "cl_test",
+            "trigger": "expiry",
+            "receipt": {
+                "rollback_id": "rb_test",
+                "lease_id": "cl_test",
+                "origin_receipt_id": "resp_test",
+                "governance_receipt_id": null,
+                "trigger": "expiry",
+                "mode": "enforced",
+                "status": "executed",
+                "steps": [],
+                "completed_at_ms": 7,
+                "summary": "0 of 0 steps reversed",
+                "governance_attestation": null
+            },
+            "lease_closed": true,
+            "attestation_verified": false,
+            "attestation_error": "unattested",
+            "partition_state_at_execution": "healthy"
+        }));
+        assert_eq!(classify(&released), Stream::Evidence);
     }
 
     #[test]

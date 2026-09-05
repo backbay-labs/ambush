@@ -41,7 +41,10 @@ impl ConfigurableApprovalGate {
             .and_then(|value| serde_json::from_value(value).ok())
     }
 
-    fn selector_matches(
+    /// Whether `rule` selects `request` for `threat_class`. Public so the
+    /// operator surface can evaluate a triple with the gate's own predicate
+    /// rather than a copy of it.
+    pub fn selector_matches(
         rule: &PolicyRuleConfig,
         request: &ActionRequest,
         threat_class: &ThreatClass,

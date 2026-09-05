@@ -127,6 +127,11 @@ export function FindingCardPresenter({
 export const findingCardEntry = defineSwarmCard<FindingPayload>({
   pillar: "substrate",
   homeSurface: ["case", "lane"],
+  // A CEILING, not a reading. The pacer seals every evidence envelope and
+  // `perch_verify_envelope` checks the hash, the signature and the chain link
+  // — so this card MAY reach tier 2, and renders whatever the verifier
+  // actually concluded, which is tier 1 for an unsigned or unchained envelope.
+  maxTier: 2,
   decode: decodeFinding,
   Presenter: FindingCardPresenter,
 });

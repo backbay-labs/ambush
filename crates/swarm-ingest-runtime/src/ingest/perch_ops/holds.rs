@@ -35,6 +35,10 @@ pub struct HoldCapture {
     store: Arc<dyn HeldActionStore>,
     events: Option<RuntimeEventBroadcaster>,
     settings: ResponseHoldSettings,
+    /// B2g-p. Read at CAPTURE time, not at construction: the partition state a
+    /// hold is stamped with has to be the one in force when the action was
+    /// held, and the quorum moves.
+    governance: Option<Arc<dyn swarm_policy::governance::GovernanceAuthority>>,
 }
 
 impl HoldCapture {
@@ -48,7 +52,20 @@ impl HoldCapture {
             store,
             events,
             settings,
+            governance: None,
         }
+    }
+
+    /// Attach the governance authority whose partition state every hold is
+    /// stamped with. Absent leaves the stamp `None`, which renders as "could
+    /// not establish" and never as healthy.
+    #[must_use]
+    pub fn with_governance(
+        mut self,
+        governance: Arc<dyn swarm_policy::governance::GovernanceAuthority>,
+    ) -> Self {
+        self.governance = Some(governance);
+        self
     }
 
     /// The store handle, for the reads and the decide engine.
@@ -92,7 +109,7 @@ impl HoldCapture {
             .map(|class| threat_class_slug(&class))
             .unwrap_or_else(|| "execution".to_string());
         let ttl_ms = i64::try_from(self.settings.hold_ttl_ms_for(&slug)).unwrap_or(i64::MAX);
-        let hold = HeldAction::new(
+        let mut hold = HeldAction::new(
             mint_hold_id(),
             request.clone(),
             detection.clone(),
@@ -102,6 +119,12 @@ impl HoldCapture {
             now_ms.saturating_add(ttl_ms),
             Some(audit.trail_id.clone()),
         );
+        // B2g-p. Read now, not at construction: this is the partition the
+        // quorum was in when the action was held, and the quorum moves.
+        hold.partition_state_at_hold = self
+            .governance
+            .as_ref()
+            .map(|authority| authority.status_report().partition_state);
         if let Err(error) = self.store.create(hold.clone()) {
             tracing::error!(
                 module = module_path!(),
@@ -405,6 +428,11 @@ pub async fn decide_hold(
         receipt_id: None,
         audit_trail_id: None,
         refusal: None,
+        // B2g-p. Read when THIS record is built, which on the grant path is
+        // after dispatch returns. A contingency-lease execution is therefore
+        // stamped `partitioned` or `healing`, and the console renders
+        // "UNATTESTED — BY DESIGN" rather than a bare "UNATTESTED" (INV-08).
+        partition_state_at_execution: state.current_partition_state(),
     };
 
     // 4. REFUSE short-circuits.
@@ -1540,5 +1568,64 @@ mod tests {
             .capture_hold(&request, &detection, &audit, None, T0)
             .unwrap();
         assert_eq!(hold.expires_at_ms, T0 + 900_000);
+    }
+
+    /// B2g-p. The hold carries the partition the quorum was in when it was held.
+    ///
+    /// Driven through the REAL `GovernancePolicy` rather than a double: the
+    /// point of the stamp is that it reports what governance actually said, and
+    /// a fake that returns a constant would prove only that the field exists.
+    #[test]
+    fn a_captured_hold_stamps_the_partition_state_governance_reports() {
+        use swarm_agents::tom_agent::{GovernancePolicy, GovernancePolicyConfig};
+
+        let governance = Arc::new(GovernancePolicy::new(GovernancePolicyConfig {
+            contingency_lease_ttl_ms: 60_000,
+            contingency_blast_radius_cap: 1,
+        }));
+        let expected =
+            swarm_policy::governance::GovernanceAuthority::status_report(governance.as_ref())
+                .partition_state;
+
+        let store = Arc::new(MemoryHeldActionStore::default());
+        let capture = HoldCapture::new(
+            store,
+            None,
+            swarm_core::config::ResponseHoldSettings::default(),
+        )
+        .with_governance(governance);
+
+        let request = request();
+        let detection = crate::ingest::routed_detection_from_request(&request);
+        let audit = trail(
+            PolicyVerdict::RequireHuman,
+            AuditResponseRecord::Skipped {
+                reason: "human_gate".into(),
+            },
+        );
+        let hold = capture
+            .capture_hold(&request, &detection, &audit, None, T0)
+            .expect("a RequireHuman skip is held");
+        assert_eq!(hold.partition_state_at_hold, Some(expected));
+    }
+
+    /// Absent governance leaves the stamp absent. It must NEVER read healthy:
+    /// "could not establish" and "established, and fine" are different claims,
+    /// and only one of them is true here.
+    #[test]
+    fn without_a_governance_authority_the_stamp_is_absent_not_healthy() {
+        let (capture, _store, _rx) = capture();
+        let request = request();
+        let detection = crate::ingest::routed_detection_from_request(&request);
+        let audit = trail(
+            PolicyVerdict::RequireHuman,
+            AuditResponseRecord::Skipped {
+                reason: "human_gate".into(),
+            },
+        );
+        let hold = capture
+            .capture_hold(&request, &detection, &audit, None, T0)
+            .expect("a RequireHuman skip is held");
+        assert_eq!(hold.partition_state_at_hold, None);
     }
 }

@@ -169,6 +169,9 @@ export function VerdictCardPresenter({
 export const verdictCardEntry = defineSwarmCard<VerdictPayload>({
   pillar: "authority",
   homeSurface: ["case"],
+  // B2 landed and provisions the operator's Ed25519 key, so a verdict card can
+  // carry a tier-1 signature today.
+  maxTier: 1,
   decode: decodeVerdict,
   Presenter: VerdictCardPresenter,
 });

@@ -170,3 +170,69 @@ pub(super) fn seed_replay_bundle(
         .persist(&bundle)
         .expect("replay bundle");
 }
+
+/// The canonical `execution` scenario, deposited into a state's substrate.
+///
+/// Three deposits from ONE agent under two strategies, matching
+/// `docs/plans/ambush-ui/build/fixtures/perch-demo-fixture.json`: `hunt-evt-1`
+/// twice at `1773738872` and `hunt-evt-2` at `1773738881`, all confidence 0.9
+/// with a one-hour half-life. Two strategies on one agent is the point — it is
+/// what makes "N sources / M agents" mean two different numbers.
+pub(super) async fn seed_execution_scenario(state: &IngestState, _now_seconds: i64) {
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use swarm_core::pheromone::PheromoneDeposit;
+    use swarm_core::types::AgentId;
+    use swarm_pheromone::{DepositSigningPayload, PheromoneSubstrate};
+
+    let key = SigningKey::from_bytes(&[9u8; 32]);
+    // Admission control binds `agent_id` to the signing key's own identity, so
+    // the agent half is DERIVED rather than written down; a literal here would
+    // be a fixture that the substrate refuses for a reason unrelated to the test.
+    let agent = AgentId::from_verifying_key(&key.verifying_key()).0;
+    let substrate = state.current_substrate();
+
+    for (event_id, strategy, timestamp) in [
+        ("hunt-evt-1", "suspicious_process_tree", 1_773_738_872_i64),
+        ("hunt-evt-1", "suspicious_scripting", 1_773_738_872),
+        ("hunt-evt-2", "suspicious_process_tree", 1_773_738_881),
+    ] {
+        let mut deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
+            indicator: serde_json::json!({ "event_id": event_id, "host_id": "host-ops-1" }),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::Critical,
+            confidence: 0.9,
+            timestamp,
+            decay_half_life: 3600.0,
+            agent_id: AgentId(format!("{agent}:{strategy}")),
+            // Part of the signed payload, so it is set here rather than after.
+            agent_identity: agent.clone(),
+            agent_role: None,
+            signature: Vec::new(),
+            agent_key: Vec::new(),
+        };
+        // The same bytes `validate_deposit_signature` rebuilds, through the
+        // crate's own public payload type rather than a copy of its field order.
+        let payload = DepositSigningPayload {
+            schema_version: deposit.schema_version,
+            indicator: &deposit.indicator,
+            threat_class: &deposit.threat_class,
+            severity: &deposit.severity,
+            confidence: deposit.confidence,
+            timestamp: deposit.timestamp,
+            decay_half_life: deposit.decay_half_life,
+            agent_id: &deposit.agent_id,
+            agent_identity: &deposit.agent_identity,
+            agent_role: deposit.agent_role,
+        };
+        let bytes = serde_json::to_vec(&payload).expect("the signing payload serialises");
+        deposit.signature = key.sign(&bytes).to_bytes().to_vec();
+        deposit.agent_key = key.verifying_key().to_bytes().to_vec();
+        substrate.deposit(deposit).await.expect("deposit");
+    }
+}
+
+/// An `IngestState` whose substrate is in-memory, for the perch read ops.
+pub(super) fn ingest_state_with_in_memory_substrate() -> IngestState {
+    test_state()
+}

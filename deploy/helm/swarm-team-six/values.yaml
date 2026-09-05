@@ -62,6 +62,30 @@ persistence:
   size: 10Gi
   storageClassName: ""
 
+# The Ambush relay the bridge files into. Off by default: a chart that shipped a
+# relay would install one beside every deployment that already has one.
+ambush:
+  enabled: false
+
+# The Perch bridge's credentials. `existingSecret` is the production path;
+# inline values land in the release manifest, which the cluster stores.
+perch:
+  enabled: false
+  existingSecret: ""
+  nostrSeed: ""
+  spineSeed: ""
+  operatorToken: ""
+
+# Default-deny egress. On by default: the daemon reaches three places, and a
+# security tool that can reach everything is an exfiltration path.
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to reach the operator port. Empty means none, which is
+  # the safe default -- an operator adds their own namespace deliberately.
+  operatorNamespaceSelectors: []
+  # Extra egress rules, e.g. the relay and NATS services this deployment uses.
+  egress: []
+
 secrets:
   enabled: true
   existingSecret: ""

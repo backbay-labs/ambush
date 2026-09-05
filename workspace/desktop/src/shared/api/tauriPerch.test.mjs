@@ -259,3 +259,89 @@ test("each record wrapper invokes its own command", () => {
     assert.equal(sent, command, `${fn} invokes ${sent}`);
   }
 });
+
+// Two defects found by reading the Rust signatures against this client while
+// preparing the live walking skeleton, pinned from both sides. Every
+// `perch_*` command binding one parameter named `input` must be invoked with
+// `{ input }` — sent flat, Tauri answers "missing required key input". And
+// every struct a `perch_*` command returns must serialize snake_case: the
+// renderer reads `decided_at_ms`, and a `rename_all = "camelCase"` on the Rust
+// side leaves it reading `undefined` in a real build while a snake_case mock
+// keeps every E2E spec green.
+test("input-shaped commands are invoked as { input } and outputs stay snake_case", () => {
+  const client = readFileSync(
+    new URL("./tauriPerch.ts", import.meta.url),
+    "utf8",
+  );
+  const injected = /\b(State|AppHandle|Window|WebviewWindow|Webview)\b/;
+  let inputShaped = 0;
+  let outputsChecked = 0;
+  for (const file of PERCH_RUST_COMMAND_FILES) {
+    const source = readFileSync(new URL(file, import.meta.url), "utf8");
+    for (const m of source.matchAll(
+      /#\[tauri::command\][\s\S]{0,160}?fn (perch_\w+)\(([\s\S]*?)\)\s*->\s*([^{]+)\{/g,
+    )) {
+      const [, name, params, ret] = m;
+      const named = params
+        .split(/,(?![^<]*>)/)
+        .map((p) => p.trim())
+        .filter((p) => p && !injected.test(p))
+        .map((p) => p.split(":")[0].trim());
+      // The name also appears in the command-list constants, so take the
+      // occurrence that is an `invokeTauri(` call: the one whose preceding
+      // text, back to the last top-level `}`, contains `invokeTauri`.
+      let invocation = null;
+      for (const m of client.matchAll(
+        new RegExp(`"${name}"\\s*(?:,\\s*([\\s\\S]*?))?\\)\\s*;`, "g"),
+      )) {
+        const before = client.slice(0, m.index);
+        const call = before.slice(before.lastIndexOf("\n}\n"));
+        if (/invokeTauri(?:<[\s\S]*?>)?\(\s*$/.test(call)) {
+          invocation = m;
+          break;
+        }
+      }
+      // Commands invoked from other client files (identity, sidecar) are not
+      // this file's contract; the registered-in-Rust guard covers direction.
+      if (!invocation) continue;
+      const args = (invocation[1] ?? "").trim();
+      if (named.length === 1 && named[0] === "input") {
+        inputShaped += 1;
+        assert.ok(
+          /^\{\s*input\b/.test(args),
+          `${name} binds \`input\` but the client sends: ${args || "(nothing)"}`,
+        );
+      } else {
+        assert.ok(
+          !/^\{\s*input\b/.test(args),
+          `${name} does not bind \`input\` but the client wraps one`,
+        );
+      }
+      const returned = ret.match(/Result<\s*(\w+)\s*[,>]/)?.[1];
+      if (!returned || !/^[A-Z]/.test(returned)) continue;
+      const decl = source.indexOf(`pub struct ${returned}`);
+      if (decl < 0) continue;
+      outputsChecked += 1;
+      const above = source.slice(Math.max(0, decl - 400), decl);
+      // Attributes only: a comment explaining why there is NO rename must
+      // not trip a lexical read of the word.
+      const attrs = above
+        .slice(above.lastIndexOf("\n}\n") + 1)
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//"))
+        .join("\n");
+      assert.ok(
+        !/rename_all/.test(attrs),
+        `${returned} (returned by ${name}) renames its fields; the renderer reads snake_case`,
+      );
+    }
+  }
+  assert.ok(
+    inputShaped >= 4,
+    `found only ${inputShaped} input-shaped commands`,
+  );
+  assert.ok(
+    outputsChecked >= 3,
+    `checked only ${outputsChecked} output structs`,
+  );
+});

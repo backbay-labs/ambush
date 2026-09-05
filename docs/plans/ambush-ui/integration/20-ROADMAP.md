@@ -20,10 +20,10 @@ cuts, risks, success measures, and the handoff from local integration to hosted 
 |---|---|---|
 | Repository merge | complete locally | full Ambush workspace history lives under `workspace/`; root and workspace remain separate Cargo workspaces |
 | Integration branch | `integrate/workspace` | migration, design and all four milestone plans are complete in local history; this roadmap closes the planning set |
-| Push / PR | not done | no hosted CI or branch-protection evidence exists yet |
+| Push / PR | five stacked PRs open, #12–#16, all green and mergeable on 2026-09-05 | none approved or merged; the roadmap makes first merge the owner's call |
 | Migration Tasks 1–8 | complete | history rewrite, merge, Cargo boundary, ignore/gate fixes, Hermit hooks and workspace CI re-rooting |
 | Migration Tasks 9–11 | open | first-push strategy, repository policy, eventual retirement of the standalone chat checkout |
-| Product implementation | not started | no bridge, wire crate, hold store or console surface has landed merely because its plan exists |
+| Product implementation | all four milestones landed | Ground accepted; First card, The hold and Operator-complete implemented with every gate green and **not self-declared accepted** — the console's commands were driven against the live stack on 2026-09-05 through Tauri's own IPC layer (`evidence/walking-skeleton.md`); the rendered React tree on a real window is the stated seam, and acceptance on that record is the owner's read |
 | Normative contradictions found during recovery | resolved as W3-27 and W3-29 | the wire crate remains transport-neutral; real receipt, escalation and 26000–26005 producers have named owners rather than stubs or mock-only consumers |
 
 The branch contains the imported repository's history, so its commit count against the old
@@ -337,9 +337,9 @@ Create one row when a milestone exits; until then its state is `not accepted`.
 |---|---|---|---|---|---|
 | Repository baseline | — | migration plan Tasks 1–8 only | — | n/a | not landed |
 | Ground | `49a535535` | root build/fmt/clippy/tests + 13 gate scripts; `workspace/just ci`; smoke E2E | Workspace CI 25/25 on PR #13 | `evidence/ground.md` | **accepted 2026-09-03** |
-| First card | `642270647` | root fmt/clippy/tests, six tool gates, copy + write-allowlist gates, provisioning test | pending on PR | `evidence/first-card.md` | **not accepted** — all 24 tasks implemented and gates green, but the end-to-end walking skeleton has not been run; the console half is mock-backed |
-| The hold | `9c2d7ad41` | root build/fmt/clippy + 1,543 workspace tests; all 18 tool gates; Tauri clippy + 3,086 tests; desktop check/typecheck/6,040 unit tests; file-size ratchet | pending on PR | `evidence/the-hold.md` | **not accepted** — the daemon-and-relay half ran live end to end (hold produced, filed, addressed, refused, granted with a 60 s lease, replayed, 409 on conflict); the CONSOLE half is mock-backed and was never driven against that stack |
-| Operator-complete | — | — | — | `evidence/operator-complete.md` | not accepted |
+| First card | `642270647` | root fmt/clippy/tests, six tool gates, copy + write-allowlist gates, provisioning test | pending on PR | `evidence/first-card.md` | **not self-declared accepted** — all 24 tasks implemented and gates green; the walking skeleton ran 2026-09-05 with `E`, `D`, both controls (`evidence/walking-skeleton.md`), the console's commands live through Tauri IPC and the rendered tree mock-backed; the owner's read |
+| The hold | `9c2d7ad41` | root build/fmt/clippy + 1,543 workspace tests; all 18 tool gates; Tauri clippy + 3,086 tests; desktop check/typecheck/6,040 unit tests; file-size ratchet | pending on PR | `evidence/the-hold.md` | **not accepted** — the daemon-and-relay half ran live end to end (hold produced, filed, addressed, refused, granted with a 60 s lease, replayed, 409 on conflict); the CONSOLE half's commands were driven live 2026-09-05 through Tauri IPC — grant to `executed` with a lease, refuse, replay, `refused_late` with its rule (`evidence/walking-skeleton.md`); the rendered tree remains mock-backed; the owner's read |
+| Operator-complete | `b766c16d0` | root build/fmt/clippy + 1,609 workspace tests; all 22 tool gates; Tauri clippy + 3,123 tests; desktop check + 6,232 unit tests + 46 perch E2E; 12 chart tests; `workspace/just ci` exit 0 | **16/16 green on PR #16 at `b766c16d0`** — the first green run of this stack — and again at `f3de3fbd8` (2026-09-05) after the walking skeleton, the fix it found, the case screen, the policy read and the tuning bench landed | `evidence/operator-complete.md` | **not self-declared accepted** — all 22 tasks implemented and every gate green; the console's commands driven live 2026-09-05 (`evidence/walking-skeleton.md`), which found two wire-shape defects (`4ce2dcdb1`) and filed W3-38–W3-40; the rendered tree on a real window is the seam; the owner's read |
 
 Each evidence record contains:
 

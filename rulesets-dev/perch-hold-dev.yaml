@@ -442,6 +442,9 @@ perch:
   # bridge in the same record.
   relay_url: "ws://localhost:3000"
   nostr_seed_env: PERCH_BRIDGE_NOSTR_SEED
+  # The spine (B6) signs every published card into a hash chain. A separate
+  # seed from the Nostr identity: a compromise of one must not forge the other.
+  spine_seed_env: PERCH_BRIDGE_SPINE_SEED
   # MUST resolve outside the repository (tools/check-worktree-clean.sh sweeps with find).
   spool_dir: "/tmp/ambush-perch-dev/spool"
   case_ttl_seconds:

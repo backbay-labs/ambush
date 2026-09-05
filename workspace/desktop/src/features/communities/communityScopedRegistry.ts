@@ -8,9 +8,11 @@ import { resetLinkPreviewPreparations } from "@/features/messages/lib/linkPrevie
 import { resetPersistentAgentAudienceStore } from "@/features/messages/lib/persistentAgentAudience";
 import { clearTimeoutState } from "@/features/moderation/lib/timeoutStore";
 import { resetKeymapArmingState } from "@/features/perch/lib/keymapArmingState";
+import { resetShiftLedger } from "@/features/perch-shift/lib/shiftLedger";
 import { resetVerdictSpool } from "@/features/perch-watch/lib/verdictSpool";
 import { resetPerchAdmittedIssuers } from "@/features/perch-evidence/lib/admittedIssuers";
 import { resetFindingVerdictFlow } from "@/features/perch-evidence/lib/findingVerdictFlow";
+import { resetCaseCanvasSeeded } from "@/features/perch-evidence/lib/caseCanvasSeeded";
 import { resetPerchCaseIndex } from "@/features/perch-evidence/lib/perchCaseIndex";
 import { resetPerchWriteStates } from "@/features/perch-evidence/lib/verdictWriteState";
 import { resetReconcileDivergenceCounter } from "@/features/perch-watch/lib/reconcileCounters";
@@ -94,6 +96,8 @@ export const COMMUNITY_SCOPED_SINGLETONS = [
   "perchReconcileCounters",
   "perchKeymapArming",
   "perchVerdictSpool",
+  "perchShiftLedger",
+  "perchCaseCanvasSeeded",
 ] as const;
 
 /** The name of one community-scoped singleton in {@link COMMUNITY_SCOPED_SINGLETONS}. */
@@ -193,6 +197,8 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
   // A spooled leg 2 names a hold on one colony's daemon. Re-sending it to the
   // next colony's daemon would aim a decision at a hold that does not exist.
   perchVerdictSpool: () => resetVerdictSpool(),
+  perchShiftLedger: () => resetShiftLedger(),
+  perchCaseCanvasSeeded: () => resetCaseCanvasSeeded(),
 };
 
 /**

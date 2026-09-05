@@ -215,6 +215,13 @@ pub struct HoldDecisionRecord {
     pub audit_trail_id: Option<String>,
     /// Why a grant did not become an action, when it did not.
     pub refusal: Option<HoldRefusal>,
+    /// B2g-p. The partition state when the decision ran.
+    ///
+    /// Read AFTER dispatch returns, so an execution that used a contingency
+    /// lease is stamped `partitioned` or `healing` and renders
+    /// "UNATTESTED — BY DESIGN" rather than a bare "UNATTESTED" (INV-08).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_state_at_execution: Option<swarm_policy::governance::PartitionState>,
 }
 
 /// One held destructive action. Field order IS the verdict pane's render
@@ -266,6 +273,13 @@ pub struct HeldAction {
     pub cas_instant_ms: Option<i64>,
     /// The state the compare-and-set moved out of.
     pub prior_state: Option<HoldState>,
+    /// B2g-p. The governance partition state when the hold was created.
+    ///
+    /// `None` when no authority was wired at capture time, and rendered as
+    /// "could not establish" rather than as healthy: a console that showed a
+    /// missing reading as a good one would be inventing the reassurance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_state_at_hold: Option<swarm_policy::governance::PartitionState>,
 }
 
 /// Why a hold cannot be decided right now.
@@ -329,6 +343,7 @@ impl HeldAction {
             deciding_intent_event_id: None,
             cas_instant_ms: None,
             prior_state: None,
+            partition_state_at_hold: None,
         }
     }
 
@@ -614,6 +629,7 @@ mod transitions {
             receipt_id: None,
             audit_trail_id: None,
             refusal: Some(stalled_refusal()),
+            partition_state_at_execution: None,
         });
         hold.state = HoldState::Failed;
         hold.prior_state = None;

@@ -6,14 +6,20 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use ambush_terminal::context::{context_vars, GuiContext};
-use ambush_terminal::damage::{Frame, Style};
-use ambush_terminal::{Fences, SharedTerminal, Size, Terminal, Viewport};
+use ambush_terminal::damage::Frame;
+#[cfg(test)]
+use ambush_terminal::damage::Style;
+#[cfg(test)]
+use ambush_terminal::Viewport;
+use ambush_terminal::{Fences, SharedTerminal, Size, Terminal};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tauri::ipc::Channel;
 use uuid::Uuid;
 
+use crate::terminal_case_scope::{case_terminal_scope, state_root_for_cases};
 use crate::terminal_transport::{FramePublisher, OfferError, Publication, SubscriptionId};
+use crate::terminal_wire::{wire_publication, AttachResponse, TerminalMessage, WireViewport};
 
 mod scroll_sign;
 
@@ -38,175 +44,14 @@ pub(crate) struct AttachRequest {
     rows: u16,
     pixel_width: u16,
     pixel_height: u16,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct WireViewport {
-    generation: u64,
-    columns: usize,
-    screen_lines: usize,
-}
-
-impl From<Viewport> for WireViewport {
-    fn from(value: Viewport) -> Self {
-        Self {
-            generation: value.generation,
-            columns: value.columns,
-            screen_lines: value.screen_lines,
-        }
-    }
-}
-
-impl From<WireViewport> for Viewport {
-    fn from(value: WireViewport) -> Self {
-        Self {
-            generation: value.generation,
-            columns: value.columns,
-            screen_lines: value.screen_lines,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AttachResponse {
-    session_id: String,
-    subscription_id: String,
-    viewport: WireViewport,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct WireStyle {
-    fg: u32,
-    bg: u32,
-    flags: u16,
-}
-
-impl From<Style> for WireStyle {
-    fn from(value: Style) -> Self {
-        Self {
-            fg: value.fg,
-            bg: value.bg,
-            flags: value.flags,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct WireCluster {
-    column: usize,
-    text: String,
-    width: u8,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct WireSpan {
-    style: WireStyle,
-    clusters: Vec<WireCluster>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct WireRow {
-    line: usize,
-    wrapped: bool,
-    spans: Vec<WireSpan>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct WireCursor {
-    line: usize,
-    column: usize,
-    visible: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct FrameMessage {
-    subscription_id: String,
-    sequence: u64,
-    rows: Vec<WireRow>,
-    cursor: WireCursor,
-    full: bool,
-    viewport: WireViewport,
-    bracketed_paste: bool,
-    focus_reporting: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", content = "payload", rename_all = "camelCase")]
-pub(crate) enum TerminalMessage {
-    Frame(FrameMessage),
-    Title(String),
-    ResetTitle,
-    Bell,
-    Exit,
-}
-
-fn wire_publication(publication: Publication) -> Result<FrameMessage> {
-    let frame = publication.frame;
-    let rows = frame
-        .rows
-        .into_iter()
-        .map(|row| {
-            let spans = row
-                .spans
-                .into_iter()
-                .map(|span| {
-                    if !span.counts_are_consistent() {
-                        return Err(
-                            "terminal engine emitted an inconsistent cluster count".to_string()
-                        );
-                    }
-                    let clusters = if span.cluster_count == 1 {
-                        vec![WireCluster {
-                            column: span.column,
-                            text: span.text,
-                            width: span.width,
-                        }]
-                    } else {
-                        span.text
-                            .chars()
-                            .enumerate()
-                            .map(|(index, ch)| WireCluster {
-                                column: span.column + index * usize::from(span.width),
-                                text: ch.to_string(),
-                                width: span.width,
-                            })
-                            .collect()
-                    };
-                    Ok(WireSpan {
-                        style: span.style.into(),
-                        clusters,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(WireRow {
-                line: row.line,
-                wrapped: row.wrapped,
-                spans,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(FrameMessage {
-        subscription_id: publication.subscription_id.to_string(),
-        sequence: publication.sequence,
-        rows,
-        cursor: WireCursor {
-            line: frame.cursor.line,
-            column: frame.cursor.column,
-            visible: frame.cursor.visible,
-        },
-        full: frame.full,
-        viewport: frame.viewport.into(),
-        bracketed_paste: false,
-        focus_reporting: false,
-    })
+    /// The case this shell is pinned to, when one is open. Absent for an
+    /// unpinned terminal, which keeps the process's own working directory.
+    #[serde(default)]
+    case_id: Option<String>,
+    /// The case's display slug. Reaches the shell's environment, so a slug
+    /// that is not shell-safe is replaced by the id rather than escaped.
+    #[serde(default)]
+    case_slug: Option<String>,
 }
 
 fn feed_and_drain(terminal: &SharedTerminal, bytes: &[u8]) -> bool {
@@ -369,6 +214,7 @@ fn offer_capture(
 
 #[tauri::command]
 pub(crate) fn terminal_attach(
+    app: tauri::AppHandle,
     request: AttachRequest,
     on_frame: Channel<TerminalMessage>,
     state: tauri::State<'_, TerminalSessions>,
@@ -441,6 +287,33 @@ pub(crate) fn terminal_attach(
     };
     for (key, value) in context_vars(&context) {
         command.env(key, value);
+    }
+    // After `fence_env`, which `env_clear()`s first: a case pin set before it
+    // would be erased, and a shell would silently run unpinned while the
+    // console's banner said it was pinned.
+    if let Some(case_id) = request.case_id.as_deref() {
+        // The id becomes a path segment. A value that is not a UUID is refused
+        // rather than sanitised: there is no case whose id is not a UUID, so a
+        // non-UUID here is a caller bug, and sanitising it would create a real
+        // directory under a name nothing can resolve back to a case.
+        match Uuid::parse_str(case_id) {
+            Ok(_) => {
+                let scope = case_terminal_scope(
+                    &state_root_for_cases(&app),
+                    case_id,
+                    request.case_slug.as_deref(),
+                );
+                // A shell that cannot reach its pinned directory runs unpinned
+                // in the process cwd, which is not the case's. Refuse instead.
+                std::fs::create_dir_all(&scope.cwd)
+                    .map_err(|e| format!("case terminal directory could not be created: {e}"))?;
+                command.cwd(&scope.cwd);
+                for (key, value) in &scope.env {
+                    command.env(key, value);
+                }
+            }
+            Err(_) => return Err("case id is not a uuid".to_string()),
+        }
     }
     let child = pair
         .slave
@@ -995,5 +868,18 @@ mod tests {
             (size.columns, size.screen_lines, size.scrollback),
             (100, 40, 10_000)
         );
+    }
+
+    #[test]
+    fn an_attach_request_without_a_case_still_deserialises() {
+        // Every existing caller omits both fields. `#[serde(default)]` on each
+        // is what keeps them working; dropping it would fail every attach.
+        let request: AttachRequest = serde_json::from_str(
+            r#"{"channelId":"c","channelName":"n","npub":"np","relayUrl":"ws://x",
+                "columns":80,"rows":24,"pixelWidth":0,"pixelHeight":0}"#,
+        )
+        .expect("an attach request without a case");
+        assert_eq!(request.case_id, None);
+        assert_eq!(request.case_slug, None);
     }
 }

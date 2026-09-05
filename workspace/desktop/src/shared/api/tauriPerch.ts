@@ -133,6 +133,28 @@ export function perchAdmittedIssuers() {
   return invokeTauri<PerchAdmittedIssuers>("perch_admitted_issuers");
 }
 
+/**
+ * Every open containment lease the daemon still lists.
+ *
+ * A 503 comes back as a thrown error, not an empty array: "no containment
+ * lease store is configured" and "nothing is contained" are different facts,
+ * and a board that rendered them the same would tell an operator the world is
+ * clear when nothing is watching it.
+ */
+export function perchListContainments() {
+  return invokeTauri<unknown>("perch_list_containments");
+}
+
+/**
+ * What the detectors deliberately do not see, served whole.
+ *
+ * The console renders each gap's own rationale rather than a paraphrase: a
+ * summary would be this console asserting a limit it did not measure.
+ */
+export function perchEvasionCoverage() {
+  return invokeTauri<unknown>("perch_evasion_coverage");
+}
+
 /** The read commands, named once so the E2E bridge can assert it answers all
  *  of them. */
 export const PERCH_READ_COMMANDS = [
@@ -141,7 +163,130 @@ export const PERCH_READ_COMMANDS = [
   "perch_list_holds",
   "perch_get_hold",
   "perch_configure_daemon",
+  "perch_list_containments",
+  "perch_evasion_coverage",
+  "perch_operator_identity",
+  "perch_policy",
+  "perch_operator_status",
 ] as const;
+
+/** One recommendation the daemon computed, every field it carries. */
+export type PerchAlertTuningRecommendation = {
+  readonly kind:
+    | "host_exclusion_review"
+    | "detector_threshold_review"
+    | "detector_rule_review";
+  readonly priority: "high" | "medium" | "low";
+  readonly summary: string;
+  readonly next_step: string;
+  readonly strategy_id?: string | null;
+  readonly host_id?: string | null;
+  readonly reviewed_findings: number;
+  readonly false_positive_findings: number;
+  readonly false_positive_rate: number;
+  readonly supporting_signals: readonly string[];
+};
+
+export type PerchAlertTuningReport = {
+  readonly reviewed_findings: number;
+  readonly false_positive_findings: number;
+  readonly recommendation_count: number;
+  readonly recommendations: readonly PerchAlertTuningRecommendation[];
+};
+
+/** The daemon's runtime status, as far as the tuning bench reads it. */
+export type PerchOperatorStatus = {
+  readonly captured_at_ms?: number;
+  readonly alert_tuning?: PerchAlertTuningReport | null;
+  readonly false_positive_tracking?: Record<string, unknown> | null;
+};
+
+/**
+ * `GET /v2/api/runtime/status`, first item. On demand only: the report changes
+ * when verdicts do, and polling it would ask the same question between the
+ * same two answers.
+ */
+export function perchOperatorStatus() {
+  return invokeTauri<PerchOperatorStatus>("perch_operator_status");
+}
+
+/** The triple `/policy` evaluates: all three, or the call sends none. */
+export type PerchPolicyTriple = {
+  readonly threatClass: string;
+  readonly severity: string;
+  readonly action: string;
+};
+
+/**
+ * `GET /v1/operator/policy` — the rules in file order and, when a triple is
+ * given, the daemon's own evaluation of it. The daemon computes the verdicts
+ * with its gate's own predicate; the console's local mirror is a reading of
+ * the policy, this is the decision.
+ */
+export function perchPolicy(triple?: PerchPolicyTriple) {
+  return invokeTauri<PerchPolicyResponse>("perch_policy", {
+    triple: triple ?? null,
+  });
+}
+
+export type PerchPolicyRuleVerdict = "decides" | "not_matched" | "not_reached";
+
+export type PerchPolicyResponse = {
+  readonly schema_version: number;
+  readonly human_gate_severity: string;
+  readonly lease_ttl_ms: number;
+  readonly max_actions_per_scope_per_minute: number;
+  readonly source: { readonly path: string; readonly attested: boolean };
+  readonly rules: readonly {
+    readonly index: number;
+    readonly name: string;
+    readonly decision: string;
+    readonly threat_class: string;
+    readonly actions: readonly string[];
+    readonly min_severity: string;
+    readonly max_severity: string;
+    readonly time_window_utc: {
+      readonly start_hour_utc: number;
+      readonly end_hour_utc: number;
+    } | null;
+    readonly max_actions_per_agent_per_minute: number | null;
+  }[];
+  readonly evaluation: {
+    readonly triple: {
+      readonly threat_class: string;
+      readonly severity: string;
+      readonly action: string;
+    };
+    readonly verdicts: readonly {
+      readonly rule_index: number;
+      readonly verdict: PerchPolicyRuleVerdict;
+    }[];
+    readonly fallthrough: {
+      readonly gate: string;
+      readonly verdict: string;
+      readonly reason: string;
+    } | null;
+    readonly outranks_human_gate: boolean;
+    readonly warning: string;
+  } | null;
+};
+
+/** The public half of this console's decision key. Never the seed. */
+export type PerchOperatorIdentity = {
+  /** 64 lowercase hex — what the daemon pins as `verdict_public_key_hex`. */
+  readonly public_key_hex: string;
+  /** `sha256(public_key)`, which is what the daemon's verifier names. */
+  readonly key_id: string;
+};
+
+/**
+ * The console's Ed25519 public key, minted on first use and held in the
+ * keyring. The operator pastes it into the daemon's principal entry; until a
+ * daemon pins it, every decision this console signs is refused as unknown.
+ */
+export function perchOperatorIdentity() {
+  return invokeTauri<PerchOperatorIdentity>("perch_operator_identity");
+}
 
 // ===========================================================================
 // LEG 1 — THE RELAY WRITE. In `commands/perch_verdict.rs`, deliberately not in
@@ -231,22 +376,160 @@ export function perchMintIncident(input: PerchMintIncidentInput) {
   });
 }
 
+/**
+ * Ask the daemon to run a containment's inverse now rather than at its TTL.
+ *
+ * The caller reads `lease_closed` from the BODY and never the HTTP status. The
+ * daemon answers 200 for a release whose inverse failed, because the request
+ * was understood and carried out — the world simply did not change.
+ */
+export function perchReleaseContainment(leaseId: string) {
+  return invokeTauri<unknown>("perch_release_containment", { leaseId });
+}
+
 /** The daemon-bound write commands this milestone implements. */
 export const PERCH_DAEMON_WRITE_COMMANDS = [
   "perch_finding_feedback",
   "perch_mint_incident",
   "perch_decide_hold",
+  "perch_release_containment",
 ] as const;
 
 /**
  * Every perch Tauri command, in one place, so the E2E mock bridge can assert
  * it answers all of them and no count drifts from the file.
  */
+/**
+ * Local process control for the laptop demo's `swarm_detect`.
+ *
+ * A THIRD list, kept apart from the reads and the two write lists on purpose.
+ * These issue no request to any Ambush host, so they are outside INV-01 — and
+ * folding them into the daemon-write list would make that table read as six
+ * routes when the claim it carries is about five.
+ */
+export const PERCH_LOCAL_COMMANDS = [
+  "perch_export_bundle",
+  "perch_verify_envelope",
+  "perch_sidecar_start",
+  "perch_sidecar_stop",
+  "perch_sidecar_status",
+] as const;
+
+/** Why a link did or did not continue its chain. Four outcomes, never a bool. */
+export type PerchChainLinkVerdict =
+  | "valid"
+  | "issuer_mismatch"
+  | "sequence_gap"
+  | "hash_mismatch";
+
+/** The last envelope this console saw from one issuer. */
+export type PerchIssuerChainHead = {
+  readonly issuer: string;
+  readonly seq: number;
+  readonly envelope_hash: string;
+};
+
+/**
+ * What the console learned about one envelope.
+ *
+ * Three independent facts rather than a boolean, because there are three ways
+ * reliance can fail and they need different responses: re-fetch the body,
+ * distrust the issuer, or go looking for a missing card. `tier` is derived in
+ * Rust so a renderer cannot compute one that disagrees with the badge.
+ */
+export type PerchEnvelopeVerification = {
+  readonly hash_matches: boolean;
+  readonly signature_present: boolean;
+  /** `null` when there is no signature: absent and failed stay apart. */
+  readonly signature_valid: boolean | null;
+  /** `null` when no earlier card from this issuer has been seen. */
+  readonly chain: PerchChainLinkVerdict | null;
+  readonly tier: 0 | 1 | 2;
+  readonly reason: string;
+};
+
+/** What the export actually wrote, so a caller reports that rather than intent. */
+export type PerchExportOutcome = {
+  readonly directory: string;
+  readonly written: readonly string[];
+  readonly bytes: number;
+};
+
+/**
+ * Write an evidence bundle into a directory the operator chose.
+ *
+ * Bytes are base64 because a `Uint8Array` across IPC becomes a JSON array of
+ * numbers, and a twelve-megabyte bundle would be a hundred megabytes of
+ * digits. They are the daemon's and the relay's bytes VERBATIM — the Rust side
+ * writes what it is handed and re-serializes nothing, because re-serializing
+ * changes the digest of a signed record.
+ */
+export function perchExportBundle(
+  directory: string,
+  files: readonly { path: string; bytes: Uint8Array }[],
+) {
+  return invokeTauri<PerchExportOutcome>("perch_export_bundle", {
+    directory,
+    files: files.map((file) => ({
+      path: file.path,
+      bytes_b64: bytesToBase64(file.bytes),
+    })),
+  });
+}
+
+/** Base64 without a data URL round-trip; chunked so a large bundle cannot blow the stack. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Verify a spine envelope in this process. Local computation, no host request,
+ * so it is outside INV-01.
+ */
+export function perchVerifyEnvelope(
+  envelope: unknown,
+  head?: PerchIssuerChainHead,
+) {
+  return invokeTauri<PerchEnvelopeVerification>("perch_verify_envelope", {
+    envelope,
+    head,
+  });
+}
+
 export const PERCH_TAURI_COMMANDS = [
   ...PERCH_READ_COMMANDS,
   ...PERCH_RELAY_WRITE_COMMANDS,
   ...PERCH_DAEMON_WRITE_COMMANDS,
+  ...PERCH_LOCAL_COMMANDS,
 ] as const;
+
+/** Seeds are reported as PRESENT or absent. A value never crosses IPC. */
+export type PerchSidecarStatus = {
+  readonly pid: number;
+  readonly started_at_ms: number;
+  readonly healthz: "starting" | "ready" | "unhealthy" | "stopped";
+  readonly profile_path: string;
+  readonly seeds_present: { readonly nostr: boolean; readonly spine: boolean };
+};
+
+/** Start the bundled daemon under a config the Rust side re-resolves. */
+export function perchSidecarStart(configPath: string) {
+  return invokeTauri<PerchSidecarStatus>("perch_sidecar_start", { configPath });
+}
+
+export function perchSidecarStop() {
+  return invokeTauri<null>("perch_sidecar_stop");
+}
+
+/** `null` means the sidecar has never run — not that it is stopped. */
+export function perchSidecarStatus() {
+  return invokeTauri<PerchSidecarStatus | null>("perch_sidecar_status");
+}
 
 // ===========================================================================
 // B2r — THE HOLD READS. The reconciliation authority.
@@ -609,6 +892,8 @@ export type PerchDecideOutcome = {
   readonly winning_decision: PerchHoldVerdict | "unknown" | null;
   /** True when this call replayed an existing record rather than deciding. */
   readonly replayed: boolean;
+  /** Whether the daemon actually ran the action. Distinct from `outcome`. */
+  readonly dispatched: boolean;
 };
 
 /**
@@ -620,12 +905,21 @@ export type PerchDecideOutcome = {
 export function perchDecideHold(input: {
   holdId: string;
   decision: PerchHoldVerdict;
-  /** Verbatim from `perchRecordVerdict`. */
+  /** Verbatim from `perchRecordHoldVerdict`. */
   nostrIntentEventId: string;
+  /** Verbatim from `perchRecordHoldVerdict`; it is inside the signature. */
+  decidedAtMs: number;
+  /** Verbatim from `perchRecordHoldVerdict`. Leg 2 forwards it, never re-signs. */
+  signature: PerchDetachedSignature;
   rationale: string | null;
   armedAtMs: number | null;
 }) {
-  return invokeTauri<PerchDecideOutcome>("perch_decide_hold", input);
+  // `{ input }`, not `input`: the Rust command binds ONE parameter named
+  // `input`, like `perch_record_verdict`. Sent flat, Tauri answers "missing
+  // required key input" and the decision never reaches the daemon. Found by
+  // reading the Rust signature against this wrapper while preparing the live
+  // walking skeleton; the mock now refuses flat arguments so a test finds it.
+  return invokeTauri<PerchDecideOutcome>("perch_decide_hold", { input });
 }
 
 /**
@@ -671,5 +965,7 @@ export function perchRecordHoldVerdict(input: {
     readonly signature: PerchDetachedSignature;
     /** Read from the daemon's own hold record, not from the input. */
     readonly hold_id: string;
+    /** The case channel the card was published into. */
+    readonly case_channel: string;
   }>("perch_record_hold_verdict", { input });
 }

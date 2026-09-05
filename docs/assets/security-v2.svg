@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 392" width="1000" height="392" role="img" aria-label="Defense in depth: five layers wrap the deterministic critical lane - fail-closed authorization, a named trusted computing base, the guard pipeline, adversarial pressure, and signed evidence. Each one fails closed.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 392" width="1000" height="392" role="img" aria-label="Defense in depth: five layers wrap the deterministic critical path - fail-closed authorization, a named attested computing base, the guard pipeline, adversarial pressure, and signed evidence. Each one fails closed.">
   <defs>
     <linearGradient id="sc-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#070a09"/><stop offset="1" stop-color="#0d1512"/></linearGradient>
     <linearGradient id="sc-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4ade80" stop-opacity="0.30"/><stop offset="1" stop-color="#4ade80" stop-opacity="0.02"/></linearGradient>
@@ -22,7 +22,7 @@
   <text x="889" y="92" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.6" fill="#7c9187">forbidden path &#183; egress &#183; secrets &#183; shell</text>
   <rect x="116" y="118" width="768" height="170" rx="9" fill="#34d399" fill-opacity="0.045" stroke="#34d399" stroke-opacity="0.45"/>
   <rect x="132" y="110" width="216" height="16" fill="#070a09"/>
-  <text x="141" y="122.5" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#34d399" fill-opacity="0.95">TRUSTED COMPUTING BASE</text>
+  <text x="141" y="122.5" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700" letter-spacing="1.5" fill="#34d399" fill-opacity="0.95">ATTESTED COMPUTING BASE</text>
   <rect x="711" y="110" width="163" height="16" fill="#070a09"/>
   <text x="859" y="122" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.6" fill="#7c9187">ADR 0009 &#183; layering gate</text>
   <rect x="146" y="148" width="708" height="116" rx="9" fill="#f59e0b" fill-opacity="0.045" stroke="#f59e0b" stroke-opacity="0.45"/>
@@ -31,6 +31,6 @@
   <rect x="698" y="140" width="146" height="16" fill="#070a09"/>
   <text x="829" y="152" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="9.6" fill="#7c9187">no receipt, no action</text>
   <rect x="176" y="178" width="648" height="62" rx="8" fill="#4ade80" fill-opacity="0.11" stroke="#4ade80" stroke-opacity="0.75"/>
-  <text x="500" y="205" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="700" letter-spacing="0.6" fill="#eaf3ee">DETERMINISTIC CRITICAL LANE</text>
+  <text x="500" y="205" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="700" letter-spacing="0.6" fill="#eaf3ee">DETERMINISTIC CRITICAL PATH</text>
   <text x="500" y="226" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="10" fill="#7c9187">ingest &#8594; detect &#8594; deposit &#8594; escalate &#8594; route</text>
 </svg>

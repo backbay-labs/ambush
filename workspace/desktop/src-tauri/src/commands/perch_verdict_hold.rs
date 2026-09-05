@@ -62,8 +62,13 @@ pub struct RecordHoldVerdictInput {
 }
 
 /// What leg 2 needs from leg 1, and nothing else.
+// NO `rename_all`: the renderer reads this snake_case, exactly as it reads the
+// finding path's `RecordVerdictOutput`. A camelCase rename here survived every
+// hold E2E because the mock spoke snake_case while this struct emitted
+// `decidedAtMs` — `leg1.decided_at_ms` would have been `undefined` in a real
+// build. Found by reading this signature against the wrapper while preparing
+// the live walking skeleton, not by any test.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RecordHoldVerdictOutput {
     /// The published card's event id. Leg 2's idempotency key.
     pub nostr_intent_event_id: String,
@@ -79,8 +84,10 @@ pub struct RecordHoldVerdictOutput {
 
 /// The public half of the operator's verdict key, for the operator to paste
 /// into the daemon's principal entry as `verdict_public_key_hex`.
+// Snake_case like every other perch output. No renderer reads this yet (the
+// live walking skeleton found no caller), so the shape is set now, before one
+// does, to match the hold outputs a caller would read beside it.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct OperatorIdentityOutput {
     /// 64 lowercase hex.
     pub public_key_hex: String,
@@ -241,7 +248,7 @@ pub(crate) fn build_hold_verdict_card(
 
 /// The public half of this console's verdict key, minting it on first use.
 ///
-/// The operator pastes `publicKeyHex` into the daemon's principal entry as
+/// The operator pastes `public_key_hex` into the daemon's principal entry as
 /// `verdict_public_key_hex`; until they do, every decision this console submits
 /// is refused, which is the fail-closed direction.
 ///

@@ -375,6 +375,7 @@ async fn query_deposits_filters_by_threat_class_and_time() {
             since_timestamp: Some(50),
             host_id: None,
             limit: 10,
+            include_suppressed: false,
         })
         .await
         .unwrap();
@@ -404,6 +405,7 @@ async fn query_deposits_filters_by_host_id() {
             since_timestamp: None,
             host_id: Some("host-b".to_string()),
             limit: 10,
+            include_suppressed: false,
         })
         .await
         .unwrap();

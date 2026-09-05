@@ -3,13 +3,13 @@
     "version": 1,
     "issued_at_ms": 1760000000000,
     "config_file_name": "perch-hold-dev.yaml",
-    "sha256": "402099dad8641bff1a3c2ac27bbfe6b70fb35543ca9820f2eea2de2eb2f2a036",
-    "size_bytes": 17961
+    "sha256": "2a0f46ab37f7db9403a44c1474d9eb6dcafd4285e2df22e8d75fd526170c5d94",
+    "size_bytes": 18159
   },
   "signature": {
     "algorithm": "ed25519",
     "key_id": "18ffbaf6a1b664a1295be5af9dc32a0c394f2aecacefa17d0d9b49c19c670dc9",
     "public_key_hex": "f4170fc2340bda6fbda85facb0fb2d33de7f661f374598797f6825d8d8fbf10a",
-    "signature_hex": "9840f2d96dc2347e1ee8d349b04b9264a107a4dc107da67ecbe253e5c2181d3ad2c0a7b9222792cf8650c1867e7ce35ea2d53d549ad96a16af91814b89e8fe03"
+    "signature_hex": "4dfa65ad0f589bc4d67be387280f776568f4323e6bc254dd60d39cbd7ca3fa14f6b445e0bec6b5ee03c4d7238d767b33a3cd24175a6ce90e67a63ccf46f96b02"
   }
 }

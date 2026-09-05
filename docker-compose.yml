@@ -19,7 +19,10 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "9090:9090"
+      # Loopback only. A bare "9090:9090" publishes the operator API on every
+      # interface, and on a laptop on a conference network that is an
+      # unauthenticated daemon on the internet.
+      - "127.0.0.1:9090:9090"
     depends_on:
       relay:
         condition: service_healthy
@@ -89,9 +92,16 @@ services:
   postgres:
     image: postgres:17-alpine
     container_name: ambush-postgres
+    env_file:
+      - path: ./.env.perch
+        required: false
     environment:
       POSTGRES_USER: ambush
-      POSTGRES_PASSWORD: ambush_dev
+      # Interpolated, never inline: a password written into this file is in git
+      # history forever, and this is the file people copy. `.env.perch` carries
+      # the value; the default keeps a fresh checkout working and is documented
+      # as a dev credential in docker-compose.perch.env.example.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ambush_dev}
       POSTGRES_DB: ambush
       PGDATA: /var/lib/postgresql/data
     ports:
@@ -146,7 +156,7 @@ services:
         required: false
     environment:
       # In-network addresses win over the localhost values in workspace/.env.
-      DATABASE_URL: postgres://ambush:ambush_dev@postgres:5432/ambush
+      DATABASE_URL: postgres://ambush:${POSTGRES_PASSWORD:-ambush_dev}@postgres:5432/ambush
       PGHOST: postgres
       REDIS_URL: redis://redis:6379
       AMBUSH_BIND_ADDR: 0.0.0.0:3000

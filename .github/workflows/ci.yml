@@ -240,6 +240,46 @@ jobs:
       - name: Check Perch wire field-set parity
         run: bash tools/check-perch-wire-parity.sh
 
+      # A chart that names a colour directly is invisible to a theme switch,
+      # and these figures are read in both themes and printed in greyscale into
+      # incident reports. Four rules: no hex literal, no `fill`/`stroke`
+      # attribute outside `none` and a `url(#…)` reference, no bare source
+      # count (render law 2), and no read of the 38 shadcn variable names
+      # ThemeProvider writes INLINE on the root -- an inline declaration
+      # outranks any stylesheet, so a chart reading one gets a value the Perch
+      # palette does not control.
+      #
+      # It runs its own fixture on every invocation: shapes each rule must
+      # catch, and controls none may flag.
+      - name: Check Perch chart tokens
+        run: bash tools/check-perch-chart-tokens.sh
+
+      # Fourteen is a decision, not a count that happened. The cost of a
+      # surface is not its code; it is the place a person has to remember to
+      # look during an incident. Surfaces arrive one reasonable addition at a
+      # time, each defensible on its own, so the number is written down and
+      # changing it means editing the manifest in the same commit.
+      - name: Check the Perch surface count is exactly fourteen
+        run: bash tools/check-perch-surface-count.sh
+
+      # An OS notification is rendered by the operating system: outside this
+      # app's markup, outside its escaping, and on a lock screen. A detector's
+      # command_line in a notification body is a remote-controlled string on
+      # the operator's screen, and no care in the renderer prevents it because
+      # the renderer is not involved. Four wake classes; findings never page.
+      - name: Check the Perch notification bodies interpolate only typed fields
+        run: bash tools/check-perch-notification-fields.sh
+
+      # A tier badge is the strongest claim this product makes on any surface:
+      # it says an operator may rely on a chain of evidence. `maxTier` is the
+      # ceiling on that claim, and a ceiling raised ahead of the evidence is
+      # how a console ends up displaying a badge for a chain nobody can fetch.
+      # The table's third column names each ceiling's precondition, and the
+      # gate asserts equality both ways -- so raising one means editing the
+      # registry and the table in the same commit.
+      - name: Check the Perch card tier allowlist
+        run: bash tools/check-perch-tier-allowlist.sh
+
       # INV-01. "Perch never authorizes" is a claim about a SET: the non-GET
       # requests the console process can issue to a daemon host. A claim about
       # a set is only true if the set is enumerable, so the console has one
@@ -648,6 +688,13 @@ jobs:
       # having a day, exactly one job goes red.
       - name: Check platform OpenAPI contract
         run: bash tools/check-platform-openapi.sh
+      # The Perch operator contract, same two aggregated assertions
+      # (12-BACKEND-BILL-API.md §14): the committed JSON is valid OpenAPI 3.1
+      # and byte-identical to what generate_perch_openapi renders from the
+      # authoring YAML — which itself refuses a document whose paths are not
+      # exactly the routes PERCH_ROUTER_PATHS mounts.
+      - name: Check Perch operator OpenAPI contract
+        run: bash tools/check-perch-openapi.sh
 
   proof-surfaces:
     needs:
@@ -809,6 +856,42 @@ jobs:
           name: hot-path-benchmark-${{ github.sha }}
           path: artifacts/benchmarks/hot-path-regression.log
           if-no-files-found: error
+
+  # The chart is a deployment contract: what it renders is what someone runs.
+  # A template that stops rendering, or renders a secret it should not, fails
+  # nothing else in this repository -- there is no compiler between this chart
+  # and a cluster.
+  helm:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install helm-unittest
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version 0.8.2
+
+      - name: Build chart dependencies
+        run: helm dependency build deploy/helm/swarm-team-six
+
+      - name: Lint the chart
+        run: helm lint deploy/helm/swarm-team-six
+
+      # The render is the proof the templates hold together with every Perch
+      # value on. Lint alone passes a chart whose templates never execute.
+      - name: Render with the Perch values
+        run: helm template ci deploy/helm/swarm-team-six -f deploy/helm/swarm-team-six/ci/perch-values.yaml > /dev/null
+
+      - name: Chart unit tests
+        run: helm unittest deploy/helm/swarm-team-six
+
+      - name: Check the dev compose
+        run: bash tools/check-perch-compose.sh
 
   supply-chain:
     needs:

@@ -318,6 +318,9 @@ export const holdDecisionRecord = z.strictObject({
   dispatched: z.boolean(),
   receipt_id: z.string().nullish(),
   refusal: z.unknown().nullish(),
+  // B2g-p. Which of the two UNATTESTED renderings applies (INV-08):
+  // `partitioned` or `healing` means "UNATTESTED — BY DESIGN".
+  partition_state_at_execution: partitionState.nullish(),
 });
 
 const locatorBase = { emitted_at_ms: unixMillis, issuer: factIssuer };
@@ -505,6 +508,9 @@ export const holdFact = z.strictObject({
       }),
     ),
     decision: holdDecisionRecord.nullish(),
+    // B2g-p. The partition state when the hold was CREATED. Absent means the
+    // console could not establish it and must say so, never assume healthy.
+    partition_state_at_hold: partitionState.nullish(),
   }),
 });
 

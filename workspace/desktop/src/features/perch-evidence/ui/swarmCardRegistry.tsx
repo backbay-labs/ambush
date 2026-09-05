@@ -29,22 +29,24 @@ function notYetRendered(
   kind: SwarmMarkerKind,
   pillar: PerchPillar,
   homeSurface: readonly SwarmCardSurfaceKind[],
+  maxTier: 0 | 1 | 2,
 ): SwarmCardEntry {
   return {
     pillar,
     homeSurface,
+    maxTier,
     render: ({ card }) => <NotYetRenderedCard kind={kind} card={card} />,
   };
 }
 
 export const SWARM_CARD_REGISTRY = {
   finding: findingCardEntry,
-  escalation: notYetRendered("escalation", "authority", ["case", "lane"]),
+  escalation: notYetRendered("escalation", "authority", ["case", "lane"], 2),
   hold: holdCardEntry,
   verdict: verdictCardEntry,
-  receipt: notYetRendered("receipt", "evidence", ["case"]),
-  lease: notYetRendered("lease", "evidence", ["case"]),
-  rollback: notYetRendered("rollback", "evidence", ["case"]),
+  receipt: notYetRendered("receipt", "evidence", ["case"], 2),
+  lease: notYetRendered("lease", "evidence", ["case"], 2),
+  rollback: notYetRendered("rollback", "evidence", ["case"], 1),
 } satisfies Record<SwarmMarkerKind, SwarmCardEntry>;
 
 /** Every parse outcome that renders a card or a refusal; never prose. */

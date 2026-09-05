@@ -628,7 +628,8 @@ fn only_the_public_half_crosses_ipc() {
         .map(String::as_str)
         .collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["keyId", "publicKeyHex"]);
+    // Snake_case, like every other perch output the renderer reads.
+    assert_eq!(keys, ["key_id", "public_key_hex"]);
 }
 
 /// Both verdict subjects use the SAME key_id rule, because one verifier checks

@@ -2,11 +2,15 @@ import * as React from "react";
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 
 import { useChannelsQuery } from "@/features/channels/hooks";
+import { CaseScreen } from "@/features/perch-evidence/ui/CaseScreen";
 import { SwarmCardSurfaceProvider } from "@/features/perch-evidence/ui/SwarmCardSurface";
+import { useTerminalContextOverride } from "@/app/TerminalContextOverrideContext";
+import { useCaseTerminalPin } from "@/features/terminal/useTerminalCaseScope";
 import {
   useFeatureEnabled,
   usePreviewFeatureWarning,
 } from "@/shared/features/useFeatureEnabled";
+import { useNow } from "@/shared/lib/useNow";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 const ChannelRouteScreen = React.lazy(async () => {
@@ -31,6 +35,22 @@ function CaseRouteComponent() {
   const { caseId } = Route.useParams();
   const enabled = useFeatureEnabled("perch");
   usePreviewFeatureWarning("perch");
+  // A shell spawned while this case is open runs under the case's own
+  // directory, so swarmctl's relative `data/…` defaults land there and every
+  // artifact is attributable to the case by path. Cleared on unmount: a banner
+  // naming a case the screen no longer shows is worse than an unpinned shell.
+  useCaseTerminalPin(enabled ? caseId : null, caseId.slice(0, 8));
+  // A case is a channel, but the terminal's context comes from the channel
+  // route; without this override ⌘J on a case is inert. The pin above scopes
+  // the shell; this gives it somewhere to spawn.
+  const terminalContext = React.useMemo(
+    () =>
+      enabled
+        ? { channelId: caseId, channelName: `case-${caseId.slice(0, 8)}` }
+        : null,
+    [enabled, caseId],
+  );
+  useTerminalContextOverride(terminalContext);
   if (!enabled) {
     return (
       <Navigate to="/channels/$channelId" params={{ channelId: caseId }} />
@@ -39,21 +59,23 @@ function CaseRouteComponent() {
   return (
     <SwarmCardSurfaceProvider surface="case" caseChannelId={caseId}>
       <CaseOpening caseId={caseId}>
-        <div data-testid="perch-case-timeline" className="contents">
-          <React.Suspense
-            fallback={<ViewLoadingFallback includeHeader kind="channel" />}
-          >
-            <ChannelRouteScreen
-              autoSendDraftKey={null}
-              channelId={caseId}
-              searchHighlight={null}
-              selectedPostId={null}
-              targetMessageId={null}
-              targetReplyId={null}
-              targetThreadRootId={null}
-            />
-          </React.Suspense>
-        </div>
+        <CaseTabs caseId={caseId}>
+          <div data-testid="perch-case-timeline" className="contents">
+            <React.Suspense
+              fallback={<ViewLoadingFallback includeHeader kind="channel" />}
+            >
+              <ChannelRouteScreen
+                autoSendDraftKey={null}
+                channelId={caseId}
+                searchHighlight={null}
+                selectedPostId={null}
+                targetMessageId={null}
+                targetReplyId={null}
+                targetThreadRootId={null}
+              />
+            </React.Suspense>
+          </div>
+        </CaseTabs>
       </CaseOpening>
     </SwarmCardSurfaceProvider>
   );
@@ -109,5 +131,37 @@ function CaseOpening({
     >
       Opening the case. The bridge is creating its channel.
     </p>
+  );
+}
+
+/**
+ * The case's tabs around its channel timeline. `CaseScreen` existed and was
+ * mounted nowhere, so the Canvas tab and the TTL clock could not be reached.
+ *
+ * The TTL deadline and the archive state come off the channel record the
+ * relay serves; the operator can edit the canvas of a live case they were
+ * addressed into (the relay refuses a write it does not allow, and the tab
+ * shows that refusal rather than a saved-looking empty canvas).
+ */
+function CaseTabs({
+  caseId,
+  children,
+}: {
+  caseId: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const channels = useChannelsQuery();
+  const channel = channels.data?.find((entry) => entry.id === caseId) ?? null;
+  const isArchived = channel?.archivedAt != null;
+  const nowMs = useNow(60_000);
+  return (
+    <CaseScreen
+      caseChannelId={caseId}
+      canEdit={channel !== null && !isArchived}
+      isArchived={isArchived}
+      ttlDeadline={channel?.ttlDeadline ?? null}
+      nowMs={nowMs}
+      timeline={children}
+    />
   );
 }

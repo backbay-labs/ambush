@@ -358,6 +358,8 @@ type E2eConfig = {
     deepHistoryMessageCount?: number;
     feedReadError?: string;
     canvasReadError?: string;
+    /** What `get_canvas` answers with; `""` is a canvas an operator emptied. */
+    canvasContent?: string;
     /** Delay (ms) for `apply_workspace` so e2e tests can observe the
      *  community-switch gate. 0/undefined = instant. */
     applyCommunityDelayMs?: number;
@@ -1193,6 +1195,16 @@ declare global {
       command: string;
       payload: unknown;
     }>;
+    /**
+     * Create a case channel with a FIXED id, the way the bridge does after
+     * the daemon mints a case. The perch mock calls this from its mint arm so
+     * `/cases/$caseId` has a channel to open.
+     */
+    __AMBUSH_E2E_CREATE_CASE_CHANNEL__?: (
+      id: string,
+      name: string,
+      ttlSeconds: number | null,
+    ) => void;
     /** Release a mock media proxy held at port 0 and return its ready port. */
     __AMBUSH_E2E_RELEASE_MEDIA_PROXY__?: () => number;
     /** Release mock send events that were stored but withheld from live subscribers. */
@@ -1705,6 +1717,9 @@ function createMockMember(
     display_name: mockDisplayNames.get(pubkey) ?? null,
   };
 }
+
+/** Canvas content per channel, as `set_canvas` last wrote it. */
+const mockCanvases = new Map<string, string>();
 
 function createMockChannel(
   seed: Omit<
@@ -11161,6 +11176,40 @@ export function maybeInstallE2eTauriMocks() {
   window.__AMBUSH_E2E_COMMANDS__ = [];
   window.__AMBUSH_E2E_COMMAND_PAYLOADS__ = [];
   window.__AMBUSH_E2E_COMMAND_LOG__ = [];
+  mockCanvases.clear();
+  window.__AMBUSH_E2E_CREATE_CASE_CHANNEL__ = (id, name, ttlSeconds) => {
+    if (mockChannels.some((channel) => channel.id === id)) return;
+    const owner = createCurrentMember(config, "owner");
+    mockChannels.push(
+      createMockChannel({
+        id,
+        name,
+        channel_type: "stream",
+        visibility: "private",
+        description: "",
+        topic: null,
+        purpose: null,
+        last_message_at: null,
+        archived_at: null,
+        created_by: owner.pubkey,
+        topic_set_by: null,
+        topic_set_at: null,
+        purpose_set_by: null,
+        purpose_set_at: null,
+        ttl_seconds: ttlSeconds,
+        ttl_deadline:
+          ttlSeconds === null
+            ? null
+            : new Date(Date.now() + ttlSeconds * 1_000).toISOString(),
+        topic_required: false,
+        max_members: null,
+        nip29_group_id: null,
+        created_minutes_ago: 0,
+        updated_minutes_ago: 0,
+        members: [owner],
+      }),
+    );
+  };
   mockMediaProxyPort = config.mock?.mediaProxyInitiallyUnavailable
     ? 0
     : MOCK_MEDIA_PROXY_PORT;
@@ -14280,12 +14329,39 @@ export function maybeInstallE2eTauriMocks() {
         // The spec only verifies UI state, not the submitted request shape;
         // returning null mirrors the Rust submit_event success path.
         return null;
-      case "set_canvas":
+      case "set_canvas": {
+        // Stored, so a canvas the app just wrote reads back as written —
+        // the case tab's seeding is a write followed by a read.
+        const args = payload as { channelId?: string; content?: string };
+        if (args?.channelId !== undefined) {
+          mockCanvases.set(args.channelId, args.content ?? "");
+        }
         return { ok: true, event_id: mockEventId() };
+      }
       case "get_canvas": {
         const canvasReadError = activeConfig?.mock?.canvasReadError;
         if (canvasReadError) {
           throw new Error(canvasReadError);
+        }
+        const readArgs = payload as { channelId?: string };
+        const stored =
+          readArgs?.channelId === undefined
+            ? undefined
+            : mockCanvases.get(readArgs.channelId);
+        if (stored !== undefined) {
+          return {
+            content: stored,
+            updated_at: Date.now(),
+            author: "mock-operator",
+          };
+        }
+        const canvasContent = activeConfig?.mock?.canvasContent;
+        if (canvasContent !== undefined) {
+          return {
+            content: canvasContent,
+            updated_at: Date.now(),
+            author: "mock-operator",
+          };
         }
         // Return the no-canvas success shape — content null means no canvas set.
         return { content: null, updated_at: null, author: null };

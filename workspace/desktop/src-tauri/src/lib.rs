@@ -41,6 +41,7 @@ mod observed_unread;
 // `pub(crate)` type its public fields carry -- reachable at `pub`, which the
 // `private_interfaces` lint refuses under `-D warnings`.
 mod perch;
+mod perch_sidecar;
 pub mod perch_sign_gate;
 #[cfg(test)]
 mod perch_sign_gate_inventory_tests;
@@ -54,9 +55,11 @@ mod secret_store;
 mod shutdown;
 mod team_catalog;
 mod templates;
+mod terminal_case_scope;
 mod terminal_runtime;
 #[cfg_attr(not(test), allow(dead_code))]
 mod terminal_transport;
+mod terminal_wire;
 #[cfg(target_os = "macos")]
 mod tray_menu;
 mod unread_catch_up;
@@ -105,6 +108,14 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 #[cfg(target_os = "macos")]
 use tray_menu::show_main_window;
+/// The app's generated Tauri context: config, capabilities and the embedded
+/// frontend. `generate_context!` may be expanded once per binary — it embeds
+/// the macOS Info.plist symbol — so the one expansion lives here and both the
+/// app and the headless IPC tests build on it.
+pub fn app_context<R: tauri::Runtime>() -> tauri::Context<R> {
+    tauri::generate_context!()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // mesh-llm async chains overflow tokio's default 2 MiB stacks; run on 8 MiB like upstream.
@@ -546,6 +557,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::perch_export_bundle,
+            commands::perch_verify_envelope,
+            commands::perch_sidecar_start,
+            commands::perch_sidecar_stop,
+            commands::perch_sidecar_status,
             terminal_runtime::terminal_attach,
             terminal_runtime::terminal_detach,
             terminal_runtime::terminal_close,
@@ -894,6 +910,11 @@ pub fn run() {
             perch_admitted_issuers,
             perch_decide_hold,
             perch_list_holds,
+            perch_list_containments,
+            perch_evasion_coverage,
+            perch_policy,
+            perch_operator_status,
+            perch_release_containment,
             perch_get_hold,
             perch_configure_daemon,
             perch_finding_feedback,
@@ -903,7 +924,7 @@ pub fn run() {
             perch_operator_identity,
             perch_publish_verdict_update,
         ])
-        .build(tauri::generate_context!())
+        .build(app_context())
         .expect("error while building tauri application");
     let shutdown_done = Arc::new(AtomicBool::new(false));
 

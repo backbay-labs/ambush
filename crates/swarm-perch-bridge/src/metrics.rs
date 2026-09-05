@@ -48,6 +48,13 @@ pub struct StreamLabel {
     pub stream: String,
 }
 
+/// One `issuer` label: the spine identity an envelope was sealed under.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct IssuerLabel {
+    /// `swarm:ed25519:{64 hex}`.
+    pub issuer: String,
+}
+
 /// A drop, by stream and cause.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct DropLabel {
@@ -104,6 +111,7 @@ pub struct BridgeMetrics {
     late_published: Histogram,
     ingested: Family<StreamLabel, Counter>,
     source_events_published: Family<StreamLabel, Counter>,
+    envelopes_signed: Family<IssuerLabel, Counter>,
     coalesced: Family<DropLabel, Counter>,
     skipped_unpublished: Family<StreamLabel, Counter>,
     redacted_library_loads: Counter<u64>,
@@ -192,6 +200,15 @@ impl BridgeMetrics {
             "bridge_source_events_published",
             "Source events whose meaning reached the relay, by stream",
             source_events_published.clone(),
+        );
+        // B6. One per envelope the spine sealed, by issuer. An operator
+        // comparing this with `bridge_source_events_published` can see whether
+        // what reached the relay was signed, rather than taking it on faith.
+        let envelopes_signed = Family::<IssuerLabel, Counter>::default();
+        registry.register(
+            "bridge_envelopes_signed",
+            "Envelopes sealed under a spine identity, by issuer",
+            envelopes_signed.clone(),
         );
         let coalesced = Family::<DropLabel, Counter>::default();
         registry.register(
@@ -299,6 +316,7 @@ impl BridgeMetrics {
                 late_published,
                 ingested,
                 source_events_published,
+                envelopes_signed,
                 coalesced,
                 skipped_unpublished,
                 redacted_library_loads,
@@ -344,6 +362,15 @@ impl BridgeMetrics {
     }
 
     /// A card reached the relay and was acknowledged.
+    /// Count one envelope sealed under `issuer`.
+    pub fn envelope_signed(&self, issuer: &str) {
+        self.envelopes_signed
+            .get_or_create(&IssuerLabel {
+                issuer: issuer.to_string(),
+            })
+            .inc();
+    }
+
     pub fn source_events_published(&self, stream: Stream) {
         self.source_events_published
             .get_or_create(&Self::stream_label(stream))

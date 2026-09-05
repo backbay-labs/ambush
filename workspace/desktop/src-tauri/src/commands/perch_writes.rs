@@ -17,7 +17,9 @@ use tauri::State;
 
 use crate::app_state::AppState;
 use crate::commands::perch_verdict::DetachedSignature;
-use crate::perch::daemon_client::{perch_daemon_get, perch_daemon_post, route, DaemonResponse};
+use crate::perch::daemon_client::{
+    daemon_response_error, perch_daemon_get, perch_daemon_post, route, DaemonResponse,
+};
 
 const ROUTE_FINDING_FEEDBACK: &str = "/v1/operator/findings/{finding_id}/feedback";
 const ROUTE_MINT_INCIDENT: &str = "/v1/operator/incidents";
@@ -26,6 +28,7 @@ const ROUTE_DECIDE_HOLD: &str = "/v1/response/holds/{hold_id}/decide";
 /// The re-read a 409 resolves through. A GET, deliberately not on the write
 /// table (00-DECISIONS W3-17).
 const ROUTE_GET_HOLD: &str = "/v1/response/holds/{hold_id}";
+const ROUTE_RELEASE_CONTAINMENT: &str = "/v1/operator/containment/leases/{lease_id}/release";
 
 /// Leg 2 of a finding verdict (B3): tell the daemon what the operator decided,
 /// naming the leg-1 card that carries the signed intent.
@@ -210,8 +213,9 @@ pub enum DecideOutcomeKind {
 }
 
 /// What leg 2 tells the renderer.
+// NO `rename_all`, for the reason on `RecordHoldVerdictOutput`: the renderer
+// reads `receipt_id`, `decided_at_ms`, `superseded_by` and `winning_decision`.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DecideOutcome {
     /// Which of the six outcomes this was.
     pub outcome: DecideOutcomeKind,
@@ -227,6 +231,10 @@ pub struct DecideOutcome {
     /// Populated ONLY on `Superseded`, and only from a RE-READ of the hold
     /// (W3-17). Never synthesised from the 409 body, which carries no winner.
     pub superseded_by: Option<String>,
+    /// The decision that won when this one was superseded — `grant` or
+    /// `refuse` — so the row can say what happened rather than only that
+    /// something did. `None` unless superseded.
+    pub winning_decision: Option<String>,
     /// Whether the daemon replayed a decision it already held.
     pub replayed: bool,
     /// Whether the runtime attempted the response at all. Carried from the
@@ -281,6 +289,7 @@ fn map_success(body: &serde_json::Value) -> DecideOutcome {
         receipt_id: decision["receipt_id"].as_str().map(str::to_string),
         decided_at_ms: decision["decided_at_ms"].as_i64().unwrap_or_default(),
         superseded_by: None,
+        winning_decision: None,
         replayed: body["replayed"].as_bool().unwrap_or(false),
         dispatched: decision["dispatched"].as_bool().unwrap_or(false),
     }
@@ -319,6 +328,9 @@ fn map_conflict(error: &str, own_intent: &str, re_read: &serde_json::Value) -> D
             .as_i64()
             .unwrap_or_default(),
         superseded_by: superseded.then(|| winner.to_string()),
+        winning_decision: superseded
+            .then(|| hold["decision"]["decision"].as_str().map(str::to_string))
+            .flatten(),
         replayed: false,
         dispatched: false,
     }
@@ -371,6 +383,7 @@ where
                     receipt_id: None,
                     decided_at_ms: input.decided_at_ms,
                     superseded_by: None,
+                    winning_decision: None,
                     replayed: false,
                     dispatched: false,
                 });
@@ -475,3 +488,41 @@ pub async fn perch_decide_hold(
 #[cfg(test)]
 #[path = "perch_writes_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "perch_ipc_tests.rs"]
+mod ipc_tests;
+
+#[cfg(test)]
+#[path = "perch_live_tests.rs"]
+mod live_tests;
+
+/// `POST /v1/operator/containment/leases/{lease_id}/release` — ask the daemon
+/// to run a containment's inverse now rather than at its TTL.
+///
+/// The body is returned whole. The caller reads `lease_closed` from it and
+/// never the HTTP status: the daemon answers 200 for a release whose inverse
+/// FAILED, because the request was understood and carried out — the world
+/// simply did not change. A console that read the status would report a host
+/// as freed while it is still contained.
+///
+/// # Errors
+///
+/// When the lease id is malformed, when the daemon is unreachable, or when the
+/// daemon refuses the request itself.
+#[tauri::command]
+pub async fn perch_release_containment(
+    lease_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let r = perch_daemon_post(
+        &state,
+        &route(ROUTE_RELEASE_CONTAINMENT, &[("lease_id", &lease_id)])?,
+        serde_json::json!({}),
+    )
+    .await?;
+    if r.status != 200 {
+        return Err(daemon_response_error(&r));
+    }
+    Ok(r.body)
+}

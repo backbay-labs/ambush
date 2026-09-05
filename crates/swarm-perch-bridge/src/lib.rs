@@ -66,15 +66,21 @@
 pub mod alarm;
 pub mod cards;
 pub mod channels;
+pub mod coalesce;
 pub mod error;
 pub mod holds;
 pub mod identity;
+pub mod lanes;
+pub mod leases;
 pub mod metrics;
 pub mod pacer;
 pub mod publish;
 pub mod receive;
+pub mod rollback;
+pub mod spine;
 pub mod spool;
 pub mod stream;
+pub mod telemetry;
 
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
@@ -160,6 +166,11 @@ pub struct PerchBridge {
     stall: Arc<AtomicU64>,
     events: broadcast::Receiver<RuntimeEvent>,
     containment: Option<Arc<ContainmentSweep>>,
+    /// B6. The spine identities every published envelope is sealed under.
+    spine: Arc<crate::spine::SpineSigner>,
+    /// B6. The durable per-issuer chain heads, so a restart continues its
+    /// chains rather than forking them.
+    chain_heads: Arc<Mutex<crate::spool::chain_heads::ChainHeadStore>>,
     hold_store: Option<Arc<dyn swarm_runtime::held_action::HeldActionStore>>,
     shutdown: watch::Receiver<bool>,
 }
@@ -219,6 +230,20 @@ impl PerchBridge {
         )?));
         let routing = CaseRouting::open(&spool_root.join(CASE_ROUTING_FILE))?;
 
+        // B6. Both before the bridge can publish anything. A missing or unusable
+        // seed is FATAL here rather than a silent fallback to unsigned
+        // envelopes: a bridge that published an unsigned chain under a signing
+        // profile would emit records nobody could tell from forged ones, and it
+        // would do so without a single line of output.
+        let spine = Arc::new(crate::spine::SpineSigner::from_config(
+            &config,
+            &colony_id,
+            &identities.slot_labels(),
+        )?);
+        let chain_heads = Arc::new(Mutex::new(crate::spool::chain_heads::ChainHeadStore::open(
+            spool_root, &colony_id,
+        )?));
+
         let (metrics, registry) = BridgeMetrics::new();
 
         // First card promotes findings; a hold is Operator-complete. A deployment with no
@@ -250,6 +275,8 @@ impl PerchBridge {
             stall: Arc::new(AtomicU64::new(0)),
             events,
             containment,
+            spine,
+            chain_heads,
             hold_store,
             shutdown,
         }))
@@ -313,6 +340,8 @@ impl PerchBridge {
             stall,
             events,
             containment: _containment,
+            spine,
+            chain_heads,
             hold_store,
             shutdown,
         } = self;
@@ -360,6 +389,13 @@ impl PerchBridge {
             );
             return;
         };
+        // The telemetry slot signs 26000-26005 under its own key. A separate
+        // connection from the alarm's: the alarm publisher carries a burst
+        // budget sized for held actions, and colony telemetry must not spend it.
+        let telemetry_identity = identities
+            .index_of(&identity::Slot::Telemetry)
+            .and_then(|idx| identities.get(idx).cloned());
+        let telemetry_metrics = metrics.clone();
 
         let pacer = Pacer::new(
             Arc::clone(&spools),
@@ -368,7 +404,10 @@ impl PerchBridge {
             colony_id.clone(),
             metrics.clone(),
             ConnectionSupervisor::new(config.relay_url.clone(), ingest_identity),
-        );
+        )
+        // B6. Every evidence envelope is sealed under its slot's spine identity,
+        // and the durable head advances only when the relay acknowledges it.
+        .with_spine(Arc::clone(&spine), Arc::clone(&chain_heads));
         let mut pacer_task = tokio::spawn(pacer.run(shutdown.clone()));
 
         // The hold publisher owns the routing sidecar: the hold path writes card ids into it
@@ -385,7 +424,11 @@ impl PerchBridge {
             alarm_identity.clone(),
             alarm_idx,
             metrics.clone(),
-        );
+        )
+        // B6. Hold cards are sealed under the spine identity too; a hold is the
+        // record an operator acts on, so it is the last card that should be
+        // publishable without attestation.
+        .with_spine(Arc::clone(&spine));
         let mut alarm_task = Some(tokio::spawn(alarm::run(alarm::AlarmDrainer {
             spools: Arc::clone(&spools),
             identities: Arc::clone(&identities),
@@ -396,6 +439,39 @@ impl PerchBridge {
             metrics,
             shutdown: shutdown.clone(),
         })));
+
+        // The Watchfloor's four frames. A separate task from the pacer because
+        // the two have opposite retry semantics: an evidence record that is
+        // lost is unrecoverable, and a telemetry frame that is REPLAYED is a
+        // lie about now. Allowed to die alone for the same reason the alarm
+        // drainer is — losing the wall must not stop evidence reaching the
+        // relay.
+        let mut telemetry_task = match telemetry_identity {
+            Some(identity_or_return) => {
+                Some(tokio::spawn(telemetry::run(telemetry::TelemetryDrainer {
+                    spools: Arc::clone(&spools),
+                    identities: Arc::clone(&identities),
+                    config: config.clone(),
+                    publisher: ConnectionSupervisor::new(
+                        config.relay_url.clone(),
+                        identity_or_return,
+                    ),
+                    metrics: telemetry_metrics,
+                    shutdown: shutdown.clone(),
+                })))
+            }
+            // No telemetry slot is a configuration state, not a crash: every
+            // other stream keeps publishing and the Watchfloor reports that no
+            // frame has arrived, which is true.
+            None => {
+                tracing::warn!(
+                    module = module_path!(),
+                    "the perch identity table has no telemetry slot; the Watchfloor will report \
+                     no frames"
+                );
+                None
+            }
+        };
 
         let mut shutdown = shutdown;
         loop {
@@ -420,6 +496,24 @@ impl PerchBridge {
                 }
                 // The pacer only returns on shutdown.
                 _ = &mut pacer_task => break,
+                // The telemetry publisher may die alone: the Watchfloor going
+                // dark is a visible, recoverable state, and the console renders
+                // "no frame has arrived" rather than inventing zeroes.
+                result = async {
+                    match telemetry_task.as_mut() {
+                        Some(handle) => handle.await,
+                        None => std::future::pending().await,
+                    }
+                }, if telemetry_task.is_some() => {
+                    telemetry_task = None;
+                    if let Ok(Err(error)) = result {
+                        tracing::error!(
+                            module = module_path!(),
+                            reason = %error,
+                            "perch telemetry publisher exited; the Watchfloor will report no frames"
+                        );
+                    }
+                }
                 // The alarm drainer is allowed to die alone. A relay that refuses a lane
                 // create, or a `case_id` the daemon minted as something other than a UUID,
                 // must not stop evidence from reaching the relay: the alarm records stay
@@ -455,6 +549,9 @@ impl PerchBridge {
 
         receive_task.abort();
         pacer_task.abort();
+        if let Some(handle) = telemetry_task.take() {
+            handle.abort();
+        }
         if let Some(handle) = alarm_task {
             handle.abort();
         }
@@ -481,5 +578,27 @@ mod tests {
         let lines: Vec<&str> = include_str!("lib.rs").lines().map(str::trim_end).collect();
         assert!(lines.contains(&"//! ## Owns"));
         assert!(lines.contains(&"//! ## Does not own"));
+    }
+
+    /// B6. A signing profile with no usable seed refuses to start.
+    ///
+    /// The alternative is the failure this whole task exists to prevent: a
+    /// bridge that quietly published unsigned envelopes under a profile that
+    /// says it signs, emitting a chain no reader could tell from a forged one.
+    #[test]
+    fn a_signing_profile_with_no_seed_refuses_rather_than_publishing_unsigned() {
+        let config = swarm_core::config::PerchBridgeConfig {
+            spine_seed_env: "PERCH_TEST_SEED_THAT_IS_NOT_SET".to_string(),
+            ..swarm_core::config::PerchBridgeConfig::default()
+        };
+        let result = crate::spine::SpineSigner::from_config(
+            &config,
+            "colony-a",
+            &["perch-alarm".to_string()],
+        );
+        assert!(matches!(
+            result,
+            Err(crate::error::BridgeError::MissingSpineSeed { .. })
+        ));
     }
 }

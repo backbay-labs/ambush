@@ -6,15 +6,23 @@
 
 import { Route as rootRouteImport } from "./routes/root";
 import { Route as workflowsRouteImport } from "./routes/workflows";
+import { Route as watchFloorRouteImport } from "./routes/watch-floor";
+import { Route as tuningRouteImport } from "./routes/tuning";
 import { Route as settingsRouteImport } from "./routes/settings";
 import { Route as remindersRouteImport } from "./routes/reminders";
 import { Route as pulseRouteImport } from "./routes/pulse";
 import { Route as projectsRouteImport } from "./routes/projects";
+import { Route as policyRouteImport } from "./routes/policy";
+import { Route as ledgerRouteImport } from "./routes/ledger";
+import { Route as leasesRouteImport } from "./routes/leases";
+import { Route as handoffRouteImport } from "./routes/handoff";
+import { Route as gapsRouteImport } from "./routes/gaps";
 import { Route as agentsRouteImport } from "./routes/agents";
 import { Route as indexRouteImport } from "./routes/index";
 import { Route as workflowsDotworkflowIdRouteImport } from "./routes/workflows.$workflowId";
 import { Route as projectsDotprojectIdRouteImport } from "./routes/projects.$projectId";
 import { Route as messagesDotnewRouteImport } from "./routes/messages.new";
+import { Route as lanesDotlaneIdRouteImport } from "./routes/lanes.$laneId";
 import { Route as channelsDotchannelIdRouteImport } from "./routes/channels.$channelId";
 import { Route as casesDotcaseIdRouteImport } from "./routes/cases.$caseId";
 import { Route as channelsDotchannelIdDotpostsDotpostIdRouteImport } from "./routes/channels.$channelId.posts.$postId";
@@ -22,6 +30,16 @@ import { Route as channelsDotchannelIdDotpostsDotpostIdRouteImport } from "./rou
 const workflowsRoute = workflowsRouteImport.update({
   id: "/workflows",
   path: "/workflows",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const watchFloorRoute = watchFloorRouteImport.update({
+  id: "/watch-floor",
+  path: "/watch-floor",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const tuningRoute = tuningRouteImport.update({
+  id: "/tuning",
+  path: "/tuning",
   getParentRoute: () => rootRouteImport,
 } as any);
 const settingsRoute = settingsRouteImport.update({
@@ -42,6 +60,31 @@ const pulseRoute = pulseRouteImport.update({
 const projectsRoute = projectsRouteImport.update({
   id: "/projects",
   path: "/projects",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const policyRoute = policyRouteImport.update({
+  id: "/policy",
+  path: "/policy",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const ledgerRoute = ledgerRouteImport.update({
+  id: "/ledger",
+  path: "/ledger",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const leasesRoute = leasesRouteImport.update({
+  id: "/leases",
+  path: "/leases",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const handoffRoute = handoffRouteImport.update({
+  id: "/handoff",
+  path: "/handoff",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const gapsRoute = gapsRouteImport.update({
+  id: "/gaps",
+  path: "/gaps",
   getParentRoute: () => rootRouteImport,
 } as any);
 const agentsRoute = agentsRouteImport.update({
@@ -69,6 +112,11 @@ const messagesDotnewRoute = messagesDotnewRouteImport.update({
   path: "/messages/new",
   getParentRoute: () => rootRouteImport,
 } as any);
+const lanesDotlaneIdRoute = lanesDotlaneIdRouteImport.update({
+  id: "/lanes/$laneId",
+  path: "/lanes/$laneId",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const channelsDotchannelIdRoute = channelsDotchannelIdRouteImport.update({
   id: "/channels/$channelId",
   path: "/channels/$channelId",
@@ -89,13 +137,21 @@ const channelsDotchannelIdDotpostsDotpostIdRoute =
 export interface FileRoutesByFullPath {
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
+  "/gaps": typeof gapsRoute;
+  "/handoff": typeof handoffRoute;
+  "/leases": typeof leasesRoute;
+  "/ledger": typeof ledgerRoute;
+  "/policy": typeof policyRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
+  "/tuning": typeof tuningRoute;
+  "/watch-floor": typeof watchFloorRoute;
   "/workflows": typeof workflowsRoute;
   "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
+  "/lanes/$laneId": typeof lanesDotlaneIdRoute;
   "/messages/new": typeof messagesDotnewRoute;
   "/projects/$projectId": typeof projectsDotprojectIdRoute;
   "/workflows/$workflowId": typeof workflowsDotworkflowIdRoute;
@@ -104,13 +160,21 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
+  "/gaps": typeof gapsRoute;
+  "/handoff": typeof handoffRoute;
+  "/leases": typeof leasesRoute;
+  "/ledger": typeof ledgerRoute;
+  "/policy": typeof policyRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
+  "/tuning": typeof tuningRoute;
+  "/watch-floor": typeof watchFloorRoute;
   "/workflows": typeof workflowsRoute;
   "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
+  "/lanes/$laneId": typeof lanesDotlaneIdRoute;
   "/messages/new": typeof messagesDotnewRoute;
   "/projects/$projectId": typeof projectsDotprojectIdRoute;
   "/workflows/$workflowId": typeof workflowsDotworkflowIdRoute;
@@ -120,13 +184,21 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
+  "/gaps": typeof gapsRoute;
+  "/handoff": typeof handoffRoute;
+  "/leases": typeof leasesRoute;
+  "/ledger": typeof ledgerRoute;
+  "/policy": typeof policyRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
+  "/tuning": typeof tuningRoute;
+  "/watch-floor": typeof watchFloorRoute;
   "/workflows": typeof workflowsRoute;
   "/cases/$caseId": typeof casesDotcaseIdRoute;
   "/channels/$channelId": typeof channelsDotchannelIdRoute;
+  "/lanes/$laneId": typeof lanesDotlaneIdRoute;
   "/messages/new": typeof messagesDotnewRoute;
   "/projects/$projectId": typeof projectsDotprojectIdRoute;
   "/workflows/$workflowId": typeof workflowsDotworkflowIdRoute;
@@ -137,13 +209,21 @@ export interface FileRouteTypes {
   fullPaths:
     | "/"
     | "/agents"
+    | "/gaps"
+    | "/handoff"
+    | "/leases"
+    | "/ledger"
+    | "/policy"
     | "/projects"
     | "/pulse"
     | "/reminders"
     | "/settings"
+    | "/tuning"
+    | "/watch-floor"
     | "/workflows"
     | "/cases/$caseId"
     | "/channels/$channelId"
+    | "/lanes/$laneId"
     | "/messages/new"
     | "/projects/$projectId"
     | "/workflows/$workflowId"
@@ -152,13 +232,21 @@ export interface FileRouteTypes {
   to:
     | "/"
     | "/agents"
+    | "/gaps"
+    | "/handoff"
+    | "/leases"
+    | "/ledger"
+    | "/policy"
     | "/projects"
     | "/pulse"
     | "/reminders"
     | "/settings"
+    | "/tuning"
+    | "/watch-floor"
     | "/workflows"
     | "/cases/$caseId"
     | "/channels/$channelId"
+    | "/lanes/$laneId"
     | "/messages/new"
     | "/projects/$projectId"
     | "/workflows/$workflowId"
@@ -167,13 +255,21 @@ export interface FileRouteTypes {
     | "__root__"
     | "/"
     | "/agents"
+    | "/gaps"
+    | "/handoff"
+    | "/leases"
+    | "/ledger"
+    | "/policy"
     | "/projects"
     | "/pulse"
     | "/reminders"
     | "/settings"
+    | "/tuning"
+    | "/watch-floor"
     | "/workflows"
     | "/cases/$caseId"
     | "/channels/$channelId"
+    | "/lanes/$laneId"
     | "/messages/new"
     | "/projects/$projectId"
     | "/workflows/$workflowId"
@@ -183,13 +279,21 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   indexRoute: typeof indexRoute;
   agentsRoute: typeof agentsRoute;
+  gapsRoute: typeof gapsRoute;
+  handoffRoute: typeof handoffRoute;
+  leasesRoute: typeof leasesRoute;
+  ledgerRoute: typeof ledgerRoute;
+  policyRoute: typeof policyRoute;
   projectsRoute: typeof projectsRoute;
   pulseRoute: typeof pulseRoute;
   remindersRoute: typeof remindersRoute;
   settingsRoute: typeof settingsRoute;
+  tuningRoute: typeof tuningRoute;
+  watchFloorRoute: typeof watchFloorRoute;
   workflowsRoute: typeof workflowsRoute;
   casesDotcaseIdRoute: typeof casesDotcaseIdRoute;
   channelsDotchannelIdRoute: typeof channelsDotchannelIdRoute;
+  lanesDotlaneIdRoute: typeof lanesDotlaneIdRoute;
   messagesDotnewRoute: typeof messagesDotnewRoute;
   projectsDotprojectIdRoute: typeof projectsDotprojectIdRoute;
   workflowsDotworkflowIdRoute: typeof workflowsDotworkflowIdRoute;
@@ -203,6 +307,20 @@ declare module "@tanstack/react-router" {
       path: "/workflows";
       fullPath: "/workflows";
       preLoaderRoute: typeof workflowsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/watch-floor": {
+      id: "/watch-floor";
+      path: "/watch-floor";
+      fullPath: "/watch-floor";
+      preLoaderRoute: typeof watchFloorRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/tuning": {
+      id: "/tuning";
+      path: "/tuning";
+      fullPath: "/tuning";
+      preLoaderRoute: typeof tuningRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/settings": {
@@ -231,6 +349,41 @@ declare module "@tanstack/react-router" {
       path: "/projects";
       fullPath: "/projects";
       preLoaderRoute: typeof projectsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/policy": {
+      id: "/policy";
+      path: "/policy";
+      fullPath: "/policy";
+      preLoaderRoute: typeof policyRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/ledger": {
+      id: "/ledger";
+      path: "/ledger";
+      fullPath: "/ledger";
+      preLoaderRoute: typeof ledgerRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/leases": {
+      id: "/leases";
+      path: "/leases";
+      fullPath: "/leases";
+      preLoaderRoute: typeof leasesRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/handoff": {
+      id: "/handoff";
+      path: "/handoff";
+      fullPath: "/handoff";
+      preLoaderRoute: typeof handoffRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/gaps": {
+      id: "/gaps";
+      path: "/gaps";
+      fullPath: "/gaps";
+      preLoaderRoute: typeof gapsRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/agents": {
@@ -268,6 +421,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof messagesDotnewRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/lanes/$laneId": {
+      id: "/lanes/$laneId";
+      path: "/lanes/$laneId";
+      fullPath: "/lanes/$laneId";
+      preLoaderRoute: typeof lanesDotlaneIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     "/channels/$channelId": {
       id: "/channels/$channelId";
       path: "/channels/$channelId";
@@ -295,13 +455,21 @@ declare module "@tanstack/react-router" {
 const rootRouteChildren: RootRouteChildren = {
   indexRoute: indexRoute,
   agentsRoute: agentsRoute,
+  gapsRoute: gapsRoute,
+  handoffRoute: handoffRoute,
+  leasesRoute: leasesRoute,
+  ledgerRoute: ledgerRoute,
+  policyRoute: policyRoute,
   projectsRoute: projectsRoute,
   pulseRoute: pulseRoute,
   remindersRoute: remindersRoute,
   settingsRoute: settingsRoute,
+  tuningRoute: tuningRoute,
+  watchFloorRoute: watchFloorRoute,
   workflowsRoute: workflowsRoute,
   casesDotcaseIdRoute: casesDotcaseIdRoute,
   channelsDotchannelIdRoute: channelsDotchannelIdRoute,
+  lanesDotlaneIdRoute: lanesDotlaneIdRoute,
   messagesDotnewRoute: messagesDotnewRoute,
   projectsDotprojectIdRoute: projectsDotprojectIdRoute,
   workflowsDotworkflowIdRoute: workflowsDotworkflowIdRoute,

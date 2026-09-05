@@ -1,0 +1,44 @@
+@layer components {
+  /*
+   * The kill-chain graph's ink. Colour reaches every node through these
+   * classes only: an inline fill in the component would be invisible to a
+   * theme switch, and this figure is read in both.
+   *
+   * Dimension is carried by dash pattern, set on the element. Every edge is
+   * ONE colour on purpose — four colours would read as four severities.
+   */
+  .perch-kill-chain-svg {
+    overflow: visible;
+  }
+
+  .perch-kill-chain-node {
+    fill: hsl(var(--perch-card));
+    stroke: hsl(var(--perch-border-strong));
+    stroke-width: 1;
+  }
+
+  .perch-kill-chain-rail {
+    fill: hsl(var(--perch-border-strong));
+  }
+
+  .perch-kill-chain-edge {
+    stroke: hsl(var(--perch-border-strong));
+    stroke-width: 1;
+  }
+
+  .perch-kill-chain-strategy {
+    fill: hsl(var(--perch-foreground));
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.875rem;
+  }
+
+  .perch-kill-chain-meta {
+    fill: hsl(var(--perch-foreground-muted));
+    font-size: 0.75rem;
+  }
+
+  .perch-kill-chain-reason {
+    fill: hsl(var(--perch-foreground-muted));
+    font-size: 0.6875rem;
+  }
+}
