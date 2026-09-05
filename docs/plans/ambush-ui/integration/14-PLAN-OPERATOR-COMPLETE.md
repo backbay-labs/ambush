@@ -5572,7 +5572,7 @@ call). The `perch` preview flag stays off by default.
 | Task | Landed | Not landed, and why |
 |---|---|---|
 | 1–3 open decisions | filed in `00-DECISIONS.md` §3 with the fallback each plan builds against | the decisions themselves are the owner's |
-| 4 B4 deposits | `perch_deposit_slice`, the engine op, the mounted route (seven paths) | OpenAPI regeneration — `generate_perch_openapi.rs` and `docs/openapi/perch-operator-v1.json` do not exist; the contract is hand-maintained YAML. A task, not a step |
+| 4 B4 deposits | `perch_deposit_slice`, the engine op, the mounted route (seven paths); `generate_perch_openapi` and the gated `docs/openapi/perch-operator-v1.json` (2026-09-05), with `tools/check-perch-openapi.sh` in CI | — |
 | 5 `ContainmentReleased` | the 13th runtime event, published from both release paths | — |
 | 6 partition stamp | both fields across five sides; parity 324 both ways | the provenance Playwright spec un-skips a file that does not exist |
 | 7 B6 spine | wire primitives, chain-head store, signer, sealing on the publish path with the durable head advancing only on ACK, and the console's `perch_verify_envelope` | — |

@@ -688,6 +688,13 @@ jobs:
       # having a day, exactly one job goes red.
       - name: Check platform OpenAPI contract
         run: bash tools/check-platform-openapi.sh
+      # The Perch operator contract, same two aggregated assertions
+      # (12-BACKEND-BILL-API.md §14): the committed JSON is valid OpenAPI 3.1
+      # and byte-identical to what generate_perch_openapi renders from the
+      # authoring YAML — which itself refuses a document whose paths are not
+      # exactly the routes PERCH_ROUTER_PATHS mounts.
+      - name: Check Perch operator OpenAPI contract
+        run: bash tools/check-perch-openapi.sh
 
   proof-surfaces:
     needs:
