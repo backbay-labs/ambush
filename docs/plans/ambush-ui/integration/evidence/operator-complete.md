@@ -126,7 +126,7 @@ which is why they came first.
 - **Two daemon-side reads were not built** and the screens say so in their own copy: the policy
   screen states the daemon's default is unknown rather than serving rules the console reads
   independently, and the tuning screen renders no recommendations rather than fabricating them.
-- **The OpenAPI generator, the SVG asset rewrite and the 72-hour soak** have no target in this
+- **The SVG asset rewrite landed on 2026-09-05** (forty hits across twelve diagrams, each render checked; `docs/assets` is `required` in the copy gate now). **The OpenAPI generator and the 72-hour soak** have no target in this
   tree, need a browser check, or are manual respectively.
 - **Task 22's sidecar was never bundled or run**: it needs an engine release build and a Tauri
   bundle with the opt-in overlay.

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 500" width="560" height="500" role="img" aria-label="Roadmap from September 2026 to April 2027: red swarm in-tree, machine-checked evolution, federated clowders, provenance-grade memory, rotating quorum, herd immunity, the detection commons, and ambush at fleet scale.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 500" width="560" height="500" role="img" aria-label="Roadmap from September 2026 to April 2027: red swarm in-tree, machine-checked evolution, federated colonies, provenance-grade memory, rotating quorum, herd immunity, the detection commons, and ambush at fleet scale.">
   <defs>
     <linearGradient id="rm-bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#070a09"/>
@@ -28,7 +28,7 @@
 
     <circle cx="64" cy="186" r="5" fill="#4ade80"/>
     <text x="96" y="182" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#4ade80">NOV 2026</text>
-    <text x="96" y="201">Federated clowders</text>
+    <text x="96" y="201">Federated colonies</text>
 
     <circle cx="64" cy="240" r="5" fill="#4ade80"/>
     <text x="96" y="236" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" letter-spacing="1.2" fill="#4ade80">DEC 2026</text>

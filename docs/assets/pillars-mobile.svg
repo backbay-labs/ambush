@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 620" width="560" height="620" role="img" aria-label="The three lanes of Swarm Team Six: Swarm detection, Governance, and Evolution, all resolving to one signed receipt chain.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 620" width="560" height="620" role="img" aria-label="The three pillars of Ambush: detection, governance, and evolution, all resolving to one signed receipt chain.">
   <defs>
     <linearGradient id="pm-bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#070a09"/>
@@ -8,7 +8,7 @@
 
   <rect width="560" height="620" fill="url(#pm-bg)"/>
 
-  <text x="280" y="42" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="3.4" fill="#7f9c8d" fill-opacity="0.8">ONE SUBSTRATE, THREE LANES</text>
+  <text x="280" y="42" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="600" letter-spacing="3.4" fill="#7f9c8d" fill-opacity="0.8">ONE SUBSTRATE, THREE PILLARS</text>
 
   <g>
     <rect x="40" y="70" width="480" height="140" rx="10" fill="#0c1613" stroke="#1e3a2e"/>
@@ -38,7 +38,7 @@
     <text x="66" y="428" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2.4" fill="#eaf3ee">EVOLUTION</text>
     <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#9db3a8">
       <text x="66" y="458">Adversarial pressure</text>
-      <text x="66" y="482">Proof, canary, promotion</text>
+      <text x="66" y="482">Attestation, canary, promotion</text>
       <text x="66" y="506">Durable evidence per stage</text>
     </g>
   </g>

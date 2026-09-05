@@ -5587,7 +5587,7 @@ call). The `perch` preview flag stays off by default.
 | 17 handoff | `reviewSession`, `watchClaim`, `shiftLedger`, `handoffPublish`, the frontier fold, `HandoffScreen`, `/handoff` | the daemon-side review session — see **W3-36**: the route cannot accept this body |
 | 18 case canvas | `caseTemplate`, `caseTtlClock`, `killChainLayout`, `CaseScreen`, `CaseCanvasTab`, `KillChainGraph`, the terminal pin in TS **and** Rust | the Playwright specs; agent rows on the graph (blocked on Task 1) |
 | 19 Watchfloor | the whole of it: the shared layer, three charts, `WatchfloorScreen`, `/watch-floor`, two gates, the four reducers, and the telemetry publisher that drains and signs them once per tick | the 72-hour soak, which is manual |
-| 20 CI gates | route-tree, surface-count and notification-field gates, all wired, all with fixtures | the SVG asset rewrite |
+| 20 CI gates | route-tree, surface-count and notification-field gates, all wired, all with fixtures; the twelve SVG assets rewritten and `docs/assets` flipped to `required` (2026-09-05) | — |
 | 21 packaging | the compose gate (which found two real defects), the relay chart dependency, NetworkPolicy, perch secret, 12 chart tests, the deployment section | `docker compose up` and `helm install` — no working Docker daemon and no cluster here. Image digests are **not** pinned and the gate says so on every run |
 | 22 sidecar (optional) | supervisor with group-kill, three commands, health poll, settings panel (mounted under Settings → Detector on 2026-09-05; it had been built and mounted nowhere), opt-in bundling | never bundled or run: it needs an engine release build and a Tauri bundle |
 

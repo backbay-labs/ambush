@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="1200" height="400" role="img" aria-label="The three lanes of Swarm Team Six: Swarm detection, Governance, and Evolution, all resolving to one signed receipt chain.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="1200" height="400" role="img" aria-label="The three pillars of Ambush: detection, governance, and evolution, all resolving to one signed receipt chain.">
   <defs>
     <linearGradient id="p-bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#070a09"/>
@@ -20,7 +20,7 @@
     <path d="M1152 360 H1164 M1158 354 V366"/>
   </g>
 
-  <text x="600" y="48" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" letter-spacing="4.4" fill="#7f9c8d" fill-opacity="0.8">ONE SUBSTRATE, THREE LANES</text>
+  <text x="600" y="48" text-anchor="middle" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" letter-spacing="4.4" fill="#7f9c8d" fill-opacity="0.8">ONE SUBSTRATE, THREE PILLARS</text>
 
   <!-- SWARM -->
   <g>
@@ -75,7 +75,7 @@
     <text x="838" y="164" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="2.6" fill="#eaf3ee">EVOLUTION</text>
     <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13.5" fill="#9db3a8">
       <text x="838" y="196">Adversarial pressure</text>
-      <text x="838" y="220">Proof, canary, promotion</text>
+      <text x="838" y="220">Attestation, canary, promotion</text>
       <text x="838" y="244">Durable evidence per stage</text>
     </g>
   </g>
