@@ -489,6 +489,14 @@ pub async fn perch_decide_hold(
 #[path = "perch_writes_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "perch_ipc_tests.rs"]
+mod ipc_tests;
+
+#[cfg(test)]
+#[path = "perch_live_tests.rs"]
+mod live_tests;
+
 /// `POST /v1/operator/containment/leases/{lease_id}/release` — ask the daemon
 /// to run a containment's inverse now rather than at its TTL.
 ///

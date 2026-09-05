@@ -108,6 +108,14 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 #[cfg(target_os = "macos")]
 use tray_menu::show_main_window;
+/// The app's generated Tauri context: config, capabilities and the embedded
+/// frontend. `generate_context!` may be expanded once per binary — it embeds
+/// the macOS Info.plist symbol — so the one expansion lives here and both the
+/// app and the headless IPC tests build on it.
+pub fn app_context<R: tauri::Runtime>() -> tauri::Context<R> {
+    tauri::generate_context!()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // mesh-llm async chains overflow tokio's default 2 MiB stacks; run on 8 MiB like upstream.
@@ -914,7 +922,7 @@ pub fn run() {
             perch_operator_identity,
             perch_publish_verdict_update,
         ])
-        .build(tauri::generate_context!())
+        .build(app_context())
         .expect("error while building tauri application");
     let shutdown_done = Arc::new(AtomicBool::new(false));
 
