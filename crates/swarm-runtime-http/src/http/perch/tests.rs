@@ -469,11 +469,11 @@ async fn feedback_requires_the_approve_scope() {
 
 #[test]
 fn perch_paths_are_disjoint_from_the_containment_router() {
-    // Eight since Task 16 mounted the policy read (seven since B4's deposits,
-    // W3-28). The count is written down so a route added without a path
-    // entry, or a path entry without a route, fails here rather than at the
-    // first request that misses.
-    assert_eq!(PERCH_ROUTER_PATHS.len(), 8);
+    // Nine since the incident read (W3-42); eight since Task 16's policy read;
+    // seven since B4's deposits (W3-28). The count is written down so a route
+    // added without a path entry, or a path entry without a route, fails here
+    // rather than at the first request that misses.
+    assert_eq!(PERCH_ROUTER_PATHS.len(), 9);
     for path in PERCH_ROUTER_PATHS {
         // Two prefixes now: the operator surface, and the hold reads B2r
         // mounts under `/v1/response/` because they are the daemon's answer
@@ -856,10 +856,10 @@ fn perch_router_paths_are_disjoint_from_the_local_operator_surface() {
     );
     let overlap: Vec<_> = perch.intersection(&local).collect();
     assert!(overlap.is_empty(), "same path on two ports: {overlap:?}");
-    // Eight after Task 16's policy read (seven after B4). The
-    // `threat-class-configs` path on 7766 is a sibling in spelling only and
-    // must never join this set.
-    assert_eq!(perch.len(), 8);
+    // Nine after the incident read (W3-42), eight after Task 16's policy
+    // read, seven after B4. The `threat-class-configs` path on 7766 is a
+    // sibling in spelling only and must never join this set.
+    assert_eq!(perch.len(), 9);
 }
 
 // ── B2: the decide route ───────────────────────────────────────────────────
@@ -1249,4 +1249,56 @@ async fn policy_read_serves_rules_in_file_order_and_evaluates_a_triple() {
     assert!(evaluation["fallthrough"].is_null());
     assert_eq!(evaluation["outranks_human_gate"], true);
     assert_eq!(evaluation["warning"], "request_carried_selectors");
+}
+
+/// The incident read: what the correlation joined and refused, with the host
+/// and strategy the feedback target would report, and a 404 for an incident
+/// the store does not have.
+#[tokio::test]
+async fn incident_read_serves_members_with_reasons_and_404s_the_unknown() {
+    let (app, _state) = app();
+    let minted = app
+        .clone()
+        .oneshot(post_json(
+            "/v1/operator/incidents",
+            "secret-token",
+            &mint_body("f-read-1"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(minted.status(), StatusCode::OK);
+    let minted = json_body(minted).await;
+    let incident_id = minted["incident_id"].as_str().unwrap().to_string();
+    let get = |uri: String| {
+        Request::builder()
+            .uri(uri)
+            .header(AUTHORIZATION, "Bearer secret-token")
+            .header("x-swarm-schema-version", "1")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let read = app
+        .clone()
+        .oneshot(get(format!("/v1/operator/incidents/{incident_id}")))
+        .await
+        .unwrap();
+    assert_eq!(read.status(), StatusCode::OK);
+    let body = json_body(read).await;
+    assert_eq!(body["incident_id"], incident_id);
+    assert_eq!(body["case_id"], minted["case_id"]);
+    let members = body["included_members"].as_array().unwrap();
+    assert!(!members.is_empty());
+    assert_eq!(members[0]["finding_id"], "f-read-1");
+    assert_eq!(members[0]["host_id"], "host-ops-1");
+    assert_eq!(members[0]["strategy_id"], "suspicious_process_tree");
+    assert!(members[0]["reason"].as_str().is_some_and(|r| !r.is_empty()));
+    assert!(body["rejected_members"].is_array());
+    assert!(body["false_positive_measurements"].is_array());
+    let missing = app
+        .oneshot(get(
+            "/v1/operator/incidents/incident:perch-case:nope".to_string()
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }

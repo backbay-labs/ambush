@@ -9,6 +9,7 @@
 pub mod deposits;
 pub mod feedback;
 pub mod holds;
+pub mod incident_read;
 pub mod mint;
 pub mod policy;
 pub mod reviewed;

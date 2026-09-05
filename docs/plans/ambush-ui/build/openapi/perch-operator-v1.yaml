@@ -536,6 +536,60 @@ paths:
         '500': { $ref: '#/components/responses/InternalError' }
 
   # ------------------------------------------------------------------------- B3r
+  /v1/operator/incidents/{incident_id}:
+    get:
+      tags: [incidents]
+      summary: One correlated incident — the members it joined, the members it refused, and every measurement against it
+      operationId: read_incident
+      description: >-
+        The read behind the case canvas's kill-chain figure and the tuning bench's
+        provenance. `GET /v2/api/incidents` serves a summary with none of this
+        (00-DECISIONS W3-42, W3-43): here are the member decisions with the
+        correlation's own reasons and evidence links, the rejected half included —
+        an empty `rejected_members` means the correlation refused nothing, which is
+        a fact about this incident and not an absence — and every false-positive
+        measurement recorded against the incident, as persisted.
+
+
+        `host_id` on a member comes from its shared keys (`host:…`), else the
+        record's correlation keys, the derivation the feedback target uses;
+        `strategy_id` is the incident's trigger strategy, which is what the
+        feedback target reports for every member. Per-member strategies are not
+        recorded.
+      parameters:
+        - $ref: '#/components/parameters/SchemaVersionHeader'
+        - name: incident_id
+          in: path
+          required: true
+          description: A bare incident id, e.g. `incident:perch-case:<case uuid>`.
+          schema: { type: string }
+      responses:
+        '200':
+          description: The incident.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PerchIncidentRead' }
+        '400':
+          description: Not a bare incident id.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: Missing or wrong bearer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: The principal lacks the `read` scope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: No incident with that id in this daemon's store.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /v1/operator/findings/reviewed:
     get:
       tags: [feedback]
@@ -2368,4 +2422,102 @@ components:
           oneOf:
             - $ref: '#/components/schemas/PolicyEvaluation'
             - type: 'null'
+      additionalProperties: false
+    IncidentGraphDimension:
+      type: string
+      enum: [temporal, causal, entity, semantic]
+    PerchIncidentEvidenceLink:
+      type: object
+      required: [dimension, explanation, shared_values, weight]
+      properties:
+        dimension: { $ref: '#/components/schemas/IncidentGraphDimension' }
+        explanation: { type: string }
+        shared_values:
+          type: array
+          items: { type: string }
+        weight: { type: integer, minimum: 0 }
+      additionalProperties: false
+    PerchIncidentMember:
+      type: object
+      required:
+        [finding_id, hunt_id, investigation_id, reason, confidence_score, host_id,
+         strategy_id, shared_keys, evidence_links]
+      properties:
+        finding_id: { type: string }
+        hunt_id: { type: string }
+        investigation_id: { type: string }
+        reason:
+          type: string
+          description: The correlation's own words for why this member was joined or refused.
+        confidence_score: { type: number }
+        host_id:
+          oneOf:
+            - type: string
+            - type: 'null'
+        strategy_id:
+          oneOf:
+            - type: string
+            - type: 'null'
+        shared_keys:
+          type: array
+          items: { type: string }
+        evidence_links:
+          type: array
+          items: { $ref: '#/components/schemas/PerchIncidentEvidenceLink' }
+      additionalProperties: false
+    PerchIncidentRead:
+      type: object
+      required:
+        [schema_version, incident_id, case_id, summary, created_at_ms, window_start_ms,
+         window_end_ms, trigger_finding_id, trigger_strategy_id, threat_class, severity,
+         confidence_score, graph_dimensions, correlation_keys, included_members,
+         rejected_members, false_positive_measurements]
+      properties:
+        schema_version: { type: integer, minimum: 1, default: 1 }
+        incident_id: { type: string }
+        case_id:
+          description: The case channel this incident was minted for, when it was.
+          oneOf:
+            - type: string
+            - type: 'null'
+        summary: { type: string }
+        created_at_ms: { type: integer }
+        window_start_ms: { type: integer }
+        window_end_ms: { type: integer }
+        trigger_finding_id:
+          oneOf:
+            - type: string
+            - type: 'null'
+        trigger_strategy_id:
+          oneOf:
+            - type: string
+            - type: 'null'
+        threat_class:
+          oneOf:
+            - $ref: '#/components/schemas/ThreatClass'
+            - type: 'null'
+        severity:
+          oneOf:
+            - $ref: '#/components/schemas/Severity'
+            - type: 'null'
+        confidence_score: { type: number }
+        graph_dimensions:
+          type: array
+          items: { $ref: '#/components/schemas/IncidentGraphDimension' }
+        correlation_keys:
+          type: array
+          items: { type: string }
+        included_members:
+          type: array
+          items: { $ref: '#/components/schemas/PerchIncidentMember' }
+        rejected_members:
+          type: array
+          description: Empty means the correlation refused nothing — a fact, not an absence.
+          items: { $ref: '#/components/schemas/PerchIncidentMember' }
+        false_positive_measurements:
+          type: array
+          description: Every measurement recorded against this incident, as persisted (`FalsePositiveMeasurement`).
+          items:
+            type: object
+            additionalProperties: true
       additionalProperties: false

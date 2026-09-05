@@ -1019,6 +1019,15 @@
         ],
         "type": "string"
       },
+      "IncidentGraphDimension": {
+        "enum": [
+          "temporal",
+          "causal",
+          "entity",
+          "semantic"
+        ],
+        "type": "string"
+      },
       "IncidentMintRequest": {
         "additionalProperties": false,
         "description": "Carries no `case_id`: the daemon mints it and returns it on `IncidentMintResponse` (00-DECISIONS W3-14); a body that supplies one is rejected by `additionalProperties: false`.",
@@ -1198,6 +1207,231 @@
           "hold_id",
           "decided_at_ms",
           "signature"
+        ],
+        "type": "object"
+      },
+      "PerchIncidentEvidenceLink": {
+        "additionalProperties": false,
+        "properties": {
+          "dimension": {
+            "$ref": "#/components/schemas/IncidentGraphDimension"
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "shared_values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "weight": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dimension",
+          "explanation",
+          "shared_values",
+          "weight"
+        ],
+        "type": "object"
+      },
+      "PerchIncidentMember": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence_score": {
+            "type": "number"
+          },
+          "evidence_links": {
+            "items": {
+              "$ref": "#/components/schemas/PerchIncidentEvidenceLink"
+            },
+            "type": "array"
+          },
+          "finding_id": {
+            "type": "string"
+          },
+          "host_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hunt_id": {
+            "type": "string"
+          },
+          "investigation_id": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "The correlation's own words for why this member was joined or refused.",
+            "type": "string"
+          },
+          "shared_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "strategy_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "finding_id",
+          "hunt_id",
+          "investigation_id",
+          "reason",
+          "confidence_score",
+          "host_id",
+          "strategy_id",
+          "shared_keys",
+          "evidence_links"
+        ],
+        "type": "object"
+      },
+      "PerchIncidentRead": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "description": "The case channel this incident was minted for, when it was.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence_score": {
+            "type": "number"
+          },
+          "correlation_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "integer"
+          },
+          "false_positive_measurements": {
+            "description": "Every measurement recorded against this incident, as persisted (`FalsePositiveMeasurement`).",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "graph_dimensions": {
+            "items": {
+              "$ref": "#/components/schemas/IncidentGraphDimension"
+            },
+            "type": "array"
+          },
+          "incident_id": {
+            "type": "string"
+          },
+          "included_members": {
+            "items": {
+              "$ref": "#/components/schemas/PerchIncidentMember"
+            },
+            "type": "array"
+          },
+          "rejected_members": {
+            "description": "Empty means the correlation refused nothing — a fact, not an absence.",
+            "items": {
+              "$ref": "#/components/schemas/PerchIncidentMember"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": 1,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "severity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Severity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "threat_class": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ThreatClass"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trigger_finding_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trigger_strategy_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window_end_ms": {
+            "type": "integer"
+          },
+          "window_start_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "incident_id",
+          "case_id",
+          "summary",
+          "created_at_ms",
+          "window_start_ms",
+          "window_end_ms",
+          "trigger_finding_id",
+          "trigger_strategy_id",
+          "threat_class",
+          "severity",
+          "confidence_score",
+          "graph_dimensions",
+          "correlation_keys",
+          "included_members",
+          "rejected_members",
+          "false_positive_measurements"
         ],
         "type": "object"
       },
@@ -2315,6 +2549,82 @@
         "summary": "Mint a single-member incident for a promoted finding",
         "tags": [
           "feedback"
+        ]
+      }
+    },
+    "/v1/operator/incidents/{incident_id}": {
+      "get": {
+        "description": "The read behind the case canvas's kill-chain figure and the tuning bench's provenance. `GET /v2/api/incidents` serves a summary with none of this (00-DECISIONS W3-42, W3-43): here are the member decisions with the correlation's own reasons and evidence links, the rejected half included — an empty `rejected_members` means the correlation refused nothing, which is a fact about this incident and not an absence — and every false-positive measurement recorded against the incident, as persisted.\n\n`host_id` on a member comes from its shared keys (`host:…`), else the record's correlation keys, the derivation the feedback target uses; `strategy_id` is the incident's trigger strategy, which is what the feedback target reports for every member. Per-member strategies are not recorded.",
+        "operationId": "read_incident",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SchemaVersionHeader"
+          },
+          {
+            "description": "A bare incident id, e.g. `incident:perch-case:<case uuid>`.",
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerchIncidentRead"
+                }
+              }
+            },
+            "description": "The incident."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not a bare incident id."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or wrong bearer."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The principal lacks the `read` scope."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No incident with that id in this daemon's store."
+          }
+        },
+        "summary": "One correlated incident — the members it joined, the members it refused, and every measurement against it",
+        "tags": [
+          "incidents"
         ]
       }
     },
