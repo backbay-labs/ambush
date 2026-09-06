@@ -22,7 +22,9 @@ stands as wave 1 wrote it.
 | **12** | [`12-PLAN-FIRST-CARD.md`](12-PLAN-FIRST-CARD.md) | First card: the bridge crate, one finding card across the seam, promote, dismiss, and the tuning report moving | the walking skeleton |
 | **13** | [`13-PLAN-THE-HOLD.md`](13-PLAN-THE-HOLD.md) | The hold: the daemon-side hold store and decide route, the 46010 row and 26006 alarm, The Watch and the verdict pane, the two-legged write | the product's central artifact |
 | **14** | [`14-PLAN-OPERATOR-COMPLETE.md`](14-PLAN-OPERATOR-COMPLETE.md) | Operator-complete: leases, ledger and export, tuning bench, gaps, governance strip, handoff, deposits read, signed envelopes | the remaining surfaces |
+| **15** | [`15-PLAN-HOLD-DURABILITY.md`](15-PLAN-HOLD-DURABILITY.md) | W3-38 and W3-39 resolved: the drainer heals its ledger and parks a refused record after a budget; the sweep re-files an unfiled hold | the hold path after the walking skeleton |
 | **20** | [`20-ROADMAP.md`](20-ROADMAP.md) | Sequencing, the two parallel tracks and where they join, exit criteria per milestone, the surviving kill criteria and success metrics, the re-sizing | planning or staffing |
+| **21** | [`21-GAMEPLAN.md`](21-GAMEPLAN.md) | The execution record from 2026-09-06: land the stack, cross the window seam, fix the hold path, then the engine roadmap phases 285–313 in the order the console makes visible | anyone asking what happens next |
 
 ## How the three waves relate
 
