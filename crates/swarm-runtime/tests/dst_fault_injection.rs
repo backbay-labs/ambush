@@ -157,6 +157,10 @@ enum Disposition {
 enum Event {
     Poll(usize),
     IntentObserved,
+    IntentMissing,
+    IntentCompleted,
+    IntentInvalidBinding,
+    IntentUnreadable,
     Effect,
     CompletedObserved,
     Returned(Disposition),
@@ -207,31 +211,41 @@ impl ResponseExecutor for EffectAdapter {
             &id,
             Event::EvidenceRead(self.evidence.read().await),
         );
-        assert_eq!(request.evidence, self.evidence.expected.indicator);
-        // Read the on-disk journal independently of its in-memory lookup cache.
-        let intent = self
-            .journal
-            .lookup_persisted(&id)
-            .unwrap()
-            .expect("effect attempted without a durable dispatch intent");
-        assert_eq!(request_id(&intent.request).unwrap(), id);
-        assert_eq!(
-            serde_json::to_value(&intent.request).unwrap(),
-            serde_json::to_value(request).unwrap()
-        );
-        assert_eq!(intent.lease.capability_id, lease.capability_id);
-        assert!(
-            intent.completion.is_none(),
-            "completed request reached executor again"
-        );
-        assert_eq!(mode, ExecutionMode::Enforced);
-        record(&self.log, &id, Event::IntentObserved);
+        // Observe the real bytes without enforcing the property ourselves.
+        // A broken production boundary must be allowed to make its sandbox
+        // effect so the named oracle can reject the actual observed history.
+        let intent_event = match self.journal.lookup_persisted(&id) {
+            Ok(Some(intent)) if intent.completion.is_some() => Event::IntentCompleted,
+            Ok(Some(intent))
+                if request_id(&intent.request)
+                    .as_ref()
+                    .is_ok_and(|found| found == &id)
+                    && serde_json::to_value(&intent.request).ok()
+                        == serde_json::to_value(request).ok()
+                    && intent.lease.capability_id == lease.capability_id
+                    && request.evidence == self.evidence.expected.indicator
+                    && mode == ExecutionMode::Enforced =>
+            {
+                Event::IntentObserved
+            }
+            Ok(Some(_)) => Event::IntentInvalidBinding,
+            Ok(None) => Event::IntentMissing,
+            Err(_) => Event::IntentUnreadable,
+        };
+        record(&self.log, &id, intent_event.clone());
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.effects_path)
             .unwrap();
-        writeln!(file, "{id}").unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "dispatch_id": id, "observed_intent": format!("{intent_event:?}")
+            })
+        )
+        .unwrap();
         file.sync_all().unwrap();
         record(&self.log, &id, Event::Effect);
         *self.stage.lock().unwrap() = Stage::AfterEffect;
@@ -531,12 +545,12 @@ fn drive_inner(plan: Plan) -> Observation {
                     plan.fault,
                     Fault::DropAfterEffect | Fault::ReopenAfterEffect
                 );
-                let checkpoint = if plan.verdict != Verdict::Allow {
-                    current == Stage::Returned
-                } else {
-                    (before && current == Stage::BeforeEffect)
-                        || (after && current == Stage::AfterEffect)
-                };
+                // Target the actual execution stage even if a production
+                // mutation wrongly dispatches a denied request. A correctly
+                // denied request instead pauses after the gate returns.
+                let checkpoint = (before && current == Stage::BeforeEffect)
+                    || (after && current == Stage::AfterEffect)
+                    || (plan.verdict != Verdict::Allow && current == Stage::Returned);
                 if !fault_fired && (before || after) && checkpoint {
                     fault_fired = true;
                     if matches!(plan.fault, Fault::DropBeforeEffect | Fault::DropAfterEffect) {
@@ -551,6 +565,11 @@ fn drive_inner(plan: Plan) -> Observation {
             plan.fault,
             Fault::DropUnpolled | Fault::DropBeforeEffect | Fault::DropAfterEffect
         );
+        drop(future);
+        if cancelled && initial.is_none() {
+            record(&log, &id, Event::Crash);
+        }
+        assert_prefix(&log, &plan);
         if cancelled {
             assert!(
                 initial.is_none(),
@@ -558,7 +577,6 @@ fn drive_inner(plan: Plan) -> Observation {
                 plan.seed,
                 plan.fault
             );
-            record(&log, &id, Event::Crash);
         } else {
             assert!(initial.is_some(), "seed {} exceeded poll budget", plan.seed);
             assert_eq!(
@@ -578,7 +596,6 @@ fn drive_inner(plan: Plan) -> Observation {
                 plan.seed
             );
         }
-        drop(future);
         observation.initial_outcomes.push(initial);
         // No executor result may be invented for an interrupted effect.
         let first = journal.lookup_persisted(&id).unwrap();
@@ -617,6 +634,7 @@ fn drive_inner(plan: Plan) -> Observation {
                 "durable dispatch record changed across reopen"
             );
             let disposition = ready(episode(&runtime, &journal, &request, &plan, &stage, &log));
+            assert_prefix(&log, &plan);
             let expected = if plan.verdict != Verdict::Allow {
                 Disposition::Rejected
             } else if previous.is_some() {
@@ -678,6 +696,7 @@ fn drive_inner(plan: Plan) -> Observation {
             "newer request erased older durable dispatch state"
         );
         let disposition = ready(episode(&runtime, &journal, request, &plan, &stage, &log));
+        assert_prefix(&log, &plan);
         assert_eq!(
             disposition,
             if plan.verdict == Verdict::Allow {
@@ -703,7 +722,13 @@ fn drive_inner(plan: Plan) -> Observation {
     drop(journal);
     view.close();
     observation.effects = match std::fs::read_to_string(&effects_path) {
-        Ok(contents) => contents.lines().map(str::to_string).collect(),
+        Ok(contents) => contents
+            .lines()
+            .map(|line| {
+                let effect: serde_json::Value = serde_json::from_str(line).unwrap();
+                effect["dispatch_id"].as_str().unwrap().to_string()
+            })
+            .collect(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => panic!("read sandbox effects: {error}"),
     };
@@ -711,49 +736,76 @@ fn drive_inner(plan: Plan) -> Observation {
     observation
 }
 
-/// These checks never predicate safety on a future returning a Result.
-fn violations(observation: &Observation) -> Vec<&'static str> {
+/// The same named prefix oracles run immediately after cancellation and
+/// redelivery, before result/state expectations can mask a forbidden effect.
+fn prefix_violations(log: &[Trace], verdict: Verdict) -> Vec<&'static str> {
     let mut failures = Vec::new();
     let mut intents = BTreeSet::new();
+    let mut counts = BTreeMap::new();
+    for entry in log {
+        match entry.event {
+            Event::IntentObserved => {
+                intents.insert(entry.id.clone());
+            }
+            Event::IntentMissing
+            | Event::IntentCompleted
+            | Event::IntentInvalidBinding
+            | Event::IntentUnreadable => {
+                intents.remove(&entry.id);
+            }
+            Event::Effect => {
+                if !intents.contains(&entry.id) {
+                    failures.push("ordering: effect preceded durable intent");
+                }
+                if verdict != Verdict::Allow {
+                    failures.push("disposition: forbidden effect despite cancellation");
+                }
+                let count = counts.entry(entry.id.clone()).or_insert(0usize);
+                *count += 1;
+                if *count > 1 {
+                    failures.push("at-most-once: duplicate effect across restart");
+                }
+            }
+            Event::CompletedObserved if counts.get(&entry.id).copied().unwrap_or_default() != 1 => {
+                failures.push("ordering: completion without exactly one preceding effect");
+            }
+            Event::Returned(disposition)
+                if verdict != Verdict::Allow && disposition != Disposition::Rejected =>
+            {
+                failures.push("disposition: forbidden request returned an incorrect disposition");
+            }
+            _ => {}
+        }
+    }
+    failures
+}
+fn assert_prefix(log: &Log, plan: &Plan) {
+    let trace = log.lock().unwrap();
+    let failures = prefix_violations(&trace, plan.verdict);
+    assert!(
+        failures.is_empty(),
+        "SWARM_DST_SEED={} plan={plan:?} named_oracles={failures:?} trace={trace:?}",
+        plan.seed
+    );
+}
+
+/// Final checks additionally compare recovered journal state and durable
+/// sandbox effects. Safety never depends on a future returning a Result.
+fn violations(observation: &Observation) -> Vec<&'static str> {
+    let mut failures = prefix_violations(&observation.log, observation.plan.verdict);
     let mut counts = BTreeMap::new();
     let mut traced_effects = Vec::new();
     for entry in &observation.log {
         if !observation.ids.contains(&entry.id) {
             failures.push("unexpected request identity in trace");
         }
-        match entry.event {
-            Event::IntentObserved => {
-                intents.insert(entry.id.clone());
-            }
-            Event::Effect => {
-                if !intents.contains(&entry.id) {
-                    failures.push("effect preceded durable intent");
-                }
-                if observation.plan.verdict != Verdict::Allow {
-                    failures.push("forbidden effect despite cancellation");
-                }
-                *counts.entry(entry.id.clone()).or_insert(0usize) += 1;
-                traced_effects.push(entry.id.clone());
-            }
-            Event::CompletedObserved => {
-                if counts.get(&entry.id).copied().unwrap_or_default() != 1 {
-                    failures.push("completion without exactly one preceding effect");
-                }
-            }
-            Event::Returned(disposition)
-                if observation.plan.verdict != Verdict::Allow
-                    && disposition != Disposition::Rejected =>
-            {
-                failures.push("forbidden request returned an incorrect disposition");
-            }
-            _ => {}
+        if entry.event == Event::Effect {
+            *counts.entry(entry.id.clone()).or_insert(0usize) += 1;
+            traced_effects.push(entry.id.clone());
         }
     }
     if traced_effects != observation.effects {
         failures.push("trace disagrees with durable sandbox effects");
-    }
-    if counts.values().any(|count| *count > 1) {
-        failures.push("duplicate effect across restart");
     }
     for id in &observation.ids {
         let count = counts.get(id).copied().unwrap_or_default();
@@ -891,12 +943,14 @@ fn dst_oracles_reject_reordered_intent_forbidden_cancelled_effect_and_duplicate(
         .position(|e| e.event == Event::Effect)
         .unwrap();
     reordered.log.swap(intent, effect); // Identical final store contents.
-    assert!(violations(&reordered).contains(&"effect preceded durable intent"));
+    assert!(violations(&reordered).contains(&"ordering: effect preceded durable intent"));
     for verdict in [Verdict::Deny, Verdict::Human] {
         let mut forbidden = good.clone();
         forbidden.plan.verdict = verdict;
         assert!(forbidden.initial_outcomes.iter().all(Option::is_none));
-        assert!(violations(&forbidden).contains(&"forbidden effect despite cancellation"));
+        assert!(
+            violations(&forbidden).contains(&"disposition: forbidden effect despite cancellation")
+        );
     }
     let mut duplicated = good;
     let id = duplicated.effects[0].clone();
@@ -905,5 +959,5 @@ fn dst_oracles_reject_reordered_intent_forbidden_cancelled_effect_and_duplicate(
         id,
         event: Event::Effect,
     });
-    assert!(violations(&duplicated).contains(&"duplicate effect across restart"));
+    assert!(violations(&duplicated).contains(&"at-most-once: duplicate effect across restart"));
 }
