@@ -20,9 +20,13 @@ import {
 } from "./perchSubscriptions";
 
 /**
- * The lane-movement path: one hook that mounts the perch REQ set while any
- * perch surface is rendered, and the sink that turns a lane's kind:9 into a
- * sequence observation plus a timeline nudge.
+ * The perch subscription manager's React side: one hook that mounts the REQ
+ * set while any perch surface is rendered, the inputs `buildPerchSubscriptions`
+ * is fed from, and the sink every open REQ delivers into.
+ *
+ * The file was `perchLaneMovement.ts` until it took the rest of the inventory;
+ * the lane-movement envelope reader below keeps its name because the card
+ * grammar it reads did not change.
  *
  * Refcounted, so the many `useSwarmCardSurface` callers in a timeline are
  * one REQ set; syncs are coalesced per tick, so a hundred rows mounting at
@@ -187,7 +191,7 @@ export function usePerchSubscriptionsMount(enabled = true): void {
  * beside `resetPerchSubscriptions`. Clears the identity and lanes the next
  * sync would use and the retry timer; the mount count is React's and stays.
  */
-export function resetPerchLaneMovement(): void {
+export function resetPerchSubscriptionManager(): void {
   cancelRetry();
   retryDelayMs = RETRY_BASE_MS;
   desired = { myPubkey: null, laneChannelIds: NO_LANES };

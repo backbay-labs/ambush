@@ -22,7 +22,7 @@ import { resetAvatarPresentations } from "@/features/profile/avatarPresentationS
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { resetPerchEphemeralStore } from "@/shared/api/perchEphemeralStore";
-import { resetPerchLaneMovement } from "@/shared/api/perchLaneMovement";
+import { resetPerchSubscriptionManager } from "@/shared/api/perchSubscriptionManager";
 import {
   resetPerchSeqTracking,
   resetPerchSubscriptions,
@@ -169,10 +169,10 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
   searchHitEventCache: () => clearSearchHitEventCache(),
   markdownNodeCache: () => clearMarkdownNodeCache(),
   messageLinkMetadataCache: () => resetMessageLinkMetadataCache(),
-  // The lane-movement mount state feeds the subscription manager; both are
-  // cleared in one step, and the awaited part is the REQ teardown.
+  // The manager's mount state and the REQ table are cleared in one step,
+  // and the awaited part is the REQ teardown.
   perchSubscriptions: async () => {
-    resetPerchLaneMovement();
+    resetPerchSubscriptionManager();
     await resetPerchSubscriptions();
   },
   // The 26000-26006 frames and the admitted set they are checked against.
