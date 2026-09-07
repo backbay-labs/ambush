@@ -9,6 +9,7 @@ pub struct SandboxExecutor;
 
 #[async_trait]
 impl ResponseExecutor for SandboxExecutor {
+    // INVARIANT: ResponseSandboxRequiresScopedLease
     async fn execute(
         &self,
         request: &ActionRequest,

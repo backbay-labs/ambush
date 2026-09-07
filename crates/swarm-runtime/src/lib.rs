@@ -990,6 +990,7 @@ where
             swarm_policy::PolicyVerdict::Deny => {
                 return Err(ApprovalError::Denied(decision.reason.clone()).into());
             }
+            // INVARIANT: RuntimeRequireHumanBlocksLiveExecution
             swarm_policy::PolicyVerdict::RequireHuman if self.mode == RuntimeMode::LiveResponse => {
                 return Err(ApprovalError::Denied(decision.reason.clone()).into());
             }
@@ -1413,6 +1414,7 @@ where
     }
 }
 
+// INVARIANT: RuntimeLeaseMustBeActive
 fn ensure_active_lease(
     lease: &swarm_policy::CapabilityLease,
     now_ms: i64,

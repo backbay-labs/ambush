@@ -1,0 +1,83 @@
+# The assumption registry (Phase 285, v1.79 assurance floor).
+#
+# Each `[assume.<ID>]` names one thing this engine assumes true of its
+# environment or of a cryptographic / serialization primitive, rather than
+# verifying it at runtime. `dependent_invariants` lists the `docs/assurance/
+# MAPPING.md` invariant `Name`s whose fail-closed behaviour would be unsound
+# if the assumption were false -- i.e. what a violation of this assumption
+# would actually break, and where.
+#
+# This file is meant to be read by humans and, from Phase 285 Task 2 onward,
+# cross-checked by `tools/check-mapping.sh`. It must parse as valid TOML.
+
+[assume.ASSUME-OS-CLOCK]
+owner = "swarm-runtime"
+statement = "The OS-provided wall clock (now_ms, threaded through ApprovalContext and the runtime) is not adversarially controlled and advances monotonically enough that rate-limit windows, lease expiry, and the human-approval hold mean what their names say."
+dependent_invariants = [
+    "PolicyHumanGateOnDestructiveAction",
+    "PolicyScopeRateLimitDeniesBurst",
+    "RuntimeRequireHumanBlocksLiveExecution",
+    "RuntimeLeaseMustBeActive",
+]
+
+[assume.ASSUME-JETSTREAM-DURABILITY]
+owner = "swarm-pheromone"
+statement = "The NATS JetStream KV backend for the pheromone substrate persists an accepted write durably, and later reads observe it, before that write is treated as committed."
+dependent_invariants = []
+# Honest gap, not an oversight: no fail-closed invariant in swarm-policy,
+# swarm-response, swarm-runtime, or swarm-spine (this phase's MAPPING.md
+# scope) rests on JetStream. swarm-spine carries no NATS/JetStream
+# dependency at all (checked its Cargo.toml at HEAD); the JetStream-backed
+# substrate lives in swarm-pheromone, which TCBOUND-04 deliberately keeps
+# out of the policy decision path. This assumption is real and worth
+# registering now, but it will not gain a MAPPING.md dependent until a
+# later phase maps swarm-pheromone (or a consumer of it) into the table.
+# See docs/assurance/../../.superpowers/sdd/285-01-PLAN/task-1-report.md
+# for the full writeup -- not padded with an invented row.
+
+[assume.ASSUME-KEYSTORE-ATOMICITY]
+owner = "swarm-runtime"
+statement = "Local on-disk agent signing-key material is written atomically -- O_EXCL create for a brand-new key, temp-file-then-rename for a replacement -- so a reader never observes a partially written key file."
+dependent_invariants = [
+    "RuntimeKeystoreKeyIntegrity",
+]
+
+[assume.ASSUME-ED25519]
+owner = "swarm-crypto"
+statement = "Ed25519 signature verification is unforgeable without the matching private key: a signature that verifies against a public key was produced by that key's holder, and a public-key-derived identifier cannot be produced without the corresponding key material."
+dependent_invariants = [
+    "RuntimeContinuityProofSignatureInvalid",
+    "RuntimeIdentityDerivedIdMismatch",
+    "SpineEnvelopeIssuerMustBeEd25519Key",
+]
+
+[assume.ASSUME-SHA256]
+owner = "swarm-crypto"
+statement = "SHA-256 is collision- and second-preimage-resistant: two different byte strings are not expected to hash to the same digest, so a matching hash is treated as proof the underlying content is unchanged."
+dependent_invariants = [
+    "SpineEnvelopeHashMismatchRejected",
+    "SpineChainLinkIntegrityViolation",
+]
+
+[assume.ASSUME-CANONICAL-JSON]
+owner = "swarm-crypto"
+statement = "swarm_crypto::canonicalize_json produces exactly one deterministic byte encoding for a given JSON value (stable key order, unambiguous number formatting), so the same logical fact always signs and hashes to the same bytes, and a value it cannot canonicalize deterministically is refused rather than silently re-encoded."
+dependent_invariants = [
+    "SpineEnvelopeCanonicalizationRequired",
+]
+
+[assume.ASSUME-NETWORK-TRANSPORT]
+owner = "swarm-response"
+statement = "Requests and adapter configuration cross a network or IPC trust boundary before this engine acts on them, so content is validated on arrival rather than trusted because deserialization succeeded, and an outbound response adapter is configured with a real, non-empty endpoint before any live call is attempted."
+dependent_invariants = [
+    "PolicyMalformedRequestRejected",
+    "ResponseHttpEdrEndpointRequired",
+    "ResponseCrowdStrikeRtrBaseUrlRequired",
+]
+
+[assume.ASSUME-SUBPROCESS-ISOLATION]
+owner = "swarm-response"
+statement = "A response adapter's execution surface is bounded to the scope named on its capability lease; nothing about the adapter's own execution context can widen a response past the blast radius the policy layer already authorized."
+dependent_invariants = [
+    "ResponseSandboxRequiresScopedLease",
+]

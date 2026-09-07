@@ -1,0 +1,125 @@
+# The negative-falsifiability registry (Phase 285, v1.79 assurance floor,
+# Task 3: FALSIFY-01).
+#
+# `docs/assurance/MAPPING.md` names 15 fail-closed invariants and points at
+# the positive test that already exercises each one. A positive test that
+# passes proves the real function's behaviour matches the assertion -- it
+# does NOT prove the assertion would have caught a REGRESSION, because a
+# check that always passes (e.g. a no-op stub standing in for a real guard)
+# would pass that same positive test too. This registry is the other half:
+# one entry per `MAPPING.md` row, naming the `negative_<name>.rs` test that
+# proves the invariant is falsifiable -- that a DELIBERATELY BROKEN variant
+# of the enforcing logic (the fail-closed check weakened or removed) is
+# distinguishable from the real one on the same input the real function
+# denies.
+#
+# `tools/check-negative-registry.sh` (FALSIFY-03) keeps this file,
+# `MAPPING.md`, and the real `crates/*/tests/` tree in sync: every
+# `MAPPING.md` row must have an entry here, every entry here must name a
+# `MAPPING.md` row, and every entry's `test_file`/`test_fn` must resolve to a
+# real, present test. This file must parse as valid TOML.
+#
+# `target` mirrors the corresponding `MAPPING.md` row's `Path` column
+# (the exact `crate::module::[Type::]function` the invariant names) so a
+# reader does not have to cross-reference the two files to see what a test
+# is falsifying. It is descriptive here; `check-mapping.sh` (Task 2) is the
+# gate that keeps `MAPPING.md`'s own `Path` column resolved against the
+# source tree.
+
+[negative.PolicyMalformedRequestRejected]
+crate = "swarm-policy"
+test_file = "crates/swarm-policy/tests/negative_policy_malformed_request_rejected.rs"
+test_fn = "negative_policy_malformed_request_rejected"
+target = "swarm_policy::static_gate::StaticApprovalGate::validate_request"
+
+[negative.PolicyHumanGateOnDestructiveAction]
+crate = "swarm-policy"
+test_file = "crates/swarm-policy/tests/negative_policy_human_gate_on_destructive_action.rs"
+test_fn = "negative_policy_human_gate_on_destructive_action"
+target = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
+
+[negative.PolicyScopeRateLimitDeniesBurst]
+crate = "swarm-policy"
+test_file = "crates/swarm-policy/tests/negative_policy_scope_rate_limit_denies_burst.rs"
+test_fn = "negative_policy_scope_rate_limit_denies_burst"
+target = "swarm_policy::static_gate::StaticApprovalGate::evaluate"
+
+[negative.RuntimeRequireHumanBlocksLiveExecution]
+crate = "swarm-runtime"
+test_file = "crates/swarm-runtime/tests/negative_runtime_require_human_blocks_live_execution.rs"
+test_fn = "negative_runtime_require_human_blocks_live_execution"
+target = "swarm_runtime::SwarmRuntime::authorize_and_execute"
+
+[negative.RuntimeLeaseMustBeActive]
+crate = "swarm-runtime"
+test_file = "crates/swarm-runtime/tests/negative_runtime_lease_must_be_active.rs"
+test_fn = "negative_runtime_lease_must_be_active"
+target = "swarm_runtime::ensure_active_lease"
+
+[negative.RuntimeContinuityProofSignatureInvalid]
+crate = "swarm-runtime"
+test_file = "crates/swarm-runtime/tests/negative_runtime_continuity_proof_signature_invalid.rs"
+test_fn = "negative_runtime_continuity_proof_signature_invalid"
+target = "swarm_runtime::agent_identity::verify_continuity_proof"
+
+[negative.RuntimeIdentityDerivedIdMismatch]
+crate = "swarm-runtime"
+test_file = "crates/swarm-runtime/tests/negative_runtime_identity_derived_id_mismatch.rs"
+test_fn = "negative_runtime_identity_derived_id_mismatch"
+target = "swarm_runtime::agent_identity::FileAgentIdentityRegistry::admit_persisted_identity"
+
+[negative.RuntimeKeystoreKeyIntegrity]
+crate = "swarm-runtime"
+test_file = "crates/swarm-runtime/tests/negative_runtime_keystore_key_integrity.rs"
+test_fn = "negative_runtime_keystore_key_integrity"
+target = "swarm_runtime::agent_identity::FileAgentKeyStore::decode_key"
+
+[negative.SpineEnvelopeHashMismatchRejected]
+crate = "swarm-spine"
+test_file = "crates/swarm-spine/tests/negative_spine_envelope_hash_mismatch_rejected.rs"
+test_fn = "negative_spine_envelope_hash_mismatch_rejected"
+target = "swarm_spine::envelope::verify_envelope"
+
+[negative.SpineChainLinkIntegrityViolation]
+crate = "swarm-spine"
+test_file = "crates/swarm-spine/tests/negative_spine_chain_link_integrity_violation.rs"
+test_fn = "negative_spine_chain_link_integrity_violation"
+target = "swarm_spine::chain::verify_chain_link"
+
+[negative.SpineEnvelopeIssuerMustBeEd25519Key]
+crate = "swarm-spine"
+test_file = "crates/swarm-spine/tests/negative_spine_envelope_issuer_must_be_ed25519_key.rs"
+test_fn = "negative_spine_envelope_issuer_must_be_ed25519_key"
+target = "swarm_spine::envelope::parse_issuer_pubkey_hex"
+
+# DEVIATION -- see task-3-report.md. `envelope_signing_bytes` cannot be
+# driven into this branch from outside the crate: a `serde_json::Value`
+# cannot carry a non-finite number through any construction path the pinned
+# `serde_json` exposes (verified empirically inside the test itself, not
+# just claimed here). The test falsifies the guard's logic directly on a
+# bare `f64` instead of calling the real function on a denying input.
+[negative.SpineEnvelopeCanonicalizationRequired]
+crate = "swarm-spine"
+test_file = "crates/swarm-spine/tests/negative_spine_envelope_canonicalization_required.rs"
+test_fn = "negative_spine_envelope_canonicalization_required"
+target = "swarm_spine::envelope::envelope_signing_bytes"
+status = "deviation"
+note = "real function's input type cannot carry the triggering (non-finite f64) value from outside the crate; falsifies the guard logic directly instead of the real call chain"
+
+[negative.ResponseSandboxRequiresScopedLease]
+crate = "swarm-response"
+test_file = "crates/swarm-response/tests/negative_response_sandbox_requires_scoped_lease.rs"
+test_fn = "negative_response_sandbox_requires_scoped_lease"
+target = "swarm_response::adapters::SandboxExecutor::execute"
+
+[negative.ResponseHttpEdrEndpointRequired]
+crate = "swarm-response"
+test_file = "crates/swarm-response/tests/negative_response_http_edr_endpoint_required.rs"
+test_fn = "negative_response_http_edr_endpoint_required"
+target = "swarm_response::http_edr::HttpEdrAdapter::new"
+
+[negative.ResponseCrowdStrikeRtrBaseUrlRequired]
+crate = "swarm-response"
+test_file = "crates/swarm-response/tests/negative_response_crowdstrike_rtr_base_url_required.rs"
+test_fn = "negative_response_crowdstrike_rtr_base_url_required"
+target = "swarm_response::crowdstrike_rtr::CrowdStrikeRtrAdapter::new"

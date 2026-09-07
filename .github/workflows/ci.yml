@@ -192,6 +192,38 @@ jobs:
       - name: Check red-swarm sources hold no response-execution authority
         run: bash tools/check-red-swarm-no-execution-authority.sh
 
+      # MAPPING-04. Phase 285 put a `// INVARIANT: <Name>` comment at each Rust
+      # call site `docs/assurance/MAPPING.md` names for a fail-closed
+      # invariant. This keeps the table, the markers, and the real code in
+      # sync: every marker's Name must have a MAPPING.md row (an unmapped
+      # marker is a comment lying about an invariant the table no longer
+      # tracks), every row's Path must still resolve to a real function (or
+      # Type::method) in the tree (a stale path means the enforcing code moved
+      # or was deleted out from under the table's claim), and every row must
+      # have at least one marker somewhere (an unmarked row was never actually
+      # annotated at its enforcement site). No toolchain needed beyond
+      # python3, so it belongs in this job with the other fast static checks.
+      - name: Check the invariant map stays in sync with its markers and paths
+        run: bash tools/check-mapping.sh
+
+      # FALSIFY-03. Phase 285 Task 3 added one `negative_<name>.rs` test per
+      # `docs/assurance/MAPPING.md` invariant -- each builds a deliberately
+      # broken variant of the enforcing logic and shows it permits the exact
+      # input the real function denies, proving the positive suite is not
+      # vacuous -- and `docs/assurance/negative-registry.toml` indexes
+      # `MAPPING.md` `Name` to that test's file and function. This keeps the
+      # two in sync: every `MAPPING.md` row must have a registry entry (an
+      # invariant with no falsifiability test is exactly the gap this task
+      # closes), and every registry entry's `test_file`/`test_fn` must
+      # resolve to a real, present test (a renamed or deleted test would
+      # otherwise leave a registry entry pointing at nothing). No toolchain
+      # needed beyond python3, so it belongs in this job with the other fast
+      # static checks. The tests themselves run wherever their crate's
+      # ordinary `cargo test` already runs (`build`/`test` jobs below); this
+      # gate is about the registry staying honest, not about executing them.
+      - name: Check the negative-falsifiability registry stays in sync
+        run: bash tools/check-negative-registry.sh
+
       # Task #15. Three check scripts existed for months and were invoked by no
       # workflow at all, and tools/verify-release-hardening.sh -- which proves
       # the flags that harden the two binaries the container ships -- had never

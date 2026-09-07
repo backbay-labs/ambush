@@ -231,6 +231,7 @@ impl FileAgentKeyStore {
         ))
     }
 
+    // INVARIANT: RuntimeKeystoreKeyIntegrity
     fn decode_key(path: &Path, bytes: &[u8]) -> Result<PersistedAgentIdentity, AgentIdentityError> {
         let seed: [u8; 32] = bytes
             .try_into()
@@ -334,6 +335,7 @@ impl FileAgentIdentityRegistry {
             .collect())
     }
 
+    // INVARIANT: RuntimeIdentityDerivedIdMismatch
     pub fn admit_persisted_identity(
         &self,
         role: AgentRole,
@@ -541,6 +543,7 @@ pub fn resolve_identity_registry_dir(config_path: &Path, identity: &IdentityConf
     }
 }
 
+// INVARIANT: RuntimeContinuityProofSignatureInvalid
 pub fn verify_continuity_proof(
     proof: &AgentIdentityContinuityProof,
 ) -> Result<(), AgentIdentityError> {

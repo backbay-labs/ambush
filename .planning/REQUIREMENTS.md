@@ -824,18 +824,18 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Assumption Registry And Invariant Mapping
 
-- [ ] **MAPPING-01**: `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants.
-- [ ] **MAPPING-02**: `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and an assumption ID.
-- [ ] **MAPPING-03**: A `// INVARIANT: <Name>` source-marker convention annotates every Rust call site named in MAPPING.md.
-- [ ] **MAPPING-04**: `scripts/check-mapping.sh` fails the build when a marker has no MAPPING.md row, or a MAPPING.md row names a Rust path that no longer exists.
-- [ ] **MAPPING-05**: `scripts/check-mapping.sh` runs as a required step in `.github/workflows/ci.yml`.
+- [x] **MAPPING-01** (5c7800644): `docs/assurance/assumptions.toml` names at least 8 assumptions (ASSUME-OS-CLOCK, ASSUME-JETSTREAM-DURABILITY, ASSUME-KEYSTORE-ATOMICITY, ASSUME-ED25519, ASSUME-SHA256, ASSUME-CANONICAL-JSON, ASSUME-NETWORK-TRANSPORT, ASSUME-SUBPROCESS-ISOLATION), each with an owner and its dependent invariants.
+- [x] **MAPPING-02** (5c7800644): `docs/assurance/MAPPING.md` carries one row per fail-closed invariant, covering `swarm-policy`'s gates, `SwarmRuntime::authorize_and_execute`, `swarm-spine`'s envelope signing and chain verification, and `swarm-response`'s dispatch, each naming an exact `crate::module::function` path and an assumption ID.
+- [x] **MAPPING-03** (c4470c860): A `// INVARIANT: <Name>` source-marker convention annotates every Rust call site named in MAPPING.md.
+- [x] **MAPPING-04** (c4470c860): `scripts/check-mapping.sh` fails the build when a marker has no MAPPING.md row, or a MAPPING.md row names a Rust path that no longer exists.
+- [x] **MAPPING-05** (c4470c860): `scripts/check-mapping.sh` runs as a required step in `.github/workflows/ci.yml`.
 
 #### Negative Falsifiability
 
-- [ ] **FALSIFY-01**: `docs/assurance/negative-registry.toml` maps each MAPPING.md invariant to a `crates/*/tests/negative_*.rs` test and the production function it targets.
-- [ ] **FALSIFY-02**: Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous.
-- [ ] **FALSIFY-03**: `scripts/check-negative-registry.sh` fails if any MAPPING.md row lacks a registry entry or names an absent test.
-- [ ] **FALSIFY-04**: `scripts/check-negative-registry.sh` is a required CI step.
+- [x] **FALSIFY-01** (723466010): `docs/assurance/negative-registry.toml` maps each MAPPING.md invariant to a `crates/*/tests/negative_*.rs` test and the production function it targets.
+- [x] **FALSIFY-02** (723466010): Each registered test constructs a deliberately-broken variant of the enforcing function and asserts the broken variant permits what the real function denies, proving the positive suite is not vacuous.
+- [x] **FALSIFY-03** (723466010): `scripts/check-negative-registry.sh` fails if any MAPPING.md row lacks a registry entry or names an absent test.
+- [x] **FALSIFY-04** (723466010): `scripts/check-negative-registry.sh` is a required CI step.
 
 #### Deterministic Simulation Testing
 
@@ -1479,15 +1479,15 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | FIXTURE-02 | Phase 284 | Satisfied |
 | FIXTURE-03 | Phase 284 | Satisfied |
 | FIXTURE-04 | Phase 284 | Satisfied |
-| MAPPING-01 | Phase 285 | Pending |
-| MAPPING-02 | Phase 285 | Pending |
-| MAPPING-03 | Phase 285 | Pending |
-| MAPPING-04 | Phase 285 | Pending |
-| MAPPING-05 | Phase 285 | Pending |
-| FALSIFY-01 | Phase 285 | Pending |
-| FALSIFY-02 | Phase 285 | Pending |
-| FALSIFY-03 | Phase 285 | Pending |
-| FALSIFY-04 | Phase 285 | Pending |
+| MAPPING-01 | Phase 285 | Satisfied |
+| MAPPING-02 | Phase 285 | Satisfied |
+| MAPPING-03 | Phase 285 | Satisfied |
+| MAPPING-04 | Phase 285 | Satisfied |
+| MAPPING-05 | Phase 285 | Satisfied |
+| FALSIFY-01 | Phase 285 | Satisfied |
+| FALSIFY-02 | Phase 285 | Satisfied |
+| FALSIFY-03 | Phase 285 | Satisfied |
+| FALSIFY-04 | Phase 285 | Satisfied |
 | DST-01 | Phase 286 | Pending |
 | DST-02 | Phase 286 | Pending |
 | DST-03 | Phase 286 | Pending |
