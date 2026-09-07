@@ -198,3 +198,31 @@ test("an UNRECONCILED selection gets no Verdict Row at all", async ({
   await waitForPerchQueue(page);
   await expect(page.getByTestId("perch-verdict-pane")).toHaveCount(0);
 });
+
+test("a failed leg 1 renders one honest register and never the recorded copy", async ({
+  page,
+}) => {
+  // found-14: leg 1 never published, so the pane says exactly that. Not the
+  // recorded sentence, not "the daemon did not answer" — both would be false.
+  await installPerchWatchBridge(page, {
+    holds: [perchHold({ hold_id: PERCH_HOLD_A })],
+    legOneError: "relay refused the verdict card: rate limited",
+  });
+  await page.goto("/");
+  await waitForPerchQueue(page);
+  await page.getByTestId(`perch-queue-row-${PERCH_HOLD_A}`).click();
+  await expect(page.getByTestId("perch-verdict-pane")).toBeVisible();
+  await page.keyboard.press("r");
+
+  const row = page.locator('[data-perch-decision-state="failed_to_record"]');
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Nothing was recorded:");
+  await expect(row).toContainText(
+    "relay refused the verdict card: rate limited",
+  );
+  await expect(row).toContainText("The daemon was not asked.");
+  await expect(row).not.toContainText("recorded on the case");
+  await expect(row).not.toContainText("daemon did not answer");
+  // The one register is the only decision state rendered.
+  await expect(page.locator("[data-perch-decision-state]")).toHaveCount(1);
+});

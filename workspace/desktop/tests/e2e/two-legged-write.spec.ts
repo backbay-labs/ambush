@@ -95,18 +95,33 @@ test("an unreachable daemon leaves the decision recorded and says it cannot tell
   expect(await perchRecordedVerdicts(page)).toHaveLength(1);
 });
 
-test("leg 1 failing means no leg 2 was ever attempted", async ({ page }) => {
+test("leg 1 failing means no leg 2 was ever attempted, and reads as recorded nothing", async ({
+  page,
+}) => {
   // The ordering, from the other side. A machine that POSTed the daemon call
   // regardless would have acted on a decision with no signed record of who
-  // asked for it.
+  // asked for it. found-14: the pane must not borrow the unreachable copy,
+  // which asserts a record that does not exist and a daemon that was asked.
   await openHold(page, {
     legOneError: "relay refused the verdict card: rate limited",
   });
   await page.keyboard.press("r");
 
-  await expect(
-    page.locator('[data-perch-decision-state="unreachable"]'),
-  ).toContainText("intent card could not be published");
+  const row = page.locator('[data-perch-decision-state="failed_to_record"]');
+  await expect(row).toBeVisible();
+  // One register, and the raw failure verbatim inside it (the transport's own
+  // words, so the exact prefix is the client's, not this test's to pin).
+  await expect(row).toContainText("Nothing was recorded:");
+  await expect(row).toContainText(
+    "relay refused the verdict card: rate limited",
+  );
+  await expect(row).toContainText("The daemon was not asked.");
+  // The unreachable register is never reached: nothing was recorded on the
+  // case, and the daemon was never asked.
+  await expect(row).not.toContainText("recorded on the case");
+  await expect(row).not.toContainText("daemon did not answer");
+  // Announced, because a decision that never landed is not progress.
+  await expect(row).toHaveAttribute("role", "alert");
   expect(await perchRecordedVerdicts(page)).toEqual([]);
 });
 

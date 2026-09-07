@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { failedToRecordSentence } from "@/shared/ui/perch/decisionStateCopy.ts";
 import { verdictWriteReducer } from "./verdictWrite.ts";
 
 const idle = { phase: "idle" };
@@ -147,14 +148,49 @@ test("a terminal state is terminal: a later leg-2 event does not move it", () =>
   );
 });
 
-test("leg 1 failing is a refusal to write at all, not a half-written decision", () => {
+test("leg 1 failing yields failed_to_record carrying the raw reason, never a daemon state", () => {
+  // found-14: this used to land in `daemon-unreachable`, whose copy asserts the
+  // decision was recorded AND that the daemon did not answer — two claims that
+  // are both false when leg 1 never published. The failure now owns its phase,
+  // and the reason it carries is the raw failure, not a pre-composed sentence.
   const state = verdictWriteReducer(
     verdictWriteReducer(idle, { type: "start" }),
-    { type: "leg1-failed", reason: "relay refused the verdict card" },
+    {
+      type: "leg1-failed",
+      reason: "relay refused the verdict card: rate limited",
+    },
   );
-  assert.equal(state.phase, "daemon-unreachable");
-  assert.match(state.reason, /intent card could not be published/);
-  assert.match(state.reason, /relay refused the verdict card/);
+  assert.deepEqual(state, {
+    phase: "failed_to_record",
+    reason: "relay refused the verdict card: rate limited",
+  });
+});
+
+test("the failed-to-record register is one honest sentence, never the recorded or unreachable copy", () => {
+  // found-14: the exact sentence, and the two false claims it must never make.
+  const sentence = failedToRecordSentence(
+    "relay refused the verdict card: rate limited",
+  );
+  assert.equal(
+    sentence,
+    "Nothing was recorded: relay refused the verdict card: rate limited. The daemon was not asked.",
+  );
+  assert.doesNotMatch(sentence, /recorded on the case/i);
+  assert.doesNotMatch(sentence, /daemon did not answer/i);
+  assert.doesNotMatch(sentence, /cannot say whether it ran/i);
+});
+
+test("leg 1 failing only fires while a write is in flight, never over a recorded decision", () => {
+  // A recorded decision is a signed event on the relay; a stray leg1-failed
+  // does not un-record it. Guarded to `sending`, mirroring leg1-ok.
+  assert.equal(
+    verdictWriteReducer(recorded(), { type: "leg1-failed", reason: "x" }).phase,
+    "recorded",
+  );
+  assert.equal(
+    verdictWriteReducer(idle, { type: "leg1-failed", reason: "x" }).phase,
+    "idle",
+  );
 });
 
 test("an expired hold is a refusal naming the expiry, never a transport error", () => {
@@ -233,12 +269,12 @@ test("reset returns to idle from every phase, so one hold's outcome never render
 });
 
 test("reset is the ONLY way back to idle", () => {
-  // `leg1-failed` used to be the nearest thing to a reset and lands in
-  // `daemon-unreachable`, which would have rendered a transport error every
-  // time the operator selected a different hold.
-  const state = verdictWriteReducer(recorded(), {
-    type: "leg1-failed",
-    reason: "",
-  });
+  // `leg1-failed` from a write in flight lands in `failed_to_record`, never
+  // idle — the selected hold does not silently forget a failure it must show.
+  const state = verdictWriteReducer(
+    verdictWriteReducer(idle, { type: "start" }),
+    { type: "leg1-failed", reason: "" },
+  );
+  assert.equal(state.phase, "failed_to_record");
   assert.notEqual(state.phase, "idle");
 });

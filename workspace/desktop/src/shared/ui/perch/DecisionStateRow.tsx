@@ -1,5 +1,7 @@
 import { cn } from "@/shared/lib/cn";
 
+import { failedToRecordSentence } from "./decisionStateCopy";
+
 /**
  * A HOLD decision's two-legged write, as distinct states with no undo
  * (INV-33, INV-28).
@@ -32,6 +34,10 @@ export type DecisionWriteState =
   | { phase: "refused-late"; ruleName: string; reason: string }
   | { phase: "refused-late-governance"; reason: string }
   | { phase: "daemon-unreachable"; reason: string }
+  // Leg 1 never published: nothing was recorded and the daemon was never asked
+  // (found-14). Distinct from `daemon-unreachable`, which is a leg-2 fact and
+  // whose copy would assert a record that does not exist.
+  | { phase: "failed_to_record"; reason: string }
   | {
       phase: "superseded";
       winningIntentEventId: string;
@@ -43,14 +49,17 @@ export type DecisionWriteState =
       decidedAtMs: number;
     };
 
-/** The six values `data-perch-decision-state` can take. */
+/** The seven values `data-perch-decision-state` can take. */
 export type PerchDecisionState =
   | "sending"
   | "recorded"
   | "acknowledged"
   | "refused_late"
   | "superseded"
-  | "unreachable";
+  | "unreachable"
+  // Leg 1 failed: no record, no daemon call. Never folded into `unreachable`,
+  // which claims a recorded decision the daemon could not answer for.
+  | "failed_to_record";
 
 function decisionState(state: DecisionWriteState): PerchDecisionState | null {
   switch (state.phase) {
@@ -68,6 +77,8 @@ function decisionState(state: DecisionWriteState): PerchDecisionState | null {
       return "refused_late";
     case "daemon-unreachable":
       return "unreachable";
+    case "failed_to_record":
+      return "failed_to_record";
     case "superseded":
       return "superseded";
   }
@@ -80,9 +91,11 @@ function formatTime(atMs: number): string {
 export function DecisionStateRow({ state }: { state: DecisionWriteState }) {
   const decision = decisionState(state);
   if (state.phase === "idle" || decision === null) return null;
-  // A refusal is announced; progress is not. A screen reader that interrupted
-  // on every step would make the two indistinguishable.
-  const isRefusal = decision === "refused_late";
+  // A refusal, and an outright failure to record, are announced; progress is
+  // not. A screen reader that interrupted on every step would make the two
+  // indistinguishable, but a decision that never landed is not progress.
+  const isRefusal =
+    decision === "refused_late" || decision === "failed_to_record";
   return (
     <div
       data-testid={`perch-write-state-${state.phase}`}
@@ -170,6 +183,11 @@ function DecisionStateBody({ state }: { state: DecisionWriteState }) {
           </span>
         </>
       );
+    case "failed_to_record":
+      // One register, and the reason verbatim inside it. Never the recorded
+      // sentence and never "the daemon did not answer" (found-14): leg 1 never
+      // published, so there is no record and the daemon was never asked.
+      return <span>{failedToRecordSentence(state.reason)}</span>;
     case "superseded":
       return (
         <>
