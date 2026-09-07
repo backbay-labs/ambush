@@ -76,8 +76,8 @@ pub struct ReasonLabel {
 /// What became of a record the drainer had parked.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct OutcomeLabel {
-    /// Exactly three values: `landed`, `discarded`, `undecodable`. A record that is refused or
-    /// stalled again stays parked and is not counted here, because it did not leave.
+    /// Exactly two values: `landed` and `discarded`. A record that is refused, stalled or
+    /// unreadable stays parked and is not counted here, because it did not leave.
     pub outcome: String,
 }
 
@@ -131,6 +131,7 @@ pub struct BridgeMetrics {
     hold_undeliverable: Family<ReasonLabel, Counter>,
     alarm_parked: Family<ReasonLabel, Counter>,
     alarm_unparked: Family<OutcomeLabel, Counter>,
+    alarm_unreadable: Counter<u64>,
     lease_store_absent: Counter<u64>,
     unknown_action_kind: Counter<u64>,
 }
@@ -321,6 +322,16 @@ impl BridgeMetrics {
             "Parked alarm records that left the dead-letter, by what became of them",
             alarm_unparked.clone(),
         );
+        // Separate from `alarm_unparked` because the record does NOT leave: its bytes are the
+        // only copy of the hold, so they stay on disk and only the retry rotation gives up on
+        // it. A non-zero value means an operator has a record to rescue by hand.
+        let alarm_unreadable = Counter::<u64>::default();
+        registry.register(
+            "bridge_alarm_unreadable", // -> perch_bridge_alarm_unreadable_total
+            "Parked alarm records whose payload this build cannot deserialize; their bytes are \
+             kept and skipped",
+            alarm_unreadable.clone(),
+        );
         let lease_store_absent = Counter::<u64>::default();
         registry.register(
             "bridge_lease_store_absent",
@@ -358,6 +369,7 @@ impl BridgeMetrics {
                 hold_undeliverable,
                 alarm_parked,
                 alarm_unparked,
+                alarm_unreadable,
                 lease_store_absent,
                 unknown_action_kind,
             },
@@ -525,7 +537,12 @@ impl BridgeMetrics {
             .inc();
     }
 
-    /// A parked record that left the dead-letter: `landed`, `discarded` or `undecodable`.
+    /// A parked record whose payload this build cannot read. It stays on disk, marked.
+    pub fn alarm_unreadable(&self) {
+        self.alarm_unreadable.inc();
+    }
+
+    /// A parked record that left the dead-letter: `landed` or `discarded`.
     pub fn alarm_unparked(&self, outcome: &'static str) {
         self.alarm_unparked
             .get_or_create(&OutcomeLabel {
@@ -667,6 +684,7 @@ mod tests {
         metrics.alarm_deferred();
         metrics.alarm_parked("not_a_channel_member");
         metrics.alarm_unparked("landed");
+        metrics.alarm_unreadable();
         metrics.lease_store_absent();
         metrics.unknown_action_kind();
         let mut out = String::new();
@@ -756,6 +774,7 @@ mod tests {
             "perch_bridge_hold_undeliverable_total",
             "perch_bridge_alarm_parked_total",
             "perch_bridge_alarm_unparked_total",
+            "perch_bridge_alarm_unreadable_total",
             "perch_bridge_lease_store_absent_total",
             "perch_bridge_unknown_action_kind_total",
         ] {

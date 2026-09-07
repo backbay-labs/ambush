@@ -38,6 +38,7 @@
 //! dead-letter ([`ParkedLedger`]) so the queue behind it drains. The parked record is retried on
 //! ticks where the spool is idle, so the live head is never made to wait for one.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -250,6 +251,12 @@ pub async fn run<P: FramePublisher>(drainer: AlarmDrainer<P>) -> Result<(), Brid
     // The refusals the record at the head has collected. `None` whenever the head is empty or
     // has just changed, so it is a property of one record and never of the drainer.
     let mut head_budget: Option<HeadBudget> = None;
+    // The parked records that have stalled on this pass through the dead-letter. In memory
+    // because a stall is not a fact about the record -- nothing was answered -- so it must not
+    // move the record's durable stamp; and the pass exists because a record whose stamp never
+    // moves would otherwise be the oldest due one on every tick and take them all.
+    let mut stalled_parked: BTreeSet<(crate::spool::IssuerIdx, crate::spool::Seq)> =
+        BTreeSet::new();
     loop {
         tokio::select! {
             biased;
@@ -280,7 +287,7 @@ pub async fn run<P: FramePublisher>(drainer: AlarmDrainer<P>) -> Result<(), Brid
                     // An idle tick. The live spool has nothing, so this is the only kind of tick
                     // a parked record is served on: the head is never made to wait for one.
                     head_budget = None;
-                    retry_parked(&mut context, &mut parked, now_ms).await?;
+                    retry_parked(&mut context, &mut parked, &mut stalled_parked, now_ms).await?;
                     continue;
                 };
                 let event: RuntimeEvent = serde_json::from_slice(&record.payload)
@@ -493,7 +500,8 @@ async fn drain_one<P: FramePublisher>(
 /// Serves one due record from the dead-letter, on a tick that had no head work.
 ///
 /// One record per tick, because a retry costs the relay budget a head record would have spent,
-/// and oldest first, so a newer parked record cannot starve an older one.
+/// and oldest first, so a newer parked record cannot starve an older one. A record that stalls
+/// keeps its stamp and steps out of the rest of the pass, so neither can an unreachable one.
 ///
 /// # Errors
 ///
@@ -501,28 +509,34 @@ async fn drain_one<P: FramePublisher>(
 async fn retry_parked<P: FramePublisher>(
     context: &mut DrainContext<'_, P>,
     parked: &mut ParkedLedger,
+    stalled: &mut BTreeSet<(crate::spool::IssuerIdx, crate::spool::Seq)>,
     now_ms: i64,
 ) -> Result<(), BridgeError> {
-    let Some(due) = parked.next_due(now_ms, PARKED_RETRY_INTERVAL_MS) else {
+    let Some(due) = parked.next_due(now_ms, PARKED_RETRY_INTERVAL_MS, stalled) else {
+        // Either nothing is due, or everything due has already stalled on this pass. Either way
+        // the pass is over, and clearing it is what lets a relay that has come back be noticed.
+        stalled.clear();
         return Ok(());
     };
     let (issuer, seq, retries, payload) = (due.issuer, due.seq, due.retries, due.payload.clone());
     let event: RuntimeEvent = match serde_json::from_slice(&payload) {
         Ok(event) => event,
         Err(error) => {
-            // A payload this build cannot read. Keeping it would hold the dead-letter open on a
-            // record no tick can ever publish, and propagating the error would take the whole
-            // alarm lane down over one record already abandoned, so it is dropped with its
-            // reason. This is the only place a parked record leaves without being planned.
+            // A payload this build cannot read. It is MARKED, not removed: these bytes are the
+            // only copy of a hold the cursor has moved past, and deleting the record because
+            // this build cannot parse it would discard exactly what the dead-letter exists to
+            // keep. The mark is what stops it holding the rotation, and propagating the error
+            // instead would take the whole alarm lane down over one abandoned record.
             tracing::error!(
                 module = module_path!(),
                 issuer,
                 seq,
                 reason = %error,
-                "a parked alarm record no longer deserializes; it leaves the dead-letter unread"
+                "a parked alarm record no longer deserializes; its bytes are kept in the \
+                 dead-letter and skipped, and only an operator can clear it"
             );
-            parked.remove(issuer, seq)?;
-            context.metrics.alarm_unparked("undecodable");
+            parked.mark_unreadable(issuer, seq)?;
+            context.metrics.alarm_unreadable();
             return Ok(());
         }
     };
@@ -562,9 +576,13 @@ async fn retry_parked<P: FramePublisher>(
             );
         }
         // The relay is down or the burst window is full. Nothing was answered, so the record
-        // keeps the instant it was parked at and the next idle tick past the interval asks
-        // again.
-        Drained::Stalled => {}
+        // keeps the stamp it was parked at -- and precisely because it keeps it, it is held out
+        // of the rest of this pass, or it would be the oldest due record on every tick from now
+        // on and nothing behind it would ever be retried. The pass restarts as soon as nothing
+        // else is due.
+        Drained::Stalled => {
+            stalled.insert((issuer, seq));
+        }
     }
     Ok(())
 }
@@ -594,6 +612,7 @@ fn park_head(
         parked_at_ms: now_ms,
         retries: 0,
         reason: ParkReason::refusal_budget_exhausted(reason),
+        unreadable: false,
     })?;
     if let Some(evicted) = evicted {
         // The dead-letter is bounded, so the record abandoned longest ago goes. That IS a drop:
@@ -847,6 +866,8 @@ fn commit(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use base64::Engine as _;
+
     use super::*;
     use swarm_core::config::SecretString;
     use swarm_core::types::AgentId;
@@ -1590,6 +1611,46 @@ mod tests {
         ParkedLedger::open(&dir.path().join("parked-alarms.json")).unwrap()
     }
 
+    /// The record parked longest ago, whatever its stamp and whatever stalled.
+    fn oldest_parked(ledger: &ParkedLedger) -> Option<&ParkedRecord> {
+        ledger.next_due(i64::MAX, 0, &BTreeSet::new())
+    }
+
+    /// An issuer index the identity table never hands out, so a seeded dead-letter entry can
+    /// never collide with one the drainer parks.
+    const SEEDED_ISSUER: crate::spool::IssuerIdx = 9;
+
+    /// One dead-letter entry carrying `payload`.
+    fn seeded(seq: crate::spool::Seq, parked_at_ms: i64, payload: &[u8]) -> ParkedRecord {
+        ParkedRecord {
+            issuer: SEEDED_ISSUER,
+            seq,
+            payload: payload.to_vec(),
+            parked_at_ms,
+            retries: 0,
+            reason: ParkReason::refusal_budget_exhausted("not_a_channel_member"),
+            unreadable: false,
+        }
+    }
+
+    /// Writes records into the dead-letter BEFORE the drainer opens it.
+    ///
+    /// The same seam `route_and_spool_hold` uses for the routing sidecar, and it is how a test
+    /// reaches a state that would otherwise cost thousands of ticks: a ledger already at
+    /// capacity, or a record written by a build whose events this one cannot read.
+    fn seed_parked(dir: &tempfile::TempDir, records: Vec<ParkedRecord>) {
+        let mut ledger = ParkedLedger::open(&dir.path().join("parked-alarms.json")).unwrap();
+        for record in records {
+            ledger.park(record).unwrap();
+        }
+    }
+
+    /// The dead-letter file as JSON, for assertions about what is on disk.
+    fn parked_file(dir: &tempfile::TempDir) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(dir.path().join("parked-alarms.json")).unwrap())
+            .unwrap()
+    }
+
     /// The hold id inside a parked record's payload.
     fn parked_hold_id(record: &ParkedRecord) -> String {
         match serde_json::from_slice::<RuntimeEvent>(&record.payload).unwrap() {
@@ -1664,7 +1725,7 @@ mod tests {
         // The refused sequence is in the dead-letter, named, with the refusal that put it there.
         let parked = parked_ledger(&dir);
         assert_eq!(parked.len(), 1);
-        let record = parked.next_due(i64::MAX, 0).unwrap();
+        let record = oldest_parked(&parked).unwrap();
         assert_eq!(parked_hold_id(record), blocked_hold.hold_id);
         assert_eq!(
             record.reason,
@@ -1756,7 +1817,7 @@ mod tests {
 
         let parked = parked_ledger(&dir);
         assert_eq!(parked.len(), 1);
-        let record = parked.next_due(i64::MAX, 0).unwrap();
+        let record = oldest_parked(&parked).unwrap();
         assert_eq!(
             record.reason,
             ParkReason::refusal_budget_exhausted("not_a_channel_member")
@@ -2087,7 +2148,7 @@ mod tests {
         let parked = parked_ledger(&dir);
         assert_eq!(parked.len(), 1);
         assert_eq!(
-            parked.next_due(i64::MAX, 0).unwrap().retries,
+            oldest_parked(&parked).unwrap().retries,
             0,
             "a due parked record is not touched on a tick that had head work"
         );
@@ -2099,9 +2160,7 @@ mod tests {
         // The socket recovers: the head empties, and the first idle tick serves the dead-letter.
         unreachable.store(false, std::sync::atomic::Ordering::SeqCst);
         let served = wait_for(|| {
-            parked_ledger(&dir)
-                .next_due(i64::MAX, 0)
-                .is_some_and(|record| record.retries >= 1)
+            oldest_parked(&parked_ledger(&dir)).is_some_and(|record| record.retries >= 1)
         })
         .await;
         shutdown_tx.send(true).unwrap();
@@ -2123,6 +2182,261 @@ mod tests {
         assert_eq!(
             store.get(&queued_hold.hold_id).unwrap().unwrap().state,
             swarm_runtime::held_action::HoldState::Notified
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stalled_parked_record_does_not_hold_the_dead_letter() {
+        // A stall leaves the record's stamp alone, which is right -- nothing was learned about
+        // it -- but it also leaves it the oldest due record. Selecting purely on the stamp would
+        // hand every idle tick to the one record the socket cannot reach and retry nothing else,
+        // which is W3-38 again one level down, inside the mechanism that answers it.
+        let dir = tempfile::tempdir().unwrap();
+        let spools = Arc::new(Mutex::new(
+            SpoolSet::open(dir.path(), "c", 1 << 20, 8 << 20).unwrap(),
+        ));
+        let identities = identities();
+        let alarm_idx = identities.alarm();
+        let store = Arc::new(swarm_runtime::held_action::MemoryHeldActionStore::default());
+        let (stalled_hold, stalled_case) =
+            route_and_spool_hold(&dir, &spools, &store, alarm_idx, "hunt-stalled");
+        let (behind_hold, behind_case) =
+            route_and_spool_hold(&dir, &spools, &store, alarm_idx, "hunt-behind-a-stall");
+
+        let (metrics, registry) = BridgeMetrics::new();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut built = drainer(
+            &dir,
+            Arc::clone(&spools),
+            Arc::clone(&identities),
+            vec!["68".repeat(32)],
+            Some(Arc::clone(&store) as Arc<dyn swarm_runtime::held_action::HeldActionStore>),
+            OkOutcome::Accepted,
+            metrics,
+            shutdown_rx,
+        );
+        built.config.lane_channels.clear();
+        let (clock, offset) = offset_clock();
+        built.clock = clock;
+        // Phase one refuses both holds into the dead-letter. Phase two lets the second one
+        // publish and leaves the first unreachable at the socket.
+        let repaired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let phase = Arc::clone(&repaired);
+        built.publisher.reply = Some(Arc::new(move |frame: &Frame| {
+            let channel = frame.channel?;
+            if !phase.load(std::sync::atomic::Ordering::SeqCst) {
+                return match frame.signed.kind.as_u16() {
+                    9007 => Some(Ok(OkOutcome::ChannelAlreadyExists)),
+                    _ => Some(Ok(OkOutcome::NotAChannelMember)),
+                };
+            }
+            (channel == stalled_case).then(|| {
+                Err(BridgeError::RelayUnreachable {
+                    attempt: 1,
+                    retry_in: Duration::from_millis(1),
+                })
+            })
+        }));
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        built.publisher.sink = Some(Arc::clone(&recorded));
+        let handle = tokio::spawn(run(built));
+
+        let both = wait_for(|| parked_ledger(&dir).len() == 2).await;
+        assert!(both, "both refused sequences were never parked");
+        repaired.store(true, std::sync::atomic::Ordering::SeqCst);
+        offset.fetch_add(
+            PARKED_RETRY_INTERVAL_MS + 1_000,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+
+        let counts = Arc::clone(&registry);
+        let served = wait_for(|| {
+            counter(
+                &counts,
+                r#"perch_bridge_alarm_unparked_total{outcome="landed"}"#,
+            ) == 1
+        })
+        .await;
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+        assert!(
+            served,
+            "the record behind the stalled one was never retried"
+        );
+
+        let parked = parked_ledger(&dir);
+        assert_eq!(parked.len(), 1, "only the stalled record is still parked");
+        let left = oldest_parked(&parked).unwrap();
+        assert_eq!(
+            (parked_hold_id(left), left.retries),
+            (stalled_hold.hold_id.clone(), 0),
+            "a stall is not an attempt: the stalled record keeps its stamp and its count"
+        );
+        assert_eq!(
+            kinds_for_channel(&recorded, behind_case)
+                .into_iter()
+                .rev()
+                .take(4)
+                .rev()
+                .collect::<Vec<u16>>(),
+            vec![9007, 9000, 9, 46010],
+            "the record behind the stall published its own sequence"
+        );
+        assert_eq!(
+            store.get(&behind_hold.hold_id).unwrap().unwrap().state,
+            swarm_runtime::held_action::HoldState::Notified
+        );
+        assert_eq!(
+            store.get(&stalled_hold.hold_id).unwrap().unwrap().state,
+            swarm_runtime::held_action::HoldState::Created,
+            "and the stalled one published nothing at all"
+        );
+    }
+
+    #[tokio::test]
+    async fn parking_past_capacity_drops_the_oldest_and_counts_it() {
+        // The one path in the hold lane that LOSES a hold. The dead-letter is bounded because an
+        // unbounded one fills the disk the spool lives on, so past the cap the record abandoned
+        // longest ago goes -- and it goes as a counted drop, never silently.
+        let dir = tempfile::tempdir().unwrap();
+        let spools = Arc::new(Mutex::new(
+            SpoolSet::open(dir.path(), "c", 1 << 20, 8 << 20).unwrap(),
+        ));
+        let identities = identities();
+        let alarm_idx = identities.alarm();
+        let store = Arc::new(swarm_runtime::held_action::MemoryHeldActionStore::default());
+        let (_hold, case) = route_and_spool_hold(&dir, &spools, &store, alarm_idx, "hunt-overflow");
+        // A dead-letter already at capacity. Every entry is stamped in the recent past, so all
+        // of them are older than the record about to be parked and none is due to be retried
+        // while this test runs.
+        let base = chrono::Utc::now().timestamp_millis() - 5_000;
+        seed_parked(
+            &dir,
+            (0..PARKED_CAPACITY)
+                .map(|index| seeded(index as crate::spool::Seq, base + index as i64, b"{}"))
+                .collect(),
+        );
+
+        let (metrics, registry) = BridgeMetrics::new();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut built = drainer(
+            &dir,
+            Arc::clone(&spools),
+            Arc::clone(&identities),
+            vec!["68".repeat(32)],
+            Some(Arc::clone(&store) as Arc<dyn swarm_runtime::held_action::HeldActionStore>),
+            OkOutcome::Accepted,
+            metrics,
+            shutdown_rx,
+        );
+        built.config.lane_channels.clear();
+        built.publisher.reply = Some(refuse_channel(
+            case,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        ));
+        let handle = tokio::spawn(run(built));
+        let counts = Arc::clone(&registry);
+        let evicted = wait_for(|| {
+            counter(
+                &counts,
+                r#"perch_bridge_dropped_events_total{stream="alarm",cause="parked_overflow"}"#,
+            ) == 1
+        })
+        .await;
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+        assert!(
+            evicted,
+            "a full dead-letter took a record without dropping one"
+        );
+
+        let file = parked_file(&dir);
+        let records = file["records"].as_array().unwrap();
+        assert_eq!(records.len(), PARKED_CAPACITY, "the cap holds on disk");
+        assert!(
+            !records
+                .iter()
+                .any(|record| record["issuer"] == SEEDED_ISSUER && record["seq"] == 0),
+            "the record abandoned longest ago is the one that went"
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["issuer"] != SEEDED_ISSUER)
+                .count(),
+            1,
+            "and the newly parked hold took its place"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_parked_payload_keeps_its_bytes_and_frees_the_rotation() {
+        // A payload written by a build whose `RuntimeEvent` this one cannot read. Removing it
+        // would destroy the only copy of that hold; leaving it selectable would hand it every
+        // retry tick forever. It is marked, kept, counted, and passed over.
+        let dir = tempfile::tempdir().unwrap();
+        let spools = Arc::new(Mutex::new(
+            SpoolSet::open(dir.path(), "c", 1 << 20, 8 << 20).unwrap(),
+        ));
+        let identities = identities();
+        let unreadable = b"this was a RuntimeEvent in another build";
+        let readable: RuntimeEvent = serde_json::from_value(serde_json::json!({
+            "event_type": "mode_transition", "emitted_at_ms": 1, "from": "normal",
+            "to": "incident", "triggering_threat_class": null, "reason": "test"
+        }))
+        .unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        seed_parked(
+            &dir,
+            vec![
+                seeded(1, now - 60_000, unreadable),
+                seeded(2, now - 50_000, &serde_json::to_vec(&readable).unwrap()),
+            ],
+        );
+
+        let (metrics, registry) = BridgeMetrics::new();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut built = drainer(
+            &dir,
+            Arc::clone(&spools),
+            Arc::clone(&identities),
+            vec!["68".repeat(32)],
+            None,
+            OkOutcome::Accepted,
+            metrics,
+            shutdown_rx,
+        );
+        built.config.lane_channels.clear();
+        let handle = tokio::spawn(run(built));
+        let counts = Arc::clone(&registry);
+        let settled = wait_for(|| {
+            counter(&counts, "perch_bridge_alarm_unreadable_total") == 1
+                && counter(
+                    &counts,
+                    r#"perch_bridge_alarm_unparked_total{outcome="discarded"}"#,
+                ) == 1
+        })
+        .await;
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+        assert!(
+            settled,
+            "the unreadable record was not marked, or it kept the record behind it from its turn"
+        );
+
+        let file = parked_file(&dir);
+        let records = file["records"].as_array().unwrap();
+        assert_eq!(
+            records.len(),
+            1,
+            "the readable record left; this one stayed"
+        );
+        assert_eq!(records[0]["seq"], 1);
+        assert_eq!(records[0]["unreadable"], true);
+        assert_eq!(
+            records[0]["payload"],
+            serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(unreadable)),
+            "the bytes an operator needs are still on disk, unchanged"
         );
     }
 

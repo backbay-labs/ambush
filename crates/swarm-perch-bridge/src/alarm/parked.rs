@@ -17,6 +17,7 @@
 //! retried on the next idle tick, and read by an operator in the meantime.
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -84,6 +85,15 @@ pub struct ParkedRecord {
     pub retries: u32,
     /// Why it is here.
     pub reason: ParkReason,
+    /// Set when a retry could not deserialize [`ParkedRecord::payload`] at all.
+    ///
+    /// The record stays on disk with its bytes intact, because they are the only copy of the
+    /// hold, and [`ParkedLedger::next_due`] passes over it, because a record no build of this
+    /// code can read would otherwise be the oldest due one forever and take every retry tick.
+    /// Only an operator clears it: deleting the entry, or a build whose `RuntimeEvent` can read
+    /// those bytes once the entry is re-parked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
 }
 
 /// The dead-letter file, beside the routing sidecar and the spool cursor.
@@ -165,11 +175,24 @@ impl ParkedLedger {
     /// the other way to lose the hold path: a file that grows without limit is read by nobody
     /// and eventually fills the disk the spool lives on.
     ///
+    /// # One record has ONE entry
+    ///
+    /// Re-parking `(issuer, seq)` REPLACES the entry it already had. Parking and committing the
+    /// spool cursor are two files and two renames, so a crash between them leaves the record at
+    /// the spool head to be refused and parked a second time. Two entries for one record is not
+    /// a cosmetic duplicate: [`ParkedLedger::next_due`] selects on the smallest `parked_at_ms`
+    /// while [`ParkedLedger::touch`] advances the first entry that matches, so the younger twin
+    /// would stay the oldest due record forever, be selected every idle tick, and keep every
+    /// other parked record from ever being retried.
+    ///
     /// # Errors
     ///
     /// [`BridgeError::SpoolIo`] when the file cannot be written. The caller must then leave the
     /// record where it is: a park that is not durable is a drop.
     pub fn park(&mut self, record: ParkedRecord) -> Result<Option<ParkedRecord>, BridgeError> {
+        self.state
+            .records
+            .retain(|held| (held.issuer, held.seq) != (record.issuer, record.seq));
         self.state.records.push(record);
         let evicted = (self.state.records.len() > super::PARKED_CAPACITY)
             .then(|| {
@@ -185,12 +208,27 @@ impl ParkedLedger {
     ///
     /// Oldest first so a record cannot be starved by a newer one that keeps failing, and one at
     /// a time because a retry costs the same relay budget a head record does.
+    ///
+    /// `skip` is the caller's set of records that have already stalled on this pass. A stall
+    /// writes nothing here — nothing was learned about the record, so its stamp must not move —
+    /// and a stamp that never moves would otherwise leave that record permanently the oldest
+    /// due one, taking every idle tick while nothing behind it is ever retried. A record marked
+    /// [`ParkedRecord::unreadable`] is passed over for the same reason, and permanently.
     #[must_use]
-    pub fn next_due(&self, now_ms: i64, interval_ms: i64) -> Option<&ParkedRecord> {
+    pub fn next_due(
+        &self,
+        now_ms: i64,
+        interval_ms: i64,
+        skip: &BTreeSet<(IssuerIdx, Seq)>,
+    ) -> Option<&ParkedRecord> {
         self.state
             .records
             .iter()
-            .filter(|record| record.parked_at_ms.saturating_add(interval_ms) <= now_ms)
+            .filter(|record| {
+                !record.unreadable
+                    && !skip.contains(&(record.issuer, record.seq))
+                    && record.parked_at_ms.saturating_add(interval_ms) <= now_ms
+            })
             .min_by_key(|record| record.parked_at_ms)
     }
 
@@ -208,6 +246,30 @@ impl ParkedLedger {
         if self.state.records.len() == before {
             return Ok(());
         }
+        self.persist()
+    }
+
+    /// Marks a record whose payload this build cannot deserialize.
+    ///
+    /// It is NOT removed. The dead-letter's whole premise is that these bytes are the only copy
+    /// of a hold the spool cursor has already moved past, so deleting a record because this
+    /// build cannot read it would discard exactly what the file exists to preserve. The mark is
+    /// what keeps it from holding the retry rotation, and the bytes stay for an operator.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::SpoolIo`] when the file cannot be written. A record the ledger does not
+    /// hold, or one already marked, is not an error and costs no I/O.
+    pub fn mark_unreadable(&mut self, issuer: IssuerIdx, seq: Seq) -> Result<(), BridgeError> {
+        let Some(record) = self
+            .state
+            .records
+            .iter_mut()
+            .find(|record| (record.issuer, record.seq) == (issuer, seq) && !record.unreadable)
+        else {
+            return Ok(());
+        };
+        record.unreadable = true;
         self.persist()
     }
 
@@ -298,6 +360,7 @@ mod tests {
             parked_at_ms,
             retries: 0,
             reason: ParkReason::refusal_budget_exhausted("not_a_channel_member"),
+            unreadable: false,
         }
     }
 
@@ -320,12 +383,12 @@ mod tests {
         let reopened = ParkedLedger::open(&path).unwrap();
         assert_eq!(reopened.len(), 2);
         assert_eq!(
-            reopened.next_due(31_000, 30_000),
+            reopened.next_due(31_000, 30_000, &BTreeSet::new()),
             Some(&parked(7, 1_000)),
             "the oldest due record comes back first, byte for byte"
         );
         assert_eq!(
-            reopened.next_due(30_999, 30_000),
+            reopened.next_due(30_999, 30_000, &BTreeSet::new()),
             None,
             "nothing is due before its interval has passed"
         );
@@ -333,7 +396,7 @@ mod tests {
         // A retry that did not land moves the interval and counts the attempt, durably.
         ledger.touch(3, 7, 40_000).unwrap();
         let reopened = ParkedLedger::open(&path).unwrap();
-        let retried = reopened.next_due(40_000, 0).unwrap();
+        let retried = reopened.next_due(40_000, 0, &BTreeSet::new()).unwrap();
         assert_eq!(
             (retried.seq, retried.retries, retried.parked_at_ms),
             (9, 0, 2_000)
@@ -341,7 +404,7 @@ mod tests {
         ledger.remove(3, 9).unwrap();
         let reopened = ParkedLedger::open(&path).unwrap();
         assert_eq!(reopened.len(), 1);
-        let kept = reopened.next_due(40_000, 0).unwrap();
+        let kept = reopened.next_due(40_000, 0, &BTreeSet::new()).unwrap();
         assert_eq!((kept.seq, kept.retries, kept.parked_at_ms), (7, 1, 40_000));
 
         // The document an operator reads: a version, the records, and each payload as one
@@ -379,6 +442,88 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_record_keeps_its_bytes_and_is_never_selected_again() {
+        // These bytes are the only copy of a hold the spool cursor has moved past, so a payload
+        // this build cannot parse is kept, not deleted. It is marked instead, and the mark takes
+        // it out of the retry rotation -- otherwise it would be the oldest due record forever
+        // and nothing behind it would ever be tried.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parked-alarms.json");
+        let mut ledger = ParkedLedger::open(&path).unwrap();
+        ledger.park(parked(7, 1_000)).unwrap();
+        ledger.park(parked(9, 2_000)).unwrap();
+
+        ledger.mark_unreadable(3, 7).unwrap();
+
+        assert_eq!(ledger.len(), 2, "the record is kept, not removed");
+        assert_eq!(
+            ledger.next_due(60_000, 0, &BTreeSet::new()).map(|r| r.seq),
+            Some(9),
+            "and the record behind it gets its turn"
+        );
+        let reopened = ParkedLedger::open(&path).unwrap();
+        assert_eq!(reopened.len(), 2, "the mark is durable");
+        assert_eq!(
+            reopened
+                .next_due(60_000, 0, &BTreeSet::new())
+                .map(|r| r.seq),
+            Some(9)
+        );
+        let written = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.contains(r#""unreadable": true"#), "{written}");
+        assert!(
+            written.contains(
+                &base64::engine::general_purpose::STANDARD
+                    .encode(r#"{"event_type":"response_held","seq":7}"#)
+            ),
+            "the bytes an operator needs are still there\n{written}"
+        );
+    }
+
+    #[test]
+    fn re_parking_a_record_replaces_its_entry_rather_than_adding_a_second() {
+        // Parking and committing the spool cursor are two files and two renames, so a crash
+        // between them leaves the record at the head to be refused and parked a second time.
+        // Two entries for one record is not a cosmetic duplicate: `next_due` selects the
+        // smallest `parked_at_ms` and `touch` advances the first entry that matches, so the
+        // younger twin would stay the oldest due record forever, be chosen on every idle tick,
+        // and no other parked record would ever be retried.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parked-alarms.json");
+        let mut ledger = ParkedLedger::open(&path).unwrap();
+        ledger.park(parked(7, 1_000)).unwrap();
+        ledger.park(parked(9, 2_000)).unwrap();
+
+        // A second park of `(3, 7)`, distinguishable from the first by every field it carries.
+        let mut again = parked(7, 1_500);
+        again.retries = 4;
+        assert!(ledger.park(again).unwrap().is_none());
+
+        assert_eq!(
+            ledger.len(),
+            2,
+            "re-parking replaces, it does not accumulate"
+        );
+        let survivor = ledger.next_due(31_500, 30_000, &BTreeSet::new()).unwrap();
+        assert_eq!(
+            (survivor.seq, survivor.parked_at_ms, survivor.retries),
+            (7, 1_500, 4),
+            "the entry that survives is the one just written"
+        );
+
+        // And one touch is enough to hand the queue on, which is the property a duplicate broke.
+        ledger.touch(3, 7, 60_000).unwrap();
+        assert_eq!(
+            ParkedLedger::open(&path)
+                .unwrap()
+                .next_due(61_000, 30_000, &BTreeSet::new())
+                .map(|record| record.seq),
+            Some(9),
+            "with one entry per record, advancing it gives the next record its turn"
+        );
+    }
+
+    #[test]
     fn the_parked_ledger_evicts_the_oldest_past_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("parked-alarms.json");
@@ -409,7 +554,7 @@ mod tests {
         let reopened = ParkedLedger::open(&path).unwrap();
         assert_eq!(reopened.len(), super::super::PARKED_CAPACITY);
         assert!(
-            reopened.next_due(600_000, 0).unwrap().seq != 0,
+            reopened.next_due(600_000, 0, &BTreeSet::new()).unwrap().seq != 0,
             "the eviction is durable, not only in memory"
         );
     }
