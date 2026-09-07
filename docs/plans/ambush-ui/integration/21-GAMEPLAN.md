@@ -104,9 +104,16 @@ the tuning bench.
      `StealthBudget` (tail truncation so red can't win by volume — proven as a system property),
      `AttackPatternDb` (append-only per-technique memory), and `swarmctl red-swarm score --json`.
      Whole-branch review (opus): merge, 0 Critical / 0 Important; four Minor fixes folded in.
-   - Next: 290 (bidirectional co-evolution and convergence — designed, one open question flagged),
-     291 (CI arms-race gate and structural isolation: the red lane can never reach response
-     authority; note the ARMSCI-02 forbidden-symbol gate goes in `tools/`, not `scripts/`).
+   - 290 (`0a6095379`): the bidirectional co-evolution loop against REAL detector runs —
+     `GenomeRedSwarm` materializes plans, `plan_weighted` biases red by pattern memory,
+     `run_generation` runs the detector pipeline for the actual catch, `RedSwarmCampaign::run`
+     has blue greedily close the gaps red exposed under a bounded stop, and `swarmctl red-swarm
+     campaign` writes byte-identical reports. Proven live: blue catch 0.125→0.778 while red
+     fitness fell 0.933→0.125, converging to full_coverage. Whole-branch review (opus): merge,
+     0 Critical / 0 Important; three Minor fixes folded in.
+   - Next: 291 (CI arms-race gate and structural isolation: the red lane can never reach response
+     authority; the ARMSCI-02 forbidden-symbol gate goes in `tools/`, not `scripts/`) — the last
+     red-swarm phase.
 2. **Open agent protocol** — a new milestone the roadmap's "bring your own agent" paragraph
    promises: deposit INGRESS. An admitted external identity publishes a signed deposit fact over
    the wire the bridge already speaks; the daemon verifies it and deposits a pheromone; the TCB
@@ -143,3 +150,4 @@ Then, and only then: packaging for outside installation.
 | 2026-09-07 | Phase 288 merged to `main` (`034efd2f7`): first v1.80 phase complete. Final-review I1 fixed and re-verified (references strictly backward). | `feat/red-swarm-288`; swarm-runtime 455 + swarm-cli 27 tests, fmt+clippy clean, CLI 7506 bytes deterministic, 174 refs / 0 forward |
 | 2026-09-07 | **Ruling — the second landing push went `--no-verify`.** The pre-push desktop `tsc` lane *hung* (0.09 s CPU over 15 min at 0 %, an environment fault, not slowness) and was killed. Backing before pushing: the workspace file-size ratchet re-run green here (desktop/web/mobile exit 0); the engine 288 tree fully re-verified this session (fmt, clippy `-D warnings`, 482 crate tests, CLI determinism); the desktop plan-16 tree verified clean the prior session (`tsc` exit 0, 369 tests) and unchanged since (no perch flip). Every other pre-push lane (workspace-rust, tauri, mobile) skips — no files. Cost if wrong: main's own CI re-runs the full gate and fixes go forward. | this ledger |
 | 2026-09-07 | Phase 289 (attack scoring, stealth budget, pattern memory) merged to `main` (`e8f923252`): `AttackScorer`, `StealthBudget`, `AttackPatternDb`, `swarmctl red-swarm score`. Executed with parallel SDD worktrees (Tasks 2/3 concurrent, Task 4 with Task 3's review). Whole-branch review (opus) = merge, 0 Critical / 0 Important; four Minor fixes folded in. Push clean (engine-only, every workspace pre-push lane skipped). Mid-flight: reclaimed 66 GB from a 99%-full disk (stale main `target/`). | `e8f923252`; swarm-runtime 55 lib + swarm-cli score tests, fmt+clippy `-D warnings`, `check-workspace-layering` (TCB isolation), score `--json` byte-identical |
+| 2026-09-07 | Phase 290 (bidirectional co-evolution) merged to `main` (`0a6095379`): `GenomeRedSwarm`, `plan_weighted`, `run_generation`, `RedSwarmCampaign::run`, `swarmctl red-swarm campaign`. Red-swarm milestone now 3/4. Executed sequentially (pipeline); Task 2 split into 2a/2b; two fix rounds (Cover-attribution, gen-0 doc). Whole-branch review (opus) = merge, 0C/0I; co-evolution proven live (blue 0.125→0.778, red fitness 0.933→0.125, full_coverage in 2 gens). Push clean (engine-only). | `0a6095379`; red_swarm 99 lib + campaign 24 + cross-crate, full workspace 1810, fmt+clippy `-D warnings`, 4 tools/check gates, `campaign --json` byte-identical |
