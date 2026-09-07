@@ -881,7 +881,393 @@ fn seed_from_env() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Tests.
+// 9. The three oracles (DST-03).
+// ---------------------------------------------------------------------------
+//
+// Each oracle is a pure function over ONE episode's `EpisodeObservation`,
+// returning `Ok(())` when its correctness property holds and
+// `Err(OracleViolation)` -- carrying a human-readable reason -- when it does
+// not. They are scoped to the guarantee the engine ACTUALLY makes (Task 1's
+// ground truth: the engine dispatches, then -- if anything persists at all --
+// persists after, with no atomic journal tying the two together), and they
+// name, rather than paper over, what it does NOT (the DST-06 evidence
+// boundary: a single-process crash between dispatch and persist legitimately
+// leaves an action with no receipt -- fault class (b)).
+//
+// See `.superpowers/sdd/286-01-PLAN/task-3-report.md` for each oracle's
+// precise definition, the defense that it is a real safety property, green on
+// the correct engine for all four fault classes, and non-vacuous (would catch
+// a regression), plus the per-fault-class coverage-vs-boundary table.
+
+/// The number of deterministic seeds the PR-lane corpus drives: seeds
+/// `0..PR_CORPUS_SEED_COUNT`. Sixty-four is small enough for the PR lane
+/// (each episode is a handful of synchronous polls) yet wide enough that all
+/// four fault classes appear many times over -- the corpus asserts that
+/// coverage so a green result is never vacuous.
+const PR_CORPUS_SEED_COUNT: u64 = 64;
+
+/// Which correctness property a violation came from. Named in the corpus
+/// failure text so a human sees WHICH property broke, not merely that one did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Oracle {
+    /// Oracle 1: receipt-before-action ordering (the safe direction).
+    ReceiptBeforeAction,
+    /// Oracle 2: the episode disposition equals what the deterministic gate
+    /// verdict demands.
+    ExactDisposition,
+    /// Oracle 3: a request is dispatched at most once (no double-dispatch).
+    NoDoubleDispatch,
+}
+
+/// One oracle's finding on one episode: which property, and why it broke.
+#[derive(Debug, Clone)]
+struct OracleViolation {
+    oracle: Oracle,
+    detail: String,
+}
+
+impl OracleViolation {
+    fn new(oracle: Oracle, detail: impl Into<String>) -> Self {
+        Self {
+            oracle,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Decode the dispatch identity `(hunt_id, order)` a harness receipt-persist
+/// deposit claims to record, from its `receipt_id`
+/// (`dst-receipt:{hunt_id}:{order}`, minted in
+/// `RecordingResponseAdapter::execute` from the monotonic dispatch order that
+/// `record_dispatch` returned). The embedded `order` is what lets Oracle 1
+/// match a receipt to the SPECIFIC dispatch it claims to record, not merely to
+/// "some" dispatch.
+///
+/// `None` when the deposit is not a harness receipt-persist record (it lacks
+/// the `"harness": "dst_fault_injection"` tag every such deposit carries) or
+/// its `receipt_id` is malformed -- Oracle 1 treats either as a violation,
+/// since the ONLY writes this harness makes to the substrate are
+/// receipt-persist deposits, and a receipt whose identity cannot be decoded
+/// cannot be shown to record a real dispatch.
+fn decode_persisted_receipt(deposit: &PheromoneDeposit) -> Option<(String, u64)> {
+    if deposit
+        .indicator
+        .get("harness")
+        .and_then(|value| value.as_str())
+        != Some("dst_fault_injection")
+    {
+        return None;
+    }
+    let receipt_id = deposit.indicator.get("receipt_id")?.as_str()?;
+    // rsplit so a hunt_id containing ':' would still decode; this harness's
+    // hunt_id has none, but the parse should not silently depend on that.
+    let (hunt_id, order) = receipt_id.strip_prefix("dst-receipt:")?.rsplit_once(':')?;
+    Some((hunt_id.to_string(), order.parse::<u64>().ok()?))
+}
+
+/// **Oracle 1 -- receipt-before-action ordering (the safe direction).**
+///
+/// The engine has no journal, so a single-process crash after dispatch but
+/// before persist (fault class (b)) legitimately ends with an action
+/// dispatched and NO receipt persisted. That action-without-receipt is the
+/// DST-06 evidence boundary, NOT a violation -- asserting "every action has a
+/// receipt" would be red on every class-(b) seed, which is wrong. So this
+/// oracle asserts only the SAFE, always-held direction: no receipt is ever
+/// persisted without a corresponding real dispatch that preceded it, and a
+/// persisted receipt records the dispatch that actually happened.
+///
+/// Concretely: every persisted receipt must be backed by a DISTINCT real
+/// dispatch it faithfully identifies. Each persisted deposit decodes to the
+/// `(hunt_id, order)` it claims to record; that identity must appear in the
+/// dispatch log, and no two receipts may claim the same dispatch (a duplicated
+/// audit record asserts an action-effect that did not separately happen -- as
+/// much a false record as an invented one). Equivalently: the multiset of
+/// dispatch identities carried by persisted receipts is contained in the
+/// multiset actually dispatched. A phantom/premature receipt -- the genuinely
+/// dangerous direction, a false audit record telling responders an action
+/// happened when it did not -- carries an identity absent from the dispatch
+/// log and is caught here. "Preceded" is observed through the final dispatch
+/// log: a completed episode persists only after its dispatch resolved, and a
+/// dropped one persists nothing, so a persisted receipt whose dispatch is not
+/// in the log is exactly one that got ahead of, or entirely without, its
+/// action.
+fn oracle_receipt_before_action(observation: &EpisodeObservation) -> Result<(), OracleViolation> {
+    let dispatched: Vec<(String, u64)> = observation
+        .dispatch_log
+        .iter()
+        .map(|record| (record.hunt_id.clone(), record.order))
+        .collect();
+    // A dispatch, once matched by a receipt, cannot back a second receipt.
+    let mut claimed = vec![false; dispatched.len()];
+
+    for (index, deposit) in observation.persisted_deposits.iter().enumerate() {
+        let Some((hunt_id, order)) = decode_persisted_receipt(deposit) else {
+            return Err(OracleViolation::new(
+                Oracle::ReceiptBeforeAction,
+                format!(
+                    "persisted deposit #{index} is not a decodable harness receipt \
+                     (indicator={}); a record in the audit substrate must identify a real \
+                     dispatch",
+                    deposit.indicator
+                ),
+            ));
+        };
+        let backing = (0..dispatched.len())
+            .find(|&i| !claimed[i] && dispatched[i].0 == hunt_id && dispatched[i].1 == order);
+        match backing {
+            Some(i) => claimed[i] = true,
+            None => {
+                return Err(OracleViolation::new(
+                    Oracle::ReceiptBeforeAction,
+                    format!(
+                        "phantom receipt: persisted deposit #{index} records dispatch \
+                         (hunt_id={hunt_id:?}, order={order}), but no such unclaimed dispatch was \
+                         ever recorded (dispatch_log={:?}) -- a receipt exists for an \
+                         action-effect that did not happen",
+                        observation.dispatch_log
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// **Oracle 2 -- exact disposition vs the deterministic verdict.**
+///
+/// The episode's observable disposition must equal what the real,
+/// deterministic gate verdict demands. `expected_verdict` is the ground truth
+/// the corpus computes once from the real `StaticApprovalGate`
+/// ([`harness_ground_truth_verdict`]), so this oracle is genuinely checked
+/// against the gate rather than a hardcoded guess; the non-vacuity proof
+/// passes a deliberately wrong verdict to show the coupling is real.
+///
+/// The disposition depends on BOTH the verdict and whether the fault class
+/// runs the episode to completion:
+/// - Drop classes ((a), (b)) simulate a crash -- the future is dropped before
+///   resolving, so no `Result` is produced at all (exactly as a real process
+///   crash yields none). The only disposition consistent with a crash is "no
+///   outcome," whatever the verdict was (the gate still ran synchronously, but
+///   nothing is observable after the drop); a fabricated outcome for a dropped
+///   future is caught here.
+/// - Completing classes (`NoFault`, (c)) under an `Allow` verdict must yield
+///   `Ok(receipt)` with an `Executed` status (Allow + `LiveResponse` +
+///   `Enforced`), and must persist that receipt exactly once. Under a
+///   `Deny`/`RequireHuman` verdict (`RequireHuman` is denied under
+///   `LiveResponse` -- INVARIANT `RuntimeRequireHumanBlocksLiveExecution`),
+///   they must surface an authorization `Err` and never dispatch.
+fn oracle_exact_disposition(
+    observation: &EpisodeObservation,
+    expected_verdict: PolicyVerdict,
+) -> Result<(), OracleViolation> {
+    let class = observation.plan.class;
+    let completes = matches!(
+        class,
+        FaultClass::NoFault | FaultClass::SubstrateCloseReopen
+    );
+
+    if !completes {
+        if observation.outcome.is_some() {
+            return Err(OracleViolation::new(
+                Oracle::ExactDisposition,
+                format!(
+                    "class {class:?} is a simulated crash: expected no EpisodeOutcome, observed \
+                     {:?}",
+                    observation.outcome
+                ),
+            ));
+        }
+        return Ok(());
+    }
+
+    let outcome = match &observation.outcome {
+        Some(outcome) => outcome,
+        None => {
+            return Err(OracleViolation::new(
+                Oracle::ExactDisposition,
+                format!("class {class:?} runs to completion but produced no EpisodeOutcome"),
+            ));
+        }
+    };
+
+    match expected_verdict {
+        PolicyVerdict::Allow => {
+            let receipt = match &outcome.authorize_result {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    return Err(OracleViolation::new(
+                        Oracle::ExactDisposition,
+                        format!("verdict Allow demands Ok(receipt); observed Err({error})"),
+                    ));
+                }
+            };
+            if receipt.status != ResponseStatus::Executed {
+                return Err(OracleViolation::new(
+                    Oracle::ExactDisposition,
+                    format!(
+                        "verdict Allow under LiveResponse demands an Executed receipt; observed \
+                         {:?}",
+                        receipt.status
+                    ),
+                ));
+            }
+            if !matches!(outcome.persist_result, Some(Ok(()))) {
+                return Err(OracleViolation::new(
+                    Oracle::ExactDisposition,
+                    format!(
+                        "a completing Allow episode must persist its receipt; observed \
+                         persist_result={:?}",
+                        outcome.persist_result
+                    ),
+                ));
+            }
+            if observation.persisted_deposits.len() != 1 {
+                return Err(OracleViolation::new(
+                    Oracle::ExactDisposition,
+                    format!(
+                        "a completing Allow episode must leave exactly one persisted receipt; \
+                         observed {}",
+                        observation.persisted_deposits.len()
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        PolicyVerdict::Deny | PolicyVerdict::RequireHuman => {
+            match &outcome.authorize_result {
+                Err(RuntimeError::Approval(_)) => {}
+                other => {
+                    return Err(OracleViolation::new(
+                        Oracle::ExactDisposition,
+                        format!(
+                            "verdict {expected_verdict:?} demands an authorization Err with no \
+                             dispatch; observed authorize_result={other:?}"
+                        ),
+                    ));
+                }
+            }
+            if !observation.dispatch_log.is_empty() {
+                return Err(OracleViolation::new(
+                    Oracle::ExactDisposition,
+                    format!(
+                        "verdict {expected_verdict:?} must NOT dispatch; observed dispatch_log={:?}",
+                        observation.dispatch_log
+                    ),
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// **Oracle 3 -- no double-dispatch.**
+///
+/// A request is dispatched AT MOST once. Dispatching the same response twice
+/// -- a host quarantined twice, a user session terminated twice -- is the
+/// genuinely dangerous direction an at-most-once response guarantee exists to
+/// prevent, and it must hold across whatever crash/pause/resume the fault plan
+/// models. Fault class (c) is the sharp case: the episode future is polled,
+/// paused mid-flight, and RESUMED -- a naive resume that re-entered `execute`
+/// would double-dispatch; this oracle proves it does not. The expected
+/// dispatch count per class is 0/1/1/1 for (a)/(b)/(c)/`NoFault` -- never 2.
+///
+/// Stated per request (grouped by `hunt_id`) so it is correct even if an
+/// episode ever drove more than one request; no `HashMap` -- a linear scan
+/// over distinct hunt_ids, which stays deterministic.
+fn oracle_no_double_dispatch(observation: &EpisodeObservation) -> Result<(), OracleViolation> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for record in &observation.dispatch_log {
+        match counts
+            .iter_mut()
+            .find(|(hunt_id, _)| *hunt_id == record.hunt_id)
+        {
+            Some((_, count)) => *count += 1,
+            None => counts.push((record.hunt_id.clone(), 1)),
+        }
+    }
+    for (hunt_id, count) in &counts {
+        if *count > 1 {
+            return Err(OracleViolation::new(
+                Oracle::NoDoubleDispatch,
+                format!(
+                    "double dispatch: request hunt_id={hunt_id:?} was dispatched {count} times \
+                     (dispatch_log={:?}); an at-most-once response must never repeat, even across \
+                     the crash/pause/resume the fault plan models",
+                    observation.dispatch_log
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Evaluate all three oracles for one episode against the deterministic
+/// ground-truth `expected_verdict`, returning every violation found (an
+/// episode can break more than one property; the corpus reports them all).
+fn evaluate_oracles(
+    observation: &EpisodeObservation,
+    expected_verdict: PolicyVerdict,
+) -> Vec<OracleViolation> {
+    let mut violations = Vec::new();
+    if let Err(violation) = oracle_receipt_before_action(observation) {
+        violations.push(violation);
+    }
+    if let Err(violation) = oracle_exact_disposition(observation, expected_verdict) {
+        violations.push(violation);
+    }
+    if let Err(violation) = oracle_no_double_dispatch(observation) {
+        violations.push(violation);
+    }
+    violations
+}
+
+/// The deterministic ground-truth verdict for this harness's fixed request,
+/// computed from the REAL `StaticApprovalGate` (not hardcoded) -- the
+/// `Allow`/`Deny`/`RequireHuman` decision Oracle 2 measures each episode's
+/// disposition against. `Escalate`/Medium falls through to `default_allow`, so
+/// this is `Allow`; the corpus asserts that, so a policy-config change that
+/// silently altered it would surface rather than quietly skew every oracle.
+fn harness_ground_truth_verdict() -> PolicyVerdict {
+    let gate = StaticApprovalGate::from_config(&harness_policy_config());
+    let request = harness_action_request();
+    let context = harness_approval_context();
+    gate.evaluate(&request, &context)
+        .expect("evaluating the fixed harness request against the real gate must not error")
+        .verdict
+}
+
+/// Format one oracle violation for a corpus/replay failure: names the seed
+/// (with the exact `SWARM_DST_SEED` value that replays that one episode), the
+/// fault class, and the oracle -- so any failure is reproducible in isolation
+/// with a single command.
+fn format_corpus_violation(
+    observation: &EpisodeObservation,
+    violation: &OracleViolation,
+) -> String {
+    format!(
+        "seed {seed} [SWARM_DST_SEED={seed}] class={class:?} oracle={oracle:?}: {detail}",
+        seed = observation.plan.seed,
+        class = observation.plan.class,
+        oracle = violation.oracle,
+        detail = violation.detail,
+    )
+}
+
+/// Drive a completing (`NoFault`) episode carrying an arbitrary, distinctive
+/// `seed`, bypassing the RNG's seed->class draw. The non-vacuity proofs use it
+/// so their forced-violation failure text names a real, recognisable seed
+/// without coupling to today's seed->class mapping (deterministic, but not
+/// guaranteed stable across tasks).
+fn drive_completing_observation(seed: u64) -> EpisodeObservation {
+    drive_episode(FaultPlan {
+        seed,
+        class: FaultClass::NoFault,
+        checkpoint: 0,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// 10. Tests.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1227,4 +1613,208 @@ fn dst_swarm_dst_seed_env_selects_exactly_one_seed_when_set() {
             );
         }
     }
+}
+
+// --- DST-03 / DST-04 (PR half): the three oracles + the 64-seed corpus. -----
+
+/// The PR-lane corpus (DST-04, PR half): 64 deterministic seeds, all three
+/// oracles per episode, run against the REAL engine stack. Green here is the
+/// phase's core claim -- every correctness property holds under every fault
+/// the plan models. On ANY violation this fails, listing each offending seed
+/// (with its `SWARM_DST_SEED` replay value), fault class, and oracle, so a
+/// failure is one-command reproducible.
+///
+/// It also asserts the corpus actually EXERCISES all four fault classes: a
+/// green result would be vacuous if, say, only `NoFault` ever ran.
+#[test]
+fn dst_sixtyfour_seed_corpus_upholds_all_three_oracles_on_the_real_engine() {
+    let expected_verdict = harness_ground_truth_verdict();
+    assert_eq!(
+        expected_verdict,
+        PolicyVerdict::Allow,
+        "the fixed harness request must be a deterministic Allow so completing episodes dispatch; \
+         if this ever changes, Oracle 2's expected dispositions must be revisited"
+    );
+
+    let mut classes_seen: Vec<FaultClass> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for seed in 0..PR_CORPUS_SEED_COUNT {
+        let observation = drive_episode_for_seed(seed);
+        if !classes_seen.contains(&observation.plan.class) {
+            classes_seen.push(observation.plan.class);
+        }
+        for violation in evaluate_oracles(&observation, expected_verdict) {
+            failures.push(format_corpus_violation(&observation, &violation));
+        }
+    }
+
+    assert_eq!(
+        classes_seen.len(),
+        ALL_FAULT_CLASSES.len(),
+        "the {PR_CORPUS_SEED_COUNT}-seed corpus must exercise all four fault classes so a green \
+         result is not vacuous; only saw {classes_seen:?}"
+    );
+
+    assert!(
+        failures.is_empty(),
+        "oracle violations across the {PR_CORPUS_SEED_COUNT}-seed corpus (each reproducible in \
+         isolation via its SWARM_DST_SEED):\n{}",
+        failures.join("\n")
+    );
+}
+
+/// The `SWARM_DST_SEED` drill-in for the oracles: replay exactly the one seed
+/// the environment names (or the default when unset) and evaluate all three
+/// oracles against it, so a seed the corpus flags is reproducible in isolation
+/// with a single command --
+/// `SWARM_DST_SEED=<n> cargo test -p swarm-runtime --test dst_fault_injection \
+///  dst_swarm_dst_seed_replay_upholds_all_three_oracles_for_the_selected_seed \
+///  -- --nocapture`.
+#[test]
+fn dst_swarm_dst_seed_replay_upholds_all_three_oracles_for_the_selected_seed() {
+    let seed = seed_from_env();
+    let observation = drive_episode_for_seed(seed);
+    let expected_verdict = harness_ground_truth_verdict();
+    let violations = evaluate_oracles(&observation, expected_verdict);
+    // Visible with `--nocapture`: exactly which seed, class, verdict, and how
+    // many oracle violations replayed.
+    println!(
+        "SWARM_DST_SEED oracle replay: seed={} class={:?} verdict={:?} violations={}",
+        seed,
+        observation.plan.class,
+        expected_verdict,
+        violations.len()
+    );
+    let formatted: Vec<String> = violations
+        .iter()
+        .map(|violation| format_corpus_violation(&observation, violation))
+        .collect();
+    assert!(
+        formatted.is_empty(),
+        "SWARM_DST_SEED={seed} replayed with oracle violations:\n{}",
+        formatted.join("\n")
+    );
+}
+
+/// Non-vacuity proof for Oracle 1: a correct completing episode passes, but a
+/// phantom receipt (a persisted receipt whose dispatch never happened -- the
+/// genuinely dangerous false-audit-record direction) is caught AND the failure
+/// names the seed. The forcing is a temporary local construction; the real
+/// corpus never sees it and stays green.
+#[test]
+fn dst_oracle_receipt_before_action_catches_a_phantom_receipt_and_names_the_seed() {
+    let mut observation = drive_completing_observation(710411);
+    assert!(
+        oracle_receipt_before_action(&observation).is_ok(),
+        "a correct completing episode must uphold receipt-before-action"
+    );
+
+    // Force the dangerous direction: a real, signed deposit whose recorded
+    // dispatch order (99) has no matching dispatch -- a receipt for an
+    // action-effect that did not happen. Built via the real persist builder so
+    // only its identity, not its shape, is anomalous.
+    let phantom_receipt = ResponseReceipt {
+        receipt_id: "dst-receipt:dst-hunt-episode:99".to_string(),
+        action: "escalate".to_string(),
+        mode: ExecutionMode::Enforced,
+        status: ResponseStatus::Executed,
+        summary: "phantom".to_string(),
+        details: serde_json::json!({}),
+        audit: Default::default(),
+    };
+    observation
+        .persisted_deposits
+        .push(deposit_for_receipt(&phantom_receipt, 0));
+
+    let violation =
+        oracle_receipt_before_action(&observation).expect_err("a phantom receipt must be caught");
+    assert_eq!(violation.oracle, Oracle::ReceiptBeforeAction);
+    let formatted = format_corpus_violation(&observation, &violation);
+    assert!(
+        formatted.contains("SWARM_DST_SEED=710411"),
+        "the violation must name the seed for one-command reproduction: {formatted}"
+    );
+    assert!(
+        formatted.contains("phantom receipt"),
+        "the violation must name the failure mode: {formatted}"
+    );
+
+    // Also the DUPLICATE-persist direction: a SECOND receipt claiming the same
+    // dispatch (order 0) as the real one. Multiset containment -- not mere
+    // existence -- is what makes this a violation too: two audit records
+    // asserting an action-effect that happened once is as false as an invented
+    // record. (This is why Oracle 1 tracks claimed dispatches, not just
+    // presence.)
+    let mut duplicated = drive_completing_observation(710411);
+    let dup_receipt = ResponseReceipt {
+        receipt_id: "dst-receipt:dst-hunt-episode:0".to_string(),
+        action: "escalate".to_string(),
+        mode: ExecutionMode::Enforced,
+        status: ResponseStatus::Executed,
+        summary: "duplicate".to_string(),
+        details: serde_json::json!({}),
+        audit: Default::default(),
+    };
+    duplicated
+        .persisted_deposits
+        .push(deposit_for_receipt(&dup_receipt, 0));
+    let dup_violation = oracle_receipt_before_action(&duplicated)
+        .expect_err("a duplicated receipt (two for one dispatch) must be caught");
+    assert_eq!(dup_violation.oracle, Oracle::ReceiptBeforeAction);
+}
+
+/// Non-vacuity proof for Oracle 2: the SAME real completing episode
+/// (`Ok`/`Executed`/persisted) passes against its true `Allow` verdict but is
+/// flagged when the oracle is told to expect a `Deny` -- proving the
+/// disposition check is genuinely coupled to the verdict, not a constant
+/// pass. The failure names the seed.
+#[test]
+fn dst_oracle_exact_disposition_catches_a_wrong_verdict_expectation_and_names_the_seed() {
+    let observation = drive_completing_observation(220722);
+    assert!(
+        oracle_exact_disposition(&observation, PolicyVerdict::Allow).is_ok(),
+        "the real completing episode is an Allow disposition"
+    );
+
+    let violation = oracle_exact_disposition(&observation, PolicyVerdict::Deny)
+        .expect_err("an Executed disposition must not satisfy a Deny expectation");
+    assert_eq!(violation.oracle, Oracle::ExactDisposition);
+    let formatted = format_corpus_violation(&observation, &violation);
+    assert!(
+        formatted.contains("SWARM_DST_SEED=220722"),
+        "the violation must name the seed for one-command reproduction: {formatted}"
+    );
+}
+
+/// Non-vacuity proof for Oracle 3: a correct episode dispatches the request at
+/// most once and passes, but a second dispatch of the same request (the
+/// dangerous double-execution direction) is caught. The failure names the
+/// seed.
+#[test]
+fn dst_oracle_no_double_dispatch_catches_a_repeated_dispatch_and_names_the_seed() {
+    let mut observation = drive_completing_observation(330733);
+    assert!(
+        oracle_no_double_dispatch(&observation).is_ok(),
+        "a correct episode dispatches the request at most once"
+    );
+
+    // Force a double dispatch: the same request recorded a second time.
+    observation.dispatch_log.push(DispatchRecord {
+        hunt_id: "dst-hunt-episode".to_string(),
+        order: 1,
+    });
+
+    let violation = oracle_no_double_dispatch(&observation)
+        .expect_err("a repeated dispatch of one request must be caught");
+    assert_eq!(violation.oracle, Oracle::NoDoubleDispatch);
+    let formatted = format_corpus_violation(&observation, &violation);
+    assert!(
+        formatted.contains("SWARM_DST_SEED=330733"),
+        "the violation must name the seed for one-command reproduction: {formatted}"
+    );
+    assert!(
+        formatted.contains("double dispatch"),
+        "the violation must name the failure mode: {formatted}"
+    );
 }
