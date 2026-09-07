@@ -493,6 +493,38 @@ mod tests {
         )
     }
 
+    /// Like [`adapter`], but with a non-trivial [`TechniqueWeights`] snapshot
+    /// attached via [`GenomeRedSwarm::with_weights`] -- Phase 290's weighted
+    /// planning path (M3), rather than the unweighted `None` arm every other
+    /// helper in this module exercises. Weights alternate a low and a high
+    /// value across the graph's own techniques, in `id` order, so the
+    /// snapshot is neither uniformly neutral (`1.0` everywhere, which plans
+    /// identically to unweighted and would prove nothing) nor hand-picked
+    /// technique ids a future catalog edit could silently drop out from
+    /// under this test.
+    fn weighted_adapter(seed: u64, generation: u32) -> GenomeRedSwarm {
+        let graph = repo_graph();
+        let weight_pairs: Vec<(String, f64)> = graph
+            .techniques()
+            .enumerate()
+            .map(|(index, node)| {
+                let weight = if index % 2 == 0 { 0.1 } else { 0.9 };
+                (node.id.clone(), weight)
+            })
+            .collect();
+        let weights = TechniqueWeights::for_test(weight_pairs);
+
+        GenomeRedSwarm::new(
+            graph,
+            suite_paths(),
+            campaign(),
+            seed,
+            generation,
+            StealthBudget::DEFAULT,
+        )
+        .with_weights(weights)
+    }
+
     fn context(requested_at_ms: i64, sequence_id: &str) -> ThreatContext {
         ThreatContext::new(
             PathBuf::from("unused-for-genome-materialization"),
@@ -597,6 +629,51 @@ mod tests {
         assert!(
             !artifact.events.is_empty(),
             "fixture campaign should admit at least one event"
+        );
+
+        // Flatten and sort exactly the way `generate_sequence_artifact`
+        // does internally, since `materialize_by_step` leaves its events in
+        // plan order rather than pre-sorting them.
+        let mut flattened: Vec<TelemetryEvent> =
+            grouped.into_iter().flat_map(|(_, events)| events).collect();
+        flattened.sort_by(|left, right| {
+            left.timestamp
+                .cmp(&right.timestamp)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+
+        assert_eq!(
+            event_fingerprint(&artifact.events),
+            event_fingerprint(&flattened)
+        );
+    }
+
+    /// M3: pins the same equivalence
+    /// [`materialize_by_step_reproduces_generate_sequence_artifacts_events`]
+    /// pins, but for a [`GenomeRedSwarm`] carrying a non-trivial
+    /// [`TechniqueWeights`] snapshot (see [`weighted_adapter`]). Both
+    /// [`GenomeRedSwarm::generate_sequence_artifact`] and
+    /// [`GenomeRedSwarm::materialize_by_step`] plan through the same
+    /// `self.weights.as_ref()` (see the module doc's "Weighted planning"
+    /// section), so the unweighted case agreeing proves nothing about the
+    /// weighted one -- a future edit that only threaded `weights` through
+    /// one of the two call sites would pass the unweighted sibling test and
+    /// still break `run_generation`'s trust that the two agree.
+    #[tokio::test]
+    async fn materialize_by_step_reproduces_generate_sequence_artifacts_events_when_weighted() {
+        let genome = weighted_adapter(13, 2);
+
+        let artifact = genome
+            .generate_sequence_artifact(&context(1_800_000_000_000, "compare-artifact-weighted"))
+            .await
+            .expect("weighted artifact materialization should succeed");
+        let grouped = genome
+            .materialize_by_step(&context(1_800_000_000_000, "compare-grouped-weighted"))
+            .expect("weighted grouped materialization should succeed");
+
+        assert!(
+            !artifact.events.is_empty(),
+            "fixture campaign should admit at least one event under weighted planning too"
         );
 
         // Flatten and sort exactly the way `generate_sequence_artifact`
