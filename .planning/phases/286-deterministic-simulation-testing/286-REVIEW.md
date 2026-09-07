@@ -246,3 +246,43 @@ Terminal observations, retained separately from final-tree acceptance:
 Current progress does not close any pending obligation in the acceptance table.
 The sandbox TCP restriction is a concrete limitation on local HTTP verification;
 no approval escalation or alternative-environment result is claimed.
+
+
+### Subsequent checkpoint and regression progress
+
+- `8086b8cd512bc50f3a064fcdf108a24f02b9204f` replaces the fragile
+  investigation duration assertion with a started/release latch and fixes the
+  live HTTP approval fixture's durable audit configuration. Execution pending.
+- `3051f1ab0811b326e803af8eb479dfe8ffe54e3e` makes the DST effect adapter
+  observation-only. It persists the observed intent status with its actual
+  sandbox effect and runs named safety oracles after cancellation and after
+  redelivery, before generic result assertions. Execution pending.
+- The ingest library command `cargo test --locked -j2 -p swarm-ingest-runtime
+  --lib -- --test-threads=1 --quiet` exited 101: **171 passed, 5 failed**. The
+  eleven new composition tests passed. All five failures were local TCP
+  listener creation rejected with `Operation not permitted`. Log:
+  `/private/tmp/ambush-ingest-5df3c228b.log`. This result precedes the first-run
+  replay correction described below.
+- An independent composition review found no journal ownership/reload bypass,
+  but identified two real integration regressions: the shipped hold development
+  profile still selected live mode with Memory audit storage, and first-run's
+  isolated audit directory made its result unavailable to the configured
+  replay lookup. Both remain open until their corrections and regressions pass.
+
+Production mutation recipes, to execute independently after a clean baseline:
+
+1. Ordering, seed 57: move the enforced executor await in `dispatch.rs` before
+   `journal.reserve`. Expect an actual `IntentMissing -> Effect -> Crash` trace
+   and `ordering: effect preceded durable intent`.
+2. Duplicate, seed 57: make `reserve` return the existing ID rather than
+   `AlreadyReserved`. Expect a second fsynced effect after reopen and
+   `at-most-once: duplicate effect across restart`.
+3. Disposition, seed 11: remove only the direct runtime's `Deny` return, leaving
+   StaticApprovalGate unchanged. Expect actual post-effect cancellation and
+   `disposition: forbidden effect despite cancellation`.
+
+For each: `SWARM_DST_SEED=<seed> cargo test --locked -j2 -p swarm-runtime
+--test dst_fault_injection dst_pr_corpus_or_exact_seed_replays_real_crash_recovery
+-- --exact --nocapture --test-threads=1`. Preserve exact source patches, immutable
+base and terminal logs in a disposable checkout, restore the source, and rerun
+positive controls. These recipes are source-reviewed; none has executed yet.
