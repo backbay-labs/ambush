@@ -57,5 +57,11 @@ the fixes it took are named where they landed, and the rest are `16-PLAN-WINDOW-
 
 - The two-console conflict (a second console racing this one) and the `superseded` card were not driven here; the headless record drove them.
 - The finding path (`E` then `D` on a real window) was not driven; the lane rendered the cards and their controls, and the headless record drove the commands.
-- `refused_late`, `expired` during the session, and a daemon crash between compare-and-set and the outcome write were not driven (W3-35 stands).
+- `expired` WAS driven, by the clock: `hold_39a64f32…` (the boot-raised hold, never decidable
+  from the window because leg 1 refused on its null `case_channel`) reached its TTL at
+  2026-09-07T01:24:54Z; the sweep tick logged `expired=1`, and the bridge published the terminal
+  `swarm:hold:v1` card into the case its routing ledger had for that hunt (alarm stream 5 of 6
+  records published, `hold_undeliverable` untouched). The Watch's row for it reads EXPIRED.
+- `refused_late` and a daemon crash between compare-and-set and the outcome write were not
+  driven (W3-35 stands; the crash belongs to phase 286's fault injection).
 - Screenshots are Orca captures on the authoring machine (`/var/folders/…/orca-computer-use/<id>-screenshot.png`), cited by id above; they are not committed.
