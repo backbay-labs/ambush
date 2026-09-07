@@ -145,3 +145,8 @@ deploy/helm/*/charts/*.tgz
 # unless a test uses `matchSnapshot`, and the worktree-clean gate refuses an
 # empty directory a test run created.
 deploy/helm/*/tests/__snapshot__/
+
+# Local window-walk daemon profile: the committed dev profiles pin the headless driver's verdict key;
+# a console pins its own by copying perch-hold-dev.yaml here and re-signing it (docs/PERCH-DEV.md).
+rulesets-dev/perch-window-dev.yaml
+rulesets-dev/perch-window-dev.yaml.sig.json
