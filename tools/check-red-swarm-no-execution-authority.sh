@@ -41,6 +41,16 @@
 #   proves both directions: a planted comment-only mention is NOT caught, and
 #   a planted code occurrence IS.
 #
+#   NOT RECOGNIZED: a `/* ... */` block comment -- only a line starting with
+#   `//` (after leading whitespace) is treated as a comment. A forbidden name
+#   inside a block comment would be scanned and FLAGGED rather than excluded,
+#   which is the safe direction to be wrong in (a spurious failure over dead
+#   comment text, never a missed real violation). There are no `/* */` blocks
+#   under either scan target today -- confirmed by grepping both for `/*`;
+#   every hit is a `///` doc-comment line or a glob pattern such as `*.yaml`
+#   written inside one -- so this is disclosed rather than fixed. The Rust
+#   companion's `isolation_gate.rs` module doc carries the identical note.
+#
 # ARMSCI-03, AND WHY ITS FILE IS EXCLUDED BY NAME BELOW
 #   `crates/swarm-runtime/src/red_swarm/isolation_gate.rs` is the Rust-side
 #   companion: it runs the same rule, in Rust, over the same two source
