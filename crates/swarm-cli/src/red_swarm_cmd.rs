@@ -545,6 +545,37 @@ fn build_score(args: &RedSwarmScoreArgs) -> Result<ScoreOutcome, ScoreCommandErr
     })
 }
 
+/// Dedup `raw`'s repeated `--strategies <id>` values before they become
+/// [`DetectionConfig::strategies`]: preserves first-seen order rather than
+/// sorting, since [`build_campaign_config`] takes its `strategy` fallback
+/// from `strategies.first()`, and reordering here would silently change
+/// which id that is for a caller who lists more than one. The `BTreeSet`
+/// below is used only to test membership, never iterated, so the result
+/// is a deterministic function of `raw`'s own order, never of hash order.
+///
+/// A literal duplicate costs nothing observable today -- `run_generation`
+/// builds one `RuntimeDetector` per `detection.strategies` entry, and two
+/// instances built from the same id share one `hits` key, so the second
+/// silently collapses into the first rather than doubling a catch (see
+/// that function's own NOTE on `detectors`) -- but it does leave
+/// `detection.strategies.len()` inflated relative to the distinct ids
+/// actually enabled, which is what a duplicate-free `records` (one entry
+/// per distinct `(technique, detector)` pair) is measured against.
+/// Deduping here is the CLI-side half of keeping `run_generation`'s own
+/// "no caller in this crate constructs a `DetectionConfig` that way today"
+/// comment true for `--strategies`, the one flag a caller could otherwise
+/// use to violate it.
+fn dedup_strategies(raw: &[String]) -> Vec<String> {
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut deduped = Vec::with_capacity(raw.len());
+    for id in raw {
+        if seen.insert(id.as_str()) {
+            deduped.push(id.clone());
+        }
+    }
+    deduped
+}
+
 /// Build the [`CampaignConfig`] for `campaign` args (Task 4): resolves the
 /// graph exactly as [`build_plan`]/[`build_score`] do (through
 /// [`build_graph`]), then fills in the budget, the starting detection
@@ -576,17 +607,19 @@ fn build_campaign_config(
     // `--strategies` seeds blue's STARTING enabled set; an empty list (the
     // default) means generation 0 runs with nothing enabled and blue only
     // ever grows `.strategies` from there (see
-    // `swarm_runtime::red_swarm::campaign::close_blue_gaps`). `.strategy`
+    // `swarm_runtime::red_swarm::campaign::close_blue_gaps`). Deduped first
+    // (M2, see `dedup_strategies`) so a repeated id never inflates
+    // `.strategies` beyond the distinct ids actually enabled. `.strategy`
     // still needs some value even though `.active_strategies()` ignores it
     // once `.strategies` is non-empty -- see [`DEFAULT_DETECTION_STRATEGY`].
-    let strategy = args
-        .strategies
+    let strategies = dedup_strategies(&args.strategies);
+    let strategy = strategies
         .first()
         .cloned()
         .unwrap_or_else(|| DEFAULT_DETECTION_STRATEGY.to_string());
     let initial_detection = DetectionConfig {
         strategy,
-        strategies: args.strategies.clone(),
+        strategies,
         high_confidence_threshold: DEFAULT_HIGH_CONFIDENCE_THRESHOLD,
         medium_confidence_threshold: DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD,
         profiles: DetectorProfilesConfig::default(),
@@ -1507,6 +1540,62 @@ mod tests {
             first_value, second_value,
             "SC4: identical arguments must produce byte-identical report JSON \
              once generated_at_ms is stripped"
+        );
+    }
+
+    #[test]
+    fn dedup_strategies_drops_repeats_and_keeps_first_seen_order() {
+        let raw = [
+            "kill_chain_sequence".to_string(),
+            "suspicious_process_tree".to_string(),
+            "kill_chain_sequence".to_string(),
+        ];
+
+        let deduped = dedup_strategies(&raw);
+
+        assert_eq!(
+            deduped,
+            vec![
+                "kill_chain_sequence".to_string(),
+                "suspicious_process_tree".to_string(),
+            ],
+            "a repeated id must drop, and the surviving ids must stay in \
+             first-seen order rather than sorted order"
+        );
+    }
+
+    #[test]
+    fn a_repeated_strategies_id_yields_the_same_campaign_report_as_passing_it_once() {
+        let mut once = campaign_args(11, 2, Some(1_700_000_000_000));
+        once.strategies = vec![
+            "kill_chain_sequence".to_string(),
+            "suspicious_process_tree".to_string(),
+        ];
+        let mut repeated = campaign_args(11, 2, Some(1_700_000_000_000));
+        repeated.strategies = vec![
+            "kill_chain_sequence".to_string(),
+            "suspicious_process_tree".to_string(),
+            "kill_chain_sequence".to_string(),
+        ];
+
+        let once_json = render_campaign_json(&build_campaign(&once).unwrap()).unwrap();
+        let repeated_json = render_campaign_json(&build_campaign(&repeated).unwrap()).unwrap();
+
+        let mut once_value: serde_json::Value = serde_json::from_str(&once_json).unwrap();
+        let mut repeated_value: serde_json::Value = serde_json::from_str(&repeated_json).unwrap();
+        once_value
+            .as_object_mut()
+            .unwrap()
+            .remove("generated_at_ms");
+        repeated_value
+            .as_object_mut()
+            .unwrap()
+            .remove("generated_at_ms");
+
+        assert_eq!(
+            once_value, repeated_value,
+            "M2: a --strategies id repeated on the command line must report \
+             exactly what passing it once would, once generated_at_ms is stripped"
         );
     }
 
