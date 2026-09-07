@@ -11,6 +11,7 @@ use crate::mutation::{
     EvolutionEpisodeStoreError, EvolutionMutationRankingRecord, EvolutionMutationRankingReport,
     EvolutionPopulationState, FileEvolutionBenchmarkStore, FileEvolutionEpisodeStore,
 };
+use crate::red_swarm::CAMPAIGNS_DIR;
 use crate::selection::EvolutionRankedCandidateSelectionRecord;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -319,23 +320,6 @@ pub enum EvolutionStatusError {
     },
 }
 
-/// The default directory `status` reads red-swarm campaign reports from
-/// (Phase 291, ARMSCI-04) -- the same literal
-/// `crates/swarm-cli/src/red_swarm_cmd.rs`'s `campaign` subcommand persists
-/// its report under (that module's own `DEFAULT_CAMPAIGN_REPORTS_DIR`),
-/// duplicated here rather than imported because `swarm-runtime` cannot
-/// depend on the downstream `swarm-cli` crate that owns it. `campaign`
-/// resolves that constant relative to the current working directory, not
-/// relative to `--config`'s own directory (it never reads a report
-/// destination from `SwarmConfig` or the config file's location -- see
-/// that constant's doc), so [`EvolutionStatusPaths::red_swarm_campaign_reports_dir`]
-/// is resolved the same CWD-relative way in
-/// [`DefaultEvolutionStatusHarness::from_config`] rather than through
-/// [`resolve_repo_relative_path`] -- to actually find what `campaign`
-/// wrote. [`DefaultEvolutionStatusHarness::with_red_swarm_campaign_reports_dir`]
-/// overrides it, for a test that needs a controlled temp directory.
-const DEFAULT_RED_SWARM_CAMPAIGN_REPORTS_DIR: &str = "data/red-swarm/campaigns";
-
 #[derive(Debug, Clone)]
 struct EvolutionStatusPaths {
     ranking_results_dir: PathBuf,
@@ -347,6 +331,23 @@ struct EvolutionStatusPaths {
     benchmark_results_dir: PathBuf,
     proof_results_dir: PathBuf,
     queue_results_dir: PathBuf,
+    /// Where `status` reads the red-swarm campaign report from (Phase 291,
+    /// ARMSCI-04): [`CAMPAIGNS_DIR`] resolved relative to the CURRENT
+    /// WORKING DIRECTORY in [`DefaultEvolutionStatusHarness::from_config`]
+    /// -- unlike every sibling field above, deliberately NOT through
+    /// [`resolve_repo_relative_path`] (which resolves relative to
+    /// `--config`'s own directory). That distinction is load-bearing, not
+    /// stylistic: `campaign` (`crates/swarm-cli/src/red_swarm_cmd.rs`'s
+    /// `run_campaign`) resolves the very same [`CAMPAIGNS_DIR`] relative to
+    /// the working directory too, never through `SwarmConfig` or the
+    /// config file's location. With the CLI's real default
+    /// (`--config rulesets/default.yaml`), `--config`'s own directory is
+    /// `rulesets/`, not the repo root -- so routing this field through
+    /// `resolve_repo_relative_path` like its siblings would resolve to
+    /// `rulesets/data/red-swarm/campaigns`, a directory `campaign` never
+    /// writes to, and `red_swarm_campaign` would silently and permanently
+    /// read `null`. [`DefaultEvolutionStatusHarness::with_red_swarm_campaign_reports_dir`]
+    /// overrides it, for a test that needs a controlled temp directory.
     red_swarm_campaign_reports_dir: PathBuf,
 }
 
@@ -399,21 +400,18 @@ impl DefaultEvolutionStatusHarness {
                     base,
                     &paths.evolution_queue_results_dir,
                 ),
-                red_swarm_campaign_reports_dir: PathBuf::from(
-                    DEFAULT_RED_SWARM_CAMPAIGN_REPORTS_DIR,
-                ),
+                red_swarm_campaign_reports_dir: PathBuf::from(CAMPAIGNS_DIR),
             },
             config,
         })
     }
 
     /// Overrides the directory [`Self::status`] reads red-swarm campaign
-    /// reports from, in place of the CWD-relative
-    /// [`DEFAULT_RED_SWARM_CAMPAIGN_REPORTS_DIR`] default (Phase 291,
-    /// ARMSCI-04). `campaign` itself never reads this destination from
-    /// `SwarmConfig`, so there is no config field to override it through --
-    /// this exists so a test can point `status()` at a temp directory
-    /// without touching the real working directory.
+    /// reports from, in place of the CWD-relative [`CAMPAIGNS_DIR`] default
+    /// (Phase 291, ARMSCI-04). `campaign` itself never reads this
+    /// destination from `SwarmConfig`, so there is no config field to
+    /// override it through -- this exists so a test can point `status()`
+    /// at a temp directory without touching the real working directory.
     pub fn with_red_swarm_campaign_reports_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.paths.red_swarm_campaign_reports_dir = dir.into();
         self
@@ -1539,6 +1537,23 @@ mod tests {
         dir
     }
 
+    /// Loads the real, checked-in `rulesets/default.yaml` as a baseline
+    /// `SwarmConfig` for an end-to-end harness test (Minor M2 from the Task
+    /// 3 review: this exact five-line `repo_root`/`load_config` pattern
+    /// used to be duplicated between
+    /// `evolution_status_harness_summarizes_durable_artifacts` and
+    /// `evolution_status_harness_reports_the_red_swarm_campaign_when_present_and_drops_it_when_removed`).
+    /// Every caller redirects individual `evolution.paths.*` fields at its
+    /// own temp directories afterward rather than touching the repo's real
+    /// `data/` tree.
+    fn default_config_for_tests() -> swarm_core::config::SwarmConfig {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        crate::config::load_config(repo_root.join("rulesets/default.yaml")).unwrap()
+    }
+
     /// Builds a minimal persisted red-swarm campaign report (the on-disk
     /// shape `crates/swarm-cli/src/red_swarm_cmd.rs`'s `CampaignReportView`
     /// serializes) with only the fields
@@ -2169,12 +2184,7 @@ mod tests {
             })
             .unwrap();
 
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .unwrap();
-        let mut config =
-            crate::config::load_config(repo_root.join("rulesets/default.yaml")).unwrap();
+        let mut config = default_config_for_tests();
         config.evolution.enabled = true;
         config.evolution.population_size = 4;
         config.evolution.paths.evolution_ranking_results_dir = ranking_dir.display().to_string();
@@ -2641,6 +2651,50 @@ mod tests {
         assert_eq!(summary.corpus_sequence_id.as_deref(), Some("generation-2"));
     }
 
+    /// Minor M1 from the Task 3 review: the freshest-pick's tie-break
+    /// clause (`.then_with(|| left.1.cmp(&right.1))` in
+    /// `load_red_swarm_campaign_summary`) claims ties on `generated_at_ms`
+    /// are broken by filename, but until this test nothing supplied two
+    /// reports sharing a timestamp -- reachable in practice, since
+    /// `generated_at_ms` can come from a fixed `--virtual-clock-start-ms`.
+    #[test]
+    fn load_red_swarm_campaign_summary_breaks_a_generated_at_ms_tie_by_filename() {
+        let dir = temp_dir("red-swarm-campaign-tie");
+        fs::write(
+            dir.join("campaign-a-1.json"),
+            red_swarm_campaign_report_json(
+                "campaign-a",
+                1,
+                5_000,
+                "plateau",
+                0.5,
+                &["generation-0"],
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("campaign-b-2.json"),
+            red_swarm_campaign_report_json(
+                "campaign-b",
+                2,
+                5_000,
+                "max_generations",
+                0.83,
+                &["generation-0", "generation-1"],
+            ),
+        )
+        .unwrap();
+
+        let summary = load_red_swarm_campaign_summary(&dir)
+            .expect("a report should still be picked when generated_at_ms ties");
+
+        assert_eq!(
+            summary.campaign, "campaign-b",
+            "\"campaign-b-2.json\" sorts after \"campaign-a-1.json\", so it must win the \
+             generated_at_ms tie deterministically"
+        );
+    }
+
     #[test]
     fn evolution_status_harness_reports_the_red_swarm_campaign_when_present_and_drops_it_when_removed()
      {
@@ -2676,12 +2730,7 @@ mod tests {
         )
         .unwrap();
 
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .unwrap();
-        let mut config =
-            crate::config::load_config(repo_root.join("rulesets/default.yaml")).unwrap();
+        let mut config = default_config_for_tests();
         config.evolution.paths.evolution_ranking_results_dir = ranking_dir.display().to_string();
         config.evolution.paths.evolution_selection_results_dir =
             selection_dir.display().to_string();

@@ -720,6 +720,28 @@ pub enum StopReason {
     FullCoverage,
 }
 
+/// The directory `swarmctl red-swarm campaign` persists each report under,
+/// and the same directory `swarmctl evolution status` reads the freshest
+/// one back from (Phase 291, ARMSCI-04) -- the SINGLE canonical value for
+/// that path. The write side (`crates/swarm-cli/src/red_swarm_cmd.rs`'s
+/// `run_campaign`) and the read side
+/// (`crate::evolution_status::load_red_swarm_campaign_summary`) both import
+/// this constant rather than each keeping an independent copy of the
+/// literal, so the two paths cannot silently drift apart -- a prior
+/// revision had exactly that: two separate `"data/red-swarm/campaigns"`
+/// literals with nothing but a doc comment on each pointing at the other.
+///
+/// Repository/cwd-relative, mirroring every other cwd-relative `data/...`
+/// store default in this codebase (`data/canaries/`, `data/replay-runs/`,
+/// etc.) -- resolved relative to the current working directory by BOTH
+/// sides, never through `SwarmConfig` or a `--config` file's own
+/// directory. Deliberately a plain constant rather than a `--output-dir`
+/// CLI flag or config field: only `run_campaign` (the write side's
+/// process-exit shell) and `evolution status` (the read side) use it
+/// directly in production, and each side's own tests inject their own
+/// temp directory instead of touching this path.
+pub const CAMPAIGNS_DIR: &str = "data/red-swarm/campaigns";
+
 /// The full record of one bounded [`RedSwarmCampaign::run`] call: every
 /// generation's measured outcome, in order, why the run stopped, and the
 /// last generation's blue catch rate for a quick read without re-deriving
