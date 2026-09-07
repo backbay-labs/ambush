@@ -72,6 +72,7 @@ impl ChainLinkVerdict {
 }
 
 /// Verify that an envelope correctly continues an issuer chain.
+// INVARIANT: SpineChainLinkIntegrityViolation
 pub fn verify_chain_link(
     envelope: &Value,
     known_head: Option<&IssuerChainHead>,

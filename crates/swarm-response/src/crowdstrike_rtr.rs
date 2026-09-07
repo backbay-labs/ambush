@@ -32,6 +32,7 @@ struct SessionResource {
 }
 
 impl CrowdStrikeRtrAdapter {
+    // INVARIANT: ResponseCrowdStrikeRtrBaseUrlRequired
     pub fn new(config: CrowdStrikeRtrConfig) -> Result<Self, ResponseError> {
         if config.base_url.trim().is_empty() {
             return Err(ResponseError::unavailable(

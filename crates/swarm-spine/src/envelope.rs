@@ -21,6 +21,7 @@ pub fn issuer_from_keypair(keypair: &Keypair) -> String {
 }
 
 /// Extract the hex public key from a `swarm:ed25519:<hex>` issuer string.
+// INVARIANT: SpineEnvelopeIssuerMustBeEd25519Key
 pub fn parse_issuer_pubkey_hex(issuer: &str) -> SpineResult<String> {
     let prefix = "swarm:ed25519:";
     let rest = issuer
@@ -40,6 +41,7 @@ fn canonical_json_bytes(value: &Value) -> SpineResult<Vec<u8>> {
 }
 
 /// Compute the bytes that are signed for an envelope.
+// INVARIANT: SpineEnvelopeCanonicalizationRequired
 pub fn envelope_signing_bytes(envelope_without_hash_and_sig: &Value) -> SpineResult<Vec<u8>> {
     canonical_json_bytes(envelope_without_hash_and_sig)
 }
@@ -137,6 +139,7 @@ pub fn verify_envelope(envelope: &Value) -> SpineResult<bool> {
 
     let bytes = envelope_signing_bytes(&unsigned)?;
     let computed_hash = sha256_hex_prefixed(&bytes);
+    // INVARIANT: SpineEnvelopeHashMismatchRejected
     if computed_hash != claimed_hash {
         return Err(SpineError::HashMismatch {
             expected: claimed_hash.to_string(),

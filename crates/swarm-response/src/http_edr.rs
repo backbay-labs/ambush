@@ -20,6 +20,7 @@ pub struct HttpEdrAdapter {
 }
 
 impl HttpEdrAdapter {
+    // INVARIANT: ResponseHttpEdrEndpointRequired
     pub fn new(config: HttpEdrConfig) -> Result<Self, ResponseError> {
         if config.endpoint.trim().is_empty() {
             return Err(ResponseError::unavailable(

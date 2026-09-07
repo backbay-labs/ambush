@@ -53,6 +53,7 @@ impl StaticApprovalGate {
         )
     }
 
+    // INVARIANT: PolicyMalformedRequestRejected
     pub(crate) fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
         if request.evidence.is_null() {
             return Err(ApprovalError::InvalidRequest(
@@ -206,6 +207,7 @@ impl StaticApprovalGate {
         }
     }
 
+    // INVARIANT: PolicyScopeRateLimitDeniesBurst
     fn scope_rate_limit_decision(
         &self,
         request: &ActionRequest,
@@ -292,6 +294,7 @@ impl ApprovalGate for StaticApprovalGate {
             return Ok(decision);
         }
 
+        // INVARIANT: PolicyHumanGateOnDestructiveAction
         if Self::destructive_action(request) && request.severity >= self.human_gate_severity {
             return Ok(PolicyDecision::require_human_with_rule(
                 "static.human_gate",
