@@ -46,6 +46,14 @@ pub(super) const fn default_decide_stall_ms() -> u64 {
     60_000
 }
 
+/// Thirty seconds: thirty alarm-drainer ticks at the bridge's 1 Hz cadence,
+/// which is also the bridge's head-refusal budget
+/// (`swarm_perch_bridge::alarm::HEAD_REFUSAL_BUDGET`), so a hold is re-filed no
+/// sooner than the bridge could have parked whatever blocked it.
+pub(super) const fn default_hold_refile_after_ms() -> u64 {
+    30_000
+}
+
 /// One day. The upper bound (`issued_at_ms <= held_at_ms`) is the load-bearing half.
 pub(super) const fn default_governance_receipt_max_age_ms() -> u64 {
     86_400_000

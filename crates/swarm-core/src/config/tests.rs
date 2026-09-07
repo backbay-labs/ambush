@@ -1759,6 +1759,7 @@ hold_ttl_ms_by_threat_class:
     assert_eq!(settings.hold_ttl_ms_for("execution"), 1_800_000);
     assert_eq!(settings.sweep_interval_ms, 5_000);
     assert_eq!(settings.decide_stall_ms, 60_000);
+    assert_eq!(settings.refile_after_ms, 30_000);
     assert_eq!(settings.governance_receipt_max_age_ms, 86_400_000);
 
     let defaults = ResponseHoldSettings::default();
@@ -1795,8 +1796,9 @@ fn response_hold_settings_reject_an_empty_store_path_and_a_zero_ttl() {
     ));
 }
 
-/// The other three fail-closed rules, so a zero sweep interval, a zero stall
-/// bound and a zero per-class override cannot reach a running daemon.
+/// The other four fail-closed rules, so a zero sweep interval, a zero stall
+/// bound, a zero re-file interval and a zero per-class override cannot reach a
+/// running daemon.
 #[test]
 fn response_hold_settings_reject_zero_sweep_stall_and_overrides() {
     for (mutate, field) in [
@@ -1808,6 +1810,10 @@ fn response_hold_settings_reject_zero_sweep_stall_and_overrides() {
         (
             Box::new(|config: &mut SwarmConfig| config.runtime.response.decide_stall_ms = 0),
             "runtime.response.decide_stall_ms",
+        ),
+        (
+            Box::new(|config: &mut SwarmConfig| config.runtime.response.refile_after_ms = 0),
+            "runtime.response.refile_after_ms",
         ),
         (
             Box::new(|config: &mut SwarmConfig| {
@@ -1842,6 +1848,7 @@ fn a_runtime_block_with_no_response_keys_loads_with_bounded_defaults() {
     assert_eq!(settings.response.hold_ttl_ms, 3_600_000);
     assert_eq!(settings.response.sweep_interval_ms, 5_000);
     assert_eq!(settings.response.decide_stall_ms, 60_000);
+    assert_eq!(settings.response.refile_after_ms, 30_000);
     assert_eq!(settings.response.governance_receipt_max_age_ms, 86_400_000);
     assert_eq!(settings.response.hold_store_path, None);
     assert!(settings.response.hold_ttl_ms_by_threat_class.is_empty());

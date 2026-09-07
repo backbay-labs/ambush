@@ -44,6 +44,10 @@ swarm-spine.workspace = true
 swarm-crypto.workspace = true
 swarm-policy.workspace = true
 axum.workspace = true
+# The parked-alarm dead-letter (`alarm/parked.rs`) holds spooled `RuntimeEvent` bytes inside a
+# JSON document an operator reads; base64 is how they stay one readable field instead of an
+# array of byte integers.
+base64.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 hex.workspace = true
@@ -74,6 +78,10 @@ swarm-spine.workspace = true
 # daemon would never produce.
 swarm-runtime = { workspace = true, features = ["test-fixtures"] }
 tempfile = "3"
+# The dead-letter overflow is the one path here that loses a record for good, and what it must
+# do is NAME the record in its log line. Asserting that needs a subscriber, and this crate has
+# no other reason to hold one: the daemon installs its own.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
