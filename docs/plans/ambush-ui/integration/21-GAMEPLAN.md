@@ -119,3 +119,6 @@ Then, and only then: packaging for outside installation.
 | 2026-09-06 | `main` fast-forwarded to `acd5024b5` locally; pre-push lanes running | this file's first commit |
 | 2026-09-06 | landed: remote `main` `0476f50d6` → `39549b19d` (ratchet bootstrap retired) → `97adf18b6` (window-walk fixes); PRs #12–#16 merged | `gh pr list`, CI runs 34068340183/34068340196 (first run: helm plugin verification + the week-boundary flake, both fixed) |
 | 2026-09-07 | the window walk crossed the hold path on a real window | `evidence/window-walk.md` |
+| 2026-09-07 | **gate zero exit met:** both hosted workflows green on `97adf18b6` (CI run 34068340183's successor and Workspace CI), the ratchet compares against a main that contains `workspace/`, no temporary override survives | `gh run list --branch main` |
+| 2026-09-07 | Phase 1: PRs #2, #3, #4, #11 retired with rationale; #5 held for phases 296–299; merged worktrees and branches pruned (56 GB free) | `gh pr list --state closed`, `git worktree list` |
+| 2026-09-07 | Phase 2 opened: phase 288 plan written in the engine's phase directory (`.planning/phases/288-…/288-01-PLAN.md`), Task 1 dispatched on `feat/red-swarm-288` | this ledger |
