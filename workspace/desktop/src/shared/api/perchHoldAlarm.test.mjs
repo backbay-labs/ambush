@@ -65,11 +65,13 @@ test("a 26006 from an unadmitted issuer is counted and dropped", () => {
   assert.equal(drainPerchAlarms().length, 0);
 });
 
-test("with no admitted set loaded nothing is admitted, and the drop is counted", () => {
+test("with no admitted set loaded nothing is admitted, and nothing is accused", () => {
   // The default must be "admit nothing", not "admit everything": the set
   // arrives asynchronously from the daemon, and a console that trusts frames
   // before it knows who to trust is a console that renders an attacker's
-  // alarm during boot.
+  // alarm during boot. It is not a REFUSAL either — see the hold buffer in
+  // perchEphemeralStore.test.mjs — so the accusation counter stays at zero
+  // until the daemon's answer says whose frame it was.
   resetPerchEphemeralStore();
   assert.equal(
     applyPerchEphemeralFrame({
@@ -80,7 +82,8 @@ test("with no admitted set loaded nothing is admitted, and the drop is counted",
     }),
     false,
   );
-  assert.equal(perchUnadmittedFrameCount(), 1);
+  assert.equal(perchUnadmittedFrameCount(), 0);
+  assert.equal(drainPerchAlarms().length, 0);
 });
 
 test("the admitted comparison is case-insensitive on both sides", () => {
