@@ -1328,8 +1328,9 @@ struct CanaryIndex {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        DefaultEvolutionStatusHarness, FileKittenStatusStore, KittenExecutionState,
-        KittenStatusRecord, render_evolution_status,
+        DefaultEvolutionStatusHarness, EvolutionAdversarialSummary, FileKittenStatusStore,
+        KittenExecutionState, KittenStatusRecord, build_adversarial_summary,
+        render_evolution_status,
     };
     use crate::canary::{CanaryRecommendation, CanaryRunRecord, CanaryRunStatus};
     use crate::drafting::EvolutionValidationBundleStatus;
@@ -1350,12 +1351,14 @@ mod tests {
         EvolutionAutonomousVariantRecipeKind, EvolutionBenchmarkBaselineReport,
         EvolutionBenchmarkFitnessDelta, EvolutionBenchmarkGenerationReport,
         EvolutionBenchmarkRunReport, EvolutionCandidateRankingEntry,
-        EvolutionEpisodeBlueFitnessVector, EvolutionEpisodeRedFitnessVector,
-        EvolutionEpisodeReport, EvolutionEpisodeThreatClassCoverage,
-        EvolutionMutationRankingRecord, EvolutionMutationRankingReport,
-        EvolutionPopulationCandidate, EvolutionPopulationFitnessObjectives,
-        EvolutionPopulationState, FileEvolutionBenchmarkStore, FileEvolutionEpisodeStore,
+        EvolutionEpisodeBlueFitnessVector, EvolutionEpisodeRecord,
+        EvolutionEpisodeRedFitnessVector, EvolutionEpisodeReport,
+        EvolutionEpisodeThreatClassCoverage, EvolutionMutationRankingRecord,
+        EvolutionMutationRankingReport, EvolutionPopulationCandidate,
+        EvolutionPopulationFitnessObjectives, EvolutionPopulationState,
+        FileEvolutionBenchmarkStore, FileEvolutionEpisodeStore,
     };
+    use crate::red_swarm::generation_corpus_sequence_id;
     use crate::replay::ExperimentLineage;
     use crate::selection::EvolutionRankedCandidateSelectionRecord;
     use ed25519_dalek::SigningKey;
@@ -2247,5 +2250,107 @@ mod tests {
         assert_eq!(report.assurance.latest_rollout_gate, None);
         assert!(render_evolution_status(&report).contains("rollout=waived"));
         assert!(render_evolution_status(&report).contains("Active waiver:"));
+    }
+
+    /// A minimal [`EvolutionEpisodeRecord`] fixture, built directly (rather
+    /// than round-tripped through [`FileEvolutionEpisodeStore`]) since these
+    /// two tests exercise [`build_adversarial_summary`] in isolation, not
+    /// the store.
+    fn episode_record_with_corpus_sequence_id(sequence_id: &str) -> EvolutionEpisodeRecord {
+        EvolutionEpisodeRecord {
+            episode_id: "episode-1".to_string(),
+            generation: 3,
+            strategy_id: "strategy-a".to_string(),
+            adversarial_corpus_sequence_id: sequence_id.to_string(),
+            adversarial_corpus_suite_name: "hellcat_office_v1".to_string(),
+            adversarial_corpus_version: "2026-04-03".to_string(),
+            blue_genome_hash: "genome-a".to_string(),
+            created_at_ms: 1_700_000_000_000,
+            final_fitness: 0.5,
+            evasion_pressure_score: 0.5,
+            evasion_gap_closure_rate: 0.5,
+            evasion_focus_gap_count: 1,
+            event_detection_rate: 0.5,
+            event_evasion_rate: 0.5,
+            threat_class_detection_rate: 0.5,
+            bundle_path: "/tmp/episode-1.json".to_string(),
+        }
+    }
+
+    /// COEVOLVE-04: `corpus_sequence_id` "may reference a campaign
+    /// generation WITHOUT CHANGING ITS PUBLIC SHAPE" -- the reference half.
+    /// [`generation_corpus_sequence_id`] (Phase 290 Task 4) is the red-swarm
+    /// campaign's own id-producing helper; this pins that its output flows
+    /// through [`build_adversarial_summary`] into `corpus_sequence_id`
+    /// completely unchanged, the exact same pass-through
+    /// [`EvolutionEpisodeRecord::adversarial_corpus_sequence_id`] already
+    /// gets for any other string (see that function's body).
+    #[test]
+    fn corpus_sequence_id_carries_a_campaign_generation_id_through_build_adversarial_summary() {
+        let generation_id = generation_corpus_sequence_id(3);
+        let episode = episode_record_with_corpus_sequence_id(&generation_id);
+
+        let summary = build_adversarial_summary(Some(3), Some(&episode), None);
+
+        assert_eq!(summary.corpus_sequence_id, Some(generation_id));
+    }
+
+    /// COEVOLVE-04's other half: the shape must not change. Every field is
+    /// named in this struct literal, so an added or removed field fails
+    /// this test to COMPILE (a missing- or unknown-field error) rather than
+    /// silently passing, and the serialized key set is asserted explicitly
+    /// on top of that so a `#[serde(rename = ...)]` change would be caught
+    /// too.
+    #[test]
+    fn evolution_adversarial_summary_field_set_is_unchanged_by_the_campaign_wiring() {
+        let summary = EvolutionAdversarialSummary {
+            current_generation: Some(3),
+            latest_episode_id: Some("episode-1".to_string()),
+            latest_strategy_id: Some("strategy-a".to_string()),
+            corpus_sequence_id: Some(generation_corpus_sequence_id(3)),
+            corpus_suite_name: Some("hellcat_office_v1".to_string()),
+            corpus_version: Some("2026-04-03".to_string()),
+            best_genome_hash: Some("genome-a".to_string()),
+            latest_final_fitness: Some(0.5),
+            latest_evasion_pressure_score: Some(0.5),
+            latest_evasion_gap_closure_rate: Some(0.5),
+            latest_evasion_focus_gap_count: Some(1),
+            latest_event_detection_rate: Some(0.5),
+            latest_event_evasion_rate: Some(0.5),
+            latest_threat_class_detection_rate: Some(0.5),
+        };
+
+        let value = serde_json::to_value(&summary).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("EvolutionAdversarialSummary must serialize to a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+
+        let mut expected = vec![
+            "best_genome_hash",
+            "corpus_sequence_id",
+            "corpus_suite_name",
+            "corpus_version",
+            "current_generation",
+            "latest_episode_id",
+            "latest_evasion_focus_gap_count",
+            "latest_evasion_gap_closure_rate",
+            "latest_evasion_pressure_score",
+            "latest_event_detection_rate",
+            "latest_event_evasion_rate",
+            "latest_final_fitness",
+            "latest_strategy_id",
+            "latest_threat_class_detection_rate",
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(
+            keys, expected,
+            "COEVOLVE-04 lets corpus_sequence_id reference a campaign generation, \
+             but EvolutionAdversarialSummary's public field set must not change"
+        );
     }
 }

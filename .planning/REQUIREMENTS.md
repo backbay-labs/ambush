@@ -880,10 +880,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Bidirectional Co-Evolution And Convergence
 
-- [ ] **COEVOLVE-01**: `RedSwarmCampaign::run` plans, materializes events, runs them through the real detector pipeline, records outcomes, and computes both red fitness and blue catch rate per generation.
-- [ ] **COEVOLVE-02**: A bounded stopping rule terminates every run on `max_generations`, fitness plateau within `convergence.min_delta` for `convergence.patience` generations, or full blue coverage; `stop_reason` is recorded.
-- [ ] **COEVOLVE-03**: `GenomeRedSwarm` implements the existing `RedSwarmAdapter` trait alongside `SuiteRedSwarmAdapter`.
-- [ ] **COEVOLVE-04**: `EvolutionAdversarialSummary.corpus_sequence_id` may reference a campaign generation without changing its public shape; campaign reports persist under `data/red-swarm/campaigns/`.
+- [x] **COEVOLVE-01** (c59d8f44e): `RedSwarmCampaign::run` plans, materializes events, runs them through the real detector pipeline, records outcomes, and computes both red fitness and blue catch rate per generation.
+- [x] **COEVOLVE-02** (c59d8f44e): A bounded stopping rule terminates every run on `max_generations`, fitness plateau within `convergence.min_delta` for `convergence.patience` generations, or full blue coverage; `stop_reason` is recorded.
+- [x] **COEVOLVE-03** (31afa036d): `GenomeRedSwarm` implements the existing `RedSwarmAdapter` trait alongside `SuiteRedSwarmAdapter`.
+- [x] **COEVOLVE-04** (fa4455429): `EvolutionAdversarialSummary.corpus_sequence_id` may reference a campaign generation without changing its public shape; campaign reports persist under `data/red-swarm/campaigns/`.
 
 #### CI Arms Race Gate And Structural Isolation
 
@@ -1512,10 +1512,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | ATKSCORE-02 | Phase 289 | Satisfied |
 | ATKSCORE-03 | Phase 289 | Satisfied |
 | ATKSCORE-04 | Phase 289 | Satisfied |
-| COEVOLVE-01 | Phase 290 | Pending |
-| COEVOLVE-02 | Phase 290 | Pending |
-| COEVOLVE-03 | Phase 290 | Pending |
-| COEVOLVE-04 | Phase 290 | Pending |
+| COEVOLVE-01 | Phase 290 | Satisfied |
+| COEVOLVE-02 | Phase 290 | Satisfied |
+| COEVOLVE-03 | Phase 290 | Satisfied |
+| COEVOLVE-04 | Phase 290 | Satisfied |
 | ARMSCI-01 | Phase 291 | Pending |
 | ARMSCI-02 | Phase 291 | Pending |
 | ARMSCI-03 | Phase 291 | Pending |

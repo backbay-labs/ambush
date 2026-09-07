@@ -13,6 +13,7 @@
 use super::super::genome::{GeneStep, OperatorRole, StepIntent};
 use super::super::graph::{ScenarioRef, TargetGraph};
 use super::super::rng::RedGenomeRng;
+use super::super::weights::TechniqueWeights;
 use super::RedOperator;
 
 /// Opsec operator: proposes `Cover` steps for noisy exploitation steps.
@@ -45,11 +46,17 @@ impl RedOperator for OpsecOperator {
         OperatorRole::Opsec
     }
 
+    // Opsec's draw is over benign-control SCENARIOS (`rng.choose(&benign)`
+    // below), never over techniques -- a cover step keeps the covered step's
+    // own technique id rather than choosing one (see the module doc). So
+    // `weights`, which biases technique choice, has nothing to bias here; the
+    // parameter exists only to satisfy the trait every role shares.
     fn propose_steps(
         &self,
         graph: &TargetGraph,
         rng: &mut RedGenomeRng,
         so_far: &[GeneStep],
+        _weights: Option<&TechniqueWeights>,
     ) -> Vec<GeneStep> {
         if so_far.is_empty() {
             return Vec::new();
@@ -148,7 +155,7 @@ mod tests {
         // scenario while keeping a real graph technique.
         let so_far = vec![exploit_step()];
         let mut rng = RedGenomeRng::from_u64(4);
-        let covers = opsec.propose_steps(&graph, &mut rng, &so_far);
+        let covers = opsec.propose_steps(&graph, &mut rng, &so_far, None);
         assert!(!covers.is_empty(), "a noisy step should draw cover");
         let benign = graph.benign_scenarios();
         for cover in &covers {
@@ -173,7 +180,7 @@ mod tests {
         let mut rng = RedGenomeRng::from_u64(4);
         assert!(
             opsec
-                .propose_steps(&graph, &mut rng, &probe_only)
+                .propose_steps(&graph, &mut rng, &probe_only, None)
                 .is_empty()
         );
     }

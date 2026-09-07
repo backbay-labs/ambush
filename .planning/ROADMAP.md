@@ -1211,13 +1211,13 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Make both sides actually move, measured against real detector runs rather than self-play estimates, and guarantee every campaign terminates.
 **Requirements:** COEVOLVE-01, COEVOLVE-02, COEVOLVE-03, COEVOLVE-04
 **Depends on:** Phase 289
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-07)
+**Plans:** 290-01-PLAN.md
 **Success Criteria**:
-1. A campaign configured for 6 generations never executes a 7th, for a fixed seed.
-2. A campaign whose fitness plateaus stops early with `stop_reason == "plateau"`.
-3. Over at least 4 generations, blue catch rate is non-decreasing on average and red technique weights measurably shift away from generation-zero favourites once recorded as caught.
-4. Two invocations at the same seed produce byte-identical campaign reports except for a generated-at timestamp.
+1. A campaign configured for 6 generations never executes a 7th, for a fixed seed. — met: c59d8f44e (+ 0c8ceeff1), `red_swarm::campaign` tests (`generations.len()==6`, `stop_reason==MaxGenerations`) + direct `plateaued()` boundary tests + a `max_generations==1` case.
+2. A campaign whose fitness plateaus stops early with `stop_reason == "plateau"`. — met: c59d8f44e, a flat-fitness fixture stops `Plateau` before `max_generations`, with a full-window guard.
+3. Over at least 4 generations, blue catch rate is non-decreasing on average and red technique weights measurably shift away from generation-zero favourites once recorded as caught. — met: c59d8f44e (blue via monotonic gap-closing; red-shift via `plan_weighted`, 1988f5899).
+4. Two invocations at the same seed produce byte-identical campaign reports except for a generated-at timestamp. — met: fa4455429, `swarmctl red-swarm campaign --json` byte-identical after stripping `generated_at_ms` (unit + real binary).
 
 ### Phase 291: CI Arms Race Gate And Structural Isolation
 

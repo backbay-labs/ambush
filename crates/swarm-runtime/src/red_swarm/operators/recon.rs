@@ -11,6 +11,7 @@
 use super::super::genome::{GeneStep, OperatorRole, StepIntent};
 use super::super::graph::{TargetGraph, TechniqueNode};
 use super::super::rng::RedGenomeRng;
+use super::super::weights::TechniqueWeights;
 use super::{
     RedOperator, choose_distinct, class_for, quietest_scenario, step_from, usable_techniques,
 };
@@ -45,6 +46,7 @@ impl RedOperator for ReconOperator {
         graph: &TargetGraph,
         rng: &mut RedGenomeRng,
         _so_far: &[GeneStep],
+        weights: Option<&TechniqueWeights>,
     ) -> Vec<GeneStep> {
         let usable = usable_techniques(graph);
         if usable.is_empty() {
@@ -73,7 +75,7 @@ impl RedOperator for ReconOperator {
             .collect();
         let pool = if gaps.is_empty() { pool } else { gaps };
 
-        let chosen = choose_distinct(rng, &pool, usize::from(self.steps_per_operator));
+        let chosen = choose_distinct(rng, &pool, usize::from(self.steps_per_operator), weights);
         let mut steps = Vec::new();
         for node in chosen {
             let Some(class) = class_for(node, &recon_classes) else {

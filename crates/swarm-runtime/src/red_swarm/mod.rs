@@ -9,13 +9,20 @@ use std::path::PathBuf;
 use swarm_whisker::TelemetryEvent;
 
 pub mod budget;
+pub mod campaign;
 mod genome;
+pub mod genome_adapter;
 mod graph;
 mod operators;
 pub mod pattern_db;
 mod rng;
 pub mod scoring;
+pub mod weights;
 
+pub use campaign::{
+    CampaignConfig, CampaignReport, Convergence, GenerationOutcome, RedSwarmCampaign, StopReason,
+    generation_corpus_sequence_id, run_generation,
+};
 pub use genome::{
     CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,
 };
@@ -25,6 +32,7 @@ pub use operators::{
     RedOperator, builtin_operators,
 };
 pub use rng::RedGenomeRng;
+pub use weights::TechniqueWeights;
 
 /// Runtime-owned context for deterministic adversarial corpus generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +129,35 @@ pub enum RedSwarmError {
         path: String,
         source: std::io::Error,
     },
+
+    /// [`genome_adapter::GenomeRedSwarm`] resolves a [`GeneStep`]'s
+    /// [`ScenarioRef`] back to real scenario material by re-reading its own
+    /// `suite_paths` (a [`TargetGraph`] keeps only the lightweight ref, never
+    /// the events -- see that module's doc). Reaching this means either the
+    /// `(suite, scenario)` pair named by the plan is not among those paths, or
+    /// an event index the step named is out of range for the scenario that
+    /// was found. Both are a construction mismatch between the graph a plan
+    /// was drawn against and the suite paths handed to the materializer --
+    /// [`crate::red_swarm::genome::RedGenome::plan`] never emits a step whose
+    /// scenario or indices its own graph does not vouch for, so a
+    /// correctly-paired graph and suite set never reaches this error.
+    #[error("plan step references scenario `{scenario}` in suite `{suite}`: {reason}")]
+    UnresolvedScenario {
+        suite: String,
+        scenario: String,
+        reason: String,
+    },
+
+    /// [`crate::detector_factory::build_detector_from_strategy`] could not
+    /// build one of a measured run's enabled detectors -- an invalid profile
+    /// somewhere in the [`swarm_core::config::DetectionConfig`] handed to
+    /// [`campaign::run_generation`], or a `detection.strategies` entry naming
+    /// a strategy id [`crate::detector_factory`] does not recognise.
+    /// Surfaced verbatim rather than skipping the offending strategy, so a
+    /// misconfigured detector set fails the measured run closed instead of
+    /// silently scoring against fewer detectors than the caller asked for.
+    #[error(transparent)]
+    DetectorBuild(#[from] crate::detector_factory::DetectorFactoryError),
 }
 
 /// Deterministic seam for generating adversarial telemetry without the historical Python runtime.

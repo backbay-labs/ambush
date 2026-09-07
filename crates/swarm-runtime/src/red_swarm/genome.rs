@@ -26,11 +26,21 @@
 //! planner (OPFOR-04): an operator that named a technique the graph does not
 //! contain is rejected with [`RedSwarmError::UnknownTechnique`], not silently
 //! shipped as an unrealisable step.
+//!
+//! [`RedGenome::plan_weighted`] (Phase 290, COEVOLVE-01/-03/-04) is this same
+//! planner with one more input: an optional [`TechniqueWeights`] snapshot that
+//! biases which technique each operator's [`super::operators::choose_distinct`]
+//! draw lands on, toward whatever has evaded detection before. [`RedGenome::plan`]
+//! is exactly `plan_weighted(.., None)` -- not an equivalent implementation kept
+//! in sync by hand, the same call -- so passing no weights reproduces Phase 288's
+//! bytes forever, and passing weights stays just as deterministic: the bias reads
+//! only the existing draw stream, never a second source of entropy.
 
 use super::RedSwarmError;
 use super::graph::{ScenarioRef, TargetGraph};
 use super::operators::{RedOperator, builtin_operators};
 use super::rng::RedGenomeRng;
+use super::weights::TechniqueWeights;
 use serde::{Deserialize, Serialize};
 use swarm_core::pheromone::ThreatClass;
 
@@ -223,20 +233,66 @@ impl RedGenome {
     /// built-in operators (OPFOR-01/04). Pure: identical arguments produce a
     /// byte-identical [`RedPlan`]. Infallible: the built-in operators only ever
     /// name graph techniques, so validation drops nothing.
+    ///
+    /// Exactly [`Self::plan_weighted`] called with `weights: None`, unwrapped
+    /// the same way that function's own dead error arm always has been --
+    /// see there for why this is the same call, not a parallel
+    /// implementation kept in sync by hand.
     pub fn plan(
         seed: u64,
         generation: u32,
         campaign: &CampaignParams,
         graph: &TargetGraph,
     ) -> RedPlan {
-        let operators = builtin_operators(campaign.steps_per_operator);
-        let refs: Vec<&dyn RedOperator> = operators.iter().map(|operator| &**operator).collect();
-        match Self::assemble(&refs, seed, generation, campaign, graph, Validation::Skip) {
+        match Self::plan_weighted(seed, generation, campaign, graph, None) {
             Ok(plan) => plan,
-            // Skip never rejects, so this arm is dead; returning a valid empty
-            // plan rather than reaching for a panic keeps the runtime contract.
+            // The built-in operators only ever name graph techniques, so the
+            // `Validation::Skip` path `plan_weighted` takes never rejects;
+            // this arm is dead. Returning a valid empty plan rather than
+            // reaching for a panic keeps the runtime contract.
             Err(_) => Self::empty_plan(seed, generation, campaign, graph),
         }
+    }
+
+    /// [`Self::plan`], with technique selection optionally biased toward
+    /// techniques a [`TechniqueWeights`] snapshot prices as more likely to
+    /// evade detection (Phase 290, COEVOLVE-01/-03/-04: the red lane's use of
+    /// what [`super::pattern_db::AttackPatternDb`] remembers blue caught).
+    ///
+    /// `weights: None` is not a close approximation of the unweighted
+    /// planner -- every technique choice it makes runs through
+    /// [`super::operators::choose_distinct`]'s uniform arm, the identical
+    /// code Phase 288 shipped, drawing nothing extra from `rng`. So
+    /// `plan_weighted(s, g, c, t, None)` and [`Self::plan`]`(s, g, c, t)`
+    /// produce byte-identical plans for every `(s, g, c, t)`, forever.
+    /// `weights: Some` is exactly as deterministic: identical `(seed,
+    /// generation, campaign, graph, weights)` always plans identical bytes,
+    /// because the bias is a deterministic function of the same draw stream
+    /// the unweighted path uses -- never a new entropy source, never a clock
+    /// (SC 2 / SC 4).
+    ///
+    /// Returns `Err` only via [`Self::plan_with_operators`]'s validation path
+    /// reached through a non-built-in operator set; with the six built-in
+    /// operators (the only ones this entry point uses) every step already
+    /// names a real graph technique, so this always returns `Ok`.
+    pub fn plan_weighted(
+        seed: u64,
+        generation: u32,
+        campaign: &CampaignParams,
+        graph: &TargetGraph,
+        weights: Option<&TechniqueWeights>,
+    ) -> Result<RedPlan, RedSwarmError> {
+        let operators = builtin_operators(campaign.steps_per_operator);
+        let refs: Vec<&dyn RedOperator> = operators.iter().map(|operator| &**operator).collect();
+        Self::assemble(
+            &refs,
+            seed,
+            generation,
+            campaign,
+            graph,
+            Validation::Skip,
+            weights,
+        )
     }
 
     /// Plan with a caller-supplied operator set, validating every step against
@@ -244,6 +300,10 @@ impl RedGenome {
     /// rejected with [`RedSwarmError::UnknownTechnique`] (OPFOR-04). This is the
     /// entry the negative-control test drives with an operator that invents an
     /// id; the built-in [`RedGenome::plan`] cannot reach the error.
+    ///
+    /// Takes no weights of its own (`None` to [`Self::assemble`]): this entry
+    /// exists for operator-set validation tests, not for weighted planning --
+    /// [`Self::plan_weighted`] is the weighted entry point.
     pub fn plan_with_operators(
         operators: &[&dyn RedOperator],
         seed: u64,
@@ -258,6 +318,7 @@ impl RedGenome {
             campaign,
             graph,
             Validation::Reject,
+            None,
         )
     }
 
@@ -270,8 +331,9 @@ impl RedGenome {
 
     /// The shared planning core. Forks a stream per operator (in call order) and
     /// one for jitter, collects each operator's proposal (feeding it the plan so
-    /// far), round-robin interleaves the proposals up to `max_steps`, validates,
-    /// remaps `Chain`/`Cover` references to final indices, and assigns offsets.
+    /// far and the technique weights, if any), round-robin interleaves the
+    /// proposals up to `max_steps`, validates, remaps `Chain`/`Cover` references
+    /// to final indices, and assigns offsets.
     fn assemble(
         operators: &[&dyn RedOperator],
         seed: u64,
@@ -279,6 +341,7 @@ impl RedGenome {
         campaign: &CampaignParams,
         graph: &TargetGraph,
         validation: Validation,
+        weights: Option<&TechniqueWeights>,
     ) -> Result<RedPlan, RedSwarmError> {
         let rng_seed = Self::effective_seed(seed, generation);
         let mut root = RedGenomeRng::from_u64(rng_seed);
@@ -291,7 +354,7 @@ impl RedGenome {
         let mut so_far: Vec<GeneStep> = Vec::new();
         for op in operators {
             let mut child = root.fork(op.role().stream_label());
-            let steps = op.propose_steps(graph, &mut child, &so_far);
+            let steps = op.propose_steps(graph, &mut child, &so_far, weights);
             so_far.extend(steps.iter().cloned());
             proposals.push(steps);
         }
@@ -543,6 +606,7 @@ mod tests {
             _graph: &TargetGraph,
             _rng: &mut RedGenomeRng,
             _so_far: &[GeneStep],
+            _weights: Option<&TechniqueWeights>,
         ) -> Vec<GeneStep> {
             vec![GeneStep {
                 operator: OperatorRole::Recon,
@@ -660,8 +724,8 @@ mod tests {
         let recon = crate::red_swarm::operators::ReconOperator::new(3);
         let auth = crate::red_swarm::operators::AuthOperator::new(3);
         let mut rng = RedGenomeRng::from_u64(1);
-        assert!(recon.propose_steps(&graph, &mut rng, &[]).is_empty());
-        assert!(auth.propose_steps(&graph, &mut rng, &[]).is_empty());
+        assert!(recon.propose_steps(&graph, &mut rng, &[], None).is_empty());
+        assert!(auth.propose_steps(&graph, &mut rng, &[], None).is_empty());
 
         // The whole plan is valid and empty.
         let campaign = campaign(CampaignParams::DEFAULT_MAX_STEPS);
@@ -719,5 +783,95 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The binding invariant: `plan_weighted(.., None)` must reproduce
+    /// [`RedGenome::plan`] byte for byte, over a seed and generation sweep.
+    #[test]
+    fn plan_weighted_with_no_weights_is_byte_identical_to_plan() {
+        let graph = repo_graph();
+        let campaign = campaign(CampaignParams::DEFAULT_MAX_STEPS);
+        for seed in 0..20u64 {
+            for generation in 0..3u32 {
+                let unweighted = RedGenome::plan(seed, generation, &campaign, &graph);
+                let weighted = RedGenome::plan_weighted(seed, generation, &campaign, &graph, None)
+                    .expect("the built-in operators never fail validation");
+                assert_eq!(
+                    serde_json::to_vec(&unweighted).unwrap(),
+                    serde_json::to_vec(&weighted).unwrap(),
+                    "plan_weighted(.., None) diverged from plan(..) at seed {seed} gen {generation}"
+                );
+            }
+        }
+    }
+
+    /// Weighted planning measurably shifts technique selection toward
+    /// whatever a [`TechniqueWeights`] snapshot prices highest, and the
+    /// weighted path is itself fully deterministic.
+    #[test]
+    fn weighted_planning_shifts_selection_toward_a_high_weight_technique() {
+        use crate::red_swarm::pattern_db::{AttackPatternDb, AttackPatternRecord};
+
+        let graph = repo_graph();
+        let campaign = campaign(CampaignParams::DEFAULT_MAX_STEPS);
+        let target = "T1003.001";
+        assert!(
+            graph.is_technique(target),
+            "fixture technique {target} must be a graph node"
+        );
+
+        // Every technique the graph carries gets one recorded observation:
+        // the target always evaded detection, everything else was always
+        // caught. `TechniqueWeights::from_pattern_db` turns that into the
+        // most lopsided snapshot it can produce, so a real shift in
+        // selection should be unmistakable.
+        let mut db = AttackPatternDb::default();
+        for node in graph.techniques() {
+            db.append(AttackPatternRecord {
+                generation: 0,
+                technique: node.id.clone(),
+                detector: "fixture".to_string(),
+                detected: node.id != target,
+            });
+        }
+        let weights = TechniqueWeights::from_pattern_db(&db, &graph);
+        assert_eq!(weights.weight_for(target), 1.0);
+
+        const SEEDS: u64 = 40;
+        let mut unweighted_hits: u32 = 0;
+        let mut weighted_hits: u32 = 0;
+        for seed in 0..SEEDS {
+            let unweighted = RedGenome::plan(seed, 0, &campaign, &graph);
+            if unweighted.steps.iter().any(|step| step.technique == target) {
+                unweighted_hits += 1;
+            }
+            let weighted = RedGenome::plan_weighted(seed, 0, &campaign, &graph, Some(&weights))
+                .expect("the built-in operators never fail validation");
+            if weighted.steps.iter().any(|step| step.technique == target) {
+                weighted_hits += 1;
+            }
+        }
+        assert!(
+            unweighted_hits < u32::try_from(SEEDS).unwrap_or(0),
+            "fixture technique {target} is already selected on every unweighted seed \
+             ({unweighted_hits}/{SEEDS}); pick a target with real competition for its pool"
+        );
+        assert!(
+            weighted_hits > unweighted_hits,
+            "weighting toward {target} did not increase its selection rate: \
+             unweighted {unweighted_hits}/{SEEDS}, weighted {weighted_hits}/{SEEDS}"
+        );
+
+        // And the weighted path is itself deterministic: replanning the same
+        // (seed, generation, campaign, graph, weights) reproduces the same
+        // bytes.
+        let first = RedGenome::plan_weighted(3, 1, &campaign, &graph, Some(&weights))
+            .expect("the built-in operators never fail validation");
+        let second = RedGenome::plan_weighted(3, 1, &campaign, &graph, Some(&weights))
+            .expect("the built-in operators never fail validation");
+        assert_eq!(
+            serde_json::to_vec(&first).unwrap(),
+            serde_json::to_vec(&second).unwrap()
+        );
     }
 }
