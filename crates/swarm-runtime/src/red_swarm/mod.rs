@@ -13,6 +13,14 @@ pub mod campaign;
 mod genome;
 pub mod genome_adapter;
 mod graph;
+// ARMSCI-02 / ARMSCI-03. Rust-side companion to
+// `tools/check-red-swarm-no-execution-authority.sh`. Declared unconditionally
+// like every sibling module here, matching this directory's own convention
+// (`production_code()` in rng.rs's `no_entropy_path_exists_in_the_red_lane`
+// relies on every red_swarm file keeping its tests in a single trailing
+// `#[cfg(test)] mod tests`); the file's own content lives entirely inside
+// such a block, so nothing in it compiles into anything the daemon ships.
+mod isolation_gate;
 mod operators;
 pub mod pattern_db;
 mod rng;
@@ -20,8 +28,8 @@ pub mod scoring;
 pub mod weights;
 
 pub use campaign::{
-    CampaignConfig, CampaignReport, Convergence, GenerationOutcome, RedSwarmCampaign, StopReason,
-    generation_corpus_sequence_id, run_generation,
+    CAMPAIGNS_DIR, CampaignConfig, CampaignReport, Convergence, GenerationOutcome,
+    RedSwarmCampaign, StopReason, generation_corpus_sequence_id, run_generation,
 };
 pub use genome::{
     CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,

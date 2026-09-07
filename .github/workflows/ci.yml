@@ -182,6 +182,16 @@ jobs:
       - name: Check no unrouted authorize_and_execute caller
         run: bash tools/check-no-unrouted-authorize.sh
 
+      # ARMSCI-02. The red lane (`crates/swarm-runtime/src/red_swarm/**`,
+      # `crates/swarm-cli/src/red_swarm_cmd.rs`) generates adversarial
+      # telemetry and scores detectors; it must never grow a path to response
+      # authority. This is a lexical ban on four names -- `execute_response`,
+      # `ResponseAdapter`, `PolicyDecision::Authorize`, `live_response` -- with
+      # its own not-vacuous fixture, same shape as the check above. ARMSCI-03
+      # is its Rust-side companion, `cargo test -p swarm-runtime red_swarm`.
+      - name: Check red-swarm sources hold no response-execution authority
+        run: bash tools/check-red-swarm-no-execution-authority.sh
+
       # Task #15. Three check scripts existed for months and were invoked by no
       # workflow at all, and tools/verify-release-hardening.sh -- which proves
       # the flags that harden the two binaries the container ships -- had never
@@ -768,6 +778,56 @@ jobs:
       - name: Assert the proof surfaces left the working tree clean
         if: always()
         run: bash tools/check-worktree-clean.sh "the proof-surface run"
+
+  # ARMSCI-01 / ARMSCI-05. Runs ONE fixed, bounded `swarmctl red-swarm
+  # campaign` end to end against the real repo catalog/scenario-suites and
+  # compares the `final_blue_catch_rate` the executor persists to
+  # data/red-swarm/campaigns/<campaign>-<seed>.json against the checked-in
+  # floor in rulesets/red-swarm/arms-race-threshold.txt. Nothing else in this
+  # workflow executes the campaign loop at all -- `test` and `clippy` compile
+  # it, and red_swarm_cmd.rs's own tests exercise it only against small
+  # synthetic fixtures -- so this is the only place a real regression in
+  # blue's convergence would ever go red. Wrapped in `timeout` inside the
+  # script itself (ARMSCI-05): a hang fails this job loudly rather than
+  # inflating CI time.
+  red-swarm-arms-race:
+    needs:
+      - changes
+      - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Restore shared target cache
+        uses: actions/cache@v4
+        with:
+          path: target/ci
+          key: cargo-target-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the red-swarm CI arms-race gate against its tracked threshold
+        run: bash tools/check-red-swarm-arms-race.sh
 
   jetstream:
     needs:

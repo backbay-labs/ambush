@@ -887,11 +887,11 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### CI Arms Race Gate And Structural Isolation
 
-- [ ] **ARMSCI-01**: CI runs a bounded campaign and fails the build if `final_blue_catch_rate` regresses below a checked-in threshold; the gate ships in the same phase as its executor.
-- [ ] **ARMSCI-02**: `scripts/check-red-swarm-no-execution-authority.sh` fails if any forbidden symbol (`execute_response`, `ResponseAdapter`, `PolicyDecision::Authorize`, `live_response`) appears in red-swarm sources.
-- [ ] **ARMSCI-03**: A Rust-side companion test performs the same check at `cargo test` time, with a documented counterexample fixture proving the check is not vacuous.
-- [ ] **ARMSCI-04**: `swarmctl evolution status --json` includes a `red_swarm_campaign` object sourced from the on-disk report, reporting `null` rather than a stale value when absent.
-- [ ] **ARMSCI-05**: A wall-clock budget guard fails the CI step loudly rather than silently inflating build time.
+- [x] **ARMSCI-01** (a290a0425): CI runs a bounded campaign and fails the build if `final_blue_catch_rate` regresses below a checked-in threshold; the gate ships in the same phase as its executor.
+- [x] **ARMSCI-02** (236812e28): `scripts/check-red-swarm-no-execution-authority.sh` fails if any forbidden symbol (`execute_response`, `ResponseAdapter`, `PolicyDecision::Authorize`, `live_response`) appears in red-swarm sources.
+- [x] **ARMSCI-03** (236812e28): A Rust-side companion test performs the same check at `cargo test` time, with a documented counterexample fixture proving the check is not vacuous.
+- [x] **ARMSCI-04** (a2966d905): `swarmctl evolution status --json` includes a `red_swarm_campaign` object sourced from the on-disk report, reporting `null` rather than a stale value when absent.
+- [x] **ARMSCI-05** (a290a0425): A wall-clock budget guard fails the CI step loudly rather than silently inflating build time.
 
 ### Machine-Checked Decision Core (v1.81)
 
@@ -1516,11 +1516,11 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | COEVOLVE-02 | Phase 290 | Satisfied |
 | COEVOLVE-03 | Phase 290 | Satisfied |
 | COEVOLVE-04 | Phase 290 | Satisfied |
-| ARMSCI-01 | Phase 291 | Pending |
-| ARMSCI-02 | Phase 291 | Pending |
-| ARMSCI-03 | Phase 291 | Pending |
-| ARMSCI-04 | Phase 291 | Pending |
-| ARMSCI-05 | Phase 291 | Pending |
+| ARMSCI-01 | Phase 291 | Satisfied |
+| ARMSCI-02 | Phase 291 | Satisfied |
+| ARMSCI-03 | Phase 291 | Satisfied |
+| ARMSCI-04 | Phase 291 | Satisfied |
+| ARMSCI-05 | Phase 291 | Satisfied |
 | DCORE-01 | Phase 292 | Pending |
 | DCORE-02 | Phase 292 | Pending |
 | DCORE-03 | Phase 292 | Pending |

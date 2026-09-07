@@ -40,8 +40,10 @@
 //! `campaign` invocations with identical arguments still produce
 //! byte-identical report JSON once `generated_at_ms` is stripped (SC 4;
 //! pinned by this module's own test). `campaign` persists that JSON under
-//! [`DEFAULT_CAMPAIGN_REPORTS_DIR`] and refuses on the same missing-clock
-//! condition as `plan`/`score`.
+//! [`swarm_runtime::red_swarm::CAMPAIGNS_DIR`] -- the single canonical
+//! constant `swarm-runtime`'s `evolution_status::load_red_swarm_campaign_summary`
+//! also reads from, so the write and read paths cannot drift apart -- and
+//! refuses on the same missing-clock condition as `plan`/`score`.
 
 use clap::{Args, Subcommand};
 use serde::Serialize;
@@ -52,8 +54,8 @@ use swarm_runtime::red_swarm::budget::{BudgetOutcome, StealthBudget};
 use swarm_runtime::red_swarm::pattern_db::AttackPatternRecord;
 use swarm_runtime::red_swarm::scoring::{AttackFitness, AttackScorer};
 use swarm_runtime::red_swarm::{
-    CampaignConfig, CampaignParams, CampaignReport, Convergence, Determinism, GeneStep,
-    GenerationOutcome, RedGenome, RedPlan, RedSwarmCampaign, RedSwarmError, StopReason,
+    CAMPAIGNS_DIR, CampaignConfig, CampaignParams, CampaignReport, Convergence, Determinism,
+    GeneStep, GenerationOutcome, RedGenome, RedPlan, RedSwarmCampaign, RedSwarmError, StopReason,
     TargetGraph, generation_corpus_sequence_id,
 };
 
@@ -100,17 +102,6 @@ const DEFAULT_HIGH_CONFIDENCE_THRESHOLD: f64 = 0.9;
 /// `campaign`'s fixed `initial_detection.medium_confidence_threshold`; see
 /// [`DEFAULT_HIGH_CONFIDENCE_THRESHOLD`]'s doc.
 const DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD: f64 = 0.7;
-
-/// The default base directory a persisted campaign report is written under,
-/// repository-relative -- the operator runs swarmctl from the repo root, the
-/// same convention [`DEFAULT_CATALOG`] and [`DEFAULT_SUITES_DIR`] already
-/// rely on. Mirrors every other cwd-relative `data/...` store default in
-/// this codebase (e.g. `data/canaries/`, `data/replay-runs/`); see
-/// [`persist_campaign_report`]'s doc for why this is a plain constant here
-/// rather than a `--output-dir` flag: only [`run_campaign`], the process-exit
-/// shell, ever uses it directly, and a test injects its own temp directory
-/// instead.
-const DEFAULT_CAMPAIGN_REPORTS_DIR: &str = "data/red-swarm/campaigns";
 
 /// `red-swarm <subcommand>`. Mirrors the `evolution` group's Args/Subcommand shape.
 #[derive(Debug, Args)]
@@ -761,7 +752,7 @@ fn build_campaign(args: &RedSwarmCampaignArgs) -> Result<CampaignReportView, Cam
 /// `base_dir` -- injectable so a test can point this at a temp directory
 /// instead of the repo's own `data/` tree (see [`persist_campaign_report`]'s
 /// doc). [`run_campaign`], the only production caller, always passes
-/// [`DEFAULT_CAMPAIGN_REPORTS_DIR`].
+/// [`swarm_runtime::red_swarm::CAMPAIGNS_DIR`].
 fn campaign_report_path(base_dir: &Path, campaign: &str, seed: u64) -> PathBuf {
     base_dir.join(format!("{campaign}-{seed}.json"))
 }
@@ -772,7 +763,7 @@ fn campaign_report_path(base_dir: &Path, campaign: &str, seed: u64) -> PathBuf {
 /// module doc) -- so a test that must never touch the repo's own `data/`
 /// tree calls this directly with a temp directory as `base_dir`, rather
 /// than going through [`run_campaign`] (which always passes
-/// [`DEFAULT_CAMPAIGN_REPORTS_DIR`]).
+/// [`swarm_runtime::red_swarm::CAMPAIGNS_DIR`]).
 fn persist_campaign_report(
     base_dir: &Path,
     view: &CampaignReportView,
@@ -1037,11 +1028,11 @@ fn run_score(args: &RedSwarmScoreArgs, json: bool) -> Result<(), Box<dyn std::er
 /// The `campaign` shell: build the report, and on a missing clock refuse
 /// with exit 1 and [`MISSING_CLOCK_MESSAGE`] -- same as [`run_plan`] and
 /// [`run_score`] (SC 4). Persists the rendered JSON under
-/// [`DEFAULT_CAMPAIGN_REPORTS_DIR`] regardless of `--json` -- persistence
-/// is an unconditional side effect of running a campaign, never gated on
-/// how the report is printed (see the module doc). Other failures,
-/// including [`RedSwarmCampaign::run`]'s own and a persistence I/O
-/// failure, surface as errors through the CLI's normal path.
+/// [`swarm_runtime::red_swarm::CAMPAIGNS_DIR`] regardless of `--json` --
+/// persistence is an unconditional side effect of running a campaign,
+/// never gated on how the report is printed (see the module doc). Other
+/// failures, including [`RedSwarmCampaign::run`]'s own and a persistence
+/// I/O failure, surface as errors through the CLI's normal path.
 fn run_campaign(args: &RedSwarmCampaignArgs, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let view = match build_campaign(args) {
         Ok(view) => view,
@@ -1054,11 +1045,7 @@ fn run_campaign(args: &RedSwarmCampaignArgs, json: bool) -> Result<(), Box<dyn s
         Err(CampaignCommandError::Run(error)) => return Err(error),
     };
     let rendered_json = render_campaign_json(&view)?;
-    persist_campaign_report(
-        Path::new(DEFAULT_CAMPAIGN_REPORTS_DIR),
-        &view,
-        &rendered_json,
-    )?;
+    persist_campaign_report(Path::new(CAMPAIGNS_DIR), &view, &rendered_json)?;
     if json {
         println!("{rendered_json}");
     } else {
@@ -1505,8 +1492,8 @@ mod tests {
     /// pre-created here (beyond the guard itself existing): exercising
     /// [`persist_campaign_report`]'s own `create_dir_all` is part of the
     /// point of these tests, matching the real `campaign` code path
-    /// against [`DEFAULT_CAMPAIGN_REPORTS_DIR`], which also does not exist
-    /// until the first report is persisted.
+    /// against [`swarm_runtime::red_swarm::CAMPAIGNS_DIR`], which also does
+    /// not exist until the first report is persisted.
     fn temp_report_dir(label: &str) -> TempDirFixture {
         TempDirFixture(unique_temp_dir(label))
     }

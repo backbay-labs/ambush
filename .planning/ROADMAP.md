@@ -1172,9 +1172,9 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Executable phases:** 288-291
 
 - [x] **Phase 288: Red Operator Genome And Target Graph** - Six operator roles recombine already-catalogued techniques into deterministic sequences, replacing verbatim suite replay. (OPFOR-01, OPFOR-04)
-- [ ] **Phase 289: Attack Scoring, Stealth Budget And Pattern Memory** - Score plans against the real catch-rate surface, cap noise, and remember per-technique outcomes. (ATKSCORE-01, ATKSCORE-03)
-- [ ] **Phase 290: Bidirectional Co-Evolution And Convergence** - Close the loop against real detector outcomes with a bounded stopping rule. (COEVOLVE-01, COEVOLVE-02)
-- [ ] **Phase 291: CI Arms Race Gate And Structural Isolation** - Wire a real executed gate and enforce that the red lane can never reach response authority. (ARMSCI-01, ARMSCI-02)
+- [x] **Phase 289: Attack Scoring, Stealth Budget And Pattern Memory** - Score plans against the real catch-rate surface, cap noise, and remember per-technique outcomes. (ATKSCORE-01, ATKSCORE-03)
+- [x] **Phase 290: Bidirectional Co-Evolution And Convergence** - Close the loop against real detector outcomes with a bounded stopping rule. (COEVOLVE-01, COEVOLVE-02)
+- [x] **Phase 291: CI Arms Race Gate And Structural Isolation** - Wire a real executed gate and enforce that the red lane can never reach response authority. (ARMSCI-01, ARMSCI-02)
 
 ### Phase 288: Red Operator Genome And Target Graph
 
@@ -1224,13 +1224,13 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Ship an executed gate rather than an attested one, and enforce structurally that the red lane generates telemetry and scores detectors without ever reaching response authority.
 **Requirements:** ARMSCI-01, ARMSCI-02, ARMSCI-03, ARMSCI-04, ARMSCI-05
 **Depends on:** Phase 290
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-07)
+**Plans:** 291-01-PLAN.md
 **Success Criteria**:
-1. CI runs the bounded campaign and fails if final blue catch rate regresses below the checked-in threshold, reading the file the executor actually writes.
-2. The isolation script exits 0 on the real tree and exits 1 against a fixture with an injected response-execution call, proving it is not vacuous.
-3. A Rust-side companion test performs the same check at test time, with a documented counterexample.
-4. `swarmctl evolution status --json` reports the campaign object, and reports null rather than a stale value when the report file is absent; a wall-clock guard fails a runaway campaign loudly.
+1. CI runs the bounded campaign and fails if final blue catch rate regresses below the checked-in threshold, reading the file the executor actually writes. — met: a290a0425, `tools/check-red-swarm-arms-race.sh` (numeric compare vs 0.75; real 0.7778; raised-threshold fails).
+2. The isolation script exits 0 on the real tree and exits 1 against a fixture with an injected response-execution call, proving it is not vacuous. — met: 236812e28, `tools/check-red-swarm-no-execution-authority.sh` (plants each forbidden symbol, asserts the scan catches it).
+3. A Rust-side companion test performs the same check at test time, with a documented counterexample. — met: 236812e28 (+206571055), `red_swarm::isolation_gate` (shared ban list; full-path fixture exclusion).
+4. `swarmctl evolution status --json` reports the campaign object, and reports null rather than a stale value when the report file is absent; a wall-clock guard fails a runaway campaign loudly. — met: a2966d905 (+b9cc8e2c9), `evolution_status::tests::load_red_swarm_campaign_summary_*`; wall-clock guard a290a0425.
 
 ### v1.81 Machine-Checked Decision Core
 
@@ -1892,10 +1892,10 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 | 285. Assumption Registry And Invariant Mapping | v1.79 | 0/TBD | Not started | - |
 | 286. Deterministic Simulation Testing | v1.79 | 0/TBD | Not started | - |
 | 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 0/TBD | Not started | - |
-| 288. Red Operator Genome And Target Graph | v1.80 | 0/TBD | Not started | - |
-| 289. Attack Scoring, Stealth Budget And Pattern Memory | v1.80 | 0/TBD | Not started | - |
-| 290. Bidirectional Co-Evolution And Convergence | v1.80 | 0/TBD | Not started | - |
-| 291. CI Arms Race Gate And Structural Isolation | v1.80 | 0/TBD | Not started | - |
+| 288. Red Operator Genome And Target Graph | v1.80 | 1/1 | Complete | 288-01 |
+| 289. Attack Scoring, Stealth Budget And Pattern Memory | v1.80 | 1/1 | Complete | 289-01 |
+| 290. Bidirectional Co-Evolution And Convergence | v1.80 | 1/1 | Complete | 290-01 |
+| 291. CI Arms Race Gate And Structural Isolation | v1.80 | 1/1 | Complete | 291-01 |
 | 292. Pure Decision Core Extraction | v1.81 | 0/TBD | Not started | - |
 | 293. Kani Bounded Model Checking | v1.81 | 0/TBD | Not started | - |
 | 294. Named Safety Properties And Partition-Lease Model | v1.81 | 0/TBD | Not started | - |
