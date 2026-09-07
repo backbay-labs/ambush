@@ -10,6 +10,7 @@ use swarm_whisker::TelemetryEvent;
 
 pub mod budget;
 mod genome;
+pub mod genome_adapter;
 mod graph;
 mod operators;
 pub mod pattern_db;
@@ -120,6 +121,24 @@ pub enum RedSwarmError {
     PatternStoreIo {
         path: String,
         source: std::io::Error,
+    },
+
+    /// [`genome_adapter::GenomeRedSwarm`] resolves a [`GeneStep`]'s
+    /// [`ScenarioRef`] back to real scenario material by re-reading its own
+    /// `suite_paths` (a [`TargetGraph`] keeps only the lightweight ref, never
+    /// the events -- see that module's doc). Reaching this means either the
+    /// `(suite, scenario)` pair named by the plan is not among those paths, or
+    /// an event index the step named is out of range for the scenario that
+    /// was found. Both are a construction mismatch between the graph a plan
+    /// was drawn against and the suite paths handed to the materializer --
+    /// [`crate::red_swarm::genome::RedGenome::plan`] never emits a step whose
+    /// scenario or indices its own graph does not vouch for, so a
+    /// correctly-paired graph and suite set never reaches this error.
+    #[error("plan step references scenario `{scenario}` in suite `{suite}`: {reason}")]
+    UnresolvedScenario {
+        suite: String,
+        scenario: String,
+        reason: String,
     },
 }
 
