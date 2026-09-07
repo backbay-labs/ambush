@@ -1111,7 +1111,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Executable phases:** 284-287
 
 - [x] **Phase 284: Fixture Determinism And Suite Health** - Regenerate the 161 schema-drifted fixtures, isolate tests from the live repo tree, and stop test runs mutating the working directory. (FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04)
-- [ ] **Phase 285: Assumption Registry And Invariant Mapping** - Build the invariant-to-function-to-assumption map with grep enforcement and a negative-falsifiability registry proving no row is vacuous. (MAPPING-01, FALSIFY-02)
+- [x] **Phase 285: Assumption Registry And Invariant Mapping** - Build the invariant-to-function-to-assumption map with grep enforcement and a negative-falsifiability registry proving no row is vacuous. (MAPPING-01, FALSIFY-02)
 - [ ] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
 - [ ] **Phase 287: Fuzz, Loom, And Supply-Chain Hardening** - Adversarial coverage for the untrusted parse boundaries and concurrent write paths, plus dated and justified dependency policy. (FUZZ-01, LOOM-01, SUPPLY-01)
 
@@ -1133,13 +1133,13 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Convert fail-closed from a README assertion into an auditable table linking each invariant to the exact function enforcing it and the assumption beneath it, with broken variants proving each check actually fires.
 **Requirements:** MAPPING-01, MAPPING-02, MAPPING-03, MAPPING-04, MAPPING-05, FALSIFY-01, FALSIFY-02, FALSIFY-03, FALSIFY-04
 **Depends on:** Phase 284
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-07)
+**Plans:** 285-01-PLAN.md
 **Success Criteria**:
-1. `docs/assurance/assumptions.toml` parses and enumerates at least 8 named assumptions, each with an owner and dependent invariants.
-2. `docs/assurance/MAPPING.md` carries at least 12 invariant rows spanning `swarm-policy`, `swarm-response`, `swarm-runtime`, and `swarm-spine`, each naming an existing `crate::module::function` path.
-3. `scripts/check-mapping.sh` is a required CI step and demonstrably fails against a deliberately unmapped `// INVARIANT:` marker.
-4. Every MAPPING.md row has a `negative_*.rs` test asserting a broken variant permits what the real function denies; `scripts/check-negative-registry.sh` fails on any missing entry.
+1. `docs/assurance/assumptions.toml` parses and enumerates at least 8 named assumptions, each with an owner and dependent invariants. — met: 5c7800644, 8 assumptions (the 8 named IDs), each with `owner` + `dependent_invariants`, parses via `tomllib`.
+2. `docs/assurance/MAPPING.md` carries at least 12 invariant rows spanning `swarm-policy`, `swarm-response`, `swarm-runtime`, and `swarm-spine`, each naming an existing `crate::module::function` path. — met: 5c7800644, 15 rows (policy 3, runtime 5, spine 4, response 3); every `crate::module::function` independently resolved at HEAD.
+3. `scripts/check-mapping.sh` is a required CI step and demonstrably fails against a deliberately unmapped `// INVARIANT:` marker. — met: c4470c860, shipped as `tools/check-mapping.sh` (repo convention; the `scripts/`→`tools/` slip in MAPPING-04/05 ruled in-plan, same as ARMSCI-02), wired into `ci.yml`; three-way marker↔row↔path sync, non-vacuous (planted unmapped marker + stale path both caught).
+4. Every MAPPING.md row has a `negative_*.rs` test asserting a broken variant permits what the real function denies; `scripts/check-negative-registry.sh` fails on any missing entry. — met: 723466010, 15 `negative_*.rs` (each calls the real fn on a denied input plus a local broken variant that permits the identical input); `tools/check-negative-registry.sh` (non-vacuous, self-planted counterexamples), wired. One honest deviation — `SpineEnvelopeCanonicalizationRequired`: a non-finite `f64` is unreachable through the public serde_json (1.0.149) API, so the test falsifies the guard's logic on a bare `f64` and asserts that unreachability so a future serde_json upgrade fails loudly; flagged `status = "deviation"` in the registry.
 
 ### Phase 286: Deterministic Simulation Testing
 
@@ -1889,7 +1889,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 | 282. Crate Extraction From swarm-runtime | v1.78 | 0/6 closed | Code merged 2026-08-13 (0a09358), complete as scoped; all six SPLIT checkboxes still open, remainder re-derived 2026-08-13 (task #14, `.planning/PHASE-282-REMAINDER.md`) | 2026-08-13 |
 | 283. TCB Boundary And Layering Enforcement | v1.78 | 0/TBD | Not started | - |
 | 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |
-| 285. Assumption Registry And Invariant Mapping | v1.79 | 0/TBD | Not started | - |
+| 285. Assumption Registry And Invariant Mapping | v1.79 | 1/1 | Complete | 285-01 |
 | 286. Deterministic Simulation Testing | v1.79 | 0/TBD | Not started | - |
 | 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 0/TBD | Not started | - |
 | 288. Red Operator Genome And Target Graph | v1.80 | 1/1 | Complete | 288-01 |
