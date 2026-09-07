@@ -432,9 +432,11 @@ async fn run_episode(
 /// `Escalate` is not in `StaticApprovalGate::destructive_action`'s list and
 /// is not `DeployDecoy`, so `evaluate` (`crates/swarm-policy/src/static_gate.rs`)
 /// falls through to `static.default_allow` regardless of severity or these
-/// threshold values. Written out explicitly (matching
-/// `PolicyConfig::default()`) so the ground truth is legible in this file
-/// without cross-referencing another crate.
+/// threshold values. Written out explicitly so the ground truth is legible in
+/// this file without cross-referencing another crate. `max_actions_per_scope_per_minute`
+/// is `1_000` — deliberately NOT the crate default of `5` — as headroom: the
+/// `Escalate`/Medium episode never reaches the rate-limit branch, and this leaves
+/// room for a future shared-gate corpus without a per-scope cap biting.
 fn harness_policy_config() -> PolicyConfig {
     PolicyConfig {
         human_gate_severity: Severity::High,
