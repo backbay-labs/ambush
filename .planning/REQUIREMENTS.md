@@ -873,10 +873,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Attack Scoring, Stealth Budget And Pattern Memory
 
-- [ ] **ATKSCORE-01**: `AttackScorer` computes `AttackFitness { evasion_rate, stealth, red_fitness }` from an adversarial sequence and an `EvasionCoverageSnapshot`, where `evasion_rate = 1.0 - detector-weighted catch_rate`.
-- [ ] **ATKSCORE-02**: `StealthBudget` (`max_events_per_generation`, `max_distinct_hosts`, `max_technique_repeats`) deterministically truncates proposed steps once exhausted, so red cannot win by volume.
-- [ ] **ATKSCORE-03**: `AttackPatternDb` is an append-only JSON-lines store recording `{generation, technique, detector, detected}` with `technique_success_rate` biasing later generations.
-- [ ] **ATKSCORE-04**: `swarmctl red-swarm score --json` prints `red_fitness`, `evasion_rate`, `stealth`, and `events_emitted`.
+- [x] **ATKSCORE-01** (a08c010bb): `AttackScorer` computes `AttackFitness { evasion_rate, stealth, red_fitness }` from an adversarial sequence and an `EvasionCoverageSnapshot`, where `evasion_rate = 1.0 - detector-weighted catch_rate`.
+- [x] **ATKSCORE-02** (ad6e48416): `StealthBudget` (`max_events_per_generation`, `max_distinct_hosts`, `max_technique_repeats`) deterministically truncates proposed steps once exhausted, so red cannot win by volume.
+- [x] **ATKSCORE-03** (c1a170539): `AttackPatternDb` is an append-only JSON-lines store recording `{generation, technique, detector, detected}` with `technique_success_rate` biasing later generations.
+- [x] **ATKSCORE-04** (fb719d259): `swarmctl red-swarm score --json` prints `red_fitness`, `evasion_rate`, `stealth`, and `events_emitted`.
 
 #### Bidirectional Co-Evolution And Convergence
 
@@ -1508,10 +1508,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | OPFOR-02 | Phase 288 | Satisfied |
 | OPFOR-03 | Phase 288 | Satisfied |
 | OPFOR-04 | Phase 288 | Satisfied |
-| ATKSCORE-01 | Phase 289 | Pending |
-| ATKSCORE-02 | Phase 289 | Pending |
-| ATKSCORE-03 | Phase 289 | Pending |
-| ATKSCORE-04 | Phase 289 | Pending |
+| ATKSCORE-01 | Phase 289 | Satisfied |
+| ATKSCORE-02 | Phase 289 | Satisfied |
+| ATKSCORE-03 | Phase 289 | Satisfied |
+| ATKSCORE-04 | Phase 289 | Satisfied |
 | COEVOLVE-01 | Phase 290 | Pending |
 | COEVOLVE-02 | Phase 290 | Pending |
 | COEVOLVE-03 | Phase 290 | Pending |

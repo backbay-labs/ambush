@@ -1198,13 +1198,13 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Turn plans into scored, resource-bounded telemetry so red cannot win by volume, and give each generation real memory of what the previous one survived.
 **Requirements:** ATKSCORE-01, ATKSCORE-02, ATKSCORE-03, ATKSCORE-04
 **Depends on:** Phase 288
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-07)
+**Plans:** 289-01-PLAN.md
 **Success Criteria**:
-1. A fully caught plan scores `red_fitness == 0.0`; a plan built only from declared-uncovered techniques scores above 0.5.
-2. A manifest capping events per generation bounds emitted events accordingly, with identical truncation order across runs at the same seed.
-3. The pattern store round-trips: an unrecorded technique returns success rate 1.0, an always-detected technique returns 0.0.
-4. `swarmctl red-swarm score --json` prints `red_fitness`, `evasion_rate`, `stealth`, and `events_emitted` as top-level fields.
+1. A fully caught plan scores `red_fitness == 0.0`; a plan built only from declared-uncovered techniques scores above 0.5. — met: a08c010bb, `red_swarm::scoring::tests::{a_fully_detected_plan_scores_zero_red_fitness, a_fully_uncovered_plan_scores_red_fitness_above_one_half}` (and end-to-end via the score CLI, fb719d259).
+2. A manifest capping events per generation bounds emitted events accordingly, with identical truncation order across runs at the same seed. — met: ad6e48416, `red_swarm::budget::tests` (event-cap bound + deterministic truncation on a truncating fixture).
+3. The pattern store round-trips: an unrecorded technique returns success rate 1.0, an always-detected technique returns 0.0. — met: c1a170539, `red_swarm::pattern_db::tests::{technique_success_rate_*, writing_an_identical_record_sequence_twice_produces_byte_identical_output}`.
+4. `swarmctl red-swarm score --json` prints `red_fitness`, `evasion_rate`, `stealth`, and `events_emitted` as top-level fields. — met: fb719d259, the `red_swarm_cmd` score tests (four top-level finite fields; binary byte-identical across runs).
 
 ### Phase 290: Bidirectional Co-Evolution And Convergence
 
