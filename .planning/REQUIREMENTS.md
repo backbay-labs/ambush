@@ -839,12 +839,19 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Deterministic Simulation Testing
 
-- [x] **DST-01** (761a65bdc): `crates/swarm-runtime/tests/dst_fault_injection.rs` drives the real `SwarmRuntime::authorize_and_execute` (`crates/swarm-runtime/src/lib.rs:753`), a real approval gate, and the real pheromone substrate, with no mocks.
-- [x] **DST-02** (bd9f5b251): Seeded fault injection covers dropping the future mid-poll before dispatch, dropping it after dispatch but before receipt persistence, and closing/reopening the substrate between policy-allow and receipt-persist.
-- [x] **DST-03** (d7d03b868): Three oracles assert receipt-before-action ordering, exact disposition against the deterministic policy verdict, and no double-dispatch per request.
-- [x] **DST-04** (d7d03b868, fb80d8a90): A 64-seed corpus runs on every PR; a >=5,000-seed corpus runs in `.github/workflows/dst-nightly.yml`.
-- [x] **DST-05** (761a65bdc): `SWARM_DST_SEED=<n>` replays one episode's exact fault plan for one-command reproduction.
-- [x] **DST-06** (fb80d8a90): `docs/assurance/MAPPING.md` gains a harness section stating the evidence boundary: single-process, single-substrate-instance, not distributed JetStream failover.
+**Reopened 2026-09-07.** Candidate `1a5c9003b` does not establish these
+requirements; see `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md`.
+The original wording below is retained. "Receipt-before-action" requires a durable
+pre-effect authorization intent; a completion receipt describes a post-effect
+outcome. The former reverse-subset oracle is rejected. All six requirements await
+replacement production-seam evidence under `286-02-PLAN.md`.
+
+- [ ] **DST-01**: `crates/swarm-runtime/tests/dst_fault_injection.rs` drives the real `SwarmRuntime::authorize_and_execute` (`crates/swarm-runtime/src/lib.rs:753`), a real approval gate, and the real pheromone substrate, with no mocks.
+- [ ] **DST-02**: Seeded fault injection covers dropping the future mid-poll before dispatch, dropping it after dispatch but before receipt persistence, and closing/reopening the substrate between policy-allow and receipt-persist.
+- [ ] **DST-03**: Three oracles assert receipt-before-action ordering, exact disposition against the deterministic policy verdict, and no double-dispatch per request.
+- [ ] **DST-04**: A 64-seed corpus runs on every PR; a >=5,000-seed corpus runs in `.github/workflows/dst-nightly.yml`.
+- [ ] **DST-05**: `SWARM_DST_SEED=<n>` replays one episode's exact fault plan for one-command reproduction.
+- [ ] **DST-06**: `docs/assurance/MAPPING.md` gains a harness section stating the evidence boundary: single-process, single-substrate-instance, not distributed JetStream failover.
 
 #### Fuzz And Loom Coverage
 
@@ -1488,12 +1495,12 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | FALSIFY-02 | Phase 285 | Satisfied |
 | FALSIFY-03 | Phase 285 | Satisfied |
 | FALSIFY-04 | Phase 285 | Satisfied |
-| DST-01 | Phase 286 | Satisfied |
-| DST-02 | Phase 286 | Satisfied |
-| DST-03 | Phase 286 | Satisfied |
-| DST-04 | Phase 286 | Satisfied |
-| DST-05 | Phase 286 | Satisfied |
-| DST-06 | Phase 286 | Satisfied |
+| DST-01 | Phase 286 | Reopened — candidate 1a5c9003b rejected; repair unverified |
+| DST-02 | Phase 286 | Reopened — candidate 1a5c9003b rejected; repair unverified |
+| DST-03 | Phase 286 | Reopened — candidate 1a5c9003b rejected; repair unverified |
+| DST-04 | Phase 286 | Reopened — candidate 1a5c9003b rejected; repair unverified |
+| DST-05 | Phase 286 | Reopened — candidate 1a5c9003b rejected; repair unverified |
+| DST-06 | Phase 286 | Reopened — candidate 1a5c9003b rejected; repair unverified |
 | FUZZ-01 | Phase 287 | Pending |
 | FUZZ-02 | Phase 287 | Pending |
 | FUZZ-03 | Phase 287 | Pending |
@@ -1683,7 +1690,7 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 - v1.77 complete: 9 requirements satisfied across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
 - v1.78 in progress: 17 requirements across phases 280-283 (GATEFIX-01-04 Satisfied 2026-08-11; TCBOUND-01-04 Satisfied 2026-08-13) (GATEFIX-01-04 -> Phase 280; INCFIX-01-03 -> Phase 281; SPLIT-01-06 -> Phase 282; TCBOUND-01-04 -> Phase 283)
 - v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
-- v1.79 queued: 25 requirements across phases 284-287 (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
+- v1.79 in progress: 29 requirements across phases 284-287; Phase 286 reopened, DST-01..06 unverified (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
 - v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)

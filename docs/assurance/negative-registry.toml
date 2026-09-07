@@ -1,8 +1,9 @@
 # The negative-falsifiability registry (Phase 285, v1.79 assurance floor,
-# Task 3: FALSIFY-01).
+# Task 3: FALSIFY-01; extended for Phase 286 dispatch invariants).
 #
-# `docs/assurance/MAPPING.md` names 15 fail-closed invariants and points at
-# the positive test that already exercises each one. A positive test that
+# `docs/assurance/MAPPING.md` names 17 fail-closed invariants. The two new
+# dispatch entries share one test file; compiling/executing these tests and
+# accepting Phase 286 remain separate gates. A positive test that
 # passes proves the real function's behaviour matches the assertion -- it
 # does NOT prove the assertion would have caught a REGRESSION, because a
 # check that always passes (e.g. a no-op stub standing in for a real guard)
@@ -123,3 +124,15 @@ crate = "swarm-response"
 test_file = "crates/swarm-response/tests/negative_response_crowdstrike_rtr_base_url_required.rs"
 test_fn = "negative_response_crowdstrike_rtr_base_url_required"
 target = "swarm_response::crowdstrike_rtr::CrowdStrikeRtrAdapter::new"
+
+[negative.RuntimeDispatchIntentRequired]
+crate = "swarm-runtime"
+test_file = "crates/swarm-runtime/tests/negative_runtime_dispatch.rs"
+test_fn = "negative_runtime_dispatch_intent_required"
+target = "swarm_runtime::dispatch::SwarmRuntime::dispatch_once"
+
+[negative.RuntimeDispatchIdentityConsumedOnce]
+crate = "swarm-runtime"
+test_file = "crates/swarm-runtime/tests/negative_runtime_dispatch.rs"
+test_fn = "negative_runtime_dispatch_identity_consumed_once"
+target = "swarm_runtime::dispatch_journal::DispatchJournal::reserve"

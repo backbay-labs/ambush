@@ -1,13 +1,8 @@
-# DST-04 (nightly half). The deterministic-simulation harness
-# (crates/swarm-runtime/tests/dst_fault_injection.rs) proves receipt-before-action,
-# exact-disposition, and no-double-dispatch hold under injected crash/scheduling
-# faults over the REAL SwarmRuntime::authorize_and_execute, gate, and substrate.
-# The PR lane (ci.yml's `test` job) runs the 64-seed corpus on every push/PR; THIS
-# workflow runs the >= 5,000-seed deep corpus -- too slow for the PR lane, but the
-# scale at which a rare oracle-violating seed the 64-seed lane never reached would
-# surface. The deep-corpus test is `#[ignore]`d so it never runs in the PR lane;
-# on any violation it fails NAMING the exact seed, reproducible in isolation with
-# `SWARM_DST_SEED=<n> cargo test -p swarm-runtime --test dst_fault_injection`.
+# DST-04 nightly corpus: seeded schedules over the real runtime, persisted
+# authorization intent, real local-journal substrate and restart/redelivery.
+# An intent precedes the external effect; completion is a separate later fact.
+# The ordinary test lane runs 64 seeds. This job exercises 5,000 varied seeds.
+# Every oracle failure names a seed for SWARM_DST_SEED=<n> replay.
 name: DST Nightly
 
 on:
@@ -27,9 +22,7 @@ jobs:
   dst-nightly:
     name: DST deep corpus (>= 5000 seeds)
     runs-on: ubuntu-latest
-    # Generous headroom for a cold build plus the 5,000-seed run; the corpus
-    # itself is fast (each episode is a handful of synchronous in-memory polls),
-    # so this bounds a hang, not the expected duration.
+    # Bound the cold build and durable filesystem fault/recovery corpus.
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -59,4 +52,4 @@ jobs:
       # single-threaded deterministic executor regardless. A violation fails the
       # step loudly, naming the seed for one-command reproduction.
       - name: Run the DST deep corpus (>= 5000 seeds)
-        run: cargo test -p swarm-runtime --test dst_fault_injection -- --ignored --test-threads=1
+        run: cargo test --locked -p swarm-runtime --test dst_fault_injection -- --ignored --test-threads=1

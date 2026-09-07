@@ -345,6 +345,15 @@ fn temp_jsonl_path(label: &str) -> String {
         .to_string()
 }
 
+/// Each enforced dispatch fixture owns a fresh, durable journal namespace.
+fn test_dispatch_journal() -> Arc<swarm_runtime::dispatch_journal::DispatchJournal> {
+    let path = std::env::temp_dir().join(format!(
+        "swarm-runtime-dispatch-journal-{}",
+        uuid::Uuid::new_v4()
+    ));
+    Arc::new(swarm_runtime::dispatch_journal::DispatchJournal::open(path).unwrap())
+}
+
 fn sample_config() -> Result<SwarmConfig, Box<dyn Error>> {
     Ok(load_config(repo_config_path())?)
 }
@@ -929,7 +938,8 @@ async fn timeout_from_dispatched_webhook_records_failure() -> Result<(), Box<dyn
             },
             None,
         )?,
-    );
+    )
+    .with_dispatch_journal(test_dispatch_journal());
     let request = sample_request(
         ResponseAction::DeployDecoy {
             decoy_type: "honeypot".to_string(),
@@ -960,7 +970,8 @@ async fn expanded_response_action_routes_through_runtime_executor() -> Result<()
         RuntimeMode::LiveResponse,
         StaticApprovalGate::default(),
         DispatchingExecutor::from_config(ResponseAdapterConfig::Sandbox, None)?,
-    );
+    )
+    .with_dispatch_journal(test_dispatch_journal());
     let request = sample_request(
         ResponseAction::TriggerEdrScan {
             host_id: "host-22".to_string(),
@@ -1003,6 +1014,7 @@ async fn unsupported_webhook_action_fails_closed_in_runtime_audit() -> Result<()
             None,
         )?,
     )
+    .with_dispatch_journal(test_dispatch_journal())
     // `terminate_user_session` is a containment, and an enforced containment
     // with no lease store is now refused BEFORE the adapter is reached. This
     // test is about the ADAPTER's unsupported-action refusal, so the lease store
@@ -1042,11 +1054,11 @@ async fn request_response_routes_through_authorize_and_execute() -> Result<(), B
     let executor = RecordingExecutor::default();
     let guard_calls = Arc::new(AtomicUsize::new(0));
     let runtime = Arc::new(
-        SwarmRuntime::new(RuntimeMode::LiveResponse, gate, executor.clone()).with_guard_pipeline(
-            GuardPipeline::new(vec![Box::new(CountingGuard {
+        SwarmRuntime::new(RuntimeMode::LiveResponse, gate, executor.clone())
+            .with_dispatch_journal(test_dispatch_journal())
+            .with_guard_pipeline(GuardPipeline::new(vec![Box::new(CountingGuard {
                 calls: Arc::clone(&guard_calls),
-            })]),
-        ),
+            })])),
     );
     let audits = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(RuntimeBackedRouter::new(
@@ -1097,11 +1109,10 @@ async fn request_response_routes_through_authorize_and_execute() -> Result<(), B
 async fn destructive_request_response_persists_governance_receipt() -> Result<(), Box<dyn Error>> {
     let (gate, _evaluate_calls, _issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
     let executor = RecordingExecutor::default();
-    let runtime = Arc::new(SwarmRuntime::new(
-        RuntimeMode::LiveResponse,
-        gate,
-        executor.clone(),
-    ));
+    let runtime = Arc::new(
+        SwarmRuntime::new(RuntimeMode::LiveResponse, gate, executor.clone())
+            .with_dispatch_journal(test_dispatch_journal()),
+    );
     let audits = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(RuntimeBackedRouter::new(
         Arc::clone(&runtime),
@@ -1221,11 +1232,10 @@ async fn partitioned_request_response_redeems_contingency_lease() -> Result<(), 
 
     let (gate, evaluate_calls, issue_lease_calls) = CountingApprovalGate::allow_with_ttl(60_000);
     let executor = RecordingExecutor::default();
-    let runtime = Arc::new(SwarmRuntime::new(
-        RuntimeMode::LiveResponse,
-        gate,
-        executor.clone(),
-    ));
+    let runtime = Arc::new(
+        SwarmRuntime::new(RuntimeMode::LiveResponse, gate, executor.clone())
+            .with_dispatch_journal(test_dispatch_journal()),
+    );
     let audits = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(RuntimeBackedRouter::new(
         Arc::clone(&runtime),

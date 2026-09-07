@@ -153,7 +153,8 @@
                 RuntimeMode::LiveResponse,
                 StaticApprovalGate::default(),
                 SandboxExecutor,
-            ),
+            )
+            .with_dispatch_journal(service_dispatch_journal()),
         );
         let detector = SuspiciousProcessTreeDetector::default();
         let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
@@ -396,7 +397,8 @@
                 RuntimeMode::LiveResponse,
                 StaticApprovalGate::default(),
                 SandboxExecutor,
-            ),
+            )
+            .with_dispatch_journal(service_dispatch_journal()),
         );
         let detector = SuspiciousProcessTreeDetector::default();
         let substrate = InMemoryPheromoneSubstrate::new(service.config.pheromone.clone());
@@ -603,12 +605,16 @@
 
     #[tokio::test]
     async fn configured_runtime_stack_builds_async_layers_from_config() {
+        let audit_directory = std::env::temp_dir()
+            .join(format!("swarm-service-stack-audit-{}", uuid::Uuid::new_v4()));
         let mut config = service_config(
             RuntimeMode::LiveResponse,
             PheromoneBackendConfig::InMemory,
             false,
         );
-        config.audit.bundle_store = BundleStoreConfig::Memory;
+        config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+            directory: audit_directory.display().to_string(),
+        };
         config.investigation = InvestigationConfig {
             enabled: true,
             worker_count: 1,
@@ -717,4 +723,6 @@
             report.freshness.latest_incident_at_ms,
             Some(incident.record.created_at_ms)
         );
+        drop(stack);
+        std::fs::remove_dir_all(audit_directory).unwrap();
     }

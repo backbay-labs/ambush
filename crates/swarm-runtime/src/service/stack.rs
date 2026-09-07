@@ -1,4 +1,6 @@
 use super::*;
+use crate::dispatch_journal::DispatchJournal;
+use swarm_core::config::BundleStoreConfig;
 
 impl<P, E, Strategy> ConfiguredRuntimeStack<P, E, Strategy>
 where
@@ -8,6 +10,58 @@ where
 {
     /// Build the runtime composition root directly from repository-owned config.
     pub fn from_runtime(
+        config: SwarmConfig,
+        mut runtime: SwarmRuntime<P, E>,
+        strategy: Strategy,
+    ) -> Result<Self, ServiceError> {
+        match &config.audit.bundle_store {
+            BundleStoreConfig::LocalFiles { directory } => {
+                if directory.trim().is_empty() {
+                    return Err(RuntimeError::DispatchRefused {
+                        reason: "durable audit storage directory must not be empty".to_string(),
+                    }
+                    .into());
+                }
+                let directory = Path::new(directory).join(".dispatch-journal");
+                if let Some(journal) = runtime.dispatch_journal() {
+                    let configured_directory = fs::canonicalize(&directory).map_err(|error| {
+                        RuntimeError::DispatchRefused {
+                            reason: format!(
+                                "cannot verify configured dispatch journal directory: {error}"
+                            ),
+                        }
+                    })?;
+                    if journal.directory() != configured_directory {
+                        return Err(RuntimeError::DispatchRefused {
+                            reason: "supplied dispatch journal differs from configured durable audit storage"
+                                .to_string(),
+                        }
+                        .into());
+                    }
+                } else {
+                    // Open durable state in detect-only mode too, so later mode
+                    // changes keep the same dispatch identity history and writer.
+                    let journal =
+                        DispatchJournal::open(&directory).map_err(RuntimeError::DispatchJournal)?;
+                    runtime = runtime.with_dispatch_journal(Arc::new(journal));
+                }
+            }
+            BundleStoreConfig::Memory
+                if config.runtime.mode == RuntimeMode::LiveResponse
+                    || runtime.mode() == RuntimeMode::LiveResponse =>
+            {
+                return Err(RuntimeError::DispatchRefused {
+                    reason: "live response requires durable local audit storage for dispatch state"
+                        .to_string(),
+                }
+                .into());
+            }
+            BundleStoreConfig::Memory => {}
+        }
+        Self::assemble(config, runtime, strategy)
+    }
+
+    fn assemble(
         config: SwarmConfig,
         runtime: SwarmRuntime<P, E>,
         strategy: Strategy,
@@ -53,6 +107,16 @@ where
         response: E,
         strategy: Strategy,
     ) -> Result<Self, ServiceError> {
+        Self::from_components_with_dispatch_journal(config, policy, response, strategy, None)
+    }
+
+    fn from_components_with_dispatch_journal(
+        config: SwarmConfig,
+        policy: P,
+        response: E,
+        strategy: Strategy,
+        dispatch_journal: Option<Arc<DispatchJournal>>,
+    ) -> Result<Self, ServiceError> {
         let mode = config.runtime.mode;
         let (containment_store, containment_ttl) =
             crate::containment::containment_binding_from_config(&config.runtime.containment)
@@ -62,12 +126,12 @@ where
                         reason: error.to_string(),
                     })
                 })?;
-        Self::from_runtime(
-            config,
-            SwarmRuntime::new(mode, policy, response)
-                .with_containment_store(containment_store, containment_ttl),
-            strategy,
-        )
+        let mut runtime = SwarmRuntime::new(mode, policy, response)
+            .with_containment_store(containment_store, containment_ttl);
+        if let Some(journal) = dispatch_journal {
+            runtime = runtime.with_dispatch_journal(journal);
+        }
+        Self::from_runtime(config, runtime, strategy)
     }
 
     /// Run the critical path, persist the replay bundle, and queue async investigation.
@@ -234,12 +298,52 @@ where
 {
     /// Build the runtime stack from repository config using the configured response adapter.
     pub fn from_config(config: SwarmConfig, strategy: Strategy) -> Result<Self, ServiceError> {
+        Self::from_config_with_dispatch_journal(config, strategy, None)
+    }
+
+    /// Open operator status, artifact, and rehearsal services without claiming a
+    /// dispatch writer. This can coexist with the daemon's configured stack.
+    ///
+    /// The runtime retains its configured mode for truthful status reporting, but
+    /// has no dispatch journal or containment writer. Enforced response attempts
+    /// therefore fail closed; only the configured production constructors may
+    /// acquire permission to dispatch. Notification and policy-store operations
+    /// remain available through their separate operator control services.
+    pub fn for_operator_view(
+        config: SwarmConfig,
+        strategy: Strategy,
+    ) -> Result<Self, ServiceError> {
         let response = DispatchingExecutor::from_config(
             config.response_adapter.clone(),
             config.runtime.max_dead_letter_bytes,
         )
         .map_err(|error| ServiceError::Runtime(crate::RuntimeError::Response(error)))?;
         let gate = ConfigurableApprovalGate::from_config(&config.policy);
-        Self::from_components(config, gate, response, strategy)
+        let runtime = SwarmRuntime::new(config.runtime.mode, gate, response);
+        Self::assemble(config, runtime, strategy)
+    }
+
+    /// Rebuild a configured stack while retaining its durable dispatch writer.
+    ///
+    /// Reload callers must pass the existing journal while older runtime snapshots
+    /// remain alive. Its storage location must match the configured audit store.
+    pub fn from_config_with_dispatch_journal(
+        config: SwarmConfig,
+        strategy: Strategy,
+        dispatch_journal: Option<Arc<DispatchJournal>>,
+    ) -> Result<Self, ServiceError> {
+        let response = DispatchingExecutor::from_config(
+            config.response_adapter.clone(),
+            config.runtime.max_dead_letter_bytes,
+        )
+        .map_err(|error| ServiceError::Runtime(crate::RuntimeError::Response(error)))?;
+        let gate = ConfigurableApprovalGate::from_config(&config.policy);
+        Self::from_components_with_dispatch_journal(
+            config,
+            gate,
+            response,
+            strategy,
+            dispatch_journal,
+        )
     }
 }

@@ -23,6 +23,8 @@ the line number — is the authoritative, drift-proof locator (grep the
 | `PolicyHumanGateOnDestructiveAction` | swarm-policy | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `crates/swarm-policy/src/static_gate.rs:268,295-300` | `ASSUME-OS-CLOCK` | Unconditional automatic execution of a destructive action (`block_egress`, `isolate_host`, `kill_process`, ...) at or above the configured human-gate severity -- returns `RequireHuman` rather than `Allow`. |
 | `PolicyScopeRateLimitDeniesBurst` | swarm-policy | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `crates/swarm-policy/src/static_gate.rs:209-229,291-293` | `ASSUME-OS-CLOCK` | An action whose target scope has already issued `max_actions_per_scope_per_minute` actions within the trailing 60 seconds of wall-clock time. |
 | `RuntimeRequireHumanBlocksLiveExecution` | swarm-runtime | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `crates/swarm-runtime/src/lib.rs:972,993-995` | `ASSUME-OS-CLOCK` | Executing a request whose policy verdict is `RequireHuman` while the runtime is running in `RuntimeMode::LiveResponse` -- no destructive action auto-executes live without a human-approved path. |
+| `RuntimeDispatchIntentRequired` | swarm-runtime | `swarm_runtime::dispatch::SwarmRuntime::dispatch_once` | `crates/swarm-runtime/src/dispatch.rs:35` | `ASSUME-DISPATCH-DURABILITY` | An enforced adapter invocation without a configured durable dispatch journal and successfully persisted authorization intent; dry-run does not consume live dispatch permission. |
+| `RuntimeDispatchIdentityConsumedOnce` | swarm-runtime | `swarm_runtime::dispatch_journal::DispatchJournal::reserve` | `crates/swarm-runtime/src/dispatch_journal.rs:285` | `ASSUME-DISPATCH-DURABILITY` | Reusing an already reserved requester/action/hunt identity, regardless of completion or changed request content; no reservation is evicted to permit retransmission. |
 | `RuntimeLeaseMustBeActive` | swarm-runtime | `swarm_runtime::ensure_active_lease` | `crates/swarm-runtime/src/lib.rs:1416-1426` | `ASSUME-OS-CLOCK` | Executing a response through a `CapabilityLease` whose `expires_at_ms` has already passed. |
 | `RuntimeContinuityProofSignatureInvalid` | swarm-runtime | `swarm_runtime::agent_identity::verify_continuity_proof` | `crates/swarm-runtime/src/agent_identity.rs:544-589` | `ASSUME-ED25519` | An agent-identity rotation continuity proof whose signature does not verify against the claimed previous ed25519 public key, or whose key/signature hex is malformed or mis-sized. |
 | `RuntimeIdentityDerivedIdMismatch` | swarm-runtime | `swarm_runtime::agent_identity::FileAgentIdentityRegistry::admit_persisted_identity` | `crates/swarm-runtime/src/agent_identity.rs:337-354` | `ASSUME-ED25519` | Admitting a persisted agent identity whose claimed `AgentId` does not equal the ID derived from its own ed25519 signing key's public key. |
@@ -35,45 +37,59 @@ the line number — is the authoritative, drift-proof locator (grep the
 | `ResponseHttpEdrEndpointRequired` | swarm-response | `swarm_response::http_edr::HttpEdrAdapter::new` | `crates/swarm-response/src/http_edr.rs:23-28` | `ASSUME-NETWORK-TRANSPORT` | Constructing (and thereby ever dispatching through) an HTTP EDR adapter whose configured endpoint URL is empty or whitespace-only. |
 | `ResponseCrowdStrikeRtrBaseUrlRequired` | swarm-response | `swarm_response::crowdstrike_rtr::CrowdStrikeRtrAdapter::new` | `crates/swarm-response/src/crowdstrike_rtr.rs:35-40` | `ASSUME-NETWORK-TRANSPORT` | Constructing a CrowdStrike RTR adapter whose configured `base_url` is empty or whitespace-only. |
 
-15 rows: 3 `swarm-policy`, 5 `swarm-runtime`, 4 `swarm-spine`, 3
+17 rows: 3 `swarm-policy`, 7 `swarm-runtime`, 4 `swarm-spine`, 3
 `swarm-response`.
 
 ## Deterministic-simulation harness (DST, phase 286)
 
-`crates/swarm-runtime/tests/dst_fault_injection.rs` is a seeded, deterministic
-fault-injection harness that drives the REAL
-`swarm_runtime::SwarmRuntime::authorize_and_execute`, a real `StaticApprovalGate`,
-and a real `InMemoryPheromoneSubstrate` -- no mocks -- through a hand-rolled
-single-threaded executor (no wall clock, no OS entropy, no tokio). Each seed
-replays an exact fault plan (`SWARM_DST_SEED=<n>`); the 64-seed corpus runs on
-every PR (`.github/workflows/ci.yml`'s `test` job), the >= 5,000-seed deep corpus
-nightly (`.github/workflows/dst-nightly.yml`). Three oracles hold across every seed
-and all four fault classes: **receipt-before-action** (no receipt is ever persisted
-without a distinct, preceding real dispatch it faithfully identifies -- no phantom
-or duplicated audit record), **exact disposition** (the outcome equals the
-deterministic gate verdict), and **no double-dispatch** (a request's action
-executes at most once).
+**Status: reopened / assurance not established, 2026-09-07.** Candidate
+`1a5c9003b` was rejected; its green seed counts do not prove the phase's safety
+properties. See `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md`
+and `286-02-PLAN.md` for the evidence and replacement acceptance contract.
 
-**Evidence boundary.** This harness proves those properties for a **single
-process** against a **single substrate instance** under in-process, mid-operation
-crash and scheduling faults -- future-drop before dispatch, future-drop after
-dispatch but before receipt-persist, and substrate close/reopen between policy-allow
-and persist. It does **not** cover distributed JetStream failover, multi-substrate
-replication, or cross-node consensus; those are out of this harness's scope by
-construction.
+The former harness checked that persisted receipt identities appeared among
+observed dispatches. That reverse subset accepts an effect with no durable prior
+record. Its dropped-episode disposition check could miss forbidden effects, its
+at-most-once check omitted restart/redelivery, its seeds collapsed to four
+effective schedules, and its reopen operation swapped in an empty in-memory
+substrate. Those are missing proof obligations, not accepted evidence boundaries.
 
-**What the engine does and does not guarantee (the load-bearing honesty).**
-`authorize_and_execute` dispatches the response and returns the receipt; it writes
-NOTHING to a substrate, and there is no atomic journal binding the dispatch to a
-persisted receipt -- persistence is the caller's responsibility (the harness
-performs its own real substrate write to model a correct caller). Consequently the
-future-drop-after-dispatch-before-persist fault class legitimately ends with an
-action dispatched and no receipt persisted: that action-without-receipt gap is the
-evidence boundary named here, NOT an oracle violation. The receipt-before-action
-oracle therefore asserts only the SAFE, always-held direction (no false or
-duplicated audit record), which is what the engine actually upholds. The harness's
-"receipt persist" repurposes `PheromoneSubstrate::deposit` (a real, signed substrate
-write) as its persistence step: pheromone deposits are domain-modeled as threat
-indicators, not response receipts, so this is a harness convention exercising the
-real substrate, not a claim that a literal production receipt-persistence path
-exists today.
+**Required production ordering.** Both `SwarmRuntime::authorize_and_execute` and
+`audit_authorize_and_execute_instrumented_internal` must durably reserve the
+immutable request identity and authorization intent before a live effect. The
+runtime's audit wrappers route through the latter entry. Completion receipts
+record observed post-effect outcomes. An authorization intent does not claim
+completion, and an unresolved result never permits automatic redispatch.
+Production composition must bind a bounded, fsynced, exclusive-writer journal to
+the configured audit directory and preserve the store across runtime reload.
+Corruption, conflicting identity reuse, unavailable storage and exhausted capacity
+must close dispatch. Internal effectful retries must not bypass the reservation.
+These are repair requirements; this section does not yet claim they are verified.
+
+**Three required oracles.** Every observed effect must have a matching durable
+prior intent; the deterministic policy's forbidden outcomes must produce no
+effects even if the caller's future is dropped; and each immutable request
+identity must produce at most one effect over crash/reopen/redelivery histories.
+Completion receipts must describe only observed outcomes. A crash can leave an
+unresolved durable intent, which is reported as uncertainty rather than falsely
+reported completion. The journal is unsigned and OS-protected; existing signed
+audit artifacts remain separate and require their own verification.
+
+**Harness and controls required for acceptance.** The replacement must drive real
+runtime and gate entry points, a real sandbox effect adapter and a persistent
+local-journal pheromone substrate. It must reopen the same storage, redeliver
+requests, vary effective fault schedules, report the failing seed and support
+`SWARM_DST_SEED=<n>` replay. The ordinary PR lane must run 64 seeds and
+`.github/workflows/dst-nightly.yml` must run at least 5,000; distinct seed labels
+alone do not establish distinct schedules. Production-source mutation controls
+must make the normal harness reject effect-before-intent, duplicate dispatch and
+forbidden effects after cancellation. No repaired corpus or mutation control is
+declared passed here; terminal evidence and immutable tree identity belong in
+the phase review before closure.
+
+**Evidence boundary.** The intended scope is single-host/process recovery over
+one logical local persistent substrate, including closing and reopening that
+same storage. Cancellation by future drop is not itself evidence of child-process
+termination. Distributed JetStream failover, cross-node consensus, external
+adapter exactly-once semantics, privileged filesystem tampering and durability
+beyond the OS/filesystem fsync contract are not established by this harness.

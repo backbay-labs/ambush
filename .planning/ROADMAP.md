@@ -1112,7 +1112,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 
 - [x] **Phase 284: Fixture Determinism And Suite Health** - Regenerate the 161 schema-drifted fixtures, isolate tests from the live repo tree, and stop test runs mutating the working directory. (FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04)
 - [x] **Phase 285: Assumption Registry And Invariant Mapping** - Build the invariant-to-function-to-assumption map with grep enforcement and a negative-falsifiability registry proving no row is vacuous. (MAPPING-01, FALSIFY-02)
-- [x] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
+- [ ] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
 - [ ] **Phase 287: Fuzz, Loom, And Supply-Chain Hardening** - Adversarial coverage for the untrusted parse boundaries and concurrent write paths, plus dated and justified dependency policy. (FUZZ-01, LOOM-01, SUPPLY-01)
 
 ### Phase 284: Fixture Determinism And Suite Health
@@ -1143,16 +1143,23 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 
 ### Phase 286: Deterministic Simulation Testing
 
-**Goal:** Prove receipt-before-action ordering and no-double-dispatch hold under adversarial scheduling and mid-operation crashes, not only on the happy path.
+**Goal:** Prove durable authorization-before-effect ordering and no-double-dispatch under adversarial scheduling, cancellation and crash/recovery. A pre-effect dispatch intent records authorization; a completion receipt records an observed post-effect outcome.
 **Requirements:** DST-01, DST-02, DST-03, DST-04, DST-05, DST-06
 **Depends on:** Phase 285
-**Status:** Complete (2026-09-07)
-**Plans:** 286-01-PLAN.md
+**Status:** IN PROGRESS / REOPENED (2026-09-07); candidate `1a5c9003b` rejected, replacement unverified.
+**Plans:** `286-01-PLAN.md` (superseded/rejected), `286-02-PLAN.md` (active repair).
+**Review:** `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md`.
 **Success Criteria**:
-1. The harness drives the real `SwarmRuntime::authorize_and_execute`, a real approval gate, and the real substrate, with no mocks. — met: 761a65bdc, `crates/swarm-runtime/tests/dst_fault_injection.rs` drives the real `authorize_and_execute` (at `lib.rs:972`; DST-01's `:753` was stale), a real `StaticApprovalGate`, and a real `InMemoryPheromoneSubstrate` through a hand-rolled deterministic single-thread executor (no wall clock/entropy/tokio).
-2. At least three fault classes are injected: future-drop before dispatch, future-drop after dispatch but before receipt persistence, and substrate close/reopen between policy-allow and receipt-persist. — met: bd9f5b251, all three fire at REAL boundaries (the adapter's async dispatch checkpoint pins the poll budget by construction, not coincidence).
-3. A 64-seed corpus runs on every PR and a 5,000-seed corpus nightly, naming the failing seed on any oracle violation. — met: d7d03b868 (64-seed PR corpus + three oracles, each proven non-vacuous; Oracle 1 = multiset-containment receipt-before-action) + fb80d8a90 (`.github/workflows/dst-nightly.yml`, the 5,000-seed deep corpus, verified green across all four fault classes in 3.54s).
-4. `SWARM_DST_SEED=<n>` reproduces one episode's exact fault plan, and MAPPING.md states the evidence boundary as single-process and single-substrate-instance. — met: 761a65bdc (`SWARM_DST_SEED` replay) + fb80d8a90 (MAPPING.md DST harness section: single-process, single-substrate-instance, NOT distributed JetStream failover; and the no-journal honesty — class (b)'s action-without-receipt is the named boundary, not an oracle failure).
+1. The harness drives real runtime, gate, sandbox effect and persistent substrate paths. Both production runtime authorization entry sites require the same durable intent journal, and composition/reload preserve reservations. **Open; no replacement acceptance evidence recorded.**
+2. Inject future-drop before dispatch, future-drop after effect but before completion publication, and persistent-substrate close/reopen between policy allowance and publication. Reopen the same storage and redeliver the same immutable request; unresolved outcomes must never dispatch again. **Open.**
+3. Run 64 seeds on every PR and >=5,000 nightly, with measured effective schedule diversity and failing-seed diagnostics. Independently observe effects and persisted intent: forbidden effects must fail even without a returned outcome, and no request may effect twice across recovery. Production mutation controls must falsify each safety oracle. **Open.**
+4. `SWARM_DST_SEED=<n>` reproduces the exact fault schedule. MAPPING states what the final evidence covers: one host/process recovery model and one logical persistent substrate; signed audit remains distinct from the unsigned local journal. **Open.**
+
+The prior green corpus is not acceptance evidence: its reverse-subset receipt
+oracle accepted unrecorded effects, dropped denied episodes could hide effects,
+there was no same-request crash/retry, only four effective schedules, and reopen
+created an empty in-memory store. Full requirements and existing gates remain
+required; neither Phase 286 nor the full roadmap is complete.
 
 ### Phase 287: Fuzz, Loom, And Supply-Chain Hardening
 
@@ -1890,7 +1897,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 | 283. TCB Boundary And Layering Enforcement | v1.78 | 0/TBD | Not started | - |
 | 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |
 | 285. Assumption Registry And Invariant Mapping | v1.79 | 1/1 | Complete | 285-01 |
-| 286. Deterministic Simulation Testing | v1.79 | 1/1 | Complete | 286-01 |
+| 286. Deterministic Simulation Testing | v1.79 | 0/2 accepted | In progress / reopened; 286-01 rejected | 286-02 |
 | 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 0/TBD | Not started | - |
 | 288. Red Operator Genome And Target Graph | v1.80 | 1/1 | Complete | 288-01 |
 | 289. Attack Scoring, Stealth Budget And Pattern Memory | v1.80 | 1/1 | Complete | 289-01 |

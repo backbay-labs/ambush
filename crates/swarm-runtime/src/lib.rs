@@ -125,6 +125,8 @@ pub mod containment;
 pub mod correlation;
 pub mod detection;
 pub mod detector_factory;
+mod dispatch;
+pub mod dispatch_journal;
 pub mod dispatcher;
 pub mod drafting;
 pub mod escalation;
@@ -179,6 +181,12 @@ use swarm_whisker::{DetectionFinding, TelemetryEvent, TelemetryEventPredicate};
 /// Runtime errors surfaced while authorizing or executing actions.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    #[error(transparent)]
+    DispatchJournal(#[from] dispatch_journal::DispatchJournalError),
+
+    #[error("dispatch refused: {reason}")]
+    DispatchRefused { reason: String },
+
     #[error(transparent)]
     Approval(#[from] ApprovalError),
 
@@ -603,6 +611,7 @@ pub struct SwarmRuntime<P, E> {
     guard_pipeline: Option<GuardPipeline>,
     temporal_event_window: TemporalEventWindow,
     containment: Option<ContainmentBinding>,
+    dispatch_journal: Option<Arc<dispatch_journal::DispatchJournal>>,
 }
 
 /// Timing and outcome details for one audited execution.
@@ -625,6 +634,7 @@ impl<P, E> SwarmRuntime<P, E> {
             guard_pipeline: None,
             temporal_event_window: TemporalEventWindow::new(TemporalEventWindowConfig::default()),
             containment: None,
+            dispatch_journal: None,
         }
     }
 
@@ -640,6 +650,22 @@ impl<P, E> SwarmRuntime<P, E> {
     /// a different rate-limit window and a different clock.
     pub fn policy(&self) -> &P {
         &self.policy
+    }
+
+    /// Bind the durable, single-writer dispatch journal. Enforced execution
+    /// fails closed without it; dry-run evaluation needs no persistent state.
+    pub fn with_dispatch_journal(
+        mut self,
+        journal: Arc<dispatch_journal::DispatchJournal>,
+    ) -> Self {
+        self.dispatch_journal = Some(journal);
+        self
+    }
+
+    /// Reuse this exact binding when rebuilding a runtime on configuration
+    /// reload. Opening a fresh journal must never reset dispatch identities.
+    pub fn dispatch_journal(&self) -> Option<&Arc<dispatch_journal::DispatchJournal>> {
+        self.dispatch_journal.as_ref()
     }
 
     /// Attach a guard pipeline that evaluates actions before execution.
@@ -1016,28 +1042,37 @@ where
 
         let lease = self.policy.issue_lease(request, context)?;
         ensure_active_lease(&lease, context.now_ms)?;
-        let receipt = self
-            .response
-            .execute(request, &lease, self.execution_mode())
-            .await
-            .map_err(RuntimeError::from)?
-            .with_policy_audit(
-                decision.verdict,
-                decision.rule_name.clone(),
-                decision.reason.clone(),
-            );
+        let dispatch = self
+            .dispatch_once(request, &lease, self.execution_mode(), context.now_ms)
+            .await;
+        let receipt = match dispatch.result {
+            Ok(receipt) => receipt,
+            Err(error) => return Err(dispatch.completion_error.unwrap_or(error).into()),
+        }
+        .with_policy_audit(
+            decision.verdict,
+            decision.rule_name.clone(),
+            decision.reason.clone(),
+        );
         let receipt = Self::decorate_receipt_with_governance(
             receipt,
             request,
             "consensus approved response action",
         );
         if !receipt.status.indicates_success() {
-            return Err(RuntimeError::Response(ResponseError {
-                failure: receipt.into_failure(),
-            }));
+            return Err(RuntimeError::Response(dispatch.completion_error.unwrap_or(
+                ResponseError {
+                    failure: receipt.into_failure(),
+                },
+            )));
         }
         if let Some(prepared) = prepared_containment.as_ref() {
             Self::record_containment_lease(prepared, request, &receipt)?;
+        }
+        // A known successful containment still needs its rollback lifecycle
+        // even when the independent dispatch completion write failed.
+        if let Some(error) = dispatch.completion_error {
+            return Err(error.into());
         }
         tracing::info!(
             correlation_id = %Self::correlation_id(context),
@@ -1227,11 +1262,15 @@ where
                             match ensure_active_lease(&lease, context.now_ms) {
                                 Ok(()) => {
                                     let response_started = Instant::now();
-                                    let response = match self
-                                        .response
-                                        .execute(request, &lease, execution_mode)
-                                        .await
-                                    {
+                                    let dispatch = self
+                                        .dispatch_once(
+                                            request,
+                                            &lease,
+                                            execution_mode,
+                                            context.now_ms,
+                                        )
+                                        .await;
+                                    let response = match dispatch.result {
                                         Ok(receipt) if receipt.status.indicates_success() => {
                                             let receipt = receipt.with_policy_audit(
                                                 decision.verdict,
@@ -1311,6 +1350,18 @@ where
                                         }
                                         Err(error) => AuditResponseRecord::Failure(error.failure),
                                     };
+                                    // Retain a successful effect long enough to
+                                    // register its containment lease above. Only
+                                    // then project an unrecorded completion as a
+                                    // failure; never hide it as clean success.
+                                    let response = match dispatch.completion_error {
+                                        Some(mut error) => {
+                                            error.failure.details["runtime_response"] =
+                                                serde_json::json!(response);
+                                            AuditResponseRecord::Failure(error.failure)
+                                        }
+                                        None => response,
+                                    };
                                     let response_elapsed_us =
                                         response_started.elapsed().as_micros() as u64;
                                     let response_succeeded =
@@ -1319,7 +1370,7 @@ where
                                         Some(lease),
                                         response,
                                         Some(response_elapsed_us),
-                                        true,
+                                        dispatch.attempted,
                                         response_succeeded,
                                     )
                                 }
@@ -1453,6 +1504,12 @@ mod tests {
     };
     use swarm_spine::AuditResponseRecord;
     use swarm_whisker::TelemetryEventPredicate;
+
+    fn test_dispatch_journal() -> Arc<crate::dispatch_journal::DispatchJournal> {
+        let path =
+            std::env::temp_dir().join(format!("ambush-runtime-journal-{}", uuid::Uuid::new_v4()));
+        Arc::new(crate::dispatch_journal::DispatchJournal::open(path).unwrap())
+    }
 
     #[derive(Clone)]
     struct RecordingExecutor {
@@ -1741,6 +1798,7 @@ mod tests {
                 calls: Arc::clone(&calls),
             },
         )
+        .with_dispatch_journal(test_dispatch_journal())
         .with_containment_store(
             store.clone(),
             swarm_response::containment::ContainmentTtl::from_config_ms(900_000).unwrap(),
@@ -1804,6 +1862,7 @@ mod tests {
                 calls: Arc::clone(&calls),
             },
         )
+        .with_dispatch_journal(test_dispatch_journal())
         .with_containment_store(
             store.clone(),
             swarm_response::containment::ContainmentTtl::from_config_ms(900_000).unwrap(),
@@ -1888,6 +1947,7 @@ mod tests {
                 calls: Arc::clone(&calls),
             },
         )
+        .with_dispatch_journal(test_dispatch_journal())
         .with_containment_store(
             store.clone(),
             swarm_response::containment::ContainmentTtl::from_config_ms(900_000).unwrap(),
@@ -1984,7 +2044,8 @@ mod tests {
             RuntimeMode::LiveResponse,
             StaticApprovalGate::default(),
             SandboxExecutor,
-        );
+        )
+        .with_dispatch_journal(test_dispatch_journal());
         let request = ActionRequest {
             hunt_id: HuntId("hunt-1".to_string()),
             requested_by: AgentId("whisker-a".to_string()),
@@ -2002,6 +2063,178 @@ mod tests {
             .unwrap();
         assert_eq!(receipt.mode, ExecutionMode::Enforced);
         assert_eq!(receipt.status, ResponseStatus::Executed);
+    }
+
+    #[tokio::test]
+    async fn a_failed_completion_write_still_records_a_known_containment_on_both_paths() {
+        struct OversizedReceiptExecutor;
+        #[async_trait::async_trait]
+        impl ResponseExecutor for OversizedReceiptExecutor {
+            async fn execute(
+                &self,
+                request: &ActionRequest,
+                _lease: &swarm_policy::CapabilityLease,
+                mode: ExecutionMode,
+            ) -> Result<ResponseReceipt, ResponseError> {
+                Ok(ResponseReceipt {
+                    receipt_id: format!("oversized:{}", request.hunt_id.0),
+                    action: request.action.kind().into(),
+                    mode,
+                    status: ResponseStatus::Executed,
+                    summary: "known effect".into(),
+                    details: serde_json::json!({"payload": "x".repeat(
+                        crate::dispatch_journal::MAX_DISPATCH_RECORD_BYTES
+                    )}),
+                    audit: Default::default(),
+                })
+            }
+        }
+        for audited in [false, true] {
+            let store = Arc::new(swarm_response::containment::MemoryContainmentLeaseStore::new());
+            let journal = test_dispatch_journal();
+            let runtime = SwarmRuntime::new(
+                RuntimeMode::LiveResponse,
+                StaticApprovalGate::default(),
+                OversizedReceiptExecutor,
+            )
+            .with_dispatch_journal(journal.clone())
+            .with_containment_store(
+                store.clone(),
+                swarm_response::containment::ContainmentTtl::from_config_ms(60_000).unwrap(),
+            );
+            let request = quarantine_request();
+            if audited {
+                let report = runtime
+                    .audit_authorize_and_execute_instrumented(
+                        &sample_detection(),
+                        &request,
+                        &sample_context(),
+                    )
+                    .await
+                    .unwrap();
+                assert!(report.response_attempted);
+                assert!(!report.response_succeeded);
+                match report.audit.response {
+                    AuditResponseRecord::Failure(f) => {
+                        assert_eq!(f.details["status"], "dispatch_outcome_unknown")
+                    }
+                    other => panic!("unrecorded completion looked successful: {other:?}"),
+                }
+            } else {
+                let error = runtime
+                    .authorize_and_execute(&request, &sample_context())
+                    .await
+                    .unwrap_err();
+                match error {
+                    RuntimeError::Response(error) => {
+                        assert_eq!(error.failure.details["status"], "dispatch_outcome_unknown")
+                    }
+                    other => panic!("unexpected completion error: {other:?}"),
+                }
+            }
+            // Journal capacity/refusal must not suppress rollback bookkeeping
+            // for a containment whose executor has already reported success.
+            let leases = store.open_leases().unwrap();
+            assert_eq!(leases.len(), 1);
+            assert_eq!(leases[0].origin_receipt_id(), "oversized:hunt-contain");
+            let id = crate::dispatch_journal::request_id(&request).unwrap();
+            assert!(
+                journal
+                    .lookup_persisted(&id)
+                    .unwrap()
+                    .unwrap()
+                    .completion
+                    .is_none()
+            );
+            assert!(
+                runtime
+                    .authorize_and_execute(&request, &sample_context())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(store.open_leases().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn both_execution_entry_points_refuse_live_actions_without_a_dispatch_journal() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            RecordingExecutor {
+                calls: calls.clone(),
+            },
+        );
+        let request = containment_request(ResponseAction::TriggerEdrScan {
+            host_id: "host-1".into(),
+            scan_profile: "quick".into(),
+        });
+        let error = runtime
+            .authorize_and_execute(&request, &sample_context())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("durable dispatch journal"));
+        let report = runtime
+            .audit_authorize_and_execute_instrumented(
+                &sample_detection(),
+                &request,
+                &sample_context(),
+            )
+            .await
+            .unwrap();
+        assert!(!report.response_attempted);
+        assert!(!report.response_succeeded);
+        assert!(matches!(
+            report.audit.response,
+            AuditResponseRecord::Failure(_)
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_completed_request_cannot_dispatch_again_through_the_other_entry_point() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let runtime = SwarmRuntime::new(
+            RuntimeMode::LiveResponse,
+            StaticApprovalGate::default(),
+            RecordingExecutor {
+                calls: calls.clone(),
+            },
+        )
+        .with_dispatch_journal(test_dispatch_journal());
+        let mut request = containment_request(ResponseAction::TriggerEdrScan {
+            host_id: "host-1".into(),
+            scan_profile: "quick".into(),
+        });
+        runtime
+            .authorize_and_execute(&request, &sample_context())
+            .await
+            .unwrap();
+        // Mutable evidence and a newly issued capability must not create a
+        // second identity for the same hunt, requester and action.
+        request.evidence = serde_json::json!({"retry": true});
+        let mut context = sample_context();
+        context.now_ms += 1;
+        let report = runtime
+            .audit_authorize_and_execute_human_approved_instrumented(
+                &sample_detection(),
+                &request,
+                &context,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!report.response_attempted);
+        assert!(!report.response_succeeded);
+        match report.audit.response {
+            AuditResponseRecord::Failure(failure) => {
+                assert_eq!(failure.details["status"], "dispatch_refused");
+                assert_eq!(failure.details["prior_reservation"], true);
+            }
+            other => panic!("duplicate dispatch was not refused: {other:?}"),
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -2172,7 +2405,8 @@ mod tests {
             RecordingExecutor {
                 calls: calls.clone(),
             },
-        );
+        )
+        .with_dispatch_journal(test_dispatch_journal());
 
         let error = runtime
             .authorize_and_execute(&quarantine_request(), &sample_context())
@@ -2242,6 +2476,7 @@ mod tests {
                 calls: calls.clone(),
             },
         )
+        .with_dispatch_journal(test_dispatch_journal())
         .with_containment_store(
             store.clone(),
             swarm_response::containment::ContainmentTtl::from_config_ms(900_000).unwrap(),
@@ -2315,6 +2550,7 @@ mod tests {
                 calls: calls.clone(),
             },
         )
+        .with_dispatch_journal(test_dispatch_journal())
         .with_containment_store(
             store.clone(),
             swarm_response::containment::ContainmentTtl::from_config_ms(60_000).unwrap(),
@@ -2347,19 +2583,29 @@ mod tests {
                 calls: calls.clone(),
             },
         )
+        .with_dispatch_journal(test_dispatch_journal())
         .with_containment_store(
             store.clone(),
             swarm_response::containment::ContainmentTtl::from_config_ms(60_000).unwrap(),
         );
 
-        // `RecordingExecutor` mints a receipt id from the hunt id alone, so two
-        // runs of the same request derive the same lease id.
+        // This intentionally broken adapter mints a receipt id from hunt id
+        // alone. DISTINCT actions must still detect colliding containment
+        // receipts; identical requests are now refused by the dispatch journal.
         runtime
             .authorize_and_execute(&quarantine_request(), &sample_context())
             .await
             .unwrap();
+        let second = containment_request(ResponseAction::QuarantineFile {
+            host_id: "host-1".into(),
+            file_path: "/tmp/b".into(),
+        });
+        let third = containment_request(ResponseAction::QuarantineFile {
+            host_id: "host-1".into(),
+            file_path: "/tmp/c".into(),
+        });
         let error = runtime
-            .authorize_and_execute(&quarantine_request(), &sample_context())
+            .authorize_and_execute(&second, &sample_context())
             .await
             .expect_err("a containment whose lease could not be written is not a success");
         assert!(
@@ -2374,11 +2620,7 @@ mod tests {
 
         let detection = sample_detection();
         let report = runtime
-            .audit_authorize_and_execute_instrumented(
-                &detection,
-                &quarantine_request(),
-                &sample_context(),
-            )
+            .audit_authorize_and_execute_instrumented(&detection, &third, &sample_context())
             .await
             .unwrap();
         assert!(

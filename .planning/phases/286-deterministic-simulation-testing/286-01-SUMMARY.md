@@ -1,77 +1,55 @@
-# Phase 286 Plan 01 Summary
+# Phase 286 Plan 01 Summary — Rejected Candidate
 
-Deterministic Simulation Testing (v1.79). The assurance floor's second phase — where 285 made
-"fail-closed" *auditable*, 286 proves **receipt-before-action ordering** and **no-double-dispatch**
-survive adversarial scheduling and mid-operation crashes, not only the happy path. A seeded,
-deterministic fault-injection harness drives the REAL `SwarmRuntime::authorize_and_execute`, a real
-approval gate, and the real pheromone substrate — no mocks — and asserts three oracles over every
-seed, naming any failing seed for one-command replay. Executed 2026-09-07 with
-subagent-driven-development as a sequential pipeline (T1→T5). The phase adds NO production behaviour
-change — it is a test harness, a CI workflow, and a MAPPING.md section.
+**Status: SUPERSEDED / REJECTED 2026-09-07. Phase 286 is reopened and in progress.**
+The closure recorded by `1a5c9003b` is withdrawn. Its test results do not establish
+DST-01..06. The replacement work is [286-02-PLAN.md](286-02-PLAN.md); the recovery
+and blocking review are [286-REVIEW.md](286-REVIEW.md). No replacement implementation
+or gate is declared passed in this record.
 
-## Delivered
+## Preserved candidate identity
 
-- **The harness foundation + the ground truth (DST-01, DST-05; 761a65bdc, nit 0b8b8f45b):**
-  `crates/swarm-runtime/tests/dst_fault_injection.rs` — a hand-rolled deterministic single-thread
-  executor (a manual `poll` loop with a no-op waker; no wall clock, no OS entropy, no tokio), the
-  real no-mock stack (a real `SwarmRuntime` over a real recording `ResponseAdapter`, a real
-  `StaticApprovalGate` with a deterministic verdict, a real `InMemoryPheromoneSubstrate`), the
-  episode, and `SWARM_DST_SEED=<n>` replay. **The load-bearing finding:** the engine has NO atomic
-  dispatch→receipt journal — `authorize_and_execute` (at `lib.rs:972`; DST-01's `:753` was stale)
-  dispatches the response and returns the receipt, and persistence is the *caller's* responsibility
-  (response-receipt writes live in `sphinx_agent`/`escalation`/`strategy`/`held_action`, not in the
-  authorize path). So the harness composes dispatch + its own real substrate deposit, and
-  receipt-before-action is proven as a *correct-caller-composition* property with the no-journal gap
-  named as the evidence boundary.
-- **The three fault classes (DST-02; bd9f5b251):** future-drop before dispatch, future-drop after
-  dispatch but before receipt-persist, and substrate close/reopen between policy-allow and persist —
-  each fires at a REAL boundary. A `BudgetedPoll::Exhausted` primitive hands the future back alive so
-  a class either drops it (crash simulation) or acts on the world and resumes it (the close/reopen
-  class). The recording adapter's async dispatch-boundary checkpoint pins the poll budget to the
-  intended boundary *by construction* (verified: `authorize_and_execute` has exactly one `.await`),
-  not by lucky poll counts.
-- **The three oracles + the 64-seed PR corpus (DST-03, DST-04 PR half; d7d03b868, fix 9925a7e2e):**
-  Oracle 1 (receipt-before-action) is **multiset containment** — the multiset of dispatch identities
-  `(hunt_id, order)` carried by persisted receipts must be contained in the multiset actually
-  dispatched, forbidding a phantom *and* a duplicated audit record (the dangerous direction) while
-  leaving class (b)'s honest action-without-receipt green as the boundary. Oracle 2 (exact
-  disposition) compares the outcome to the real gate's verdict (Allow *and* Deny both positively
-  exercised). Oracle 3 (no double-dispatch) holds the at-most-once count. The 64-seed corpus runs on
-  every PR, exercises all four fault classes, and names the failing seed; each oracle is proven
-  non-vacuous by a forced violation.
-- **The nightly deep corpus + the evidence boundary (DST-04 nightly, DST-06; fb80d8a90):** an
-  `#[ignore]`-d `dst_nightly_deep_corpus_...` test runs the same oracles + per-seed episode over a
-  fixed 5,000 seeds (so ">= 5,000" is unconditional), driven by `.github/workflows/dst-nightly.yml`
-  (the repo's first scheduled workflow: nightly cron + `workflow_dispatch`, single-threaded,
-  timeout-guarded). `docs/assurance/MAPPING.md` gains a DST harness section stating the evidence
-  boundary (single-process, single-substrate-instance, NOT distributed JetStream failover) and the
-  no-journal honesty. Verified green: 5,000 seeds, all four fault classes, 3.54s.
+The interrupted Claude session built eight commits on `feat/dst-286`, based on
+`5ad9b6850`, with candidate head `1a5c9003b`, in the sibling checkout
+`/Users/connor/Medica/backbay/standalone/swarm-team-six-dst-286`:
 
-## Success criteria (mirror ROADMAP)
+- `3cc4525fc`: original implementation plan.
+- `761a65bdc`, `0b8b8f45b`: harness foundation and comment correction.
+- `bd9f5b251`: the three named fault classes.
+- `d7d03b868`, `9925a7e2e`: oracles, corpus and task-review fixes.
+- `fb80d8a90`: nightly workflow and former MAPPING evidence-boundary section.
+- `1a5c9003b`: the premature planning closure.
 
-1. **Real harness, real gate, real substrate, no mocks** — met: 761a65bdc.
-2. **≥3 fault classes at the named injection points** — met: bd9f5b251, all three at real boundaries.
-3. **64-seed PR corpus + 5,000-seed nightly, naming the failing seed** — met: d7d03b868 (PR corpus +
-   three non-vacuous oracles) + fb80d8a90 (`dst-nightly.yml`, 5,000-seed deep corpus, verified green).
-4. **`SWARM_DST_SEED` replay + MAPPING evidence boundary** — met: 761a65bdc (`SWARM_DST_SEED`) +
-   fb80d8a90 (MAPPING single-process/single-substrate boundary).
+These objects preserve the original work and its claims for comparison. The
+original plan remains historical evidence; its permission to weaken an oracle
+to match existing behavior is superseded by the repair plan.
 
-## Notes
+## Why the closure was rejected
 
-- **The engine makes no receipt-before-action guarantee — and that honesty is the point.** There is
-  no atomic journal binding dispatch to a persisted receipt, so a crash after dispatch but before
-  persist legitimately splits action from receipt. Rather than assert a guarantee the engine does not
-  make, Oracle 1 asserts only the safe, always-held direction (no phantom or duplicated audit
-  record), and the MAPPING.md section names the action-without-receipt gap as the evidence boundary.
-  DST discovers and encodes the *real* contract, it does not presume correctness.
-- **DST-01's line ref (`lib.rs:753`) was stale** — `authorize_and_execute` is at `lib.rs:972` at
-  HEAD; the harness targets it by name. Requirement text kept verbatim (the 285/291 path-slip
-  convention).
-- **No production code changed:** the diff is confined to `crates/swarm-runtime/tests/`,
-  `.github/workflows/`, and `docs/assurance/` — 0 edits under any crate's `src/`.
-- **The harness's "receipt persist" repurposes a real, signed `PheromoneSubstrate::deposit`** as its
-  persistence step (pheromone deposits are domain-modeled as threat indicators, not response
-  receipts) — a harness convention exercising the real substrate, not a claim that a literal
-  production receipt-persistence path exists today. Stated plainly in the MAPPING.md section.
-- **v1.79 "Assurance Foundation" progress:** Phase 284 (fixture determinism), 285 (assumption
-  registry), and 286 (this) are complete; Phase 287 (fuzz, loom, supply-chain hardening) remains.
+The purported receipt-before-action oracle checked the reverse subset: persisted
+receipt identities had to appear among observed actions. It accepted an action
+with no durable prior authorization record and no completion receipt. The exact
+policy-disposition oracle also accepted a dropped episode without checking for
+forbidden effects. At-most-once counts covered one invocation without restarting
+and redelivering the same request. Repeated seeds exercised only four effective
+schedules, and substrate reopen substituted a fresh empty in-memory instance.
+
+A passing counter-based corpus with those properties cannot establish durable
+ordering, policy safety through cancellation, or duplicate suppression after a
+crash. The former reports of a green 64/5,000-seed corpus and clean task reviews
+are historical reports about this rejected candidate, not acceptance evidence.
+The final whole-branch review was interrupted before a verdict.
+
+## Repair contract
+
+Before a live effect, both production runtime entry paths must durably reserve
+the request identity and its immutable authorized content in a dispatch-intent
+journal. A post-effect completion receipt records an observed result. An intent
+is not a claim that an action completed, and a missing completion after a crash
+must remain unresolved and must not authorize another effect. The local journal
+is unsigned and depends on OS/filesystem protections; signed audit artifacts are
+a separate evidence surface.
+
+The replacement proof must exercise real sandbox effects, persistent substrate
+reopen, request redelivery, varied deterministic fault schedules and production
+mutations that expose each safety failure. Phase 286 remains open until its
+immutable repaired tree passes that proof and the existing required gates.

@@ -314,7 +314,7 @@ impl DefaultControlPlane {
         config: swarm_core::config::SwarmConfig,
     ) -> Result<Self, ControlError> {
         let detector = build_composite_detector(&config.detection)?;
-        let stack = ConfiguredRuntimeStack::from_config(config, SummaryInvestigator)?;
+        let stack = ConfiguredRuntimeStack::for_operator_view(config, SummaryInvestigator)?;
 
         Ok(Self {
             config_path: config_path.into(),
@@ -433,8 +433,20 @@ impl DefaultControlPlane {
             &options.paths.approval_set_results_dir,
             &options.paths.approval_ledger_results_dir,
         )?;
-        let config =
+        let mut config =
             guided_first_run_config(&self.stack.service.config, &options.voter_signing_key_env)?;
+        // The walkthrough uses enforced sandbox execution, so it still requires
+        // durable dispatch state. Give this run its own artifact root rather
+        // than contending with the production daemon's writer or audit history.
+        config.audit.bundle_store = swarm_core::config::BundleStoreConfig::LocalFiles {
+            directory: options
+                .paths
+                .approval_receipt_pack_results_dir
+                .join(".first-run-audit")
+                .join(uuid::Uuid::new_v4().to_string())
+                .display()
+                .to_string(),
+        };
         let state = IngestState::from_config(self.config_path.clone(), config)
             .map_err(|error| ControlError::IngestBuild(Box::new(error)))?
             .with_approval_harness(harness);
@@ -1948,9 +1960,28 @@ mod tests {
         }
     }
 
+    fn control_plane_with_dispatch_fixture() -> DefaultControlPlane {
+        let mut config = control_config();
+        config.audit.bundle_store = swarm_core::config::BundleStoreConfig::LocalFiles {
+            directory: std::env::temp_dir()
+                .join(format!("swarm-control-dispatch-{}", uuid::Uuid::new_v4()))
+                .display()
+                .to_string(),
+        };
+        let mut plane = DefaultControlPlane::from_config("inline", config.clone()).unwrap();
+        // These tests produce the records they subsequently inspect. Production
+        // operator views intentionally cannot issue enforced response actions.
+        plane.stack = swarm_runtime::service::ConfiguredRuntimeStack::from_config(
+            config,
+            swarm_runtime::investigation::SummaryInvestigator,
+        )
+        .unwrap();
+        plane
+    }
+
     #[tokio::test]
     async fn status_output_uses_live_runtime_origin() {
-        let plane = DefaultControlPlane::from_config("inline", control_config()).unwrap();
+        let plane = control_plane_with_dispatch_fixture();
         let signing_key = test_signing_key();
         let agent_id = test_agent_id();
 
@@ -2188,7 +2219,7 @@ mod tests {
 
     #[tokio::test]
     async fn lookup_outputs_resolve_stable_ids_and_persisted_origin() {
-        let plane = DefaultControlPlane::from_config("inline", control_config()).unwrap();
+        let plane = control_plane_with_dispatch_fixture();
         let signing_key = test_signing_key();
         let agent_id = test_agent_id();
 
