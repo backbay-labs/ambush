@@ -619,11 +619,16 @@ desktop-standalone *ARGS: _ensure-sidecar-stubs
     source ../scripts/instance-env.sh
     INSTANCE_ID=$(node -e "console.log(JSON.parse(process.env.AMBUSH_TAURI_CONFIG).identifier)")
     # The main checkout is the UNSCOPED instance: the app defaults to `ambush-desktop-dev`
-    # and `reset-desktop-standalone-state.sh` pairs the unsuffixed bundle id with that
-    # unscoped service. Inventing a `main` scope here made `fresh=1` refuse to run there.
-    export AMBUSH_DEV_KEYRING_SERVICE="ambush-desktop-dev${AMBUSH_INSTANCE_SLUG:+.$AMBUSH_INSTANCE_SLUG}"
+    # when the variable is unset, and `reset-desktop-standalone-state.sh` pairs the
+    # unsuffixed bundle id with that unscoped service. Inventing a `main` scope here made
+    # `fresh=1` refuse to run there. Only a worktree carries a scope.
+    if [[ -n "${AMBUSH_INSTANCE_SLUG:-}" ]]; then
+        export AMBUSH_DEV_KEYRING_SERVICE="ambush-desktop-dev.${AMBUSH_INSTANCE_SLUG}"
+    else
+        unset AMBUSH_DEV_KEYRING_SERVICE
+    fi
     if [[ -n "{{fresh}}" ]]; then
-        ../scripts/reset-desktop-standalone-state.sh "$INSTANCE_ID" "$AMBUSH_DEV_KEYRING_SERVICE"
+        ../scripts/reset-desktop-standalone-state.sh "$INSTANCE_ID" "${AMBUSH_DEV_KEYRING_SERVICE:-ambush-desktop-dev}"
     fi
     trap '../scripts/cleanup-instance-agents.sh "$INSTANCE_ID" || true' EXIT
     echo "Starting standalone desktop on Vite port ${AMBUSH_VITE_PORT}; no relay services were started"
