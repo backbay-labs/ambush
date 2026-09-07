@@ -12,6 +12,7 @@ mod genome;
 mod graph;
 mod operators;
 mod rng;
+pub mod scoring;
 
 pub use genome::{
     CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,
