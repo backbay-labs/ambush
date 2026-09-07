@@ -725,6 +725,11 @@ mod tests {
     /// never collide on the same `--coverage` fixture file. Reading the wall
     /// clock here is fine: this helper lives after `#[cfg(test)]`, which
     /// `no_entropy_path_exists_in_the_red_swarm_cli` never scans.
+    ///
+    /// Uniqueness alone only prevents collisions between tests -- it does
+    /// not clean up after them. A test that writes to this path owns
+    /// removing it (see [`TempFixture`]) rather than leaving it under
+    /// `/tmp` for every run.
     fn unique_temp_path(label: &str) -> PathBuf {
         use std::time::{SystemTime, UNIX_EPOCH};
         let suffix = SystemTime::now()
@@ -734,13 +739,47 @@ mod tests {
         std::env::temp_dir().join(format!("red-swarm-score-{label}-{suffix}.json"))
     }
 
-    /// Writes `snapshot` to a fresh temp file as JSON and returns its path,
-    /// so a test can drive `--coverage` end to end through the CLI rather
-    /// than calling `AttackScorer` directly (SC 1).
-    fn write_coverage_fixture(label: &str, snapshot: &EvasionCoverageSnapshot) -> PathBuf {
+    /// RAII guard for a fixture file written under the OS temp dir: the file
+    /// is removed when the guard drops, so a test leaves no `/tmp` residue
+    /// regardless of how it exits (including an early return via `?` or a
+    /// failed assertion unwinding the test). Call [`TempFixture::path`] to
+    /// hand an owned `PathBuf` to a call site (such as a `RedSwarmScoreArgs`
+    /// field) while the guard itself stays alive to clean up at the end of
+    /// the test.
+    struct TempFixture(PathBuf);
+
+    impl TempFixture {
+        /// A clone of the guarded path, for callers that need to hand off an
+        /// owned `PathBuf` (like the `coverage` field of
+        /// [`RedSwarmScoreArgs`]) while the guard itself stays alive to clean
+        /// up at the end of the test.
+        fn path(&self) -> PathBuf {
+            self.0.clone()
+        }
+    }
+
+    impl Drop for TempFixture {
+        fn drop(&mut self) {
+            // Best-effort: some tests exercise a path that was never
+            // written (a deliberately missing `--coverage` file), so a
+            // failed removal here is expected, not a bug.
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// Writes `contents` to a fresh, process-unique temp file and returns an
+    /// RAII guard that removes it when dropped -- see [`TempFixture`].
+    fn write_temp_fixture(label: &str, contents: &[u8]) -> TempFixture {
         let path = unique_temp_path(label);
-        std::fs::write(&path, serde_json::to_string(snapshot).unwrap()).unwrap();
-        path
+        std::fs::write(&path, contents).unwrap();
+        TempFixture(path)
+    }
+
+    /// Writes `snapshot` to a fresh temp file as JSON and returns an RAII
+    /// guard for it, so a test can drive `--coverage` end to end through the
+    /// CLI rather than calling `AttackScorer` directly (SC 1).
+    fn write_coverage_fixture(label: &str, snapshot: &EvasionCoverageSnapshot) -> TempFixture {
+        write_temp_fixture(label, serde_json::to_string(snapshot).unwrap().as_bytes())
     }
 
     /// `score` args pinned to the real repo catalog and suites, mirroring
@@ -769,7 +808,7 @@ mod tests {
     #[test]
     fn the_score_json_is_byte_identical_across_two_runs_with_the_same_arguments() {
         let coverage = write_coverage_fixture("determinism", &all_uncovered_coverage());
-        let args = score_args(7, 0, coverage, Some(1_700_000_000_000));
+        let args = score_args(7, 0, coverage.path(), Some(1_700_000_000_000));
 
         let first = render_score_json(&build_score(&args).unwrap()).unwrap();
         let second = render_score_json(&build_score(&args).unwrap()).unwrap();
@@ -783,7 +822,8 @@ mod tests {
     #[test]
     fn the_score_json_carries_the_four_top_level_fitness_fields_all_finite_and_determinism() {
         let coverage = write_coverage_fixture("sc4", &all_uncovered_coverage());
-        let outcome = build_score(&score_args(7, 0, coverage, Some(1_700_000_000_000))).unwrap();
+        let outcome =
+            build_score(&score_args(7, 0, coverage.path(), Some(1_700_000_000_000))).unwrap();
         let json = render_score_json(&outcome).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
@@ -818,7 +858,8 @@ mod tests {
         let techniques: Vec<String> = techniques.into_iter().collect();
         let coverage = write_coverage_fixture("fully-caught", &fully_caught_coverage(&techniques));
 
-        let outcome = build_score(&score_args(7, 0, coverage, Some(1_700_000_000_000))).unwrap();
+        let outcome =
+            build_score(&score_args(7, 0, coverage.path(), Some(1_700_000_000_000))).unwrap();
 
         assert_eq!(outcome.fitness.evasion_rate, 0.0);
         assert_eq!(outcome.fitness.red_fitness, 0.0);
@@ -828,7 +869,8 @@ mod tests {
     fn an_all_uncovered_coverage_fixture_scores_red_fitness_above_one_half_through_the_cli() {
         let coverage = write_coverage_fixture("all-uncovered", &all_uncovered_coverage());
 
-        let outcome = build_score(&score_args(7, 0, coverage, Some(1_700_000_000_000))).unwrap();
+        let outcome =
+            build_score(&score_args(7, 0, coverage.path(), Some(1_700_000_000_000))).unwrap();
 
         assert_eq!(outcome.fitness.evasion_rate, 1.0);
         assert!(
@@ -841,7 +883,7 @@ mod tests {
     #[test]
     fn a_score_omitting_the_virtual_clock_is_refused_rather_than_defaulting_to_now() {
         let coverage = write_coverage_fixture("refusal", &all_uncovered_coverage());
-        let result = build_score(&score_args(7, 0, coverage, None));
+        let result = build_score(&score_args(7, 0, coverage.path(), None));
         assert!(
             matches!(result, Err(ScoreCommandError::MissingVirtualClock)),
             "a missing --virtual-clock-start-ms must refuse, not score"
@@ -860,9 +902,8 @@ mod tests {
 
     #[test]
     fn a_malformed_coverage_file_is_refused_rather_than_panicking() {
-        let path = unique_temp_path("malformed");
-        std::fs::write(&path, b"not valid json").unwrap();
-        let result = build_score(&score_args(7, 0, path, Some(1_700_000_000_000)));
+        let coverage = write_temp_fixture("malformed", b"not valid json");
+        let result = build_score(&score_args(7, 0, coverage.path(), Some(1_700_000_000_000)));
         assert!(
             matches!(result, Err(ScoreCommandError::CoverageParse(_))),
             "a malformed --coverage file must be a CoverageParse error, not a panic"
@@ -872,7 +913,7 @@ mod tests {
     #[test]
     fn a_tight_max_events_override_truncates_the_budget_and_lowers_events_emitted() {
         let coverage = write_coverage_fixture("max-events", &all_uncovered_coverage());
-        let mut args = score_args(7, 0, coverage, Some(1_700_000_000_000));
+        let mut args = score_args(7, 0, coverage.path(), Some(1_700_000_000_000));
         args.max_events = Some(0);
 
         let outcome = build_score(&args).unwrap();
@@ -883,7 +924,8 @@ mod tests {
     #[test]
     fn the_score_human_table_lists_the_four_fitness_numbers() {
         let coverage = write_coverage_fixture("table", &all_uncovered_coverage());
-        let outcome = build_score(&score_args(7, 0, coverage, Some(1_700_000_000_000))).unwrap();
+        let outcome =
+            build_score(&score_args(7, 0, coverage.path(), Some(1_700_000_000_000))).unwrap();
         let table = render_score_table(&outcome);
         assert!(table.contains("round_robin_v1"));
         for label in ["red_fitness", "evasion_rate", "stealth", "events_emitted"] {
