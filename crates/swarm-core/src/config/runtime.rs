@@ -141,6 +141,13 @@ pub struct ResponseHoldSettings {
     /// Default 60,000, equal to `policy.lease_ttl_ms`.
     #[serde(default = "default_decide_stall_ms")]
     pub decide_stall_ms: u64,
+    /// How long a hold may sit in `created` with no `notice_event_id` before
+    /// the sweep re-publishes its created event so the bridge re-plans the
+    /// filing. Default 30,000; must be greater than zero. This is the bound on
+    /// how long a hold the relay never learned of stays invisible to every
+    /// console while the daemon still holds it (W3-39).
+    #[serde(default = "default_hold_refile_after_ms")]
+    pub refile_after_ms: u64,
     /// A governance receipt older than this at decision time is refused as
     /// `governance.receipt_stale`. Default 86,400,000.
     #[serde(default = "default_governance_receipt_max_age_ms")]
@@ -165,6 +172,7 @@ impl Default for ResponseHoldSettings {
             hold_ttl_ms_by_threat_class: BTreeMap::new(),
             sweep_interval_ms: default_hold_sweep_interval_ms(),
             decide_stall_ms: default_decide_stall_ms(),
+            refile_after_ms: default_hold_refile_after_ms(),
             governance_receipt_max_age_ms: default_governance_receipt_max_age_ms(),
         }
     }

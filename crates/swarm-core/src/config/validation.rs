@@ -396,6 +396,14 @@ impl SwarmConfig {
                     .to_string(),
             });
         }
+        if self.runtime.response.refile_after_ms == 0 {
+            return Err(ConfigValidationError::InvalidField {
+                field: "runtime.response.refile_after_ms",
+                reason:
+                    "must be greater than zero; a hold re-filed on every tick floods the alarm spool"
+                        .to_string(),
+            });
+        }
         if self
             .runtime
             .response

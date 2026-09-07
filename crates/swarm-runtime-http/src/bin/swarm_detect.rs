@@ -1108,15 +1108,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sweep.run_until_shutdown(interval_ms, sweep_shutdown).await;
             })
         });
-        // B1's TTL and stall sweep, beside the containment one and for the same
-        // reason: without it an expired hold is a row nobody retires and a
+        // B1's TTL, stall and re-file sweep, beside the containment one and for
+        // the same reason: without it an expired hold is a row nobody retires, a
         // decision that stalled is a hold parked in `deciding` forever, which no
-        // operator and no retry can move.
+        // operator and no retry can move, and a hold whose filing was lost is
+        // durable here and invisible to every console until its TTL (W3-39).
         let mut hold_sweep_handle = Some({
             let sweep = swarm_runtime::hold_sweep::HoldSweep::new(
                 Arc::clone(&hold_store),
                 Some(runtime_events.clone()),
                 hold_settings.decide_stall_ms,
+                hold_settings.refile_after_ms,
             );
             let sweep_shutdown = shutdown_rx.clone();
             let interval_ms = hold_settings.sweep_interval_ms;
@@ -1125,6 +1127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 interval_ms,
                 hold_ttl_ms = hold_settings.hold_ttl_ms,
                 decide_stall_ms = hold_settings.decide_stall_ms,
+                refile_after_ms = hold_settings.refile_after_ms,
                 durable = hold_settings.hold_store_path.is_some(),
                 "hold sweep started"
             );

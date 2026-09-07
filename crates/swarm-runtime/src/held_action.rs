@@ -16,6 +16,11 @@
 //! returns it to `prior_state`, and `fail_stalled_decisions` moves it to
 //! `failed` after `decide_stall_ms`. `created` IS decidable — `notified` is a
 //! fact about the queue card, not about the hold.
+//!
+//! A hold that stays `created` with no `notice_event_id` is one the relay
+//! never learned of. The sweep re-publishes its created event every
+//! `refile_after_ms` until the bridge files it (W3-39), which is a publish and
+//! not a transition: no state here moves because a hold was re-filed.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
