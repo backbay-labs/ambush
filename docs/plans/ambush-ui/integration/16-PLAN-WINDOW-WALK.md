@@ -229,18 +229,58 @@ whose record already names the channel is not written again (count the store's
 **Files.** `crates/swarm-runtime/src/escalation.rs` and its tests.
 
 **Behaviour.** `evaluate_all` currently emits the WARN "pheromone concentration crossed
-escalation threshold" on every evaluation while a class stays above its threshold (every 100 ms
-on the dev profile: 1,572 lines in eight minutes). It warns on the rising edge only — the
-evaluation in which a class first exceeds the threshold, or its target mode rises — and logs the
-steady state at `debug!` with the same fields. A class that drops below and crosses again warns
-again. No behaviour other than logging changes: the events returned, the mode transitions and
-the substrate records are exactly what they were.
+escalation threshold" AND publishes a `RuntimeEvent::Escalation` (`publish_escalation`, called
+per evaluation) on every evaluation while a class stays above its threshold — every 100 ms on
+the dev profile: 1,572 log lines in eight minutes, and 20,436 evidence records spooled into the
+bridge in forty-five minutes against a pacer that drains one per second, so no finding card
+reached the relay after the restart (`evidence/window-walk.md`, the evidence-stream counters).
+Both the warn and the event are emitted on the rising edge only — the evaluation in which a
+class first exceeds its threshold, or its target mode rises above the current mode — and the
+steady state is logged at `debug!` with the same fields and publishes nothing. A class that
+drops below and crosses again warns and publishes again. The events returned to the caller,
+the mode transitions and the substrate records are exactly what they were; only the log level
+and the runtime-event publication change. Measure the `mode_changed` flag `publish_escalation`
+already carries: the edge rule may be expressible through it.
 
 **Tests.** Drive `evaluate_all` through ten evaluations with a concentration held above the
-threshold and assert one warn (use the crate's existing log-capture approach if it has one —
-`grep -rn 'tracing_test\|with_default\|MockWriter' crates/swarm-runtime` — else assert on a
-counter the evaluator exposes for tests); assert the returned events and transitions are
-unchanged from before the change by running the existing escalation tests.
+threshold: exactly one `RuntimeEvent::Escalation` on the subscribed broadcaster and one warn
+(use the crate's existing log-capture approach if it has one — `grep -rn 'tracing_test\|with_default\|MockWriter' crates/swarm-runtime`
+— else assert on a counter the evaluator exposes for tests); drop below and cross again: a
+second event; the existing escalation tests unchanged.
 
 **Verification.** `cargo fmt --all --check`; `cargo clippy -p swarm-runtime --all-targets -- -D warnings`;
 `cargo test -p swarm-runtime escalation`; `bash tools/check-runtime-panic-contract.sh`.
+
+---
+
+### Task 7: The pacer does not spend a tick on a record it will never publish (found-15)
+
+**Files.** `crates/swarm-perch-bridge/src/pacer.rs` (and its tests); `crates/swarm-perch-bridge/src/metrics.rs`
+if a counter is added; `crates/swarm-perch-bridge/src/stream.rs` only if a variant moves to
+`DroppedAtSource` (see below).
+
+**Behaviour.** `Pacer::tick` peeks one evidence record; when no producer turns it into a card
+it counts `skipped_unpublished`, commits it, and the tick is over (`pacer.rs` ≈ 309–311). Under
+a producer that emits faster than 1 Hz that is a queue that only grows: the walk measured
+20,436 evidence records ingested, 2,127 skipped, zero cards published in forty-five minutes.
+The invariant is *at most one relay frame per tick*, not one spool record per tick. So a tick
+discharges every consecutive unpublishable record it meets — commit, count, peek again — up to
+`PACER_SKIP_BUDGET` records (a `pub const`, 4,096, doc-commented: the bound exists only so a
+poisoned spool cannot pin the task; at 1 Hz it clears a day of the 10 Hz flood in seconds), and
+publishes the first publishable record it reaches in the same tick. A record that fails to
+build (`BridgeError` from a producer) keeps its current handling.
+
+Separately, decide per variant at `classify` time: a variant for which no producer exists and
+none is planned in `14-PLAN-OPERATOR-COMPLETE.md` (measure: `Escalation` has a planned producer
+— "the durable escalation producer and its edge coalescer", W3-29 — so it stays `Evidence`)
+belongs in `DroppedAtSource`, counted, never spooled. Move only variants that meet that test,
+and state each move in the commit message.
+
+**Tests.** A spool of 100 unpublishable records followed by one `Finding`: a single tick
+publishes the finding and reports 100 skipped; the skip budget bounds one tick (a spool of
+`PACER_SKIP_BUDGET + 1` unpublishable records leaves one for the next tick); an interleaving of
+publishable records still produces exactly one frame per tick (the invariant test that already
+exists must still pass); the `classify_has_no_wildcard_arm` test still passes.
+
+**Verification.** `cargo fmt --all --check`; `cargo clippy -p swarm-perch-bridge --all-targets -- -D warnings`;
+`cargo test -p swarm-perch-bridge pacer`; `bash tools/check-runtime-panic-contract.sh`.
