@@ -1702,6 +1702,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_refused_promotion_is_parked_after_the_budget_like_a_hold() {
+        // The budget belongs to the spool head, not to the hold path: a promotion whose case
+        // channel the relay refuses to admit anybody to blocks the same queue, and it is parked
+        // by the same rule -- under the case id it is about.
+        let dir = tempfile::tempdir().unwrap();
+        let spools = Arc::new(Mutex::new(
+            SpoolSet::open(dir.path(), "c", 1 << 20, 8 << 20).unwrap(),
+        ));
+        let identities = identities();
+        let alarm_idx = identities.alarm();
+        let case = "9499a6e2-8872-453b-80d9-dafc6fc7fc69";
+        spools
+            .lock()
+            .unwrap()
+            .append(
+                Stream::Alarm,
+                Record::from_event(&case_promoted("hunt-promoted", case), alarm_idx).unwrap(),
+            )
+            .unwrap();
+
+        let (metrics, registry) = BridgeMetrics::new();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut built = drainer(
+            &dir,
+            Arc::clone(&spools),
+            Arc::clone(&identities),
+            vec!["68".repeat(32)],
+            None,
+            OkOutcome::Accepted,
+            metrics,
+            shutdown_rx,
+        );
+        built.config.lane_channels.clear();
+        built.publisher.reply = Some(refuse_channel(
+            uuid::Uuid::parse_str(case).unwrap(),
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        ));
+        let handle = tokio::spawn(run(built));
+        let drained = Arc::clone(&spools);
+        let settled = wait_for(|| {
+            drained
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .alarm()
+                .peek(usize::MAX)
+                .is_ok_and(|records| records.is_empty())
+        })
+        .await;
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+        assert!(settled, "the refused promotion never left the spool head");
+
+        let parked = parked_ledger(&dir);
+        assert_eq!(parked.len(), 1);
+        let record = parked.next_due(i64::MAX, 0).unwrap();
+        assert_eq!(
+            record.reason,
+            ParkReason::refusal_budget_exhausted("not_a_channel_member")
+        );
+        assert!(
+            matches!(
+                serde_json::from_slice::<RuntimeEvent>(&record.payload).unwrap(),
+                RuntimeEvent::CasePromoted { case_id, .. } if case_id == case
+            ),
+            "the parked payload is the promotion, verbatim"
+        );
+        assert_eq!(
+            counter(
+                &registry,
+                r#"perch_bridge_alarm_parked_total{reason="not_a_channel_member"}"#
+            ),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn transport_errors_never_count_toward_the_budget() {
         // A relay that is down is not a relay that disagrees. Every tick fails at the socket,
         // which says nothing about whether the sequence would be accepted, so the budget must
