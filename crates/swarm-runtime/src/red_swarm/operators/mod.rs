@@ -237,8 +237,34 @@ const WEIGHT_SCALE: f64 = 1_000_000.0;
 /// starved outright -- it keeps a `1`-in-`WEIGHT_SCALE`-ish share of every
 /// pick instead of becoming unreachable -- and so the pool's scaled total is
 /// never zero.
+///
+/// `f64::clamp` alone is not enough: it leaves `NaN` untouched (clamp only
+/// bounds an already-ordered value, and `NaN` has no order), so a `NaN`
+/// `weight` would otherwise survive to the `scaled < 1.0` check below --
+/// `false` under IEEE-754, since `NaN` compares `false` against everything
+/// -- and fall through to `NaN as u64`, which saturates to `0` and silently
+/// breaks the "every scaled weight is >= 1" invariant
+/// [`choose_distinct_weighted`] relies on to keep its scaled total non-zero.
+/// A non-finite `weight` -- `NaN` or either infinity escaping some future
+/// caller's own domain check -- is therefore mapped to `0.0` first, the same
+/// floor a `0.0` weight already gets and the same reading `scoring`'s
+/// `normalize_catch_rate` gives a non-finite `catch_rate`: an untrusted
+/// number is deprioritised, never propagated into a `NaN`/panic.
+///
+/// Unreachable today: every live `weight` is
+/// [`super::weights::TechniqueWeights::weight_for`]'s return, itself always
+/// [`super::pattern_db::AttackPatternDb::technique_success_rate`] or the
+/// `1.0` neutral default -- both always finite in `[0.0, 1.0]`. This guards
+/// the invariant at the draw itself (defense-in-depth), rather than assuming
+/// every future weight source stays finite, and changes nothing for any
+/// finite `weight`: `clamp` alone already handled `[0.0, 1.0]` and both
+/// infinities correctly.
 fn scaled_weight(weight: f64) -> u64 {
-    let clamped = weight.clamp(0.0, 1.0);
+    let clamped = if weight.is_finite() {
+        weight.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let scaled = (clamped * WEIGHT_SCALE).round();
     if scaled < 1.0 { 1 } else { scaled as u64 }
 }
@@ -383,5 +409,89 @@ mod tests {
         let second = choose_distinct(&mut second_rng, &pool, 3, Some(&weights));
 
         assert_eq!(ids(&first), ids(&second));
+    }
+
+    /// T2a: a non-finite `weight` must floor to the exact same `1` a `0.0`
+    /// weight already gets, never fall through to `NaN as u64`'s saturating
+    /// `0`. Direct and deterministic, unlike the statistical sweep below --
+    /// this pins the scaled number itself.
+    #[test]
+    fn scaled_weight_maps_every_non_finite_input_to_the_same_floor_as_zero() {
+        let floor = scaled_weight(0.0);
+        assert_eq!(
+            floor, 1,
+            "sanity: the documented floor for a 0.0 weight is 1"
+        );
+        assert_eq!(scaled_weight(f64::NAN), floor);
+        assert_eq!(scaled_weight(f64::INFINITY), floor);
+        assert_eq!(scaled_weight(f64::NEG_INFINITY), floor);
+    }
+
+    /// T2a: a `NaN` weight must not be silently starved out of the draw. Before
+    /// [`scaled_weight`]'s finite guard, `scaled_weight(f64::NAN)` saturated to
+    /// `0` (via `NaN as u64`) rather than the documented `1` floor, giving that
+    /// technique a zero-width slot in [`choose_distinct_weighted`]'s cumulative
+    /// draw -- mathematically unreachable, not merely deprioritised. With every
+    /// other technique here floored to the same `1` (a `0.0` weight), a correct
+    /// implementation picks the `NaN`-weighted one about a quarter of the time;
+    /// getting zero hits over 200 seeds is a ~0.75^200 event, not a flake.
+    #[test]
+    fn a_non_finite_weight_keeps_its_technique_reachable_rather_than_starved() {
+        let pool_nodes: Vec<TechniqueNode> = (0..4).map(|i| technique(&format!("T{i}"))).collect();
+        let pool: Vec<&TechniqueNode> = pool_nodes.iter().collect();
+        let weights =
+            TechniqueWeights::for_test([("T0", f64::NAN), ("T1", 0.0), ("T2", 0.0), ("T3", 0.0)]);
+
+        const SEEDS: u64 = 200;
+        let mut nan_hits: u32 = 0;
+        for seed in 0..SEEDS {
+            let mut rng = RedGenomeRng::from_u64(seed);
+            if choose_distinct(&mut rng, &pool, 1, Some(&weights))
+                .first()
+                .is_some_and(|node| node.id == "T0")
+            {
+                nan_hits += 1;
+            }
+        }
+
+        assert!(
+            nan_hits > 0,
+            "T2a: a NaN weight must floor to the same reachable share a 0.0 \
+             weight gets (here, one of four equally-floored techniques), never \
+             starve its technique outright -- got 0 hits for T0 over {SEEDS} seeds"
+        );
+    }
+
+    /// T2a, end to end: a non-finite weight anywhere in the pool must never
+    /// panic or shrink the pick count, whatever finite weights sit alongside
+    /// it (mixing in an ordinary weighted technique too, unlike the uniform
+    /// floor above).
+    #[test]
+    fn choose_distinct_weighted_does_not_panic_when_a_pool_weight_is_non_finite() {
+        let pool_nodes: Vec<TechniqueNode> = (0..4).map(|i| technique(&format!("T{i}"))).collect();
+        let pool: Vec<&TechniqueNode> = pool_nodes.iter().collect();
+        let weights = TechniqueWeights::for_test([
+            ("T0", f64::NAN),
+            ("T1", 0.5),
+            ("T2", f64::INFINITY),
+            ("T3", f64::NEG_INFINITY),
+        ]);
+
+        for seed in 0..20u64 {
+            let mut rng = RedGenomeRng::from_u64(seed);
+            let picked = choose_distinct(&mut rng, &pool, 2, Some(&weights));
+
+            assert_eq!(
+                picked.len(),
+                2,
+                "seed {seed}: a non-finite weight must not shrink the pick count"
+            );
+            let picked_ids: BTreeSet<&str> = picked.iter().map(|node| node.id.as_str()).collect();
+            assert_eq!(
+                picked_ids.len(),
+                2,
+                "seed {seed}: picks must stay distinct even with a non-finite weight in the pool"
+            );
+        }
     }
 }
