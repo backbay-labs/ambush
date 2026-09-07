@@ -12,6 +12,7 @@ pub mod budget;
 mod genome;
 mod graph;
 mod operators;
+pub mod pattern_db;
 mod rng;
 pub mod scoring;
 
@@ -97,6 +98,16 @@ pub enum RedSwarmError {
     /// here rather than silently emitting an unrealisable step.
     #[error("plan step names technique `{technique}`, which is not a node in the target graph")]
     UnknownTechnique { technique: String },
+
+    /// [`pattern_db::AttackPatternDb`] read a JSONL line it could not parse
+    /// into an `AttackPatternRecord` (ATKSCORE-03, SC 3). The store fails
+    /// the whole read closed rather than skipping the line, so a corrupt
+    /// pattern-history file never silently understates a technique's
+    /// detection history. Reused by the store's file wrappers for a
+    /// file-level open failure, with `line: 0` standing in for "not a
+    /// specific data line" -- see those wrappers' doc comments.
+    #[error("malformed attack-pattern record on line {line}: {reason}")]
+    MalformedPatternRecord { line: usize, reason: String },
 }
 
 /// Deterministic seam for generating adversarial telemetry without the historical Python runtime.
