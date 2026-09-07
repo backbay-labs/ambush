@@ -1,8 +1,10 @@
 # Wave 3 Implementation Roadmap
 
-**Status:** planning baseline after the 2026-09-02 repository migration. Migration Tasks 1–8
-are complete on `integrate/workspace`; nothing has been pushed. This roadmap sequences the
-four implementation plans and does not convert planned work into delivered work.
+**Status:** landed. On 2026-09-06 `main` was fast-forwarded to the Operator-complete head
+(`acd5024b5`) and pushed; PRs #12–#16 are merged; both hosted workflows are green on
+`97adf18b6` and `c81fb5059`. The sequencing below is history now; what follows it is
+`21-GAMEPLAN.md`, and the console's remaining fixes are `15-PLAN-HOLD-DURABILITY.md` and
+`16-PLAN-WINDOW-WALK.md`.
 
 **Goal:** move from the merged repository to an operator-complete Ambush console through four
 evidence-bearing milestones: Ground, First card, The hold, and Operator-complete. At every exit,
@@ -20,7 +22,7 @@ cuts, risks, success measures, and the handoff from local integration to hosted 
 |---|---|---|
 | Repository merge | complete locally | full Ambush workspace history lives under `workspace/`; root and workspace remain separate Cargo workspaces |
 | Integration branch | `integrate/workspace` | migration, design and all four milestone plans are complete in local history; this roadmap closes the planning set |
-| Push / PR | five stacked PRs open, #12–#16, all green and mergeable on 2026-09-05 | none approved or merged; the roadmap makes first merge the owner's call |
+| Push / PR | **landed 2026-09-06** by route A (fast-forward, `--no-verify`; ruling in `21-GAMEPLAN.md`) | remote `main` `0476f50d6` → `39549b19d` (ratchet bootstrap retired) → `97adf18b6` (window-walk fixes); #12–#16 merged 2026-09-06T23:57:48Z |
 | Migration Tasks 1–8 | complete | history rewrite, merge, Cargo boundary, ignore/gate fixes, Hermit hooks and workspace CI re-rooting |
 | Migration Tasks 9–11 | open | first-push strategy, repository policy, eventual retirement of the standalone chat checkout |
 | Product implementation | all four milestones landed | Ground accepted; First card, The hold and Operator-complete implemented with every gate green and **not self-declared accepted** — the console's commands were driven against the live stack on 2026-09-05 through Tauri's own IPC layer (`evidence/walking-skeleton.md`); the rendered React tree on a real window is the stated seam, and acceptance on that record is the owner's read |
@@ -335,7 +337,7 @@ Create one row when a milestone exits; until then its state is `not accepted`.
 
 | Milestone | Exit SHA | Local combined gates | Hosted run | Real workflow evidence | State |
 |---|---|---|---|---|---|
-| Repository baseline | — | migration plan Tasks 1–8 only | — | n/a | not landed |
+| Repository baseline | `97adf18b6` | root gates + `workspace/just ci` lanes via the pre-push hooks on `main` | CI [34071297069](https://github.com/backbay-labs/ambush/actions/runs/34071297069) · Workspace CI [34071297111](https://github.com/backbay-labs/ambush/actions/runs/34071297111) (both green; again on `c81fb5059`: 34071384157 / 34071384151) | `evidence/window-walk.md` | **landed 2026-09-06** |
 | Ground | `49a535535` | root build/fmt/clippy/tests + 13 gate scripts; `workspace/just ci`; smoke E2E | Workspace CI 25/25 on PR #13 | `evidence/ground.md` | **accepted 2026-09-03** |
 | First card | `642270647` | root fmt/clippy/tests, six tool gates, copy + write-allowlist gates, provisioning test | pending on PR | `evidence/first-card.md` | **not self-declared accepted** — all 24 tasks implemented and gates green; the walking skeleton ran 2026-09-05 with `E`, `D`, both controls (`evidence/walking-skeleton.md`), the console's commands live through Tauri IPC and the rendered tree mock-backed; the owner's read |
 | The hold | `9c2d7ad41` | root build/fmt/clippy + 1,543 workspace tests; all 18 tool gates; Tauri clippy + 3,086 tests; desktop check/typecheck/6,040 unit tests; file-size ratchet | pending on PR | `evidence/the-hold.md` | **not accepted** — the daemon-and-relay half ran live end to end (hold produced, filed, addressed, refused, granted with a 60 s lease, replayed, 409 on conflict); the CONSOLE half's commands were driven live 2026-09-05 through Tauri IPC — grant to `executed` with a lease, refuse, replay, `refused_late` with its rule (`evidence/walking-skeleton.md`); the rendered tree remains mock-backed; the owner's read |

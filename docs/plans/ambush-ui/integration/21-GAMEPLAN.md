@@ -62,8 +62,8 @@ engine roadmap completes. Nothing before it is scheduled around an outside event
   sweep re-files an unfiled hold. Live reproduction re-run (spool against a wiped relay
   database) and recorded in `evidence/the-hold.md`.
 - [ ] **`perch` on by default.** The exit task of The hold, taken only after the window walk.
-- [ ] **Roadmap and evidence index updated**: `20-ROADMAP.md` §1 and §10 say "landed" with
-  the remote SHA and the hosted run URLs.
+- [x] **Roadmap and evidence index updated**: `20-ROADMAP.md`'s status, §1 and §10 say
+  "landed" with the remote SHAs and the four green hosted run URLs (2026-09-07).
 
 ## Phase 1 — an internal build someone on the team could run
 
