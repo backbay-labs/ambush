@@ -8,6 +8,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use swarm_whisker::TelemetryEvent;
 
+mod graph;
+
+pub use graph::{LoadedSuite, Node, ScenarioRef, TargetGraph, TechniqueNode};
+
 /// Runtime-owned context for deterministic adversarial corpus generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreatContext {
@@ -54,6 +58,13 @@ pub struct AdversarialSequenceArtifact {
 pub enum RedSwarmError {
     #[error(transparent)]
     Replay(#[from] ReplayHarnessError),
+
+    /// The target graph reads the evasion technique catalog through
+    /// `evasion_coverage`'s loader, whose read and parse failures surface here
+    /// unchanged so a caller sees the same catalog diagnostics either lane
+    /// produces.
+    #[error(transparent)]
+    Catalog(#[from] crate::evasion_coverage::EvasionCoverageError),
 
     #[error("invalid threat context field `{field}`: {reason}")]
     InvalidContext { field: &'static str, reason: String },

@@ -827,8 +827,17 @@ fn detector_intentionally_uncovered(
         })
 }
 
-fn load_catalog(
-    repo_root: &Path,
+/// Read and parse the evasion technique catalog, without the repo-root-scoped
+/// validation the coverage evaluators layer on top.
+///
+/// The red-swarm target graph (OPFOR-02) builds its technique nodes from this
+/// same catalog and must read the identical bytes through the identical schema,
+/// not grow a second YAML parse that could drift from this one. It has no repo
+/// root against which to check that the catalog's referenced suite exists, so
+/// the structural `validate_catalog` pass stays with `load_catalog` -- its only
+/// caller that holds a repo root -- and this function is the shared read/parse
+/// step beneath both.
+pub(crate) fn parse_evasion_technique_catalog(
     catalog_path: &Path,
 ) -> Result<EvasionTechniqueCatalog, EvasionCoverageError> {
     let raw =
@@ -836,12 +845,19 @@ fn load_catalog(
             path: catalog_path.to_path_buf(),
             source,
         })?;
-    let catalog = serde_yaml::from_str::<EvasionTechniqueCatalog>(&raw).map_err(|source| {
+    serde_yaml::from_str::<EvasionTechniqueCatalog>(&raw).map_err(|source| {
         EvasionCoverageError::CatalogParse {
             path: catalog_path.to_path_buf(),
             source,
         }
-    })?;
+    })
+}
+
+fn load_catalog(
+    repo_root: &Path,
+    catalog_path: &Path,
+) -> Result<EvasionTechniqueCatalog, EvasionCoverageError> {
+    let catalog = parse_evasion_technique_catalog(catalog_path)?;
     validate_catalog(repo_root, catalog_path, &catalog)?;
     Ok(catalog)
 }
@@ -1070,7 +1086,15 @@ fn scenario_coverage<'a>(
         })
 }
 
-fn threat_class_from_payload(payload: &TelemetryPayload) -> ThreatClass {
+/// Map a telemetry payload to the threat class its shape implies.
+///
+/// Shared with the red-swarm target graph (OPFOR-02) so that an adversarial
+/// scenario which omits an explicit `metadata.threat_class` is classified the
+/// one way the engine already classifies it here -- the same fallback
+/// `load_adversarial_scenarios` uses -- rather than by a second, divergent rule
+/// that would let the graph and the coverage evaluator disagree about what a
+/// scenario is.
+pub(crate) fn threat_class_from_payload(payload: &TelemetryPayload) -> ThreatClass {
     match payload {
         TelemetryPayload::ProcessStart(_) => ThreatClass::Execution,
         TelemetryPayload::ProcessMemoryAccess(access) => {
