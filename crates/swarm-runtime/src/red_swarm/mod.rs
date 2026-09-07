@@ -8,10 +8,13 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use swarm_whisker::TelemetryEvent;
 
+pub mod budget;
 mod genome;
 mod graph;
 mod operators;
+pub mod pattern_db;
 mod rng;
+pub mod scoring;
 
 pub use genome::{
     CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,
@@ -95,6 +98,29 @@ pub enum RedSwarmError {
     /// here rather than silently emitting an unrealisable step.
     #[error("plan step names technique `{technique}`, which is not a node in the target graph")]
     UnknownTechnique { technique: String },
+
+    /// [`pattern_db::AttackPatternDb`] read a JSONL line it could not parse
+    /// into an `AttackPatternRecord` (ATKSCORE-03, SC 3). The store fails
+    /// the whole read closed rather than skipping the line, so a corrupt
+    /// pattern-history file never silently understates a technique's
+    /// detection history. A file-level open failure is
+    /// [`Self::PatternStoreIo`] instead -- see that variant's doc for why
+    /// the two are kept distinct.
+    #[error("malformed attack-pattern record on line {line}: {reason}")]
+    MalformedPatternRecord { line: usize, reason: String },
+
+    /// [`pattern_db::AttackPatternDb::load`] or
+    /// [`pattern_db::AttackPatternDb::append_line`] could not open the
+    /// pattern-store file at `path`. Kept distinct from
+    /// [`Self::MalformedPatternRecord`]: an open failure means nothing was
+    /// ever read, so nothing was malformed -- reusing the parse-error
+    /// variant (with its `line: 0` sentinel) for this case would describe a
+    /// data problem the store never observed.
+    #[error("attack pattern store IO error at {path}: {source}")]
+    PatternStoreIo {
+        path: String,
+        source: std::io::Error,
+    },
 }
 
 /// Deterministic seam for generating adversarial telemetry without the historical Python runtime.
