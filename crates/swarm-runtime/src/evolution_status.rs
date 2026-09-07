@@ -239,6 +239,28 @@ pub struct EvolutionBenchmarkSummary {
     pub corpus_version: Option<String>,
 }
 
+/// The `red_swarm_campaign` field of `evolution status --json` (Phase 291,
+/// ARMSCI-04): the key facts of the on-disk red-swarm campaign report
+/// `campaign` persists to `data/red-swarm/campaigns/<campaign>-<seed>.json`
+/// (see `crates/swarm-cli/src/red_swarm_cmd.rs`'s `CampaignReportView`).
+/// `stop_reason` is carried as the literal persisted JSON string rather
+/// than [`crate::red_swarm::StopReason`] (`Serialize`-only by that enum's
+/// own design) so an unrecognized future variant still round-trips
+/// instead of failing this reader closed. `generation_count` is
+/// `generations.len()` -- how many generations the campaign actually ran,
+/// not the configured cap -- and `corpus_sequence_id` is the last of
+/// those generations' id, mirroring [`EvolutionAdversarialSummary`]'s own
+/// field of the same name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvolutionRedSwarmCampaignSummary {
+    pub campaign: String,
+    pub seed: u64,
+    pub generation_count: usize,
+    pub stop_reason: String,
+    pub final_blue_catch_rate: f64,
+    pub corpus_sequence_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvolutionStatusReport {
     pub enabled: bool,
@@ -259,6 +281,7 @@ pub struct EvolutionStatusReport {
     pub adversarial: EvolutionAdversarialSummary,
     pub autonomous: EvolutionAutonomousFitnessSummary,
     pub benchmark: EvolutionBenchmarkSummary,
+    pub red_swarm_campaign: Option<EvolutionRedSwarmCampaignSummary>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -296,6 +319,23 @@ pub enum EvolutionStatusError {
     },
 }
 
+/// The default directory `status` reads red-swarm campaign reports from
+/// (Phase 291, ARMSCI-04) -- the same literal
+/// `crates/swarm-cli/src/red_swarm_cmd.rs`'s `campaign` subcommand persists
+/// its report under (that module's own `DEFAULT_CAMPAIGN_REPORTS_DIR`),
+/// duplicated here rather than imported because `swarm-runtime` cannot
+/// depend on the downstream `swarm-cli` crate that owns it. `campaign`
+/// resolves that constant relative to the current working directory, not
+/// relative to `--config`'s own directory (it never reads a report
+/// destination from `SwarmConfig` or the config file's location -- see
+/// that constant's doc), so [`EvolutionStatusPaths::red_swarm_campaign_reports_dir`]
+/// is resolved the same CWD-relative way in
+/// [`DefaultEvolutionStatusHarness::from_config`] rather than through
+/// [`resolve_repo_relative_path`] -- to actually find what `campaign`
+/// wrote. [`DefaultEvolutionStatusHarness::with_red_swarm_campaign_reports_dir`]
+/// overrides it, for a test that needs a controlled temp directory.
+const DEFAULT_RED_SWARM_CAMPAIGN_REPORTS_DIR: &str = "data/red-swarm/campaigns";
+
 #[derive(Debug, Clone)]
 struct EvolutionStatusPaths {
     ranking_results_dir: PathBuf,
@@ -307,6 +347,7 @@ struct EvolutionStatusPaths {
     benchmark_results_dir: PathBuf,
     proof_results_dir: PathBuf,
     queue_results_dir: PathBuf,
+    red_swarm_campaign_reports_dir: PathBuf,
 }
 
 pub struct DefaultEvolutionStatusHarness {
@@ -358,9 +399,24 @@ impl DefaultEvolutionStatusHarness {
                     base,
                     &paths.evolution_queue_results_dir,
                 ),
+                red_swarm_campaign_reports_dir: PathBuf::from(
+                    DEFAULT_RED_SWARM_CAMPAIGN_REPORTS_DIR,
+                ),
             },
             config,
         })
+    }
+
+    /// Overrides the directory [`Self::status`] reads red-swarm campaign
+    /// reports from, in place of the CWD-relative
+    /// [`DEFAULT_RED_SWARM_CAMPAIGN_REPORTS_DIR`] default (Phase 291,
+    /// ARMSCI-04). `campaign` itself never reads this destination from
+    /// `SwarmConfig`, so there is no config field to override it through --
+    /// this exists so a test can point `status()` at a temp directory
+    /// without touching the real working directory.
+    pub fn with_red_swarm_campaign_reports_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.paths.red_swarm_campaign_reports_dir = dir.into();
+        self
     }
 
     pub fn status(&self) -> Result<EvolutionStatusReport, EvolutionStatusError> {
@@ -527,6 +583,9 @@ impl DefaultEvolutionStatusHarness {
                 latest_episode_report.as_ref(),
             ),
             benchmark: build_benchmark_summary(latest_benchmark_report.as_ref()),
+            red_swarm_campaign: load_red_swarm_campaign_summary(
+                &self.paths.red_swarm_campaign_reports_dir,
+            ),
         })
     }
 }
@@ -711,6 +770,19 @@ pub fn render_evolution_status(report: &EvolutionStatusReport) -> String {
             format_optional_f64(report.benchmark.latest_delta_from_previous),
             format_optional_f64(report.benchmark.latest_delta_from_first),
         ));
+    }
+    if let Some(campaign) = &report.red_swarm_campaign {
+        lines.push(format!(
+            "Red swarm campaign: {} seed={} generations={} stop_reason={} final_blue_catch_rate={:.3}",
+            campaign.campaign,
+            campaign.seed,
+            campaign.generation_count,
+            campaign.stop_reason,
+            campaign.final_blue_catch_rate
+        ));
+        if let Some(corpus_sequence_id) = &campaign.corpus_sequence_id {
+            lines.push(format!("Red swarm corpus sequence: {corpus_sequence_id}"));
+        }
     }
     if let Some(observation_count) = report.observation_count {
         lines.push(format!("Latest observation window: {observation_count}"));
@@ -1210,6 +1282,94 @@ fn load_latest_handoff(
     load_json::<EvolutionHandoffReport>(Path::new(&record.bundle_path))
 }
 
+/// The on-disk shape [`load_red_swarm_campaign_summary`] reads: the subset
+/// of `campaign`'s persisted JSON
+/// (`crates/swarm-cli/src/red_swarm_cmd.rs`'s `CampaignReportView`) that
+/// `red_swarm_campaign` needs. Deliberately its own `Deserialize`-only
+/// type, decoupled from both [`crate::red_swarm::CampaignReport`]
+/// (`Serialize`-only by design -- see that struct's own doc) and
+/// `red_swarm_cmd`'s private view types (which live in the downstream
+/// `swarm-cli` crate this crate cannot depend on): unknown JSON fields are
+/// ignored, so a field this reader does not name never breaks parsing.
+#[derive(Debug, Deserialize)]
+struct RedSwarmCampaignReportFile {
+    generated_at_ms: i64,
+    determinism: RedSwarmCampaignReportFileDeterminism,
+    #[serde(default)]
+    generations: Vec<RedSwarmCampaignGenerationFile>,
+    stop_reason: String,
+    final_blue_catch_rate: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RedSwarmCampaignReportFileDeterminism {
+    seed: u64,
+    campaign: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RedSwarmCampaignGenerationFile {
+    corpus_sequence_id: String,
+}
+
+/// Reads every `*.json` file directly under `dir`, parses each as a
+/// [`RedSwarmCampaignReportFile`], and returns the summary of whichever
+/// one has the greatest `generated_at_ms` (ties broken by filename, so the
+/// pick is deterministic regardless of directory iteration order) --
+/// `campaign` names its report `<campaign>-<seed>.json`, so a directory
+/// can hold one file per campaign/seed pair, and this always surfaces the
+/// most recently generated one.
+///
+/// Fail-soft by design, unlike this module's other `load_latest_*`
+/// helpers: a missing `dir`, a file that fails to read, or a file that
+/// fails to parse is skipped rather than surfaced as an
+/// [`EvolutionStatusError`], because `evolution status --json` must report
+/// `red_swarm_campaign` as `null` rather than fail the whole read over a
+/// missing or malformed campaign report (Phase 291, ARMSCI-04). If every
+/// candidate is unreadable or malformed, this returns `None`, exactly as
+/// it would if `dir` did not exist at all -- computed fresh from whatever
+/// is on disk right now, so a report removed since the last call can never
+/// leave a stale summary behind.
+fn load_red_swarm_campaign_summary(dir: &Path) -> Option<EvolutionRedSwarmCampaignSummary> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut candidates: Vec<(i64, String, EvolutionRedSwarmCampaignSummary)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(file) = serde_json::from_str::<RedSwarmCampaignReportFile>(&raw) else {
+            continue;
+        };
+        let corpus_sequence_id = file
+            .generations
+            .last()
+            .map(|generation| generation.corpus_sequence_id.clone());
+        candidates.push((
+            file.generated_at_ms,
+            file_name.to_string(),
+            EvolutionRedSwarmCampaignSummary {
+                campaign: file.determinism.campaign,
+                seed: file.determinism.seed,
+                generation_count: file.generations.len(),
+                stop_reason: file.stop_reason,
+                final_blue_catch_rate: file.final_blue_catch_rate,
+                corpus_sequence_id,
+            },
+        ));
+    }
+    candidates
+        .into_iter()
+        .max_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)))
+        .map(|(_, _, summary)| summary)
+}
+
 fn format_optional_f64(value: Option<f64>) -> String {
     value
         .map(|value| format!("{value:.3}"))
@@ -1328,8 +1488,9 @@ struct CanaryIndex {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        DefaultEvolutionStatusHarness, EvolutionAdversarialSummary, FileKittenStatusStore,
-        KittenExecutionState, KittenStatusRecord, build_adversarial_summary,
+        DefaultEvolutionStatusHarness, EvolutionAdversarialSummary,
+        EvolutionRedSwarmCampaignSummary, FileKittenStatusStore, KittenExecutionState,
+        KittenStatusRecord, build_adversarial_summary, load_red_swarm_campaign_summary,
         render_evolution_status,
     };
     use crate::canary::{CanaryRecommendation, CanaryRunRecord, CanaryRunStatus};
@@ -1376,6 +1537,34 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("swarm-evolution-status-{label}-{suffix}"));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Builds a minimal persisted red-swarm campaign report (the on-disk
+    /// shape `crates/swarm-cli/src/red_swarm_cmd.rs`'s `CampaignReportView`
+    /// serializes) with only the fields
+    /// [`load_red_swarm_campaign_summary`] reads -- every other field
+    /// `campaign` writes (`determinism.max_generations`,
+    /// `determinism.convergence`, each generation's `red_fitness`,
+    /// `blue_catch_rate`, `records`, `evaded_techniques`) is deliberately
+    /// absent, pinning that the reader tolerates a real report's extra
+    /// fields rather than requiring this fixture to mirror it byte for
+    /// byte.
+    fn red_swarm_campaign_report_json(
+        campaign: &str,
+        seed: u64,
+        generated_at_ms: i64,
+        stop_reason: &str,
+        final_blue_catch_rate: f64,
+        generation_corpus_sequence_ids: &[&str],
+    ) -> String {
+        let generations = generation_corpus_sequence_ids
+            .iter()
+            .map(|id| format!(r#"{{"corpus_sequence_id":"{id}"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"{{"generated_at_ms":{generated_at_ms},"determinism":{{"seed":{seed},"campaign":"{campaign}"}},"generations":[{generations}],"stop_reason":"{stop_reason}","final_blue_catch_rate":{final_blue_catch_rate}}}"#
+        )
     }
 
     fn active_waiver(
@@ -2094,6 +2283,10 @@ mod tests {
         assert_eq!(report.benchmark.latest_leader_generation, Some(2));
         assert_eq!(report.benchmark.latest_measured_fitness, Some(0.824));
         assert_eq!(report.benchmark.latest_delta_from_previous, Some(0.022));
+        assert_eq!(
+            report.red_swarm_campaign, None,
+            "no data/red-swarm/campaigns directory was set up for this harness"
+        );
         assert!(
             render_evolution_status(&report).contains("Autonomous fitness:"),
             "rendered status should surface measured autonomous fitness"
@@ -2351,6 +2544,179 @@ mod tests {
             keys, expected,
             "COEVOLVE-04 lets corpus_sequence_id reference a campaign generation, \
              but EvolutionAdversarialSummary's public field set must not change"
+        );
+    }
+
+    /// ARMSCI-04: `evolution status --json`'s `red_swarm_campaign` object
+    /// has a fixed field set, exactly like
+    /// [`evolution_adversarial_summary_field_set_is_unchanged_by_the_campaign_wiring`]
+    /// pins for [`EvolutionAdversarialSummary`] above.
+    #[test]
+    fn evolution_red_swarm_campaign_summary_field_set_is_fixed() {
+        let summary = EvolutionRedSwarmCampaignSummary {
+            campaign: "campaign-a".to_string(),
+            seed: 1,
+            generation_count: 2,
+            stop_reason: "max_generations".to_string(),
+            final_blue_catch_rate: 0.5,
+            corpus_sequence_id: Some("generation-1".to_string()),
+        };
+
+        let value = serde_json::to_value(&summary).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("EvolutionRedSwarmCampaignSummary must serialize to a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+
+        let mut expected = vec![
+            "campaign",
+            "seed",
+            "generation_count",
+            "stop_reason",
+            "final_blue_catch_rate",
+            "corpus_sequence_id",
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(
+            keys, expected,
+            "evolution status --json's red_swarm_campaign object's field set must not change silently"
+        );
+    }
+
+    #[test]
+    fn load_red_swarm_campaign_summary_is_none_when_the_directory_does_not_exist() {
+        let dir = temp_dir("red-swarm-campaign-missing").join("does-not-exist");
+
+        assert_eq!(load_red_swarm_campaign_summary(&dir), None);
+    }
+
+    #[test]
+    fn load_red_swarm_campaign_summary_is_none_for_a_malformed_report_file() {
+        let dir = temp_dir("red-swarm-campaign-malformed");
+        fs::write(dir.join("campaign-a-1.json"), "{ not valid json").unwrap();
+
+        assert_eq!(load_red_swarm_campaign_summary(&dir), None);
+    }
+
+    #[test]
+    fn load_red_swarm_campaign_summary_picks_the_freshest_of_several_reports() {
+        let dir = temp_dir("red-swarm-campaign-freshest");
+        fs::write(
+            dir.join("campaign-a-1.json"),
+            red_swarm_campaign_report_json(
+                "campaign-a",
+                1,
+                1_000,
+                "plateau",
+                0.5,
+                &["generation-0"],
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("campaign-b-2.json"),
+            red_swarm_campaign_report_json(
+                "campaign-b",
+                2,
+                2_000,
+                "max_generations",
+                0.83,
+                &["generation-0", "generation-1", "generation-2"],
+            ),
+        )
+        .unwrap();
+
+        let summary =
+            load_red_swarm_campaign_summary(&dir).expect("the freshest report should be picked");
+
+        assert_eq!(summary.campaign, "campaign-b");
+        assert_eq!(summary.seed, 2);
+        assert_eq!(summary.generation_count, 3);
+        assert_eq!(summary.stop_reason, "max_generations");
+        assert_eq!(summary.final_blue_catch_rate, 0.83);
+        assert_eq!(summary.corpus_sequence_id.as_deref(), Some("generation-2"));
+    }
+
+    #[test]
+    fn evolution_status_harness_reports_the_red_swarm_campaign_when_present_and_drops_it_when_removed()
+     {
+        let root = temp_dir("red-swarm-campaign-harness");
+        let ranking_dir = root.join("rankings");
+        let selection_dir = root.join("selections");
+        let canary_dir = root.join("canaries");
+        let handoff_dir = root.join("handoffs");
+        let population_dir = root.join("population");
+        let proof_dir = root.join("proofs");
+        let queue_dir = root.join("queue");
+        let campaign_dir = root.join("campaigns");
+        fs::create_dir_all(ranking_dir.join("reports")).unwrap();
+        fs::create_dir_all(&selection_dir).unwrap();
+        fs::create_dir_all(&canary_dir).unwrap();
+        fs::create_dir_all(&handoff_dir).unwrap();
+        fs::create_dir_all(&population_dir).unwrap();
+        fs::create_dir_all(&proof_dir).unwrap();
+        fs::create_dir_all(&queue_dir).unwrap();
+        fs::create_dir_all(&campaign_dir).unwrap();
+
+        let report_path = campaign_dir.join("night-market-7.json");
+        fs::write(
+            &report_path,
+            red_swarm_campaign_report_json(
+                "night-market",
+                7,
+                3_000,
+                "full_coverage",
+                0.91,
+                &["generation-0", "generation-1"],
+            ),
+        )
+        .unwrap();
+
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let mut config =
+            crate::config::load_config(repo_root.join("rulesets/default.yaml")).unwrap();
+        config.evolution.paths.evolution_ranking_results_dir = ranking_dir.display().to_string();
+        config.evolution.paths.evolution_selection_results_dir =
+            selection_dir.display().to_string();
+        config.evolution.paths.canary_results_dir = canary_dir.display().to_string();
+        config.evolution.paths.evolution_handoff_results_dir = handoff_dir.display().to_string();
+        config.evolution.paths.evolution_population_results_dir =
+            population_dir.display().to_string();
+        config.evolution.paths.evolution_proof_results_dir = proof_dir.display().to_string();
+        config.evolution.paths.evolution_queue_results_dir = queue_dir.display().to_string();
+
+        let harness = DefaultEvolutionStatusHarness::from_config("inline", config)
+            .unwrap()
+            .with_red_swarm_campaign_reports_dir(campaign_dir);
+
+        let report = harness.status().unwrap();
+        let campaign = report
+            .red_swarm_campaign
+            .as_ref()
+            .expect("a persisted campaign report should populate red_swarm_campaign");
+        assert_eq!(campaign.campaign, "night-market");
+        assert_eq!(campaign.seed, 7);
+        assert_eq!(campaign.generation_count, 2);
+        assert_eq!(campaign.stop_reason, "full_coverage");
+        assert_eq!(campaign.final_blue_catch_rate, 0.91);
+        assert_eq!(campaign.corpus_sequence_id.as_deref(), Some("generation-1"));
+        assert!(
+            render_evolution_status(&report).contains("Red swarm campaign: night-market seed=7"),
+            "rendered status should surface the red swarm campaign summary"
+        );
+
+        fs::remove_file(&report_path).unwrap();
+        let report_after_removal = harness.status().unwrap();
+        assert_eq!(
+            report_after_removal.red_swarm_campaign, None,
+            "a removed campaign report must never leave a stale red_swarm_campaign value behind"
         );
     }
 }
