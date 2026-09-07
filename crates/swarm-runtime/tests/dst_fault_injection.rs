@@ -1,14 +1,19 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! Phase 286 Task 1 -- the deterministic-simulation fault-injection harness
-//! foundation (DST-01, DST-05).
+//! Phase 286 -- the deterministic-simulation fault-injection harness
+//! (DST-01, DST-02, DST-05).
 //!
 //! This file drives the REAL `SwarmRuntime::authorize_and_execute`, a real
 //! `StaticApprovalGate`, and a real `InMemoryPheromoneSubstrate` -- no mocks
 //! of any of the three -- through a hand-rolled deterministic executor with
-//! no wall clock, no OS entropy, and no tokio. Only `FaultClass::NoFault` is
-//! wired here; Task 2 adds the three DST-02 fault classes on top of the
-//! shapes below. See `.superpowers/sdd/286-01-PLAN/task-1-report.md` for the
+//! no wall clock, no OS entropy, and no tokio. Task 1 built the foundation
+//! and wired only `FaultClass::NoFault`; Task 2 (this extension) adds the
+//! three DST-02 fault classes and the machinery that fires them --
+//! `RecordingResponseAdapter`'s dispatch-boundary checkpoint (precise
+//! before/after-dispatch drop control) and `SubstrateSeam` (the real
+//! close/reopen seam for class (c)). See
+//! `.superpowers/sdd/286-01-PLAN/task-1-report.md` (the foundation) and
+//! `.superpowers/sdd/286-01-PLAN/task-2-report.md` (this extension) for the
 //! full account, in particular:
 //!
 //! - **Entry point.** Neither `authorize_and_execute` nor
@@ -26,12 +31,26 @@
 //!   would persist if anything persisted at all; there is no atomic journal
 //!   tying the two together. This harness's persist step is a real, signed
 //!   `PheromoneDeposit` -- a genuine substrate write, not a bookkeeping side
-//!   channel -- so Task 2's fault classes have a real boundary to split.
+//!   channel -- so the three fault classes below have a real boundary to
+//!   split.
+//! - **The three fault classes (DST-02), and how each fires.** (a)
+//!   `DropBeforeDispatch`: the executor polls the episode to budget 1 and
+//!   drops it -- stuck inside the adapter's dispatch checkpoint, before
+//!   `record_dispatch` ever runs. (b) `DropAfterDispatchBeforePersist`:
+//!   polls to budget 2 and drops -- dispatch recorded exactly once, but the
+//!   substrate `.deposit(..)` call never begins. (c) `SubstrateCloseReopen`:
+//!   polls to the SAME budget 2 as (b), but instead of dropping, closes then
+//!   reopens the real substrate (`SubstrateSeam::close_then_reopen`) while
+//!   the future sits suspended, then resumes it to completion -- the
+//!   episode's persist call then executes against the newly reopened real
+//!   instance. A seed selects a class deterministically
+//!   (`FaultPlan::for_seed`, via `RedGenomeRng::choose` over
+//!   `ALL_FAULT_CLASSES`).
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use async_trait::async_trait;
@@ -132,6 +151,30 @@ fn run_to_completion<'a, T>(future: Pin<Box<dyn Future<Output = T> + 'a>>) -> (T
     }
 }
 
+/// Poll `future` to exactly `budget` polls and hand it back `Exhausted`,
+/// still alive -- panicking if it resolves any earlier. Every fault
+/// checkpoint budget this file uses ([`BEFORE_DISPATCH_POLL_BUDGET`],
+/// [`AFTER_DISPATCH_POLL_BUDGET`]) is derived from the hand-traced, pinned
+/// poll sequence: an early `Ready` here means that sequence silently
+/// changed shape, which every one of Task 2's fault classes depends on
+/// being false, so this is a loud diagnostic, not a silent mismatch.
+fn poll_to_checkpoint<'a, T>(
+    future: Pin<Box<dyn Future<Output = T> + 'a>>,
+    budget: u32,
+) -> (Pin<Box<dyn Future<Output = T> + 'a>>, u32) {
+    match poll_bounded(future, budget) {
+        BudgetedPoll::Ready(value, polls) => {
+            drop(value);
+            unreachable!(
+                "episode resolved after only {polls} poll(s), before the intended checkpoint at \
+                 budget {budget}: the hand-traced poll sequence this fault class relies on has \
+                 changed shape"
+            )
+        }
+        BudgetedPoll::Exhausted(future, polls) => (future, polls),
+    }
+}
+
 /// A future that is `Pending` exactly once, then `Ready(())`.
 ///
 /// This harness's own synthetic checkpoint primitive. It exists because the
@@ -174,28 +217,91 @@ impl Future for YieldOnce {
 // 2. FaultPlan + seed mapping (DST-05).
 // ---------------------------------------------------------------------------
 
-/// The one fault class Task 1 wires: run the episode to completion. Task 2
-/// adds the three DST-02 fault classes (future-drop before dispatch,
-/// future-drop after dispatch but before receipt persistence, substrate
-/// close/reopen) as further variants and gives the executor logic to act on
-/// them. This task only needs the enum to exist so `FaultPlan`'s shape does
-/// not change out from under Task 2.
+/// Poll budget for DST-02 fault class (a): the outer episode future's FIRST
+/// poll always stalls inside `RecordingResponseAdapter::execute`'s
+/// `YieldOnce`, before `record_dispatch` ever runs -- hand-traced (and
+/// pinned by Task 1's `dst_no_fault_episode_polls_through_both_real_checkpoints_before_resolving`,
+/// which asserts the full no-fault sequence resolves in exactly 3 polls
+/// total). Stopping at budget 1 lands exactly there, every time.
+const BEFORE_DISPATCH_POLL_BUDGET: u32 = 1;
+
+/// Poll budget for DST-02 fault classes (b) and (c): by poll 2, the
+/// adapter's `YieldOnce` has resolved (dispatch recorded exactly once) and
+/// `authorize_and_execute`'s fully-synchronous tail has completed, but
+/// `run_episode`'s own second `YieldOnce` -- polled for the first time in
+/// this same poll -- is `Pending`, so the substrate `.deposit(..)` call has
+/// not yet begun. Stopping at budget 2 lands exactly there, every time; see
+/// `BEFORE_DISPATCH_POLL_BUDGET`'s doc comment for the same hand-traced
+/// sequence.
+const AFTER_DISPATCH_POLL_BUDGET: u32 = 2;
+
+/// The four fault classes DST-02 requires. Task 1 wired only `NoFault`;
+/// Task 2 adds the other three variants AND the executor logic
+/// (`run_episode_under_fault`) that acts on them.
+///
+/// - `NoFault`: run the episode to completion, no injected fault.
+/// - `DropBeforeDispatch` (DST-02 class (a)): the deterministic executor
+///   drops the episode future at [`BEFORE_DISPATCH_POLL_BUDGET`] -- BEFORE
+///   `RecordingResponseAdapter::execute`'s dispatch effect becomes
+///   observable. The action never takes effect; the dispatch log stays
+///   empty.
+/// - `DropAfterDispatchBeforePersist` (DST-02 class (b)): the executor drops
+///   the episode future at [`AFTER_DISPATCH_POLL_BUDGET`] -- the dispatch IS
+///   recorded, but the substrate persist call never begins. A real
+///   crash-window split between action and receipt, not a bug in the fault
+///   injector (see Task 1's report on the engine's receipt-before-action
+///   ground truth).
+/// - `SubstrateCloseReopen` (DST-02 class (c)): NOT a drop. The executor
+///   stops the episode future at the SAME [`AFTER_DISPATCH_POLL_BUDGET`]
+///   checkpoint as `DropAfterDispatchBeforePersist`, but instead of dropping
+///   it, closes then reopens the real substrate
+///   ([`SubstrateSeam::close_then_reopen`]) while the future sits suspended,
+///   then resumes the SAME future to completion -- so the episode's persist
+///   call executes against the newly reopened real substrate instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FaultClass {
     NoFault,
+    DropBeforeDispatch,
+    DropAfterDispatchBeforePersist,
+    SubstrateCloseReopen,
 }
+
+/// Every fault class, in the fixed order [`FaultPlan::for_seed`] hands to
+/// [`RedGenomeRng::choose`] for its class-selector draw. Also this file's
+/// own enumeration of "all classes" for coverage tests and the
+/// determinism sweep below.
+const ALL_FAULT_CLASSES: [FaultClass; 4] = [
+    FaultClass::NoFault,
+    FaultClass::DropBeforeDispatch,
+    FaultClass::DropAfterDispatchBeforePersist,
+    FaultClass::SubstrateCloseReopen,
+];
 
 /// One seed's deterministic fault injection plan (DST-05).
 ///
-/// `checkpoint` is a raw deterministic draw from the seed's own
-/// [`RedGenomeRng`] stream. Task 1 does not interpret it -- there is only one
-/// fault class, and it needs no checkpoint -- but the field exists now so
-/// Task 2 can give it meaning (e.g. a poll count to drop at) without
-/// changing `FaultPlan`'s shape or re-deriving how seeds map to plans. If
-/// Task 2 also needs to draw a class selector, it should do so BEFORE
-/// drawing `checkpoint` from the same stream and document the new order --
-/// this task guarantees only that `for_seed` itself is deterministic, not
-/// that today's draw order is permanently frozen.
+/// `class` is drawn first from the seed's [`RedGenomeRng`] stream, via
+/// `choose` over [`ALL_FAULT_CLASSES`] -- Task 2's addition: "each class is
+/// selected deterministically by seed." `checkpoint` is drawn immediately
+/// after, from the same stream, exactly as Task 1 left it.
+///
+/// Task 2 does NOT give `checkpoint` further meaning, despite Task 1's
+/// report speculating it would "most likely" become a poll budget: this
+/// harness's fixed episode has exactly two real, controllable poll
+/// checkpoints ([`BEFORE_DISPATCH_POLL_BUDGET`], [`AFTER_DISPATCH_POLL_BUDGET`]),
+/// and every active fault class's poll budget is an intrinsic property of
+/// the class itself (there is only one sensible checkpoint for "before
+/// dispatch" and only one for "after dispatch, before persist" -- no free
+/// parameter for a per-seed `checkpoint` value to usefully vary). So
+/// `checkpoint` remains a reserved, uninterpreted-but-deterministic draw,
+/// left for a future task that needs it without reshaping `FaultPlan`
+/// again.
+///
+/// Changing the draw order (this task adds the `class` draw BEFORE
+/// `checkpoint`) reassigns which checkpoint value every seed gets --
+/// expected and pre-documented by Task 1's own report; only `for_seed`'s
+/// determinism (same seed, same plan, forever, given the current
+/// implementation) is guaranteed, never a specific seed's mapping across
+/// task boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FaultPlan {
     seed: u64,
@@ -209,10 +315,13 @@ impl FaultPlan {
     /// `RedGenomeRng` is seeded only from `seed`).
     fn for_seed(seed: u64) -> Self {
         let mut rng = RedGenomeRng::from_u64(seed);
+        let class = *rng
+            .choose(&ALL_FAULT_CLASSES)
+            .expect("ALL_FAULT_CLASSES is a fixed, non-empty array");
         let checkpoint = rng.next_below(u64::MAX);
         Self {
             seed,
-            class: FaultClass::NoFault,
+            class,
             checkpoint,
         }
     }
@@ -365,7 +474,123 @@ fn deposit_for_receipt(receipt: &ResponseReceipt, timestamp_secs: i64) -> Pherom
 }
 
 // ---------------------------------------------------------------------------
-// 5. The episode: allow -> dispatch -> receipt-persist.
+// 5. The substrate seam for DST-02 fault class (c): real close/reopen.
+// ---------------------------------------------------------------------------
+
+/// One lifecycle transition [`SubstrateSeam`] observed, in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubstrateLifecycleEvent {
+    Closed,
+    Reopened,
+}
+
+/// A REAL `InMemoryPheromoneSubstrate` behind a handle the deterministic
+/// executor can close and reopen from OUTSIDE the episode future -- DST-02
+/// fault class (c).
+///
+/// `InMemoryPheromoneSubstrate` has no close/reopen operation of its own --
+/// there is no OS handle for a pure in-memory store to close -- so this seam
+/// manufactures a real one the only honest way available: dropping the real
+/// instance (releasing its storage, exactly what an in-memory substrate
+/// restart means -- this IS the DST-06 evidence boundary, not a shortcut
+/// around it) and constructing a genuinely new real
+/// `InMemoryPheromoneSubstrate::new(..)` in its place. This mirrors this
+/// crate's OWN test idiom for "close then reopen" a real substrate --
+/// `local_journal_recovers_deposits_after_reopen`
+/// (`crates/swarm-pheromone/src/substrate.rs`) drops a
+/// `LocalJournalPheromoneSubstrate` handle and calls `::open` again on the
+/// same path; there is no other concept of substrate close/reopen anywhere
+/// in this crate to be faithful to.
+///
+/// `run_episode` closes over `&SubstrateSeam` for its (single, checkpointed)
+/// `.deposit(..)` call, so whichever real instance is current AT THE MOMENT
+/// that call actually executes is the one it observes: `close_then_reopen`
+/// runs synchronously, entirely between two polls of the suspended episode
+/// future (never concurrently with it), so the future itself never
+/// observes a `None` ("closed") state -- it only ever sees the substrate
+/// that is current when it resumes.
+///
+/// This is not a mock of `InMemoryPheromoneSubstrate` or
+/// `PheromoneSubstrate`: every `deposit`/`recent_deposits` call this seam
+/// forwards executes against a real instance. The seam only owns WHICH real
+/// instance is live.
+struct SubstrateSeam {
+    config: PheromoneConfig,
+    inner: RwLock<Option<InMemoryPheromoneSubstrate>>,
+    lifecycle: Mutex<Vec<SubstrateLifecycleEvent>>,
+}
+
+impl SubstrateSeam {
+    /// Construct a seam holding one freshly opened real substrate.
+    fn open(config: PheromoneConfig) -> Self {
+        let substrate = InMemoryPheromoneSubstrate::new(config.clone());
+        Self {
+            config,
+            inner: RwLock::new(Some(substrate)),
+            lifecycle: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// DST-02 fault class (c)'s seam: drop the current real substrate
+    /// instance (close), then construct and install a genuinely new one
+    /// (reopen). Called synchronously by the deterministic executor while
+    /// the episode future is suspended (`Exhausted`) -- never concurrently
+    /// with a live `deposit`/`recent_deposits` call from that future, so a
+    /// plain `std::sync::RwLock` (never held across an `.await` -- see
+    /// `deposit`/`recent_deposits` below) is sufficient; no async lock is
+    /// needed.
+    fn close_then_reopen(&self) {
+        *self.inner.write().unwrap() = None; // close: drop the real instance
+        self.lifecycle
+            .lock()
+            .unwrap()
+            .push(SubstrateLifecycleEvent::Closed);
+
+        let fresh = InMemoryPheromoneSubstrate::new(self.config.clone());
+        *self.inner.write().unwrap() = Some(fresh); // reopen: a genuinely new real instance
+        self.lifecycle
+            .lock()
+            .unwrap()
+            .push(SubstrateLifecycleEvent::Reopened);
+    }
+
+    /// The lifecycle transitions observed so far, in order. Empty for every
+    /// fault class except `SubstrateCloseReopen`, where it must read
+    /// exactly `[Closed, Reopened]`.
+    fn lifecycle_log(&self) -> Vec<SubstrateLifecycleEvent> {
+        self.lifecycle.lock().unwrap().clone()
+    }
+
+    /// Delegate to whichever real substrate is current.
+    /// `InMemoryPheromoneSubstrate`'s fields are all `Arc`-backed handles
+    /// (`crates/swarm-pheromone/src/substrate.rs`), so cloning it out from
+    /// under the read lock is cheap, and the lock is held only long enough
+    /// to do that -- never across the `.await` below.
+    async fn deposit(&self, deposit: PheromoneDeposit) -> Result<(), SubstrateError> {
+        let substrate = self
+            .inner
+            .read()
+            .unwrap()
+            .clone()
+            .expect("SubstrateSeam.deposit called while closed");
+        substrate.deposit(deposit).await
+    }
+
+    /// Delegate to whichever real substrate is current. See `deposit` for
+    /// why the lock is not held across the `.await`.
+    async fn recent_deposits(&self, limit: usize) -> Result<Vec<PheromoneDeposit>, SubstrateError> {
+        let substrate = self
+            .inner
+            .read()
+            .unwrap()
+            .clone()
+            .expect("SubstrateSeam.recent_deposits called while closed");
+        substrate.recent_deposits(limit).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6. The episode: allow -> dispatch -> receipt-persist.
 // ---------------------------------------------------------------------------
 
 /// What one episode's `authorize_and_execute` call, and (on success) its
@@ -383,8 +608,14 @@ struct EpisodeOutcome {
 /// substrate persist call beginning is a SECOND, independent [`YieldOnce`].
 /// Deliberately: without it, `authorize_and_execute` resolving and the
 /// (eagerly-ready) deposit future's first poll would both complete inside
-/// the SAME outer poll, and Task 2's fault class (b) -- "after dispatch, but
-/// before receipt persistence" -- would have no real boundary to stop at.
+/// the SAME outer poll, and fault class (b) -- "after dispatch, but before
+/// receipt persistence" -- would have no real boundary to stop at.
+///
+/// `substrate` is the [`SubstrateSeam`], not a bare `InMemoryPheromoneSubstrate`
+/// directly, so fault class (c)'s close/reopen (triggered from OUTSIDE this
+/// future, while it sits suspended at the checkpoint below) changes which
+/// real instance THIS `.deposit(..)` call observes once the executor
+/// resumes it.
 ///
 /// A response that dispatches but reports failure (`ResponseStatus::Failed`)
 /// makes `authorize_and_execute` itself return `Err`, even though the
@@ -395,16 +626,16 @@ struct EpisodeOutcome {
 /// correct for that case too.
 async fn run_episode(
     runtime: &SwarmRuntime<StaticApprovalGate, RecordingResponseAdapter>,
-    substrate: &InMemoryPheromoneSubstrate,
+    substrate: &SubstrateSeam,
     request: &ActionRequest,
     context: &ApprovalContext,
 ) -> EpisodeOutcome {
     let authorize_result = runtime.authorize_and_execute(request, context).await;
 
     // Checkpoint: dispatch (if any) has already happened; persistence has
-    // not started. Task 2's fault class (b) drops here; its substrate
-    // close/reopen class (c) acts on the substrate here, then lets the
-    // episode continue.
+    // not started. Fault class (b) drops here; fault class (c)'s substrate
+    // close/reopen acts on `substrate` here (from outside this future),
+    // then lets the episode continue.
     YieldOnce::new().await;
 
     let persist_result = match &authorize_result {
@@ -423,7 +654,7 @@ async fn run_episode(
 }
 
 // ---------------------------------------------------------------------------
-// 6. The fixed harness stack + episode driver.
+// 7. The fixed harness stack + episode driver.
 // ---------------------------------------------------------------------------
 
 /// A deterministic policy configuration under which this harness's fixed
@@ -497,39 +728,82 @@ fn harness_approval_context() -> ApprovalContext {
 
 /// Everything one seed's episode produced: this task's own ground-truth
 /// tests, and the oracles Task 3 will add, both read this.
+///
+/// `outcome` is `None` exactly when the deterministic executor dropped the
+/// episode future before it resolved (fault classes `DropBeforeDispatch`
+/// and `DropAfterDispatchBeforePersist`): a simulated crash produces no
+/// return value at all, matching a real process crash -- there is no
+/// `authorize_and_execute` `Result` and no persist-attempt `Result` to read,
+/// only what is externally observable (`dispatch_log`, `persisted_deposits`,
+/// `substrate_lifecycle`), exactly as a real caller recovering from a crash
+/// would have. `outcome` is `Some(..)` for `NoFault` and
+/// `SubstrateCloseReopen`, which both run the episode to completion (class
+/// (c) is explicitly NOT a drop).
 #[derive(Debug)]
 struct EpisodeObservation {
     plan: FaultPlan,
-    outcome: EpisodeOutcome,
+    outcome: Option<EpisodeOutcome>,
     dispatch_log: Vec<DispatchRecord>,
     persisted_deposits: Vec<PheromoneDeposit>,
+    substrate_lifecycle: Vec<SubstrateLifecycleEvent>,
     polls: u32,
 }
 
+/// Drive `episode` to whatever `class` demands, on the real `substrate` seam
+/// behind it. Returns the `EpisodeOutcome` if one was produced (`NoFault`,
+/// `SubstrateCloseReopen`) and the total poll count actually taken (for the
+/// drop classes, exactly their fixed checkpoint budget, by construction).
+///
+/// This is the executor-side half of DST-02: `FaultPlan`'s `class` selects
+/// which of the three fault behaviors (or none) fires, deterministically.
+fn run_episode_under_fault(
+    episode: Pin<Box<dyn Future<Output = EpisodeOutcome> + '_>>,
+    class: FaultClass,
+    substrate: &SubstrateSeam,
+) -> (Option<EpisodeOutcome>, u32) {
+    match class {
+        FaultClass::NoFault => {
+            let (outcome, polls) = run_to_completion(episode);
+            (Some(outcome), polls)
+        }
+        FaultClass::DropBeforeDispatch => {
+            let (future, polls) = poll_to_checkpoint(episode, BEFORE_DISPATCH_POLL_BUDGET);
+            drop(future); // the simulated crash: no more polls, ever
+            (None, polls)
+        }
+        FaultClass::DropAfterDispatchBeforePersist => {
+            let (future, polls) = poll_to_checkpoint(episode, AFTER_DISPATCH_POLL_BUDGET);
+            drop(future); // the simulated crash: no more polls, ever
+            (None, polls)
+        }
+        FaultClass::SubstrateCloseReopen => {
+            let (future, paused_polls) = poll_to_checkpoint(episode, AFTER_DISPATCH_POLL_BUDGET);
+            // NOT a drop: act on the world around the still-alive, suspended
+            // future, then resume polling the SAME future to completion.
+            substrate.close_then_reopen();
+            let (outcome, resumed_polls) = run_to_completion(future);
+            (Some(outcome), paused_polls + resumed_polls)
+        }
+    }
+}
+
 /// Build a fresh, real, no-mock stack and drive exactly one episode for
-/// `seed`'s `FaultPlan`.
+/// `plan`.
 ///
 /// A fresh stack every call: episodes must not share mutable state (an
-/// adapter's dispatch log, a substrate's deposits) across seeds, or a later
-/// seed's observation would be contaminated by an earlier one's.
-fn drive_episode_for_seed(seed: u64) -> EpisodeObservation {
-    let plan = FaultPlan::for_seed(seed);
-    assert_eq!(
-        plan.class,
-        FaultClass::NoFault,
-        "Task 1 wires only the no-fault plan"
-    );
-
+/// adapter's dispatch log, a substrate's deposits) across episodes, or one
+/// episode's observation would be contaminated by another's.
+fn drive_episode(plan: FaultPlan) -> EpisodeObservation {
     let adapter = RecordingResponseAdapter::default();
     let gate = StaticApprovalGate::from_config(&harness_policy_config());
     let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate, adapter.clone());
-    let substrate = InMemoryPheromoneSubstrate::new(harness_pheromone_config());
+    let substrate = SubstrateSeam::open(harness_pheromone_config());
     let request = harness_action_request();
     let context = harness_approval_context();
 
     let episode: Pin<Box<dyn Future<Output = EpisodeOutcome> + '_>> =
         Box::pin(run_episode(&runtime, &substrate, &request, &context));
-    let (outcome, polls) = run_to_completion(episode);
+    let (outcome, polls) = run_episode_under_fault(episode, plan.class, &substrate);
 
     let query: Pin<Box<dyn Future<Output = Result<Vec<PheromoneDeposit>, SubstrateError>> + '_>> =
         Box::pin(substrate.recent_deposits(16));
@@ -540,12 +814,44 @@ fn drive_episode_for_seed(seed: u64) -> EpisodeObservation {
         outcome,
         dispatch_log: adapter.dispatch_log(),
         persisted_deposits: persisted_deposits.unwrap(),
+        substrate_lifecycle: substrate.lifecycle_log(),
         polls,
     }
 }
 
+/// Drive exactly one episode for `seed`'s `FaultPlan` (DST-05's real path:
+/// a seed determines everything, including which fault class fires).
+fn drive_episode_for_seed(seed: u64) -> EpisodeObservation {
+    drive_episode(FaultPlan::for_seed(seed))
+}
+
+/// Build the `FaultPlan` for a specific `class` directly, bypassing the
+/// seed's RNG class-selector draw entirely. `seed` and `checkpoint` are
+/// otherwise unused by any current fault class (see `FaultPlan`'s doc
+/// comment), so fixed placeholder values are honest, not a shortcut.
+///
+/// Used only by this task's own focused, one-class-at-a-time tests below,
+/// so each proves its fault class fires at the intended point without
+/// depending on which concrete seed the RNG's class-selector draw happens to
+/// land on. `FaultPlan::for_seed`'s own seed -> class mapping (exercised by
+/// `dst_fault_plan_for_seed_deterministically_selects_one_of_the_four_classes`
+/// and the corpus Task 3 adds) is what DST-05/replay actually relies on.
+fn fault_plan_for_class(class: FaultClass) -> FaultPlan {
+    FaultPlan {
+        seed: 0,
+        class,
+        checkpoint: 0,
+    }
+}
+
+/// Drive exactly one episode forcing `class`, bypassing seed-based class
+/// selection. See `fault_plan_for_class`.
+fn drive_episode_for_class(class: FaultClass) -> EpisodeObservation {
+    drive_episode(fault_plan_for_class(class))
+}
+
 // ---------------------------------------------------------------------------
-// 7. SWARM_DST_SEED (DST-05).
+// 8. SWARM_DST_SEED (DST-05).
 // ---------------------------------------------------------------------------
 
 /// The seed Task 1's env-driven replay test uses when `SWARM_DST_SEED` is
@@ -575,12 +881,12 @@ fn seed_from_env() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Tests.
+// 9. Tests.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn dst_no_fault_episode_dispatches_exactly_once_and_persists_a_matching_receipt() {
-    let observation = drive_episode_for_seed(0);
+    let observation = drive_episode_for_class(FaultClass::NoFault);
 
     assert_eq!(
         observation.dispatch_log.len(),
@@ -589,14 +895,17 @@ fn dst_no_fault_episode_dispatches_exactly_once_and_persists_a_matching_receipt(
         observation.dispatch_log
     );
 
-    let receipt = match &observation.outcome.authorize_result {
+    let outcome = observation
+        .outcome
+        .as_ref()
+        .expect("NoFault always runs the episode to completion");
+    let receipt = match &outcome.authorize_result {
         Ok(receipt) => receipt,
         Err(error) => panic!("expected Ok(receipt), got RuntimeError: {error}"),
     };
     assert_eq!(receipt.status, ResponseStatus::Executed);
 
-    let persisted = observation
-        .outcome
+    let persisted = outcome
         .persist_result
         .as_ref()
         .expect("a successful dispatch must attempt a substrate persist");
@@ -630,9 +939,11 @@ fn dst_no_fault_episode_disposition_matches_the_deterministic_allow_verdict() {
          actually dispatches"
     );
 
-    let observation = drive_episode_for_seed(0);
+    let observation = drive_episode_for_class(FaultClass::NoFault);
     let receipt = observation
         .outcome
+        .as_ref()
+        .expect("NoFault always runs the episode to completion")
         .authorize_result
         .as_ref()
         .expect("an Allow verdict must produce Ok(receipt)");
@@ -645,7 +956,7 @@ fn dst_no_fault_episode_disposition_matches_the_deterministic_allow_verdict() {
 
 #[test]
 fn dst_no_fault_episode_polls_through_both_real_checkpoints_before_resolving() {
-    let observation = drive_episode_for_seed(0);
+    let observation = drive_episode_for_class(FaultClass::NoFault);
     assert_eq!(
         observation.polls, 3,
         "expected exactly 3 polls (pending pre-dispatch, pending post-dispatch/pre-persist, then \
@@ -672,8 +983,166 @@ fn dst_fault_plan_differs_across_seeds_via_its_checkpoint_draw() {
         a.checkpoint, b.checkpoint,
         "two different seeds must not collide on their checkpoint draw"
     );
-    assert_eq!(a.class, FaultClass::NoFault);
-    assert_eq!(b.class, FaultClass::NoFault);
+}
+
+#[test]
+fn dst_fault_plan_for_seed_deterministically_selects_one_of_the_four_classes() {
+    // Same seed -> same class, every time (Task 2's addition to `for_seed`).
+    for seed in [0_u64, 1, 7, 42] {
+        assert_eq!(
+            FaultPlan::for_seed(seed).class,
+            FaultPlan::for_seed(seed).class,
+            "seed {seed} must select the same fault class every time"
+        );
+    }
+
+    // The selector draw must actually be able to reach all four variants,
+    // not just one or two by a construction bug -- scan enough seeds to see
+    // every class at least once.
+    let mut seen: Vec<FaultClass> = Vec::new();
+    for seed in 0_u64..256 {
+        let class = FaultPlan::for_seed(seed).class;
+        if !seen.contains(&class) {
+            seen.push(class);
+        }
+    }
+    assert_eq!(
+        seen.len(),
+        ALL_FAULT_CLASSES.len(),
+        "expected all four fault classes to appear across seeds 0..256, only saw {seen:?}"
+    );
+}
+
+#[test]
+fn dst_drive_episode_for_seed_is_byte_identical_across_repeated_calls() {
+    for seed in [0_u64, 1, 2, 3, 4, 5, 100, 4242] {
+        let first = drive_episode_for_seed(seed);
+        let second = drive_episode_for_seed(seed);
+        assert_eq!(
+            first.plan.class, second.plan.class,
+            "seed {seed} must select the same fault class every time"
+        );
+        assert_eq!(
+            format!("{first:?}"),
+            format!("{second:?}"),
+            "seed {seed} (class {:?}) must produce a byte-identical observation across repeated \
+             runs",
+            first.plan.class
+        );
+    }
+}
+
+#[test]
+fn dst_drive_episode_for_class_is_byte_identical_across_repeated_calls_for_every_class() {
+    for class in ALL_FAULT_CLASSES {
+        let first = drive_episode_for_class(class);
+        let second = drive_episode_for_class(class);
+        assert_eq!(
+            format!("{first:?}"),
+            format!("{second:?}"),
+            "class {class:?} must produce a byte-identical observation across repeated runs"
+        );
+    }
+}
+
+#[test]
+fn dst_fault_class_drop_before_dispatch_leaves_the_dispatch_log_empty() {
+    let observation = drive_episode_for_class(FaultClass::DropBeforeDispatch);
+    assert!(
+        observation.outcome.is_none(),
+        "a before-dispatch drop simulates a crash: no EpisodeOutcome is ever produced, got {:?}",
+        observation.outcome
+    );
+    assert_eq!(
+        observation.polls, BEFORE_DISPATCH_POLL_BUDGET,
+        "must drop after exactly the before-dispatch checkpoint's poll budget"
+    );
+    assert!(
+        observation.dispatch_log.is_empty(),
+        "the action must never take effect: got {:?}",
+        observation.dispatch_log
+    );
+    assert!(
+        observation.persisted_deposits.is_empty(),
+        "nothing dispatched means nothing to persist: got {:?}",
+        observation.persisted_deposits
+    );
+    assert!(
+        observation.substrate_lifecycle.is_empty(),
+        "this class never touches the substrate seam: got {:?}",
+        observation.substrate_lifecycle
+    );
+}
+
+#[test]
+fn dst_fault_class_drop_after_dispatch_before_persist_dispatches_once_but_persists_nothing() {
+    let observation = drive_episode_for_class(FaultClass::DropAfterDispatchBeforePersist);
+    assert!(
+        observation.outcome.is_none(),
+        "an after-dispatch drop simulates a crash: no EpisodeOutcome is ever produced, got {:?}",
+        observation.outcome
+    );
+    assert_eq!(
+        observation.polls, AFTER_DISPATCH_POLL_BUDGET,
+        "must drop after exactly the after-dispatch checkpoint's poll budget"
+    );
+    assert_eq!(
+        observation.dispatch_log.len(),
+        1,
+        "the action must dispatch exactly once before the simulated crash: got {:?}",
+        observation.dispatch_log
+    );
+    assert!(
+        observation.persisted_deposits.is_empty(),
+        "the crash must land strictly before the substrate persist call begins: got {:?}",
+        observation.persisted_deposits
+    );
+}
+
+#[test]
+fn dst_fault_class_substrate_close_reopen_persists_against_the_reopened_substrate() {
+    let observation = drive_episode_for_class(FaultClass::SubstrateCloseReopen);
+    assert_eq!(
+        observation.substrate_lifecycle,
+        vec![
+            SubstrateLifecycleEvent::Closed,
+            SubstrateLifecycleEvent::Reopened
+        ],
+        "the seam must close then reopen exactly once, in that order: got {:?}",
+        observation.substrate_lifecycle
+    );
+    assert_eq!(
+        observation.dispatch_log.len(),
+        1,
+        "the action must still dispatch exactly once: got {:?}",
+        observation.dispatch_log
+    );
+    assert_eq!(
+        observation.polls, 3,
+        "closing/reopening the substrate must not change how many polls the SAME future needs \
+         (2 to reach the checkpoint, 1 more to resolve after resuming): got {}",
+        observation.polls
+    );
+
+    let outcome = observation
+        .outcome
+        .as_ref()
+        .expect("class (c) is not a drop; the episode must run to completion");
+    assert!(
+        outcome.authorize_result.is_ok(),
+        "got {:?}",
+        outcome.authorize_result
+    );
+    assert!(
+        matches!(outcome.persist_result, Some(Ok(()))),
+        "the persist call must succeed against the reopened substrate: got {:?}",
+        outcome.persist_result
+    );
+    assert_eq!(
+        observation.persisted_deposits.len(),
+        1,
+        "the episode must observe the reopened substrate and persist successfully against it"
+    );
 }
 
 #[test]
@@ -702,17 +1171,60 @@ fn dst_swarm_dst_seed_env_selects_exactly_one_seed_when_set() {
     let observation = drive_episode_for_seed(seed);
     // Visible with `--nocapture`, so `SWARM_DST_SEED=<n> cargo test -p
     // swarm-runtime dst_swarm_dst_seed_env_selects_exactly_one_seed_when_set
-    // -- --nocapture` shows a human exactly which seed and plan replayed --
-    // the one-command reproduction DST-05 asks for.
+    // -- --nocapture` shows a human exactly which seed, fault class, and
+    // plan replayed -- the one-command reproduction DST-05 asks for.
     println!(
-        "SWARM_DST_SEED replay: seed={} plan={:?}",
-        observation.plan.seed, observation.plan
+        "SWARM_DST_SEED replay: seed={} plan={:?} dispatch_log={:?} persisted_deposits={} \
+         substrate_lifecycle={:?}",
+        observation.plan.seed,
+        observation.plan,
+        observation.dispatch_log,
+        observation.persisted_deposits.len(),
+        observation.substrate_lifecycle
     );
     assert_eq!(
         observation.plan.seed, seed,
         "the episode driven must be exactly the seed SWARM_DST_SEED named (or the default when unset)"
     );
-    assert_eq!(observation.dispatch_log.len(), 1);
-    assert!(observation.outcome.authorize_result.is_ok());
-    assert!(matches!(observation.outcome.persist_result, Some(Ok(()))));
+    // DST-05 promises exact reproduction of whatever that seed's plan is --
+    // NOT that every seed is a full-success episode (Task 2 introduces
+    // fault classes precisely so that is no longer universally true). What
+    // "correct" looks like depends on the replayed plan's OWN class.
+    match observation.plan.class {
+        FaultClass::NoFault => {
+            assert_eq!(observation.dispatch_log.len(), 1);
+            let outcome = observation
+                .outcome
+                .as_ref()
+                .expect("NoFault always runs the episode to completion");
+            assert!(outcome.authorize_result.is_ok());
+            assert!(matches!(outcome.persist_result, Some(Ok(()))));
+        }
+        FaultClass::DropBeforeDispatch => {
+            assert!(observation.outcome.is_none());
+            assert!(observation.dispatch_log.is_empty());
+            assert!(observation.persisted_deposits.is_empty());
+        }
+        FaultClass::DropAfterDispatchBeforePersist => {
+            assert!(observation.outcome.is_none());
+            assert_eq!(observation.dispatch_log.len(), 1);
+            assert!(observation.persisted_deposits.is_empty());
+        }
+        FaultClass::SubstrateCloseReopen => {
+            assert_eq!(observation.dispatch_log.len(), 1);
+            let outcome = observation
+                .outcome
+                .as_ref()
+                .expect("class (c) is not a drop; the episode must run to completion");
+            assert!(outcome.authorize_result.is_ok());
+            assert_eq!(observation.persisted_deposits.len(), 1);
+            assert_eq!(
+                observation.substrate_lifecycle,
+                vec![
+                    SubstrateLifecycleEvent::Closed,
+                    SubstrateLifecycleEvent::Reopened
+                ]
+            );
+        }
+    }
 }
