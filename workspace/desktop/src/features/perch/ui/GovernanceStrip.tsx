@@ -7,7 +7,11 @@ import {
 } from "@/shared/api/perchEphemeralStore";
 import { usePerchTelemetryConsumer } from "@/shared/api/perchTelemetryWanted";
 
-import { GOVERNANCE } from "../lib/governanceCopy";
+import {
+  fillGovernanceCopy,
+  formatGovernanceAge,
+  GOVERNANCE,
+} from "../lib/governanceCopy";
 import {
   derivePerchGovernanceMode,
   GOVERNANCE_STALE_AFTER_MS,
@@ -59,17 +63,36 @@ export function GovernanceStrip(): React.ReactElement {
     body.partition_state === "healing"
       ? body.partition_state
       : "healthy";
+  const totalGovernors =
+    typeof body.total_governors === "number" ? body.total_governors : 1;
+  const receivedAtMs = frame?.receivedAtMs ?? null;
 
   const mode = derivePerchGovernanceMode({
     partitionState,
-    totalGovernors:
-      typeof body.total_governors === "number" ? body.total_governors : 1,
+    totalGovernors,
     healthyGovernors:
       typeof body.healthy_governors === "number" ? body.healthy_governors : 1,
-    receivedAtMs: frame?.receivedAtMs ?? null,
+    receivedAtMs,
     nowMs,
     bridgeShedding: body.shedding === true,
     staleAfterMs: GOVERNANCE_STALE_AFTER_MS,
+  });
+
+  // The strip fills its own line — a raw `{ago}`/`{lastSeen}` reaching the
+  // window is found-1. Only a mode that has a frame renders `{ago}`, so the
+  // no-frame fallback below is never shown; `{lastSeen}` carries the no-frame
+  // case, and reads `never` until the first envelope lands.
+  const ageMs =
+    receivedAtMs === null ? null : Math.max(0, nowMs - receivedAtMs);
+  const ago = ageMs === null ? "never" : formatGovernanceAge(ageMs);
+  const line = fillGovernanceCopy(COPY[mode], {
+    ago,
+    lastSeen: ageMs === null ? "never" : `${ago} ago`,
+    n: totalGovernors,
+    unauthorized:
+      typeof body.unauthorized_partition_actions === "number"
+        ? body.unauthorized_partition_actions
+        : 0,
   });
 
   return (
@@ -78,7 +101,7 @@ export function GovernanceStrip(): React.ReactElement {
       data-governance-mode={mode}
       className="border-b border-border px-3 py-1 text-2xs text-muted-foreground"
     >
-      {COPY[mode]}
+      {line}
       {body.shedding === true ? ` · ${GOVERNANCE.shedding}` : null}
     </p>
   );

@@ -68,6 +68,11 @@ test("with no frame the strip says the bridge is down, never healthy", async ({
     "data-governance-mode",
     "bridge-down",
   );
+  // found-1: the line renders its own values, so `{lastSeen}` is filled — here
+  // `never`, because no envelope has landed — never shipped as a raw template.
+  await expect(strip(page)).toHaveText(
+    "bridge: down (last envelope never) · holds may not be reaching the console",
+  );
 });
 
 test("a 26004 from the admitted bridge reaches the strip", async ({ page }) => {
