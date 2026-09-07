@@ -71,8 +71,9 @@ phase adds NO production behaviour change — it documents, marks (comment-only)
   the test falsifies the guard's LOGIC on a bare `f64` AND asserts the unreachability claims, so a
   future serde_json upgrade that changes this behaviour fails the test loudly. The registry row
   carries `status = "deviation"`. 14 of 15 invariants falsify through the real call chain.
-- **No production code changed:** the diff is confined to `docs/assurance/`, `crates/*/tests/`,
-  `tools/`, and `.github/workflows/ci.yml` — 0 edits under any crate's `src/`.
+- **No production behaviour change:** the only edits under any crate's `src/` are the 15 comment-only
+  `// INVARIANT:` markers required by MAPPING-03 (no logic or compilation change); all other changes are
+  confined to `docs/assurance/`, `crates/*/tests/`, `tools/`, and `.github/workflows/ci.yml`.
 - **v1.79 "Assurance Foundation" progress:** Phase 284 (fixture determinism) and Phase 285 (this) are
   complete; Phases 286 (deterministic simulation testing) and 287 (fuzz, loom, supply-chain
   hardening) remain.

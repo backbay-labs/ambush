@@ -11,7 +11,11 @@ ID the invariant rests on.
 
 Phase 285 Task 2 adds a `// INVARIANT: <Name>` comment at each `Source` call
 site and a gate that keeps this table, those markers, and the real paths in
-sync. `Name` is therefore a stable identifier, not prose.
+sync. `Name` is therefore a stable identifier, not prose. The gate checks
+`Path` and `Name`, not the `Source` line numbers: those are approximate
+reading hints, and the `// INVARIANT: <Name>` marker at the call site — not
+the line number — is the authoritative, drift-proof locator (grep the
+`Name`). A `Source` line may sit a line or two off as surrounding code shifts.
 
 | Name | Crate | Path | Source | Assumption | Denies |
 |---|---|---|---|---|---|
