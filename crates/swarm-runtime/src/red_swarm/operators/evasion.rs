@@ -11,6 +11,7 @@
 use super::super::genome::{GeneStep, OperatorRole, StepIntent};
 use super::super::graph::{TargetGraph, TechniqueNode};
 use super::super::rng::RedGenomeRng;
+use super::super::weights::TechniqueWeights;
 use super::{
     RedOperator, choose_distinct, choose_scenario, class_for, step_from, usable_techniques,
 };
@@ -45,6 +46,7 @@ impl RedOperator for EvasionOperator {
         graph: &TargetGraph,
         rng: &mut RedGenomeRng,
         so_far: &[GeneStep],
+        weights: Option<&TechniqueWeights>,
     ) -> Vec<GeneStep> {
         if so_far.is_empty() {
             return Vec::new();
@@ -78,7 +80,9 @@ impl RedOperator for EvasionOperator {
                             .any(|detector| original.declared_uncovered_by.contains(detector))
                 })
                 .collect();
-            let Some(alternative) = choose_distinct(rng, &alternatives, 1).into_iter().next()
+            let Some(alternative) = choose_distinct(rng, &alternatives, 1, weights)
+                .into_iter()
+                .next()
             else {
                 continue;
             };
@@ -154,7 +158,7 @@ mod tests {
         let original = graph.technique("T1106").expect("T1106 is a catalogued gap");
         let so_far = vec![step("T1106", ThreatClass::DefenseEvasion)];
         let mut rng = RedGenomeRng::from_u64(9);
-        let rewrites = evasion.propose_steps(&graph, &mut rng, &so_far);
+        let rewrites = evasion.propose_steps(&graph, &mut rng, &so_far, None);
         assert!(
             !rewrites.is_empty(),
             "a same-detector gap should be reachable"
@@ -183,6 +187,10 @@ mod tests {
         // toward: the operator is total.
         let no_gap = vec![step("T1059.001", ThreatClass::Execution)];
         let mut rng = RedGenomeRng::from_u64(9);
-        assert!(evasion.propose_steps(&graph, &mut rng, &no_gap).is_empty());
+        assert!(
+            evasion
+                .propose_steps(&graph, &mut rng, &no_gap, None)
+                .is_empty()
+        );
     }
 }

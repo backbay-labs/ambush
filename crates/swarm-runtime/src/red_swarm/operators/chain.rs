@@ -17,6 +17,7 @@
 use super::super::genome::{GeneStep, OperatorRole, StepIntent};
 use super::super::graph::{TargetGraph, TechniqueNode};
 use super::super::rng::RedGenomeRng;
+use super::super::weights::TechniqueWeights;
 use super::{RedOperator, choose_distinct, choose_scenario, step_from, usable_techniques};
 use swarm_core::pheromone::ThreatClass;
 
@@ -69,6 +70,7 @@ impl RedOperator for ChainOperator {
         graph: &TargetGraph,
         rng: &mut RedGenomeRng,
         so_far: &[GeneStep],
+        weights: Option<&TechniqueWeights>,
     ) -> Vec<GeneStep> {
         if so_far.is_empty() {
             return Vec::new();
@@ -102,7 +104,10 @@ impl RedOperator for ChainOperator {
                 .copied()
                 .filter(|node| node.threat_classes.contains(&successor_class))
                 .collect();
-            let Some(node) = choose_distinct(rng, &bridge_pool, 1).into_iter().next() else {
+            let Some(node) = choose_distinct(rng, &bridge_pool, 1, weights)
+                .into_iter()
+                .next()
+            else {
                 continue;
             };
             let Some(scenario) = choose_scenario(rng, node) else {
@@ -177,7 +182,7 @@ mod tests {
             step(ThreatClass::LateralMovement),
         ];
         let mut rng = RedGenomeRng::from_u64(3);
-        let bridges = chain.propose_steps(&graph, &mut rng, &so_far);
+        let bridges = chain.propose_steps(&graph, &mut rng, &so_far, None);
         assert!(!bridges.is_empty(), "an adjacent pair should be bridged");
         for bridge in &bridges {
             let StepIntent::Chain { from } = &bridge.intent else {
@@ -197,7 +202,7 @@ mod tests {
         let mut rng = RedGenomeRng::from_u64(3);
         assert!(
             chain
-                .propose_steps(&graph, &mut rng, &non_adjacent)
+                .propose_steps(&graph, &mut rng, &non_adjacent, None)
                 .is_empty()
         );
     }

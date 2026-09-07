@@ -16,6 +16,7 @@ mod operators;
 pub mod pattern_db;
 mod rng;
 pub mod scoring;
+pub mod weights;
 
 pub use genome::{
     CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,
@@ -26,6 +27,7 @@ pub use operators::{
     RedOperator, builtin_operators,
 };
 pub use rng::RedGenomeRng;
+pub use weights::TechniqueWeights;
 
 /// Runtime-owned context for deterministic adversarial corpus generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

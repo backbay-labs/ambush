@@ -9,6 +9,7 @@
 use super::super::genome::{GeneStep, OperatorRole, StepIntent};
 use super::super::graph::{TargetGraph, TechniqueNode};
 use super::super::rng::RedGenomeRng;
+use super::super::weights::TechniqueWeights;
 use super::{RedOperator, choose_distinct, choose_scenario, step_from, usable_techniques};
 use swarm_core::pheromone::ThreatClass;
 
@@ -41,6 +42,7 @@ impl RedOperator for AuthOperator {
         graph: &TargetGraph,
         rng: &mut RedGenomeRng,
         _so_far: &[GeneStep],
+        weights: Option<&TechniqueWeights>,
     ) -> Vec<GeneStep> {
         let usable = usable_techniques(graph);
         let credential: Vec<&TechniqueNode> = usable
@@ -63,7 +65,10 @@ impl RedOperator for AuthOperator {
         // One credential step, then one lateral step distinct from it, so the
         // adjacency exists; then fill from either stage. `choose_distinct` yields
         // nothing on an empty pool, so no separate emptiness guard is needed.
-        if let Some(node) = choose_distinct(rng, &credential, 1).into_iter().next() {
+        if let Some(node) = choose_distinct(rng, &credential, 1, weights)
+            .into_iter()
+            .next()
+        {
             picks.push((node, ThreatClass::CredentialAccess));
         }
         if picks.len() < budget {
@@ -72,7 +77,10 @@ impl RedOperator for AuthOperator {
                 .copied()
                 .filter(|candidate| !picks.iter().any(|(picked, _)| picked.id == candidate.id))
                 .collect();
-            if let Some(node) = choose_distinct(rng, &lateral_pool, 1).into_iter().next() {
+            if let Some(node) = choose_distinct(rng, &lateral_pool, 1, weights)
+                .into_iter()
+                .next()
+            {
                 picks.push((node, ThreatClass::LateralMovement));
             }
         }
@@ -85,7 +93,7 @@ impl RedOperator for AuthOperator {
                     union.push(node);
                 }
             }
-            for node in choose_distinct(rng, &union, budget - picks.len()) {
+            for node in choose_distinct(rng, &union, budget - picks.len(), weights) {
                 let class = if node.threat_classes.contains(&ThreatClass::CredentialAccess) {
                     ThreatClass::CredentialAccess
                 } else {

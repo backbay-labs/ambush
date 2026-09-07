@@ -9,6 +9,7 @@
 use super::super::genome::{GeneStep, OperatorRole, StepIntent};
 use super::super::graph::{TargetGraph, TechniqueNode};
 use super::super::rng::RedGenomeRng;
+use super::super::weights::TechniqueWeights;
 use super::{
     RedOperator, choose_preferred_then_fill, choose_scenario, class_for, step_from,
     usable_techniques,
@@ -57,6 +58,7 @@ impl RedOperator for InjectionOperator {
         graph: &TargetGraph,
         rng: &mut RedGenomeRng,
         _so_far: &[GeneStep],
+        weights: Option<&TechniqueWeights>,
     ) -> Vec<GeneStep> {
         let usable = usable_techniques(graph);
         let candidates: Vec<&TechniqueNode> = usable
@@ -82,6 +84,7 @@ impl RedOperator for InjectionOperator {
             &gaps,
             &candidates,
             usize::from(self.steps_per_operator),
+            weights,
         );
 
         let mut steps = Vec::new();
