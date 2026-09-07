@@ -150,11 +150,20 @@
 //!     is appended to an [`super::pattern_db::AttackPatternDb`] that starts
 //!     empty and only grows; the [`TechniqueWeights`] snapshot handed to the
 //!     NEXT generation's `run_generation` call is built fresh from that
-//!     accumulated db every time (empty at generation 0, so generation 0
-//!     plans exactly the unweighted plan -- see [`RedGenome::plan_weighted`]'s
-//!     own doc for why `weights: None` and an all-neutral-weight `Some` are
-//!     byte-identical, and [`TechniqueWeights::weight_for`]'s `1.0` default
-//!     for why an empty db's snapshot is exactly that all-neutral case);
+//!     accumulated db every time. At generation 0 the db is empty, so every
+//!     technique's weight is the explicit, shared neutral `1.0`
+//!     ([`TechniqueWeights::weight_for`]'s documented default for an
+//!     unrecorded technique) -- but `run` always passes `Some(&weights)`,
+//!     never `None`, so generation 0 still routes through
+//!     [`super::operators::choose_distinct`]'s WEIGHTED arm, not its
+//!     uniform one. That is a different draw from [`RedGenome::plan`]'s
+//!     fully-unweighted `None` path -- deterministic in its own right (the
+//!     same `(seed, generation, campaign, graph, weights)` always plans the
+//!     same bytes), but never byte-identical to `plan()`'s, per
+//!     `choose_distinct`'s own doc. Generation 0's plan is "unweighted" only
+//!     in the sense that nothing in the snapshot yet prefers one technique
+//!     over another, not in the sense of matching [`RedGenome::plan`]'s
+//!     bytes;
 //!   - **blue's coverage** -- a `DetectionConfig` that starts at
 //!     [`CampaignConfig::initial_detection`] and only ever gains strategies,
 //!     never loses one, via [`close_blue_gaps`] below;
@@ -772,9 +781,13 @@ impl RedSwarmCampaign {
         let mut stop_reason = StopReason::MaxGenerations;
 
         for generation in 0..config.max_generations {
-            // 1. Weight from whatever red's memory holds so far (empty at
-            //    generation 0, so this reproduces the unweighted plan --
-            //    see the module doc's "The campaign loop" section).
+            // 1. Weight from whatever red's memory holds so far -- empty at
+            //    generation 0, so every technique gets the shared neutral
+            //    weight `1.0`, but this is still `Some(&weights)`, not
+            //    `None`: generation 0 routes through `choose_distinct`'s
+            //    weighted arm, a different (still deterministic) draw than
+            //    `RedGenome::plan`'s fully-unweighted path -- see the
+            //    module doc's "The campaign loop" section.
             let weights = TechniqueWeights::from_pattern_db(&db, &config.graph);
 
             // 2. Run the generation against blue's CURRENT (pre-move)
@@ -1728,6 +1741,148 @@ mod tests {
             assert_eq!(outcome.blue_catch_rate, 0.0);
             assert!(outcome.evaded_techniques.is_empty());
         }
+    }
+
+    /// M1 (fix round 1): `plateaued` directly, at the boundary the SC2
+    /// integration test above only pins indirectly.
+    #[test]
+    fn plateaued_is_false_while_the_window_is_not_yet_full() {
+        let convergence = Convergence {
+            min_delta: 1e-9,
+            patience: 2,
+        };
+
+        // `patience` values of flat history: one short of the 3 values a
+        // `patience: 2` window needs (2 deltas), so nothing has been
+        // disproved yet -- `plateaued` must not fire early.
+        assert!(!plateaued(&[1.0, 1.0], &convergence));
+    }
+
+    #[test]
+    fn plateaued_is_true_the_instant_the_window_fills_with_flat_deltas() {
+        let convergence = Convergence {
+            min_delta: 1e-9,
+            patience: 2,
+        };
+
+        // Exactly `patience + 1` values: the window is full and both
+        // deltas are `0.0`, which is `< 1e-9`.
+        assert!(plateaued(&[1.0, 1.0, 1.0], &convergence));
+    }
+
+    #[test]
+    fn plateaued_with_zero_patience_is_true_as_soon_as_one_value_exists() {
+        let convergence = Convergence {
+            min_delta: 1e-9,
+            patience: 0,
+        };
+
+        // A window of zero required transitions is vacuously satisfied the
+        // moment there is at least one recorded value (see `Convergence`'s
+        // own doc for why this is honoured literally, not rejected).
+        assert!(plateaued(&[1.0], &convergence));
+    }
+
+    #[test]
+    fn plateaued_never_fires_on_a_nan_delta() {
+        let convergence = Convergence {
+            min_delta: 1e9,
+            patience: 1,
+        };
+
+        // A `NaN` delta compares `false` against any threshold under
+        // IEEE-754 (`NaN < x` is always `false`), including this
+        // deliberately huge `min_delta` that would trivially satisfy any
+        // REAL delta -- so a `NaN` anywhere in the window means "never
+        // plateau", not a panic and not a false positive.
+        assert!(!plateaued(&[0.0, f64::NAN], &convergence));
+        assert!(!plateaued(&[f64::NAN, f64::NAN, f64::NAN], &convergence));
+    }
+
+    #[test]
+    fn plateaued_never_fires_with_a_negative_min_delta() {
+        let convergence = Convergence {
+            min_delta: -0.001,
+            patience: 2,
+        };
+
+        // Otherwise-perfectly-flat history (every delta exactly `0.0`)
+        // still never plateaus once `min_delta` is negative: no
+        // non-negative magnitude is ever smaller than a negative number
+        // (see `Convergence`'s own doc).
+        assert!(!plateaued(&[1.0, 1.0, 1.0], &convergence));
+    }
+
+    /// M1 (fix round 1): the `max_generations == 1` case the review traced
+    /// by hand (`MaxGenerations` fires on generation 0 itself, before
+    /// `plateaued`/`FullCoverage` are even reached) is now backed by a
+    /// test rather than left to inspection.
+    #[test]
+    fn run_stops_at_max_generations_when_max_generations_is_one() {
+        let config = CampaignConfig {
+            seed: 5,
+            campaign: empty_plan_campaign(),
+            graph: repo_graph(),
+            suite_paths: suite_paths(),
+            budget: StealthBudget::DEFAULT,
+            initial_detection: detection_config(&[]),
+            max_generations: 1,
+            convergence: Convergence {
+                min_delta: 1e-9,
+                patience: 100,
+            },
+        };
+
+        let report = RedSwarmCampaign::run(&config).expect("run should succeed");
+
+        assert_eq!(report.generations.len(), 1);
+        assert_eq!(report.stop_reason, StopReason::MaxGenerations);
+    }
+
+    /// M2 (fix round 1): a fixture where `MaxGenerations` and `Plateau`
+    /// are BOTH true on the same final generation, pinning the documented
+    /// precedence order (`MaxGenerations` checked first, so it is the one
+    /// recorded) rather than leaving it an untested claim.
+    #[test]
+    fn max_generations_takes_precedence_over_plateau_when_both_fire_together() {
+        let convergence = Convergence {
+            min_delta: 1e-9,
+            patience: 2,
+        };
+        // `empty_plan_campaign` makes `red_fitness` a provable constant
+        // `1.0` every generation (see that fixture's own doc), so by
+        // generation 2 (the 3rd generation, 0-indexed) the accumulated
+        // history is `[1.0, 1.0, 1.0]` -- exactly the flat window
+        // `plateaued_is_true_the_instant_the_window_fills_with_flat_deltas`
+        // already proves satisfies `plateaued` on its own. Confirm that
+        // directly here, independent of the loop, so the "both true"
+        // premise this test's name claims is verified, not assumed.
+        assert!(plateaued(&[1.0, 1.0, 1.0], &convergence));
+
+        let config = CampaignConfig {
+            seed: 11,
+            campaign: empty_plan_campaign(),
+            graph: repo_graph(),
+            suite_paths: suite_paths(),
+            budget: StealthBudget::DEFAULT,
+            initial_detection: detection_config(&[]),
+            // `max_generations: 3` makes `generation + 1 == max_generations`
+            // ALSO true at generation 2 -- the same generation the
+            // plateau window fills at, by construction of `patience: 2`
+            // above (window needs `patience + 1 == 3` values).
+            max_generations: 3,
+            convergence,
+        };
+
+        let report = RedSwarmCampaign::run(&config).expect("run should succeed");
+
+        assert_eq!(report.generations.len(), 3);
+        assert_eq!(
+            report.stop_reason,
+            StopReason::MaxGenerations,
+            "MaxGenerations is checked first and must win over the \
+             simultaneously-true Plateau condition"
+        );
     }
 
     #[test]
