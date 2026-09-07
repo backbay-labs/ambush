@@ -15,7 +15,11 @@ import {
   buildWaveMessageContent,
   WAVE_MESSAGE_MARKER,
 } from "../../src/features/messages/lib/waveMessage";
-import type { PerchMockFixture } from "../../src/testing/perch/e2ePerchBridge";
+import {
+  PERCH_LANE_CHANNEL_NAME as MOCK_LANE_CHANNEL_NAME,
+  type PerchMockFixture,
+  type PerchMockFrameInput,
+} from "../../src/testing/perch/e2ePerchBridge";
 import { installMockBridge } from "./bridge";
 
 /**
@@ -52,7 +56,10 @@ export {
   mintedCaseId,
   mintedIncidentId,
 } from "../../src/testing/perch/e2ePerchBridge";
-export type { PerchMockFixture } from "../../src/testing/perch/e2ePerchBridge";
+export type {
+  PerchMockFixture,
+  PerchMockFrameInput,
+} from "../../src/testing/perch/e2ePerchBridge";
 
 /**
  * The finding card's human fallback line, pinned to the Rust golden
@@ -196,6 +203,42 @@ export async function waitForMockLiveSubscription(
       }) === true,
     channelName,
   );
+}
+
+/**
+ * Wait until the console's telemetry REQ is open.
+ *
+ * A frame emitted before it is silently dropped, exactly as a message is. The
+ * mock records a REQ with no `#h` as a GLOBAL subscription, so any channel name
+ * answers the question and the `kind` is what actually selects the REQ: only
+ * the telemetry filter carries 26004.
+ */
+export async function waitForPerchTelemetrySubscription(
+  page: Page,
+): Promise<void> {
+  await page.waitForFunction(
+    (name) =>
+      window.__AMBUSH_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+        channelName: name,
+        kind: 26004,
+      }) === true,
+    MOCK_LANE_CHANNEL_NAME,
+  );
+}
+
+/**
+ * Emit one ephemeral frame. Returns the event id, so a spec that needs to talk
+ * about the frame it sent can.
+ */
+export async function emitPerchFrame(
+  page: Page,
+  input: PerchMockFrameInput,
+): Promise<string> {
+  return page.evaluate((frame) => {
+    const event = window.__AMBUSH_E2E_EMIT_MOCK_FRAME__?.(frame);
+    if (!event) throw new Error("the mock bridge has no frame emitter");
+    return event.id;
+  }, input);
 }
 
 export type PerchEmitInput = {

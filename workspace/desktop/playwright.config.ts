@@ -183,6 +183,7 @@ export default defineConfig({
         "**/needs-restart-screenshots.spec.ts",
         "**/team-catalog-screenshots.spec.ts",
         "**/perch-marker-admission.spec.ts",
+        "**/perch-telemetry.spec.ts",
         "**/perch-finding-card.spec.ts",
         "**/perch-containment.spec.ts",
         "**/perch-watchfloor.spec.ts",
