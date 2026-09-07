@@ -2,6 +2,7 @@ use crate::runtime_events::{
     EscalationLevel, RuntimeEvent, RuntimeEventBroadcaster, RuntimeThreatConcentration, now_ms,
 };
 use arc_swap::ArcSwap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use swarm_core::agent::{SwarmMode, SwarmModeState};
@@ -26,6 +27,10 @@ pub struct ConcentrationMonitor<S: PheromoneSubstrate> {
     below_threshold_since: Option<i64>,
     shared_mode_state: Option<Arc<ArcSwap<SwarmModeState>>>,
     runtime_events: Option<RuntimeEventBroadcaster>,
+    /// The threat classes that were above their threshold on the previous evaluation. A class
+    /// absent here is on a rising edge when it next exceeds its threshold; a class present is in
+    /// steady state and neither warns nor publishes again (found-4).
+    escalated_classes: HashSet<ThreatClass>,
 }
 
 impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
@@ -37,6 +42,7 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
             below_threshold_since: None,
             shared_mode_state: None,
             runtime_events: None,
+            escalated_classes: HashSet::new(),
         }
     }
 
@@ -106,21 +112,18 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
         let mut events = Vec::new();
         let mut mode_changed = false;
         let starting_mode = self.mode_state.current;
+        // The classes that were above their threshold last time, against which this evaluation's
+        // rising edges are measured. Rebuilt below from the classes that exceed this time.
+        let previously_escalated = std::mem::take(&mut self.escalated_classes);
+        let mut now_escalated = HashSet::new();
 
         for threat_class in standard_threat_classes() {
             if let Some(event) = self.evaluate_threat_class(&threat_class, now).await? {
                 let target_mode = event_mode(&event);
                 let event_threat_class = event_threat_class(&event).clone();
                 let mut event_mode_changed = false;
-                tracing::warn!(
-                    module = module_path!(),
-                    threat_class = %threat_class_name(&event_threat_class),
-                    total_strength = event_total_strength(&event),
-                    distinct_sources = event_distinct_sources(&event),
-                    peak_confidence = event_peak_confidence(&event),
-                    target_mode = ?target_mode,
-                    "pheromone concentration crossed escalation threshold"
-                );
+                let held_above = previously_escalated.contains(&event_threat_class);
+                now_escalated.insert(event_threat_class.clone());
 
                 if target_mode > self.mode_state.current {
                     let record = escalation_record(&event);
@@ -145,10 +148,44 @@ impl<S: PheromoneSubstrate> ConcentrationMonitor<S> {
                     );
                 }
 
-                self.publish_escalation(&event, event_mode_changed);
+                // found-4: warn and publish the runtime event on the RISING EDGE only -- the
+                // first evaluation in which this class exceeds its threshold, or the one in which
+                // its target mode rose above the current mode. A class that merely holds above
+                // the line is steady state: it logs at debug with the same fields and publishes
+                // nothing, so an escalation that sits above its threshold does not put a WARN and
+                // a RuntimeEvent::Escalation on every 100 ms tick (the walk spooled 20,436
+                // evidence records in 45 min against a pacer that drains one per second). A class
+                // that drops below and crosses again is absent from `previously_escalated`, so it
+                // is a fresh rising edge. The mode-change flag alone cannot express this: a class
+                // can first cross its threshold while the mode is already elevated by another
+                // class, which is a rising edge with no mode change.
+                let rising_edge = !held_above || event_mode_changed;
+                if rising_edge {
+                    tracing::warn!(
+                        module = module_path!(),
+                        threat_class = %threat_class_name(&event_threat_class),
+                        total_strength = event_total_strength(&event),
+                        distinct_sources = event_distinct_sources(&event),
+                        peak_confidence = event_peak_confidence(&event),
+                        target_mode = ?target_mode,
+                        "pheromone concentration crossed escalation threshold"
+                    );
+                    self.publish_escalation(&event, event_mode_changed);
+                } else {
+                    tracing::debug!(
+                        module = module_path!(),
+                        threat_class = %threat_class_name(&event_threat_class),
+                        total_strength = event_total_strength(&event),
+                        distinct_sources = event_distinct_sources(&event),
+                        peak_confidence = event_peak_confidence(&event),
+                        target_mode = ?target_mode,
+                        "pheromone concentration holds above escalation threshold"
+                    );
+                }
                 events.push(event);
             }
         }
+        self.escalated_classes = now_escalated;
 
         if events.is_empty() {
             if self.mode_state.current != SwarmMode::Normal {
@@ -415,6 +452,7 @@ fn unix_timestamp_secs() -> i64 {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::ConcentrationMonitor;
+    use crate::runtime_events::{RuntimeEvent, RuntimeEventBroadcaster};
     use ed25519_dalek::{Signer, SigningKey};
     use std::sync::Arc;
     use swarm_core::agent::SwarmMode;
@@ -422,6 +460,7 @@ mod tests {
     use swarm_core::pheromone::{PheromoneDeposit, ThreatClass};
     use swarm_core::types::{AgentId, EscalationEvent, Severity};
     use swarm_pheromone::{DepositSigningPayload, InMemoryPheromoneSubstrate, PheromoneSubstrate};
+    use tokio::sync::broadcast;
 
     fn test_config() -> PheromoneConfig {
         PheromoneConfig {
@@ -630,5 +669,85 @@ mod tests {
         assert_eq!(outcome.current_mode, SwarmMode::Incident);
         assert!(!outcome.mode_changed);
         assert!(matches!(outcome.events[0], EscalationEvent::Alert { .. }));
+    }
+
+    async fn deposit_alert_pair(substrate: &InMemoryPheromoneSubstrate, at: i64) {
+        // Two sources, two deposits each, confidence 0.9 -> total strength 3.6 at `at`: above the
+        // alert threshold (2.0) and below the incident threshold (5.0).
+        for key in [&signing_key_a(), &signing_key_b()] {
+            substrate.deposit(make_deposit(key, 0.9, at)).await.unwrap();
+            substrate.deposit(make_deposit(key, 0.9, at)).await.unwrap();
+        }
+    }
+
+    fn escalations_published(receiver: &mut broadcast::Receiver<RuntimeEvent>) -> usize {
+        std::iter::from_fn(|| receiver.try_recv().ok())
+            .filter(|event| matches!(event, RuntimeEvent::Escalation { .. }))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_class_held_above_threshold_publishes_one_escalation_on_the_rising_edge() {
+        // found-4: a class that merely holds above its threshold must warn and publish a
+        // RuntimeEvent::Escalation exactly once -- on the rising edge -- not on every evaluation.
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+        deposit_alert_pair(&substrate, 1_700_000_000).await;
+
+        let events = RuntimeEventBroadcaster::new(256);
+        let mut receiver = events.subscribe();
+        let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate))
+            .with_runtime_events(events);
+
+        // Ten evaluations at the same instant: the concentration stays above the alert threshold.
+        for _ in 0..10 {
+            let outcome = monitor.evaluate_all(1_700_000_000).await.unwrap();
+            assert!(matches!(outcome.events[0], EscalationEvent::Alert { .. }));
+        }
+
+        assert_eq!(
+            escalations_published(&mut receiver),
+            1,
+            "the rising edge publishes once; the nine steady evaluations publish nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_class_that_drops_below_and_crosses_again_publishes_a_second_escalation() {
+        // A steady hold does not re-publish, but a class that drops below its threshold and
+        // crosses again is a fresh rising edge that warns and publishes anew.
+        let substrate = Arc::new(InMemoryPheromoneSubstrate::new(test_config()));
+        let events = RuntimeEventBroadcaster::new(256);
+        let mut receiver = events.subscribe();
+        let mut monitor = ConcentrationMonitor::new(test_config(), Arc::clone(&substrate))
+            .with_runtime_events(events);
+
+        let t0 = 1_700_000_000;
+        deposit_alert_pair(&substrate, t0).await;
+        // Rising edge, then a steady hold at the same instant: one publish, not two.
+        assert!(matches!(
+            monitor.evaluate_all(t0).await.unwrap().events[0],
+            EscalationEvent::Alert { .. }
+        ));
+        assert!(matches!(
+            monitor.evaluate_all(t0).await.unwrap().events[0],
+            EscalationEvent::Alert { .. }
+        ));
+
+        // Ten half-lives on, the deposits have decayed to ~0.0035, far below the threshold.
+        let later = t0 + 36_000;
+        assert!(monitor.evaluate_all(later).await.unwrap().events.is_empty());
+
+        // Fresh deposits cross the threshold again: a second rising edge.
+        deposit_alert_pair(&substrate, later).await;
+        assert!(matches!(
+            monitor.evaluate_all(later).await.unwrap().events[0],
+            EscalationEvent::Alert { .. }
+        ));
+
+        assert_eq!(
+            escalations_published(&mut receiver),
+            2,
+            "one publish per crossing; the steady hold between them publishes nothing"
+        );
     }
 }

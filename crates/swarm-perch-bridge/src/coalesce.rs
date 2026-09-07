@@ -34,12 +34,14 @@
 use std::collections::BTreeMap;
 
 use swarm_perch_wire::{
-    AgentHealthEntry, AgentHealthFrame, ConcentrationFrame, IngestRate, ModeTransitionFrame,
-    WireAgentHealth, WireAgentRole, WireSwarmMode,
+    AgentHealthEntry, AgentHealthFrame, ConcentrationFrame, GovernanceStatusFrame, IngestRate,
+    ModeTransitionFrame, WireAgentHealth, WireAgentRole, WireSwarmMode,
 };
 use swarm_runtime::runtime_events::RuntimeEvent;
 
-use crate::stream::{agent_role_to_wire, concentration_to_wire, threat_class_to_wire};
+use crate::stream::{
+    agent_role_to_wire, concentration_to_wire, partition_state_to_wire, threat_class_to_wire,
+};
 
 /// The window every reducer here collapses. One second, matching `26000`'s
 /// `window_ms`, so all four frames describe the same slice of time.
@@ -120,6 +122,11 @@ pub fn telemetry_slot_key(event: &RuntimeEvent) -> Option<&'static str> {
         // that reason, and the caller must hold it.
         RuntimeEvent::AgentHealth { .. } | RuntimeEvent::AgentAction { .. } => Some("26002"),
         RuntimeEvent::ModeTransition { .. } => Some("26003"),
+        // One slot per frame kind: two governance readings in a window collapse
+        // to the newest here, which is exactly the coalescing 26004 wants — a
+        // reading is a statement about now, so an older one carries no meaning a
+        // newer one lost.
+        RuntimeEvent::GovernanceStatus { .. } => Some("26004"),
         RuntimeEvent::TamperAlert { .. } => Some("26005"),
         _ => None,
     }
@@ -369,6 +376,59 @@ pub fn mode_transitions(events: &[RuntimeEvent]) -> Vec<ModeTransitionFrame> {
         .collect()
 }
 
+/// Reduce a window of `GovernanceStatus` readings to one `26004` frame.
+///
+/// The NEWEST reading wins, by `emitted_at_ms`. A governance reading is a
+/// statement about now, so — like `concentration_frame` — an average or an older
+/// sample would assert a state the authority is no longer in. The telemetry
+/// spool is last-wins per frame kind, so by publish time the slice already holds
+/// one reading; taking the newest here is the same defensive rule the
+/// concentration reducer applies to the same last-wins spool.
+///
+/// `None` when the window carried no reading. An absent frame is "the console
+/// has not been told", which the strip renders as bridge-down — the honest state
+/// for a daemon whose heartbeat has not reached the relay, and never a
+/// fabricated healthy.
+pub fn governance_status_frame(events: &[RuntimeEvent]) -> Option<GovernanceStatusFrame> {
+    let mut latest: Option<&RuntimeEvent> = None;
+    for event in events {
+        if let RuntimeEvent::GovernanceStatus { emitted_at_ms, .. } = event
+            && latest.is_none_or(|prev| *emitted_at_ms >= prev.emitted_at_ms())
+        {
+            latest = Some(event);
+        }
+    }
+    let RuntimeEvent::GovernanceStatus {
+        partition_state,
+        total_governors,
+        healthy_governors,
+        quorum_threshold,
+        unauthorized_partition_actions,
+        active_contingency_leases,
+        last_transition_at_ms,
+        last_reconciliation_report_id,
+        contingency_lease_ttl_ms,
+        ..
+    } = latest?
+    else {
+        return None;
+    };
+    Some(GovernanceStatusFrame {
+        // A total match, not a string round trip: a new partition state on
+        // either side is a compile error at `partition_state_to_wire`, not a
+        // value the console cannot render (INV-08).
+        partition_state: partition_state_to_wire(*partition_state),
+        total_governors: *total_governors,
+        healthy_governors: *healthy_governors,
+        quorum_threshold: *quorum_threshold,
+        active_contingency_leases: *active_contingency_leases,
+        unauthorized_partition_actions: *unauthorized_partition_actions,
+        last_transition_at_ms: *last_transition_at_ms,
+        last_reconciliation_report_id: last_reconciliation_report_id.clone(),
+        contingency_lease_ttl_ms: *contingency_lease_ttl_ms,
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "coalesce_tests.rs"]
@@ -470,6 +530,21 @@ pub fn tick_frames(
                     issuer: issuer.to_string(),
                     emitted_at_ms,
                     seq: seq_for(26003),
+                },
+                body,
+            }),
+        )?;
+    }
+
+    if let Some(body) = governance_status_frame(events) {
+        push(
+            26004,
+            swarm_perch_wire::Frame::GovernanceStatus(swarm_perch_wire::FrameBody {
+                header: swarm_perch_wire::FrameHeader {
+                    kind: 26004,
+                    issuer: issuer.to_string(),
+                    emitted_at_ms,
+                    seq: seq_for(26004),
                 },
                 body,
             }),

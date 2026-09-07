@@ -439,3 +439,128 @@ fn a_zero_count_still_reports_one_because_a_frame_collapsed_at_least_itself() {
         concentration_frame(&[snapshot(1_000, SwarmMode::Normal, 1.0)], 0).expect("a frame");
     assert_eq!(frame.coalesced_from, 1);
 }
+
+/// One governance reading, at `at`, reporting `healthy` of `total` governors.
+fn governance(at: i64, total: usize, healthy: usize) -> RuntimeEvent {
+    RuntimeEvent::GovernanceStatus {
+        emitted_at_ms: at,
+        partition_state: swarm_policy::governance::PartitionState::Healthy,
+        total_governors: total,
+        healthy_governors: healthy,
+        quorum_threshold: 1,
+        unauthorized_partition_actions: 0,
+        active_contingency_leases: 0,
+        last_transition_at_ms: None,
+        last_reconciliation_report_id: None,
+        contingency_lease_ttl_ms: 300_000,
+    }
+}
+
+#[test]
+fn a_governance_reading_keys_to_the_26004_slot() {
+    // One slot per frame kind, so readings coalesce newest-wins rather than
+    // evicting some other telemetry.
+    assert_eq!(telemetry_slot_key(&governance(0, 1, 1)), Some("26004"));
+}
+
+#[test]
+fn the_governance_frame_keeps_the_newest_reading() {
+    // Newest by emitted_at_ms, not by slice position — the spool is last-wins,
+    // and a governance reading is a statement about now.
+    let frame = governance_status_frame(&[
+        governance(1_000, 3, 1),
+        governance(3_000, 3, 3),
+        governance(2_000, 3, 2),
+    ])
+    .expect("a frame");
+    assert_eq!(frame.healthy_governors, 3, "the newest reading wins");
+    // And with the newest first, the same reading still wins.
+    let frame = governance_status_frame(&[governance(3_000, 3, 3), governance(1_000, 3, 1)])
+        .expect("a frame");
+    assert_eq!(frame.healthy_governors, 3);
+}
+
+#[test]
+fn an_empty_window_publishes_no_governance_frame() {
+    // Absence is "the console has not been told", which the strip renders as
+    // bridge-down. A synthetic frame would paint a fabricated healthy.
+    assert!(governance_status_frame(&[]).is_none());
+    assert!(governance_status_frame(&[ingest("s", true)]).is_none());
+}
+
+#[test]
+fn a_governance_reading_becomes_a_26004_that_matches_the_golden_vector() {
+    // The golden is extracted from the schema's own example; the producer must
+    // reproduce it field for field. Read it the way `tests/wire_parity.rs`
+    // reads the card goldens.
+    let golden_raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../swarm-perch-wire/golden/frame-26004-governance-status.json"
+    ))
+    .expect("the 26004 golden vector");
+    let golden: serde_json::Value = serde_json::from_str(&golden_raw).expect("valid JSON");
+
+    // A reading carrying the golden's numbers, published by the golden's issuer
+    // on the golden's clock and seq.
+    let emitted_at_ms = golden["emitted_at_ms"].as_i64().expect("emitted_at_ms");
+    let reading = governance(emitted_at_ms, 1, 1);
+    let issuer = golden["issuer"].as_str().expect("issuer");
+    let seq = golden["seq"].as_u64().expect("seq");
+    let mut seq_for = |_kind: u16| seq;
+    let frames = tick_frames(
+        IngestWindow::default().drain(),
+        std::slice::from_ref(&reading),
+        0,
+        issuer,
+        emitted_at_ms,
+        &mut seq_for,
+    )
+    .expect("frames");
+    let frame = frames
+        .iter()
+        .find(|f| f.kind == 26004)
+        .expect("a 26004 frame");
+
+    // The typed producer omits an absent optional where the schema example
+    // spells it null, and both decode the same — so compare against the golden
+    // with its explicit nulls stripped, exactly as `tests/golden.rs` does.
+    let mut expected = golden.clone();
+    if let serde_json::Value::Object(map) = &mut expected {
+        map.retain(|_, value| !value.is_null());
+    }
+    assert_eq!(
+        frame.value, expected,
+        "every field matches the golden vector"
+    );
+    assert_eq!(
+        frame.value["schema"], "swarm.perch.frame.governance_status.v1",
+        "the schema string is the one the console reads"
+    );
+
+    // And the produced bytes round-trip back into the typed wire frame — the
+    // zod/serde parity the desktop mirror asserts on the same golden.
+    let round_trip: swarm_perch_wire::Frame =
+        serde_json::from_value(frame.value.clone()).expect("round trip");
+    assert_eq!(
+        round_trip.frame_kind(),
+        swarm_perch_wire::FrameKind::GovernanceStatus
+    );
+}
+
+#[test]
+fn the_governance_frame_follows_the_gauge_in_kind_order() {
+    let mut seq = seq_counter();
+    let frames = tick_frames(
+        IngestWindow::default().drain(),
+        &[governance(1_000, 1, 1)],
+        0,
+        "issuer",
+        1_000,
+        &mut seq,
+    )
+    .expect("frames");
+    assert_eq!(
+        frames.iter().map(|f| f.kind).collect::<Vec<_>>(),
+        vec![26000, 26004]
+    );
+}

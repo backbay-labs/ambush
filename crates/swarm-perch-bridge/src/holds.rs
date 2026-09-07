@@ -301,6 +301,18 @@ impl HoldPublisher {
             );
         }
 
+        // found-6: a first hold learns its case channel through `on_ok(CreateChannel)`, but a
+        // second hold on the same hunt plans no `CreateChannel` step, so that write-back never
+        // fires for it and its record keeps `case_channel: null`. Leg 1 of the operator's write
+        // reads exactly this field, so a null refuses every decision on this hold. When the
+        // ledger already records the channel as created, perform the same write-back here. It is
+        // idempotent and gated on `record.case_channel.is_none()`, so a hold that already names
+        // its case is not written again; a first hold, whose create is not yet acked, still
+        // learns its channel through `on_ok` rather than here.
+        if record.case_channel.is_none() && self.routing.channel_is_created(case) {
+            self.mark_case_channel(case);
+        }
+
         let open_card = self.routing.open_card_for_hold(&id).map(str::to_string);
         if open_card.is_none() {
             steps.push(PublishStep::PublishHoldCard {
@@ -625,12 +637,110 @@ impl HoldPublisher {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use swarm_core::config::SecretString;
     use swarm_core::types::{AgentId, ResponseAction};
-    use swarm_runtime::held_action::{HoldState, MemoryHeldActionStore};
+    use swarm_runtime::held_action::{
+        HeldActionStoreError, HeldActionStoreHealth, HoldDecisionRecord, HoldState,
+        MemoryHeldActionStore,
+    };
 
     use crate::identity::IdentityTable;
+
+    /// A store that forwards to an in-memory backend and counts the `mark_case_channel`
+    /// write-backs, so a test can prove the plan does not re-write a hold that already names
+    /// its case.
+    #[derive(Default)]
+    struct CountingStore {
+        inner: MemoryHeldActionStore,
+        case_channel_writes: AtomicUsize,
+    }
+
+    impl CountingStore {
+        fn case_channel_writes(&self) -> usize {
+            self.case_channel_writes.load(Ordering::SeqCst)
+        }
+    }
+
+    impl HeldActionStore for CountingStore {
+        fn create(&self, hold: HeldAction) -> Result<(), HeldActionStoreError> {
+            self.inner.create(hold)
+        }
+        fn get(&self, hold_id: &str) -> Result<Option<HeldAction>, HeldActionStoreError> {
+            self.inner.get(hold_id)
+        }
+        fn list(
+            &self,
+            include_terminal: bool,
+            limit: usize,
+        ) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+            self.inner.list(include_terminal, limit)
+        }
+        fn mark_case_channel(
+            &self,
+            hold_id: &str,
+            case_channel: &str,
+        ) -> Result<(), HeldActionStoreError> {
+            self.case_channel_writes.fetch_add(1, Ordering::SeqCst);
+            self.inner.mark_case_channel(hold_id, case_channel)
+        }
+        fn mark_notified(
+            &self,
+            hold_id: &str,
+            at_ms: i64,
+            notice_event_id: &str,
+            card_event_id: Option<&str>,
+        ) -> Result<(), HeldActionStoreError> {
+            self.inner
+                .mark_notified(hold_id, at_ms, notice_event_id, card_event_id)
+        }
+        fn mark_armed(&self, hold_id: &str, at_ms: i64) -> Result<(), HeldActionStoreError> {
+            self.inner.mark_armed(hold_id, at_ms)
+        }
+        fn begin_decision(
+            &self,
+            hold_id: &str,
+            intent_event_id: &str,
+            cas_instant_ms: i64,
+        ) -> Result<HeldAction, HeldActionStoreError> {
+            self.inner
+                .begin_decision(hold_id, intent_event_id, cas_instant_ms)
+        }
+        fn abandon_decision(
+            &self,
+            hold_id: &str,
+            intent_event_id: &str,
+        ) -> Result<(), HeldActionStoreError> {
+            self.inner.abandon_decision(hold_id, intent_event_id)
+        }
+        fn complete_decision(
+            &self,
+            hold_id: &str,
+            decision: HoldDecisionRecord,
+            state: HoldState,
+        ) -> Result<(), HeldActionStoreError> {
+            self.inner.complete_decision(hold_id, decision, state)
+        }
+        fn expire_due(&self, now_ms: i64) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+            self.inner.expire_due(now_ms)
+        }
+        fn fail_stalled_decisions(
+            &self,
+            now_ms: i64,
+            stall_ms: u64,
+        ) -> Result<Vec<HeldAction>, HeldActionStoreError> {
+            self.inner.fail_stalled_decisions(now_ms, stall_ms)
+        }
+        fn health(
+            &self,
+            now_ms: i64,
+            stall_ms: u64,
+        ) -> Result<HeldActionStoreHealth, HeldActionStoreError> {
+            self.inner.health(now_ms, stall_ms)
+        }
+    }
 
     fn identity() -> (Identity, IssuerIdx) {
         let table = IdentityTable::build(
@@ -1041,6 +1151,116 @@ mod tests {
                 .all(|step| step.channel() != Some(uuid::Uuid::nil()))
         );
         assert_eq!(plan[0].channel(), Some(case));
+    }
+
+    #[test]
+    fn a_second_hold_on_a_routed_hunt_learns_its_case_channel() {
+        // found-6: a second hold on a hunt whose case channel already exists plans no
+        // `CreateChannel` step, so `on_ok(CreateChannel)` -- the write-back that records the
+        // case on every routed hold -- never fires for it, and its record keeps `case_channel:
+        // null`. Leg 1 of the operator's write reads exactly this field, so a null refuses every
+        // decision on the hold. `plan_open` performs the same write-back when it reuses a
+        // created channel.
+        let mut h = harness(vec!["68".repeat(32), "69".repeat(32)], true);
+        let first = fixture();
+        h.store.create(first.clone()).unwrap();
+        let opened = steps(
+            h.publisher
+                .plan(&held_event(&first, HoldState::Created))
+                .unwrap(),
+        );
+        for (index, step) in opened.iter().enumerate() {
+            h.publisher
+                .on_ok(step, &format!("{:02x}", index + 1).repeat(32), 1)
+                .unwrap();
+        }
+        let case = h
+            .publisher
+            .routing_mut()
+            .case_for_hunt(&first.action_request.hunt_id.0)
+            .unwrap();
+
+        let mut second = fixture();
+        second.hold_id = swarm_runtime::held_action::mint_hold_id();
+        h.store.create(second.clone()).unwrap();
+        // The freshly created second hold names no case yet.
+        assert_eq!(
+            h.store.get(&second.hold_id).unwrap().unwrap().case_channel,
+            None
+        );
+
+        let _ = steps(
+            h.publisher
+                .plan(&held_event(&second, HoldState::Created))
+                .unwrap(),
+        );
+
+        // After the second hold is planned, its record carries the case its hunt was routed to.
+        assert_eq!(
+            h.store.get(&second.hold_id).unwrap().unwrap().case_channel,
+            Some(case.to_string())
+        );
+    }
+
+    #[test]
+    fn a_hold_that_already_names_its_channel_is_not_written_again() {
+        // The write-back is idempotent and gated on `record.case_channel.is_none()`: re-planning
+        // a `created` event whose record already names the case must not touch the store again.
+        let store = Arc::new(CountingStore::default());
+        let dir = tempfile::tempdir().unwrap();
+        let routing = CaseRouting::open(&dir.path().join("routing.json")).unwrap();
+        let (issuer, idx) = identity();
+        let mut publisher = HoldPublisher::new(
+            routing,
+            Some(Arc::clone(&store) as Arc<dyn HeldActionStore>),
+            vec!["68".repeat(32)],
+            2_592_000,
+            issuer,
+            idx,
+            BridgeMetrics::for_test(),
+        );
+
+        let first = fixture();
+        store.create(first.clone()).unwrap();
+        let opened = steps(
+            publisher
+                .plan(&held_event(&first, HoldState::Created))
+                .unwrap(),
+        );
+        for (index, step) in opened.iter().enumerate() {
+            publisher
+                .on_ok(step, &format!("{:02x}", index + 1).repeat(32), 1)
+                .unwrap();
+        }
+
+        // Baseline after the first hold's own `on_ok(CreateChannel)` write-back has run.
+        let baseline = store.case_channel_writes();
+
+        let mut second = fixture();
+        second.hold_id = swarm_runtime::held_action::mint_hold_id();
+        store.create(second.clone()).unwrap();
+        let _ = steps(
+            publisher
+                .plan(&held_event(&second, HoldState::Created))
+                .unwrap(),
+        );
+        let after_learning = store.case_channel_writes();
+        assert!(
+            after_learning > baseline,
+            "the second hold should have learned its channel"
+        );
+
+        // Re-plan the same created event: the record now names the case, so nothing is written.
+        let _ = steps(
+            publisher
+                .plan(&held_event(&second, HoldState::Created))
+                .unwrap(),
+        );
+        assert_eq!(
+            store.case_channel_writes(),
+            after_learning,
+            "a hold whose record already names its channel must not be written again"
+        );
     }
 
     #[test]

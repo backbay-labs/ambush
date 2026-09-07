@@ -454,6 +454,106 @@ async fn an_ungated_alarm_subscription_is_closed_by_the_relay() {
     );
 }
 
+/// The 1 Hz governance frame reaches an authenticated subscriber within three seconds.
+///
+/// `26004` is a community-global telemetry frame: no `h`, no `p`, and — unlike `26006` — NOT
+/// p-gated, so any authenticated member's `REQ {"kinds":[26004]}` receives it. It is ephemeral,
+/// so the subscriber opens the REQ BEFORE the frame is published; a read-back afterwards would
+/// find nothing (the relay stores no ephemeral). Built by the REAL producer (`tick_frames`) and
+/// signed by the telemetry identity — the same two steps the daemon's telemetry publisher does —
+/// so this proves the bridge's own governance bytes are admitted and delivered.
+#[tokio::test]
+#[ignore = "needs PERCH_TEST_RELAY_URL and a live relay"]
+async fn an_authenticated_subscriber_receives_a_26004_within_three_seconds() {
+    use swarm_perch_bridge::coalesce::{IngestWindow, tick_frames};
+    use swarm_runtime::runtime_events::RuntimeEvent;
+
+    let url = relay_url();
+    let table = table();
+    let telemetry_idx = table
+        .index_of(&swarm_perch_bridge::identity::Slot::Telemetry)
+        .unwrap();
+    let telemetry = table.get(telemetry_idx).unwrap().clone();
+    let issuer = telemetry.keys.public_key().to_hex();
+
+    // The subscriber, on a throwaway key, watches the global 26004 stream BEFORE
+    // anything is published.
+    let subscriber = nostr::Keys::generate();
+    let mut watcher = NostrWsConnection::connect_authenticated(&url, &subscriber, None)
+        .await
+        .unwrap();
+    watcher
+        .send_raw(&serde_json::json!(["REQ", "gov-status", {"kinds": [26004]}]))
+        .await
+        .unwrap();
+
+    // The real producer turns one reading into one 26004 body.
+    let reading = RuntimeEvent::GovernanceStatus {
+        emitted_at_ms: chrono::Utc::now().timestamp_millis(),
+        partition_state: swarm_policy::governance::PartitionState::Healthy,
+        total_governors: 1,
+        healthy_governors: 1,
+        quorum_threshold: 1,
+        unauthorized_partition_actions: 0,
+        active_contingency_leases: 0,
+        last_transition_at_ms: None,
+        last_reconciliation_report_id: None,
+        contingency_lease_ttl_ms: 300_000,
+    };
+    let mut seq = |_kind: u16| 1u64;
+    let frames = tick_frames(
+        IngestWindow::default().drain(),
+        std::slice::from_ref(&reading),
+        0,
+        &issuer,
+        reading.emitted_at_ms(),
+        &mut seq,
+    )
+    .unwrap();
+    let frame = frames
+        .into_iter()
+        .find(|f| f.kind == 26004)
+        .expect("the producer built a 26004");
+    let content = serde_json::to_string(&frame.value).unwrap();
+
+    // Signed by the telemetry identity, global, no tags — exactly as telemetry.rs publishes it.
+    let mut conn = NostrWsConnection::connect_authenticated(&url, &telemetry.keys, None)
+        .await
+        .unwrap();
+    let signed = nostr::EventBuilder::new(nostr::Kind::Custom(26004), content)
+        .custom_created_at(nostr::Timestamp::from(now_secs()))
+        .sign_with_keys(&telemetry.keys)
+        .unwrap();
+    let ok = conn.send_event(signed).await.unwrap();
+    assert!(ok.accepted, "the relay refused the 26004: {}", ok.message);
+
+    // It reaches the subscriber within three seconds, carrying the governance schema and no host.
+    let mut saw = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        match watcher.next_event(Duration::from_secs(3)).await.unwrap() {
+            RelayMessage::Event { event, .. } if event.kind.as_u16() == 26004 => {
+                let body: serde_json::Value = serde_json::from_str(&event.content).unwrap();
+                assert_eq!(body["schema"], "swarm.perch.frame.governance_status.v1");
+                assert_eq!(body["issuer"], issuer);
+                assert!(
+                    body.get("host_id").is_none(),
+                    "a community-global frame carries no host id"
+                );
+                println!("26004 reached the subscriber: {}", event.id.to_hex());
+                saw = true;
+                break;
+            }
+            RelayMessage::Closed { message, .. } => panic!("the 26004 REQ was closed: {message}"),
+            _ => {}
+        }
+    }
+    assert!(
+        saw,
+        "no 26004 reached an authenticated subscriber within three seconds"
+    );
+}
+
 /// The lane channel `PERCH_TEST_LANE_CHANNEL` carries at least one finding card written by
 /// `PERCH_TEST_EXPECT_AUTHOR`.
 ///

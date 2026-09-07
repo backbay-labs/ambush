@@ -36,6 +36,19 @@ pub const PERCH_PUBLISH_TICK_MS: u64 = 1_000;
 /// never a protocol risk.
 pub const PERCH_FRAME_MAX_BYTES: usize = 64 * 1024;
 
+/// The most unpublishable records one tick will discharge before it yields, so a poisoned or
+/// flooded spool cannot pin the drain task on a single tick.
+///
+/// The invariant is at most one relay FRAME per tick, not one spool RECORD per tick: a producer
+/// that emits faster than the pacer drains (found-15 measured a 10 Hz escalation flood against a
+/// 1 Hz pacer, 20,436 records spooled and no card published in 45 min) would otherwise leave
+/// every finding card behind a wall the pacer clears one record per tick. A tick therefore
+/// commits every consecutive record no producer turns into a card and publishes the first
+/// publishable record it reaches. This bound exists only so the loop cannot run unbounded on a
+/// spool that is *entirely* unpublishable; at 4,096 records a tick and 1 Hz it clears a day of
+/// the measured flood in seconds.
+pub const PACER_SKIP_BUDGET: usize = 4096;
+
 /// Ticks of silence on a stream holding a pending gap before the pacer would emit a **gap-only
 /// card**. PROPOSED; three ticks is the smallest value that does not race a busy stream's own
 /// next card.
@@ -248,120 +261,150 @@ impl<P: FramePublisher> Pacer<P> {
             }
         }
 
-        // 2. Take the head record and any pending gaps. The lock is held for the read only.
-        let (record, gaps) = {
-            let mut guard = self.spools.lock().unwrap_or_else(PoisonError::into_inner);
-            let evidence = guard.evidence();
-            let Some(record) = evidence.peek(PERCH_FRAME_MAX_BYTES)?.into_iter().next() else {
-                let bytes = guard.disk_bytes();
-                drop(guard);
-                for (stream, held) in bytes {
-                    self.metrics.observe_spool_bytes(stream, held);
+        // 2. Discharge the head records no producer turns into a card -- and any whose issuer
+        //    index is past the table -- until a publishable record is reached or the skip budget
+        //    bounds the tick (found-15). The invariant is at most one relay FRAME per tick, NOT
+        //    one spool RECORD per tick: a producer that emits faster than the pacer drains would
+        //    otherwise leave every finding card behind a wall the pacer clears one record per
+        //    tick, which is the 20,436-record spool the walk measured with no card published.
+        //    Records are consumed a peeked batch at a time rather than re-peeked per record, so a
+        //    tick that clears thousands of them re-scans the spool a handful of times, not once
+        //    per record. A record that fails to BUILD (a `BridgeError` from a producer) still
+        //    propagates and keeps its current handling.
+        let mut skipped: usize = 0;
+        loop {
+            // A batch of head records and the pending gaps, taken once for the batch. The gaps
+            // ride the first publishable record in the batch, or are put back if there is none.
+            let (records, gaps) = {
+                let mut guard = self.spools.lock().unwrap_or_else(PoisonError::into_inner);
+                let evidence = guard.evidence();
+                let records = evidence.peek(PERCH_FRAME_MAX_BYTES)?;
+                if records.is_empty() {
+                    let bytes = guard.disk_bytes();
+                    drop(guard);
+                    for (stream, held) in bytes {
+                        self.metrics.observe_spool_bytes(stream, held);
+                    }
+                    return Ok(0);
                 }
-                return Ok(0);
+                let gaps = evidence.take_gaps();
+                (records, gaps)
             };
-            let gaps = evidence.take_gaps();
-            (record, gaps)
-        };
 
-        let event: RuntimeEvent = serde_json::from_slice(&record.payload)
-            .map_err(|error| BridgeError::Encode(error.to_string()))?;
+            for record in records {
+                if skipped >= PACER_SKIP_BUDGET {
+                    // The budget is spent; this record and the rest of the batch wait for the next
+                    // tick. No frame was published, so one-frame-per-tick holds; the gaps go back.
+                    self.restore_gaps(&gaps);
+                    return Ok(0);
+                }
 
-        let Some(identity) = self.identities.get(record.issuer) else {
-            // A record whose issuer index is past the table can never be signed. Commit it and
-            // account for it rather than blocking the head forever.
-            self.metrics
-                .dropped_event(Stream::Evidence, "unknown_issuer");
-            self.restore_gaps(&gaps);
-            self.commit(record.issuer, record.seq)?;
-            return Ok(0);
-        };
-        let identity = identity.clone();
+                let event: RuntimeEvent = serde_json::from_slice(&record.payload)
+                    .map_err(|error| BridgeError::Encode(error.to_string()))?;
 
-        let before = self.chains.get(&record.issuer).cloned().unwrap_or_default();
-        let mut chain = before.clone();
-        let built = build_finding_card(
-            &record,
-            &event,
-            &identity,
-            &self.colony_id,
-            &self.config,
-            &mut chain,
-            &gaps,
-            now_ms,
-            self.spine.as_deref(),
-        )?;
+                let Some(identity) = self.identities.get(record.issuer) else {
+                    // A record whose issuer index is past the table can never be signed. Commit it
+                    // and account for it rather than blocking the head forever; being unpublishable
+                    // it is discharged within the tick's budget rather than ending the tick.
+                    self.metrics
+                        .dropped_event(Stream::Evidence, "unknown_issuer");
+                    self.commit(record.issuer, record.seq)?;
+                    skipped += 1;
+                    continue;
+                };
+                let identity = identity.clone();
 
-        // B6. Counted where the seal happened, so an operator comparing this
-        // with `bridge_source_events_published` can see whether what reached the
-        // relay was signed rather than taking it on faith.
-        if let Some(spine) = self.spine.as_ref()
-            && built.is_some()
-        {
-            self.metrics
-                .envelope_signed(spine.issuer(identity.slot.label()));
-        }
+                let before = self.chains.get(&record.issuer).cloned().unwrap_or_default();
+                let mut chain = before.clone();
+                let built = build_finding_card(
+                    &record,
+                    &event,
+                    &identity,
+                    &self.colony_id,
+                    &self.config,
+                    &mut chain,
+                    &gaps,
+                    now_ms,
+                    self.spine.as_deref(),
+                )?;
 
-        let Some(body) = built else {
-            // A card type this milestone does not publish. The record's meaning is not lost — it
-            // stays in the daemon's own stores — so it is committed and counted apart from both
-            // a drop and a publish.
-            self.metrics.skipped_unpublished(Stream::Evidence);
-            self.restore_gaps(&gaps);
-            self.commit(record.issuer, record.seq)?;
-            return Ok(0);
-        };
+                // B6. Counted where the seal happened, so an operator comparing this with
+                // `bridge_source_events_published` can see whether what reached the relay was
+                // signed rather than taking it on faith.
+                if let Some(spine) = self.spine.as_ref()
+                    && built.is_some()
+                {
+                    self.metrics
+                        .envelope_signed(spine.issuer(identity.slot.label()));
+                }
 
-        // 3. Stamp `created_at` from the daemon's clock, immediately before signing.
-        //
-        // FORCED, not preferred. The relay's `MAX_TIMESTAMP_DRIFT_SECS` is 900 s and it REJECTS,
-        // and `created_at` is inside the Nostr signature, so a spooled card carrying its true
-        // emit time would become permanently unpublishable fifteen minutes after it was produced
-        // and could not be corrected without re-signing. `emitted_at_ms` in the body is the
-        // domain timestamp and every Perch surface sorts on it.
-        let tags: Vec<nostr::Tag> = body
-            .tags
-            .iter()
-            .map(|tag| nostr::Tag::parse(tag.clone()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| BridgeError::Encode(error.to_string()))?;
-        let signed = nostr::EventBuilder::new(
-            nostr::Kind::Custom(swarm_perch_wire::KIND_CARD),
-            body.content,
-        )
-        .tags(tags)
-        .custom_created_at(nostr::Timestamp::from(now_secs.max(0) as u64))
-        .sign_with_keys(&identity.keys)
-        .map_err(|error| BridgeError::Encode(error.to_string()))?;
+                let Some(body) = built else {
+                    // A card type this milestone does not publish. The record's meaning is not lost
+                    // -- it stays in the daemon's own stores -- so it is committed and counted
+                    // apart from both a drop and a publish, and the tick moves to the next record.
+                    self.metrics.skipped_unpublished(Stream::Evidence);
+                    self.commit(record.issuer, record.seq)?;
+                    skipped += 1;
+                    continue;
+                };
 
-        let lateness_secs = now_secs - record.emitted_at_ms / 1_000;
-        if lateness_secs > PERCH_LATE_PUBLISHED_TICKS {
-            self.metrics.observe_late_published(lateness_secs as f64);
-        }
+                // 3. Stamp `created_at` from the daemon's clock, immediately before signing.
+                //
+                // FORCED, not preferred. The relay's `MAX_TIMESTAMP_DRIFT_SECS` is 900 s and it
+                // REJECTS, and `created_at` is inside the Nostr signature, so a spooled card
+                // carrying its true emit time would become permanently unpublishable fifteen
+                // minutes after it was produced and could not be corrected without re-signing.
+                // `emitted_at_ms` in the body is the domain timestamp and every Perch surface
+                // sorts on it.
+                let tags: Vec<nostr::Tag> = body
+                    .tags
+                    .iter()
+                    .map(|tag| nostr::Tag::parse(tag.clone()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| BridgeError::Encode(error.to_string()))?;
+                let signed = nostr::EventBuilder::new(
+                    nostr::Kind::Custom(swarm_perch_wire::KIND_CARD),
+                    body.content,
+                )
+                .tags(tags)
+                .custom_created_at(nostr::Timestamp::from(now_secs.max(0) as u64))
+                .sign_with_keys(&identity.keys)
+                .map_err(|error| BridgeError::Encode(error.to_string()))?;
 
-        let frame = Frame {
-            identity: record.issuer,
-            channel: Some(body.channel),
-            event_id: signed.id.to_hex(),
-            signed,
-            covers: body.covers,
-            created_at_secs: now_secs,
-        };
-        self.chain_before.insert(record.issuer, before);
-        self.chains.insert(record.issuer, chain);
-        self.inflight_gaps = gaps;
+                let lateness_secs = now_secs - record.emitted_at_ms / 1_000;
+                if lateness_secs > PERCH_LATE_PUBLISHED_TICKS {
+                    self.metrics.observe_late_published(lateness_secs as f64);
+                }
 
-        match self.submit(frame).await {
-            Ok(SubmitOutcome::Acknowledged) => Ok(1),
-            Ok(SubmitOutcome::Held) => Ok(0),
-            Ok(SubmitOutcome::Refused) => {
-                self.rewind(record.issuer);
-                Ok(0)
+                let frame = Frame {
+                    identity: record.issuer,
+                    channel: Some(body.channel),
+                    event_id: signed.id.to_hex(),
+                    signed,
+                    covers: body.covers,
+                    created_at_secs: now_secs,
+                };
+                self.chain_before.insert(record.issuer, before);
+                self.chains.insert(record.issuer, chain);
+                self.inflight_gaps = gaps;
+
+                return match self.submit(frame).await {
+                    Ok(SubmitOutcome::Acknowledged) => Ok(1),
+                    Ok(SubmitOutcome::Held) => Ok(0),
+                    Ok(SubmitOutcome::Refused) => {
+                        self.rewind(record.issuer);
+                        Ok(0)
+                    }
+                    Err(error) => {
+                        self.rewind(record.issuer);
+                        Err(error)
+                    }
+                };
             }
-            Err(error) => {
-                self.rewind(record.issuer);
-                Err(error)
-            }
+
+            // The whole batch was unpublishable and under budget. Put the gaps back for the next
+            // batch's peek to re-take, and go on to the next batch.
+            self.restore_gaps(&gaps);
         }
     }
 
@@ -529,8 +572,13 @@ impl<P: FramePublisher> Pacer<P> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use prometheus_client::encoding::text::encode;
+    use prometheus_client::registry::Registry;
+    use swarm_core::agent::SwarmMode;
     use swarm_core::config::SecretString;
+    use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::AgentId;
+    use swarm_runtime::runtime_events::EscalationLevel;
 
     use crate::spool::Record;
 
@@ -585,7 +633,22 @@ mod tests {
         tempfile::TempDir,
     );
 
+    type HarnessWithRegistry = (
+        Arc<Mutex<SpoolSet>>,
+        Arc<IdentityTable>,
+        PerchBridgeConfig,
+        BridgeMetrics,
+        Arc<Mutex<Registry>>,
+        tempfile::TempDir,
+    );
+
     fn harness() -> Harness {
+        let (spools, identities, config, metrics, _registry, dir) = harness_with_registry();
+        (spools, identities, config, metrics, dir)
+    }
+
+    /// The harness plus the metrics registry, for a test that reads a counter's encoded value.
+    fn harness_with_registry() -> HarnessWithRegistry {
         let dir = tempfile::tempdir().unwrap();
         let spools = Arc::new(Mutex::new(
             SpoolSet::open(dir.path(), "c", 1 << 20, 8 << 20).unwrap(),
@@ -605,8 +668,54 @@ mod tests {
             config.lane_channels.insert(slug.into(), uuid.into());
         }
         config.case_ttl_seconds.insert("default".into(), 2_592_000);
-        let (metrics, _registry) = BridgeMetrics::new();
-        (spools, identities, config, metrics, dir)
+        let (metrics, registry) = BridgeMetrics::new();
+        (spools, identities, config, metrics, registry, dir)
+    }
+
+    /// A record that classifies to `Stream::Evidence` but has no producer this milestone, so the
+    /// pacer commits it as `skipped_unpublished`. This is the record found-15 measured flooding.
+    fn escalation_event() -> RuntimeEvent {
+        RuntimeEvent::Escalation {
+            emitted_at_ms: 1_700_000_000_000,
+            threat_class: ThreatClass::Execution,
+            level: EscalationLevel::Alert,
+            total_strength: 3.6,
+            distinct_sources: 2,
+            peak_confidence: 0.9,
+            mode_changed: false,
+            current_mode: SwarmMode::Alert,
+        }
+    }
+
+    fn append_event(spools: &Arc<Mutex<SpoolSet>>, event: &RuntimeEvent) {
+        spools
+            .lock()
+            .unwrap()
+            .append(Stream::Evidence, Record::from_event(event, 0).unwrap())
+            .unwrap();
+    }
+
+    fn evidence_records(spools: &Arc<Mutex<SpoolSet>>) -> usize {
+        spools
+            .lock()
+            .unwrap()
+            .evidence()
+            .peek(usize::MAX)
+            .unwrap()
+            .len()
+    }
+
+    fn skipped_evidence(registry: &Arc<Mutex<Registry>>) -> u64 {
+        let mut out = String::new();
+        encode(&mut out, &registry.lock().unwrap()).unwrap();
+        out.lines()
+            .find(|line| {
+                line.starts_with("perch_bridge_skipped_unpublished_total")
+                    && line.contains("stream=\"evidence\"")
+            })
+            .and_then(|line| line.rsplit(' ').next())
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0)
     }
 
     fn finding_event(finding_id: &str, threat_class: &str, severity: &str) -> RuntimeEvent {
@@ -872,6 +981,124 @@ mod tests {
             pacer.publisher().seen[2],
             pacer.publisher().seen[1],
             "the re-stamped frame is a new event id"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tick_discharges_unpublishable_records_and_publishes_the_finding_behind_them() {
+        // found-15: 100 records no producer turns into a card, then one finding. A single tick
+        // commits all 100 as skipped and publishes the finding in the SAME tick -- the invariant
+        // is one relay FRAME per tick, not one spool RECORD per tick.
+        let (spools, identities, config, metrics, registry, _dir) = harness_with_registry();
+        for _ in 0..100 {
+            append_event(&spools, &escalation_event());
+        }
+        append_event(&spools, &finding_event("f0", "execution", "LOW"));
+
+        let mut pacer = Pacer::new(
+            Arc::clone(&spools),
+            identities,
+            config,
+            "c".into(),
+            metrics,
+            Recording {
+                frames: vec![],
+                answer: OkOutcome::Accepted,
+            },
+        );
+
+        assert_eq!(pacer.tick(1_700_000_000_000).await.unwrap(), 1);
+        assert_eq!(pacer.publisher().frames.len(), 1);
+        assert_eq!(
+            pacer.publisher().frames[0].signed.content.lines().next(),
+            Some("<!-- swarm:finding:v1 -->")
+        );
+        assert_eq!(
+            evidence_records(&spools),
+            0,
+            "the flood and the finding were both committed this tick"
+        );
+        assert_eq!(skipped_evidence(&registry), 100);
+    }
+
+    #[tokio::test]
+    async fn the_skip_budget_bounds_one_tick() {
+        // A spool that is entirely unpublishable cannot pin the drain task: one tick discharges at
+        // most PACER_SKIP_BUDGET records and yields, leaving the rest for the next tick.
+        let (spools, identities, config, metrics, _dir) = harness();
+        for _ in 0..(PACER_SKIP_BUDGET + 1) {
+            append_event(&spools, &escalation_event());
+        }
+        let mut pacer = Pacer::new(
+            Arc::clone(&spools),
+            identities,
+            config,
+            "c".into(),
+            metrics,
+            Recording {
+                frames: vec![],
+                answer: OkOutcome::Accepted,
+            },
+        );
+
+        assert_eq!(
+            pacer.tick(1_700_000_000_000).await.unwrap(),
+            0,
+            "nothing publishable this tick"
+        );
+        assert_eq!(
+            evidence_records(&spools),
+            1,
+            "the budget bounded the tick; one record waits for the next"
+        );
+        // The next tick clears the remainder.
+        assert_eq!(pacer.tick(1_700_000_001_000).await.unwrap(), 0);
+        assert_eq!(evidence_records(&spools), 0);
+    }
+
+    #[tokio::test]
+    async fn interleaved_unpublishable_records_still_publish_one_frame_per_tick() {
+        // A skip does not buy a second frame: with unpublishable records between findings, each
+        // tick still publishes exactly one finding.
+        let (spools, identities, config, metrics, _dir) = harness();
+        append_event(&spools, &escalation_event());
+        append_event(&spools, &finding_event("f0", "execution", "LOW"));
+        append_event(&spools, &escalation_event());
+        append_event(&spools, &finding_event("f1", "execution", "LOW"));
+        append_event(&spools, &escalation_event());
+
+        let mut pacer = Pacer::new(
+            Arc::clone(&spools),
+            identities,
+            config,
+            "c".into(),
+            metrics,
+            Recording {
+                frames: vec![],
+                answer: OkOutcome::Accepted,
+            },
+        );
+
+        assert_eq!(
+            pacer.tick(1_700_000_000_000).await.unwrap(),
+            1,
+            "the first finding, past the leading flood record"
+        );
+        assert_eq!(
+            pacer.tick(1_700_000_001_000).await.unwrap(),
+            1,
+            "the second finding, past the record between them"
+        );
+        assert_eq!(
+            pacer.tick(1_700_000_002_000).await.unwrap(),
+            0,
+            "only the trailing flood record remained"
+        );
+        assert_eq!(evidence_records(&spools), 0);
+        assert_eq!(
+            pacer.publisher().frames.len(),
+            2,
+            "exactly one frame per publishing tick"
         );
     }
 }
