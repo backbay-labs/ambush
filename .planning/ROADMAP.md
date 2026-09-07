@@ -1171,7 +1171,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Land an adversary as a first-class, deterministic, catalog-bounded in-tree lane so detectors are scored against something that adapts generation over generation, with fitness measured on the existing evasion-coverage infrastructure and a bounded arms race running in CI.
 **Executable phases:** 288-291
 
-- [ ] **Phase 288: Red Operator Genome And Target Graph** - Six operator roles recombine already-catalogued techniques into deterministic sequences, replacing verbatim suite replay. (OPFOR-01, OPFOR-04)
+- [x] **Phase 288: Red Operator Genome And Target Graph** - Six operator roles recombine already-catalogued techniques into deterministic sequences, replacing verbatim suite replay. (OPFOR-01, OPFOR-04)
 - [ ] **Phase 289: Attack Scoring, Stealth Budget And Pattern Memory** - Score plans against the real catch-rate surface, cap noise, and remember per-technique outcomes. (ATKSCORE-01, ATKSCORE-03)
 - [ ] **Phase 290: Bidirectional Co-Evolution And Convergence** - Close the loop against real detector outcomes with a bounded stopping rule. (COEVOLVE-01, COEVOLVE-02)
 - [ ] **Phase 291: CI Arms Race Gate And Structural Isolation** - Wire a real executed gate and enforce that the red lane can never reach response authority. (ARMSCI-01, ARMSCI-02)
@@ -1181,13 +1181,17 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** `red_swarm.rs` today replays static suites verbatim. Give the red lane a bounded mutation engine that recombines catalogued techniques rather than inventing payload shapes, keeping the arms race classical and maintainable.
 **Requirements:** OPFOR-01, OPFOR-02, OPFOR-03, OPFOR-04
 **Depends on:** v1.79 milestone complete
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete
+**Plans:** 288-01-PLAN.md
 **Success Criteria**:
 1. Six operator roles implement a shared trait, and the target graph's technique-node set equals the union of the catalog's declared techniques and every suite scenario's declared techniques.
+   MET in a86e7a533 (target graph) and 096cd6136 (operator trait and six roles): `the_graph_technique_set_is_the_union_of_catalog_and_suite_techniques`, `each_operator_role_appears_and_the_scheduler_string_is_pinned`.
 2. `RedGenome::plan` is proven pure: identical arguments produce byte-identical output, and a 20-seed sweep produces at least one differing step per seed.
+   MET in 096cd6136: `plan_is_byte_identical_for_identical_arguments`, `a_twenty_seed_sweep_differs_in_at_least_one_step_per_seed`.
 3. A test fails if any generated step names a technique absent from the target graph.
+   MET in 096cd6136: `every_generated_step_names_a_graph_technique`, `the_planner_rejects_an_operator_that_invents_a_technique`.
 4. `swarmctl red-swarm plan` prints a `determinism` object with `rng_seed`, `virtual_clock_start_ms`, and `scheduler`, and no code path reads wall-clock for output bytes.
+   MET in 67ce8b23f (`swarmctl red-swarm plan`, `crates/swarm-cli/src/red_swarm_cmd.rs`): `the_plan_json_carries_determinism_at_top_level_and_a_hex_fingerprint`, `the_plan_json_is_byte_identical_across_two_runs_with_the_same_arguments`, `a_plan_omitting_the_virtual_clock_is_refused_rather_than_defaulting_to_now`, `no_entropy_path_exists_in_the_red_swarm_cli`; the RNG-level entropy guard is `no_entropy_path_exists_in_the_red_lane` (eab31fa9d).
 
 ### Phase 289: Attack Scoring, Stealth Budget And Pattern Memory
 

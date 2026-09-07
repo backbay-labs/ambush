@@ -8,6 +8,21 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use swarm_whisker::TelemetryEvent;
 
+mod genome;
+mod graph;
+mod operators;
+mod rng;
+
+pub use genome::{
+    CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,
+};
+pub use graph::{LoadedSuite, Node, ScenarioRef, TargetGraph, TechniqueNode};
+pub use operators::{
+    AuthOperator, ChainOperator, EvasionOperator, InjectionOperator, OpsecOperator, ReconOperator,
+    RedOperator, builtin_operators,
+};
+pub use rng::RedGenomeRng;
+
 /// Runtime-owned context for deterministic adversarial corpus generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreatContext {
@@ -55,6 +70,13 @@ pub enum RedSwarmError {
     #[error(transparent)]
     Replay(#[from] ReplayHarnessError),
 
+    /// The target graph reads the evasion technique catalog through
+    /// `evasion_coverage`'s loader, whose read and parse failures surface here
+    /// unchanged so a caller sees the same catalog diagnostics either lane
+    /// produces.
+    #[error(transparent)]
+    Catalog(#[from] crate::evasion_coverage::EvasionCoverageError),
+
     #[error("invalid threat context field `{field}`: {reason}")]
     InvalidContext { field: &'static str, reason: String },
 
@@ -65,6 +87,14 @@ pub enum RedSwarmError {
 
     #[error("suite `{suite}` did not contain any matching scenarios for red-swarm generation")]
     NoMatchingScenarios { suite: String },
+
+    /// A plan step named a technique the target graph does not contain. The
+    /// planner's validation raises this so OPFOR-04 -- every `GeneStep.technique`
+    /// resolves to a graph node -- is enforced in code, not only asserted in a
+    /// test: a custom or future operator that invents a technique id is rejected
+    /// here rather than silently emitting an unrealisable step.
+    #[error("plan step names technique `{technique}`, which is not a node in the target graph")]
+    UnknownTechnique { technique: String },
 }
 
 /// Deterministic seam for generating adversarial telemetry without the historical Python runtime.

@@ -866,10 +866,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 
 #### Red Operator Genome And Target Graph
 
-- [ ] **OPFOR-01**: Six red operator roles (`ReconOperator`, `InjectionOperator`, `AuthOperator`, `EvasionOperator`, `ChainOperator`, `OpsecOperator`) implement a shared `RedOperator` trait with `propose_steps(&self, graph, rng) -> Vec<GeneStep>`.
-- [ ] **OPFOR-02**: `TargetGraph` is built from `rulesets/evasion/attack-technique-catalog.yaml` and every scenario's `metadata.techniques`; nodes are the 11 catalogued detectors, techniques, and `ThreatClass` values.
-- [ ] **OPFOR-03**: `RedGenomeRng` is a deterministic `rand_core::RngCore` + `SeedableRng` PRNG with zero OS-entropy paths.
-- [ ] **OPFOR-04**: `RedGenome::plan(seed, generation, campaign)` resolves every `GeneStep.technique` only to techniques already in the `TargetGraph` (no invented techniques or payload shapes); `swarmctl red-swarm plan` prints the plan with a `determinism` object (`rng_seed`, `virtual_clock_start_ms`, `scheduler`).
+- [x] **OPFOR-01**: Six red operator roles (`ReconOperator`, `InjectionOperator`, `AuthOperator`, `EvasionOperator`, `ChainOperator`, `OpsecOperator`) implement a shared `RedOperator` trait with `propose_steps(&self, graph, rng) -> Vec<GeneStep>`. SHIPPED 096cd6136, fix round 069cfe573 (OpsecOperator draws benign-control cover from `graph.benign_scenarios()`). ONE SIGNATURE DEVIATION, noted on the trait: `propose_steps` takes an extra `so_far: &[GeneStep]` argument, because the Evasion, Chain, and Opsec roles amend the plan proposed before them and cannot do so from `(graph, rng)` alone.
+- [x] **OPFOR-02**: `TargetGraph` is built from `rulesets/evasion/attack-technique-catalog.yaml` and every scenario's `metadata.techniques`; nodes are the 11 catalogued detectors, techniques, and `ThreatClass` values. SHIPPED a86e7a533.
+- [x] **OPFOR-03**: `RedGenomeRng` is a deterministic `rand_core::RngCore` + `SeedableRng` PRNG with zero OS-entropy paths. SHIPPED eab31fa9d (xoshiro256** seeded through SplitMix64; no `Default`, no seedless `new()`).
+- [x] **OPFOR-04**: `RedGenome::plan(seed, generation, campaign)` resolves every `GeneStep.technique` only to techniques already in the `TargetGraph` (no invented techniques or payload shapes); `swarmctl red-swarm plan` prints the plan with a `determinism` object (`rng_seed`, `virtual_clock_start_ms`, `scheduler`). SHIPPED 096cd6136 (pure planner and graph validation), 67ce8b23f (`swarmctl red-swarm plan`, required `--virtual-clock-start-ms`).
 
 #### Attack Scoring, Stealth Budget And Pattern Memory
 
@@ -1504,10 +1504,10 @@ _Note: PROJECT.md constraints previously stated "no BFT, gossip, or distributed 
 | LOOM-04 | Phase 287 | Pending |
 | SUPPLY-01 | Phase 287 | Pending |
 | SUPPLY-02 | Phase 287 | Pending |
-| OPFOR-01 | Phase 288 | Pending |
-| OPFOR-02 | Phase 288 | Pending |
-| OPFOR-03 | Phase 288 | Pending |
-| OPFOR-04 | Phase 288 | Pending |
+| OPFOR-01 | Phase 288 | Satisfied — one signature deviation (`propose_steps` takes `so_far`), noted on the trait |
+| OPFOR-02 | Phase 288 | Satisfied |
+| OPFOR-03 | Phase 288 | Satisfied |
+| OPFOR-04 | Phase 288 | Satisfied |
 | ATKSCORE-01 | Phase 289 | Pending |
 | ATKSCORE-02 | Phase 289 | Pending |
 | ATKSCORE-03 | Phase 289 | Pending |
