@@ -8,7 +8,7 @@ import {
 } from "@/shared/api/perchEphemeralStore";
 import { usePerchRelayFeed } from "@/shared/api/perchRelayFeed";
 
-import type { PerchHoldRow } from "../lib/holdRows";
+import { type PerchHoldRow, selectDaemonHold } from "../lib/holdRows";
 import { readReconcileDivergenceCounter } from "../lib/reconcileCounters";
 import {
   PERCH_QUEUE_ORDER,
@@ -76,11 +76,13 @@ export function WatchScreen({ currentPubkey, onOpenCase }: WatchScreenProps) {
   const undeliverable =
     openRows.length > 0 && openRows.every((row) => !row.noticed);
 
-  const selectedRow = rows.find((row) => rowKey(row) === selected);
-  const selectedHold =
-    selectedRow && selectedRow.kind !== "unreconciled"
-      ? selectedRow.hold
-      : null;
+  // Resolve the selection against the TERMINAL-INCLUSIVE daemon list, not the
+  // reconciled rows. A granted hold turns `executed` and leaves the open queue
+  // the instant it is decided, but the daemon still holds its record; resolving
+  // against the rows would lose the pane's subject and read "no record" for a
+  // hold the daemon plainly holds (found-10). Absence from this list is the
+  // only thing that is truly no record.
+  const selectedHold = selectDaemonHold(queue.daemonHolds, selected);
   const selectedCaseChannel = selectedHold?.case_channel ?? null;
 
   return (

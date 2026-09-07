@@ -88,6 +88,26 @@ export type HoldQueueReconciliation = {
   queueDepthAlarm: boolean;
 };
 
+/**
+ * The selected hold, resolved against the daemon's TERMINAL-INCLUSIVE list.
+ *
+ * The reconciled queue deliberately drops a decided hold — a human already
+ * answered it, so it is not a row (see the decided-hold cases above). But the
+ * detail pane must still render it: the instant a grant is recorded the hold
+ * turns `executed` and leaves the open queue, and resolving the selection
+ * against the rows would lose its subject and read "no record" for a hold the
+ * daemon plainly holds (found-10). `GET /v1/response/holds` returns decided and
+ * expired holds, so this list carries the answer; absence from it is the only
+ * thing that is truly "no record".
+ */
+export function selectDaemonHold(
+  holds: readonly PerchHeldActionView[],
+  selectedId: string | null,
+): PerchHeldActionView | null {
+  if (selectedId === null) return null;
+  return holds.find((hold) => hold.hold_id === selectedId) ?? null;
+}
+
 function holdTag(item: FeedItem): string | null {
   const tag = item.tags.find((entry) => entry[0] === "hold");
   const value = tag?.[1];

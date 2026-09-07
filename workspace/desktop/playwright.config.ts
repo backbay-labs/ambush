@@ -52,6 +52,7 @@ export default defineConfig({
         "**/badge.spec.ts",
         "**/watch-queues.spec.ts",
         "**/perch-verdict-pane.spec.ts",
+        "**/perch-queue-lifecycle.spec.ts",
         "**/grant-two-stroke.spec.ts",
         "**/two-legged-write.spec.ts",
         "**/channel-browser.spec.ts",

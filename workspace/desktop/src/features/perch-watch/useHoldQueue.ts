@@ -17,7 +17,10 @@ import {
   perchKeys,
 } from "@/shared/api/perchKeys";
 import { usePerchRelayFeed } from "@/shared/api/perchRelayFeed";
-import { perchListHolds } from "@/shared/api/tauriPerch";
+import {
+  perchListHolds,
+  type PerchHeldActionView,
+} from "@/shared/api/tauriPerch";
 import { useRelayConnection } from "@/shared/api/useRelayConnection";
 
 import {
@@ -44,6 +47,13 @@ export type HoldQueueResult = {
   error: string | null;
   /** True only when BOTH sides answered. Drives `data-perch-queue-reconciled`. */
   reconciled: boolean;
+  /**
+   * Every hold the daemon returned, terminal ones included. The reconciled
+   * `data.rows` drops decided holds; the detail pane resolves its selection
+   * against THIS list so a hold that just left the open queue still renders
+   * (found-10).
+   */
+  daemonHolds: readonly PerchHeldActionView[];
 };
 
 /** The Tauri command's phrasing when neither keyring key nor env var is set. */
@@ -114,5 +124,6 @@ export function useHoldQueue(): HoldQueueResult {
     status,
     error: errorText,
     reconciled: status === "ready" && !feed.isPending && !feed.isError,
+    daemonHolds: holds.data?.holds ?? [],
   };
 }

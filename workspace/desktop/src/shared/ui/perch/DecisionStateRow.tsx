@@ -1,4 +1,8 @@
 import { cn } from "@/shared/lib/cn";
+import {
+  HoverCopyIndicator,
+  useCopyFeedback,
+} from "@/shared/ui/HoverCopyIndicator";
 
 import { failedToRecordSentence } from "./decisionStateCopy";
 
@@ -136,11 +140,13 @@ function DecisionStateBody({ state }: { state: DecisionWriteState }) {
       return (
         <>
           <span>The daemon acted on it at {formatTime(state.atMs)}.</span>
-          <span className="text-[hsl(var(--perch-foreground-muted))]">
-            {state.receiptId === null
-              ? "No response receipt was minted."
-              : `Response receipt ${state.receiptId}.`}
-          </span>
+          {state.receiptId === null ? (
+            <span className="text-[hsl(var(--perch-foreground-muted))]">
+              No response receipt was minted.
+            </span>
+          ) : (
+            <ReceiptId receiptId={state.receiptId} />
+          )}
         </>
       );
     case "daemon-refused":
@@ -207,4 +213,32 @@ function DecisionStateBody({ state }: { state: DecisionWriteState }) {
         </>
       );
   }
+}
+
+/**
+ * The response receipt id, copyable. It is the operator's handle on the audit
+ * artifact the daemon minted for the action it just ran, and a receipt they
+ * cannot copy is a receipt they cannot cite, so this is a button and not a
+ * label. `group` reveals the copy affordance on hover or focus.
+ */
+function ReceiptId({ receiptId }: { receiptId: string }) {
+  const { copied, copy } = useCopyFeedback({
+    label: "Response receipt",
+    value: receiptId,
+  });
+  return (
+    <button
+      type="button"
+      data-testid="perch-write-state-receipt"
+      data-perch-receipt-id={receiptId}
+      onClick={() => void copy()}
+      className="group flex items-center gap-1 self-start text-left font-mono text-[hsl(var(--perch-foreground-muted))]"
+    >
+      <span>Response receipt {receiptId}</span>
+      <HoverCopyIndicator
+        copied={copied}
+        testId="perch-write-state-receipt-copy"
+      />
+    </button>
+  );
 }
