@@ -67,13 +67,16 @@ engine roadmap completes. Nothing before it is scheduled around an outside event
 
 ## Phase 1 — an internal build someone on the team could run
 
-- [ ] Rebase or retire the parked v1.79 stream: PRs #2, #3, #4, #5 and #11 (phase 285
-  assurance, phase 286 collective hypothesis graph; #11 conflicts). Decide each against the
-  engine roadmap below rather than merging by momentum.
-- [ ] Prune the ~120 `checkpoint/*` remote branches and the ~50 local worktrees after
-  triaging the two dirty ones (`swarm-team-six-hold-bridge`: an E2E mock extension;
-  `swarm-team-six-wave3-bootstrap-fix`: rename, keyring and reset work). The
-  `swarm-team-six-hold-daemon` diff is already landed as `a2e35ce96`.
+- [x] Rebase or retire the parked v1.79 stream (2026-09-07): #2, #3, #4 and #11 retired with
+  the triage rationale (they carry the renumbered phase-285/286 fork's own `.planning/`
+  narrative; #11 did not stack on its own base); #5, the collective hypothesis graph
+  foundation, kept open for a decision at phases 296–299. Branches kept.
+- [~] Prune: on 2026-09-07 the merged, clean, non-running worktrees and their local branches
+  were removed (21 worktrees remain, most of them dirty v1.79 session checkouts kept until
+  their diffs are triaged); the `swarm-team-six-hold-bridge` diff is superseded by
+  `7929df076`; `swarm-team-six-wave3-bootstrap-fix` still needs a read. The ~120
+  `checkpoint/*` remote branches are the owner's call — deleting remote refs is not reversible
+  from here.
 - [ ] Drive the hold states nobody has driven: `expired`, a daemon crash between the
   compare-and-set and the outcome write (phase 286's fault-injection remit), and a
   containment-refusal `refused_late` (W3-35).
