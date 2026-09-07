@@ -73,6 +73,14 @@ pub struct ReasonLabel {
     pub reason: String,
 }
 
+/// What became of a record the drainer had parked.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct OutcomeLabel {
+    /// Exactly three values: `landed`, `discarded`, `undecodable`. A record that is refused or
+    /// stalled again stays parked and is not counted here, because it did not leave.
+    pub outcome: String,
+}
+
 /// One identity slot.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct IdentityLabel {
@@ -121,6 +129,8 @@ pub struct BridgeMetrics {
     case_channel_conflict: Counter<u64>,
     case_channels_created: Family<ClauseLabel, Counter>,
     hold_undeliverable: Family<ReasonLabel, Counter>,
+    alarm_parked: Family<ReasonLabel, Counter>,
+    alarm_unparked: Family<OutcomeLabel, Counter>,
     lease_store_absent: Counter<u64>,
     unknown_action_kind: Counter<u64>,
 }
@@ -291,6 +301,26 @@ impl BridgeMetrics {
             "26006 hold alarms held back by the per-minute burst cap. DEFERRED, NEVER DROPPED",
             alarm_deferred.clone(),
         );
+        // Split by the refusal that exhausted the budget, because that label names the repair:
+        // `not_a_channel_member` is a relay whose channel state was restored out from under the
+        // bridge, `relay_fork_absent` is a relay build without the hold kinds, `rejected` is
+        // something nobody has classified yet. A non-zero value here always means an operator
+        // is not seeing a hold the daemon captured.
+        let alarm_parked = Family::<ReasonLabel, Counter>::default();
+        registry.register(
+            "bridge_alarm_parked", // -> perch_bridge_alarm_parked_total
+            "Alarm spool records moved to the dead-letter after the head refusal budget, by the \
+             refusal that exhausted it",
+            alarm_parked.clone(),
+        );
+        // The counter that says the dead-letter is a queue and not a grave: every parked record
+        // is retried on idle ticks, and this is where it leaves.
+        let alarm_unparked = Family::<OutcomeLabel, Counter>::default();
+        registry.register(
+            "bridge_alarm_unparked", // -> perch_bridge_alarm_unparked_total
+            "Parked alarm records that left the dead-letter, by what became of them",
+            alarm_unparked.clone(),
+        );
         let lease_store_absent = Counter::<u64>::default();
         registry.register(
             "bridge_lease_store_absent",
@@ -326,6 +356,8 @@ impl BridgeMetrics {
                 case_channel_conflict,
                 case_channels_created,
                 hold_undeliverable,
+                alarm_parked,
+                alarm_unparked,
                 lease_store_absent,
                 unknown_action_kind,
             },
@@ -481,6 +513,27 @@ impl BridgeMetrics {
         self.alarm_deferred.inc();
     }
 
+    /// A head record the relay refused until its budget ran out, moved to the dead-letter.
+    ///
+    /// `reason` is the last refusal's `OkOutcome::reason()`: a `&'static str` for the same
+    /// reason [`BridgeMetrics::hold_undeliverable`] takes one, the label set being closed.
+    pub fn alarm_parked(&self, reason: &'static str) {
+        self.alarm_parked
+            .get_or_create(&ReasonLabel {
+                reason: reason.to_string(),
+            })
+            .inc();
+    }
+
+    /// A parked record that left the dead-letter: `landed`, `discarded` or `undecodable`.
+    pub fn alarm_unparked(&self, outcome: &'static str) {
+        self.alarm_unparked
+            .get_or_create(&OutcomeLabel {
+                outcome: outcome.to_string(),
+            })
+            .inc();
+    }
+
     /// A metrics handle for a test, without the registry the caller would drop anyway.
     ///
     /// The registry is still built and still owns the metric families — this only spares every
@@ -612,6 +665,8 @@ mod tests {
         metrics.case_channel_created("manual");
         metrics.hold_undeliverable("no_operator_pubkey");
         metrics.alarm_deferred();
+        metrics.alarm_parked("not_a_channel_member");
+        metrics.alarm_unparked("landed");
         metrics.lease_store_absent();
         metrics.unknown_action_kind();
         let mut out = String::new();
@@ -699,6 +754,8 @@ mod tests {
             "perch_bridge_case_channel_conflict_total",
             "perch_bridge_case_channels_created_total",
             "perch_bridge_hold_undeliverable_total",
+            "perch_bridge_alarm_parked_total",
+            "perch_bridge_alarm_unparked_total",
             "perch_bridge_lease_store_absent_total",
             "perch_bridge_unknown_action_kind_total",
         ] {

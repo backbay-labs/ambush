@@ -44,6 +44,10 @@ swarm-spine.workspace = true
 swarm-crypto.workspace = true
 swarm-policy.workspace = true
 axum.workspace = true
+# The parked-alarm dead-letter (`alarm/parked.rs`) holds spooled `RuntimeEvent` bytes inside a
+# JSON document an operator reads; base64 is how they stay one readable field instead of an
+# array of byte integers.
+base64.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 hex.workspace = true

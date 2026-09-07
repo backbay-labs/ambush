@@ -26,6 +26,9 @@
 //! - The publish pacer, the `created_at` stamp, and the relay write budget.
 //! - The bridge's own Nostr identities and what their signatures do and do not prove.
 //! - Provisioning the case channel and its `ttl`, on both promotion triggers ([`channels`]).
+//! - Whether a relay refusal is settled: the alarm drainer's head-refusal budget, the durable
+//!   dead-letter it parks a settled record into ([`alarm::ParkedLedger`], beside the routing
+//!   sidecar), and when a parked record is retried.
 //!
 //! ## Does not own
 //!
@@ -41,6 +44,9 @@
 //! - Minting a `hold_id`, a `case_id`, a receipt or a containment lease. Every identifier the
 //!   bridge publishes was minted by the daemon; the bridge asserts their shape and republishes
 //!   them.
+//! - Re-filing a hold whose sequence the bridge parked. The dead-letter retries what it holds,
+//!   but the daemon's sweep is what notices a hold nobody filed (`runtime.response.refile_after_ms`),
+//!   because the store record is the only place that fact lives.
 //!
 //! ## The two headings above are load-bearing, exactly as written
 //!
@@ -108,6 +114,10 @@ pub use stream::Stream;
 /// The sidecar file that holds `hunt_id -> case_channel`, beside the spools.
 const CASE_ROUTING_FILE: &str = "case-routing.json";
 
+/// The alarm drainer's dead-letter, beside the routing sidecar and for the same reason: a
+/// record the spool cursor has moved past exists nowhere else.
+const PARKED_ALARMS_FILE: &str = "parked-alarms.json";
+
 /// Everything `swarm_detect` hands the bridge at startup.
 ///
 /// `events` is deliberately a receiver rather than an `IngestState`: it keeps this crate off
@@ -160,6 +170,9 @@ pub struct PerchBridge {
     identities: Arc<IdentityTable>,
     spools: Arc<Mutex<SpoolSet>>,
     routing: CaseRouting,
+    /// The alarm drainer's dead-letter, opened here so a file this bridge cannot read is a
+    /// startup failure rather than a surprise on the first parked record.
+    parked: crate::alarm::ParkedLedger,
     operators: Vec<String>,
     metrics: BridgeMetrics,
     registry: Arc<Mutex<Registry>>,
@@ -229,6 +242,7 @@ impl PerchBridge {
             config.spool_max_bytes,
         )?));
         let routing = CaseRouting::open(&spool_root.join(CASE_ROUTING_FILE))?;
+        let parked = crate::alarm::ParkedLedger::open(&spool_root.join(PARKED_ALARMS_FILE))?;
 
         // B6. Both before the bridge can publish anything. A missing or unusable
         // seed is FATAL here rather than a silent fallback to unsigned
@@ -269,6 +283,7 @@ impl PerchBridge {
             identities,
             spools,
             routing,
+            parked,
             operators,
             metrics,
             registry,
@@ -334,6 +349,7 @@ impl PerchBridge {
             identities,
             spools,
             routing,
+            parked,
             operators,
             metrics,
             registry: _registry,
@@ -437,6 +453,8 @@ impl PerchBridge {
             publisher: ConnectionSupervisor::new(config.relay_url.clone(), alarm_identity)
                 .with_alarm_burst(config.alarm_burst_per_min),
             metrics,
+            parked,
+            clock: crate::alarm::system_clock(),
             shutdown: shutdown.clone(),
         })));
 
