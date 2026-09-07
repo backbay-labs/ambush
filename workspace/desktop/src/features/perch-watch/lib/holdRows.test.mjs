@@ -256,6 +256,33 @@ test("a hold past its expiry renders expired even when the stored state has not 
   assert.equal(out.rows[0].kind, "expired");
 });
 
+test("a DECIDED hold past its TTL is not an expired row: the action was taken or refused, and the case carries it", () => {
+  // Seen live on 2026-09-06: six executed and fourteen refused holds, all older
+  // than their TTL, rendered as "EXPIRED — NO ACTION WAS TAKEN" beside the one
+  // open hold. The clock test belongs to OPEN states only; a hold a human
+  // answered left the queue the moment the daemon recorded the answer.
+  const out = reconcileHoldQueue({
+    daemon: daemon([
+      hold("h_executed", { state: "executed", expires_at_ms: NOW - 1 }),
+      hold("h_refused", { state: "refused", expires_at_ms: NOW - 1 }),
+      hold("h_granted", { state: "granted", expires_at_ms: NOW - 1 }),
+      hold("h_failed", { state: "failed", expires_at_ms: NOW - 1 }),
+      hold("h_swept", { state: "expired", expires_at_ms: NOW - 1 }),
+      hold("h_open", { state: "notified", expires_at_ms: NOW + 1 }),
+    ]),
+    relayNotices: [],
+    admitted: new Set([BRIDGE]),
+    nowMs: NOW,
+  });
+  assert.deepEqual(
+    out.rows.map((row) => [row.kind, row.hold.hold_id]),
+    [
+      ["expired", "h_swept"],
+      ["hold", "h_open"],
+    ],
+  );
+});
+
 test("the admitted comparison is case-insensitive and duplicate notices collapse", () => {
   const out = reconcileHoldQueue({
     daemon: daemon([], { store_durable: true }),

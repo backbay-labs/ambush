@@ -2,6 +2,7 @@ import {
   readPerchCounter,
   type PerchCounterName,
 } from "@/features/perch-evidence/lib/admittedIssuers";
+import { weekStartMs } from "@/features/perch-policy/lib/tuningProvenance";
 import {
   PERCH_TAURI_COMMANDS,
   type PerchAdmittedIssuers,
@@ -154,7 +155,7 @@ export type PerchMockFixture = {
    * message-carrying variant, for a daemon that answered with its own words.
    */
   daemonError?: string | null;
-  /** The containment leases `perch_list_containments` reports. */
+  /** The `open_leases` entries `perch_list_containments` reports: `{ lease, remaining_ms, expired }` each, as the daemon serves them. */
   containments?: readonly Record<string, unknown>[];
   /** The coverage snapshot `perch_evasion_coverage` reports. */
   evasionCoverage?: Record<string, unknown> | null;
@@ -843,7 +844,7 @@ function findingFeedback(payload: unknown): PerchFindingFeedbackResponse {
     // treats it as a state rather than as a failure.
     throw new Error("not-yet-correlated: no incident carries this finding yet");
   }
-  const key = `${findingId} ${verdictEventId}`;
+  const key = `${findingId}\u0000${verdictEventId}`;
   const existing = s.feedback.get(key);
   if (existing) return { ...existing, replayed: true };
   const row: PerchFindingFeedbackResponse = {
@@ -952,7 +953,11 @@ export function handlePerchMockCommand(
       return {
         schema_version: 1,
         observed_at_ms: Date.now(),
-        leases: s.containments.map((lease) => ({ ...lease })),
+        // `open_leases`, each `{ lease, remaining_ms, expired }`, exactly as
+        // `GET /v1/operator/containment/leases` serves them; the flat shape this
+        // mock once invented hid a board that rendered nothing against a real
+        // daemon (2026-09-06). `daemonContainmentFixture.json` is the reference.
+        open_leases: s.containments.map((entry) => ({ ...entry })),
       };
     case "perch_release_containment":
       s.log.push(command);
@@ -1396,8 +1401,10 @@ function mockIncidentFor(incidentId: string): unknown {
         ],
       },
     ],
-    // Two verdicts on the fixture detector: one Dismiss an hour ago, one
-    // Confirm thirty days ago — "1 of 2 verdicts this week" for the bench.
+    // Two verdicts on the fixture detector: one Dismiss an hour ago — but
+    // never before this week began, or a run in the first hour of a Monday
+    // UTC reads "0 of 2" — and one Confirm thirty days ago: "1 of 2 verdicts
+    // this week" for the bench.
     false_positive_measurements: [
       {
         finding_id: PERCH_FINDING_ID,
@@ -1405,7 +1412,10 @@ function mockIncidentFor(incidentId: string): unknown {
         strategy_id: "suspicious_process_tree",
         host_id: "host-ops-1",
         feedback_id: "fb-1",
-        reviewed_at_ms: Date.now() - 3_600_000,
+        reviewed_at_ms: Math.max(
+          weekStartMs(Date.now()),
+          Date.now() - 3_600_000,
+        ),
         analyst_id: "console",
         action: "dismiss",
         reason: "looked like the backup job",

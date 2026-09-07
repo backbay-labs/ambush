@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "observed_at_ms": 1788741621968,
+  "open_leases": [
+    {
+      "lease": {
+        "schema_version": 1,
+        "lease_id": "containment:walk-d82c41-2:isolate_host:resp:walk-d82c41-2:lease:walk-d82c41-2:isolate_host:1788741336782",
+        "action": {
+          "type": "isolate_host",
+          "host_id": "host-ops-1"
+        },
+        "origin_receipt_id": "resp:walk-d82c41-2:lease:walk-d82c41-2:isolate_host:1788741336782",
+        "governance_receipt_id": "bdeffa4aae44eb95e69104358ca3623223fe3baf4b54aa5eeaf5429fb4642eac",
+        "blast_radius": {
+          "scope_kind": "host",
+          "scope_value": "host-ops-1",
+          "impact": "host_connectivity_isolated",
+          "max_affected_scopes": 1,
+          "affected_capabilities": [
+            "network_connectivity",
+            "remote_management"
+          ],
+          "summary": "Cuts the scoped host `host-ops-1` off from normal network communication"
+        },
+        "rollback": {
+          "required": true,
+          "summary": "Restore normal connectivity for the isolated host `host-ops-1`",
+          "steps": [
+            {
+              "kind": "restore_host_connectivity",
+              "summary": "Remove the isolation policy for `host-ops-1` and verify host reachability"
+            }
+          ]
+        },
+        "issued_at_ms": 1788741336782,
+        "expires_at_ms": 1788742236782
+      },
+      "remaining_ms": 614814,
+      "expired": false
+    }
+  ]
+}

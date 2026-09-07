@@ -138,6 +138,16 @@ export function reconcileHoldQueue(input: {
   const daemonIds = new Set<string>();
   for (const hold of daemon?.holds ?? []) {
     daemonIds.add(hold.hold_id);
+    if (hold.state !== "expired" && !OPEN_STATES.has(hold.state)) {
+      // Granted, refused, executed or failed: a human already answered, and
+      // the case timeline carries what happened. Leaving it in the queue would
+      // ask the same question twice. This test runs BEFORE the clock test
+      // because the clock only decides anything for an OPEN hold: a decided
+      // hold older than its TTL is answered, not "expired, no action taken".
+      // Seen live on 2026-09-06, when six executed and fourteen refused holds
+      // rendered as EXPIRED beside the one open one.
+      continue;
+    }
     // The sweep runs on an interval, so between the expiry instant and the
     // sweep the stored state still reads `notified`. The clock decides whether
     // a verdict can still land, so it decides which row this is.
@@ -145,12 +155,6 @@ export function reconcileHoldQueue(input: {
       hold.state === "expired" || hold.expired || nowMs >= hold.expires_at_ms;
     if (expired) {
       rows.push({ kind: "expired", hold });
-      continue;
-    }
-    if (!OPEN_STATES.has(hold.state)) {
-      // Granted, refused, executed or failed: a human already answered, and
-      // the case timeline carries what happened. Leaving it in the queue would
-      // ask the same question twice.
       continue;
     }
     rows.push({

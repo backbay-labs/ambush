@@ -60,6 +60,22 @@ export type TuningProvenance = {
 };
 
 /**
+ * Monday 00:00 UTC of the week containing `nowMs`, which is what "this week"
+ * means everywhere the bench says it.
+ *
+ * One definition, shared by the route that renders the fraction and by the
+ * E2E mock that stamps its fixture verdicts: the first hosted run on the merged
+ * repository fell inside the first hour of a Monday UTC, the mock's "an hour
+ * ago" verdict landed in the previous week, and the bench truthfully said
+ * "0 of 2 verdicts this week" to a spec expecting 1 of 2.
+ */
+export function weekStartMs(nowMs: number): number {
+  const d = new Date(nowMs);
+  const day = (d.getUTCDay() + 6) % 7;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day);
+}
+
+/**
  * The provenance behind one recommendation.
  *
  * `fractionThisWeek` is `null` with no verdicts at all — a fraction of zero

@@ -10,14 +10,35 @@ import { installPerchBridge } from "../helpers/perchBridge";
  * "released" gets its own check.
  */
 
+/**
+ * One `open_leases` entry, in the shape `GET /v1/operator/containment/leases`
+ * serves it: the daemon's `ContainmentLease` under `lease`, and the two
+ * clock-derived facts beside it. `src/testing/perch/daemonContainmentFixture.json`
+ * is a captured answer; keep this in step with it, not with the renderer.
+ */
 const OPEN_LEASE = {
-  lease_id: "cl_open",
-  action_kind: "isolate_host",
-  scope_value: "web-04",
-  origin_receipt_id: "r1",
-  governance_receipt_id: "g1",
-  issued_at_ms: 1_000,
-  expires_at_ms: 9_999_999_999_999,
+  lease: {
+    schema_version: 1,
+    lease_id: "cl_open",
+    action: { type: "isolate_host", host_id: "web-04" },
+    origin_receipt_id: "r1",
+    governance_receipt_id: "g1",
+    blast_radius: {
+      scope_kind: "host",
+      scope_value: "web-04",
+      impact: "host_connectivity_isolated",
+      max_affected_scopes: 1,
+      affected_capabilities: ["network_connectivity", "remote_management"],
+      summary: "Cuts the scoped host off the network",
+    },
+    rollback: {
+      required: true,
+      summary: "Restore normal connectivity for the isolated host `web-04`",
+      steps: [],
+    },
+    issued_at_ms: 1_000,
+    expires_at_ms: 9_999_999_999_999,
+  },
   remaining_ms: 600_000,
   expired: false,
 };
@@ -27,9 +48,12 @@ const OPEN_LEASE = {
  * different facts and this is the second one: the sweep tried and failed.
  */
 const EXPIRED_LEASE = {
-  ...OPEN_LEASE,
-  lease_id: "cl_expired",
-  scope_value: "db-01",
+  lease: {
+    ...OPEN_LEASE.lease,
+    lease_id: "cl_expired",
+    action: { type: "isolate_host", host_id: "db-01" },
+    blast_radius: { ...OPEN_LEASE.lease.blast_radius, scope_value: "db-01" },
+  },
   remaining_ms: 0,
   expired: true,
 };

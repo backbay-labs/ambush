@@ -52,13 +52,27 @@ function asOptionalBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-/** One lease row from the daemon's list. */
+/**
+ * One entry of the daemon's `open_leases`.
+ *
+ * The daemon serves `{ lease, remaining_ms, expired }`: the `ContainmentLease`
+ * it minted, verbatim, wrapped with the two facts only the clock can derive.
+ * The action kind is `lease.action.type` and the scope is
+ * `lease.blast_radius.scope_value`; neither is a flat field. This parser once
+ * read a flat shape the E2E mock had invented, and the board rendered "No
+ * open containments" against a daemon that was holding a host (seen live,
+ * 2026-09-06). `daemonContainmentFixture.json` is the captured answer that
+ * keeps it honest.
+ */
 export function parseContainmentLease(value: unknown): ContainmentLeaseView {
-  const lease = asRecord(value);
+  const entry = asRecord(value);
+  const lease = asRecord(entry.lease);
+  const action = asRecord(lease.action);
+  const blastRadius = asRecord(lease.blast_radius);
   return {
     leaseId: asString(lease.lease_id),
-    actionKind: asString(lease.action_kind),
-    scopeValue: asString(lease.scope_value),
+    actionKind: asString(action.type),
+    scopeValue: asString(blastRadius.scope_value),
     originReceiptId: asString(lease.origin_receipt_id),
     governanceReceiptId:
       typeof lease.governance_receipt_id === "string"
@@ -66,15 +80,15 @@ export function parseContainmentLease(value: unknown): ContainmentLeaseView {
         : null,
     issuedAtMs: asNumber(lease.issued_at_ms),
     expiresAtMs: asNumber(lease.expires_at_ms),
-    remainingMs: asNumber(lease.remaining_ms),
-    expired: lease.expired === true,
+    remainingMs: asNumber(entry.remaining_ms),
+    expired: entry.expired === true,
   };
 }
 
-/** The list route's body. */
+/** The list route's body: `GET /v1/operator/containment/leases`. */
 export function parseContainmentList(value: unknown): ContainmentList {
   const body = asRecord(value);
-  const raw = Array.isArray(body.leases) ? body.leases : [];
+  const raw = Array.isArray(body.open_leases) ? body.open_leases : [];
   return {
     // Served order is kept. The daemon sorts by expiry then id, and a board
     // that re-sorted would put a row somewhere the daemon's own paging did not.

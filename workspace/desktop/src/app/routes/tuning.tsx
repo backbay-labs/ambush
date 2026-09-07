@@ -4,8 +4,9 @@ import * as React from "react";
 
 import { perchKeys } from "@/shared/api/perchKeys";
 import {
-  type TuningIncident,
   tuningIncidentFrom,
+  type TuningIncident,
+  weekStartMs,
 } from "@/features/perch-policy/lib/tuningProvenance";
 import {
   type PerchIncidentRead,
@@ -25,13 +26,6 @@ const TuningScreen = React.lazy(async () => {
   const module = await import("@/features/perch-policy/ui/TuningScreen");
   return { default: module.TuningScreen };
 });
-
-/** Monday 00:00 UTC of the current week, which is what "this week" means here. */
-function weekStartMs(nowMs: number): number {
-  const d = new Date(nowMs);
-  const day = (d.getUTCDay() + 6) % 7;
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day);
-}
 
 export const Route = createFileRoute("/tuning")({
   component: TuningRouteComponent,

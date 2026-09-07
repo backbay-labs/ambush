@@ -5,6 +5,7 @@ import {
   deriveTuningProvenance,
   incidentOrigin,
   tuningIncidentFrom,
+  weekStartMs,
 } from "./tuningProvenance.ts";
 
 test("the two id schemes cannot collide, and an unknown one is unresolved", () => {
@@ -160,5 +161,25 @@ test("measurements come off the daemon's read with only Dismiss as a false posit
       ["f2", false],
       ["f3", false],
     ],
+  );
+});
+
+test("this week starts on Monday 00:00 UTC, and the first hour of a Monday is inside it", () => {
+  const mondayMidnight = Date.UTC(2026, 8, 7); // 2026-09-07, a Monday
+  assert.equal(weekStartMs(mondayMidnight), mondayMidnight);
+  assert.equal(
+    weekStartMs(mondayMidnight + 16 * 60_000),
+    mondayMidnight,
+    "00:16 UTC Monday: the hosted run that found this",
+  );
+  assert.equal(
+    weekStartMs(mondayMidnight - 1),
+    Date.UTC(2026, 7, 31),
+    "Sunday 23:59:59.999 belongs to the previous week",
+  );
+  assert.equal(
+    weekStartMs(Date.UTC(2026, 8, 13, 23, 59)),
+    mondayMidnight,
+    "Sunday night still belongs to the week that began Monday",
   );
 });
