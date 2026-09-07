@@ -139,6 +139,119 @@
 //! boundary is intentional, not a bug: one reports what blue caught, the
 //! other what red evaded, and a vacuous corpus is a vacuous "catch nothing"
 //! by the first reading and a vacuous "evade everything" by the second.
+//!
+//! # The campaign loop (Task 3, COEVOLVE-01 part B / COEVOLVE-02)
+//!
+//! [`RedSwarmCampaign::run`] repeats [`run_generation`] across a bounded
+//! sequence of generations, threading three things forward between calls
+//! that a single [`run_generation`] call never sees on its own:
+//!
+//!   - **red's memory** -- every generation's [`GenerationOutcome::records`]
+//!     is appended to an [`super::pattern_db::AttackPatternDb`] that starts
+//!     empty and only grows; the [`TechniqueWeights`] snapshot handed to the
+//!     NEXT generation's `run_generation` call is built fresh from that
+//!     accumulated db every time (empty at generation 0, so generation 0
+//!     plans exactly the unweighted plan -- see [`RedGenome::plan_weighted`]'s
+//!     own doc for why `weights: None` and an all-neutral-weight `Some` are
+//!     byte-identical, and [`TechniqueWeights::weight_for`]'s `1.0` default
+//!     for why an empty db's snapshot is exactly that all-neutral case);
+//!   - **blue's coverage** -- a `DetectionConfig` that starts at
+//!     [`CampaignConfig::initial_detection`] and only ever gains strategies,
+//!     never loses one, via [`close_blue_gaps`] below;
+//!   - **red's fitness history** -- the sequence of
+//!     [`AttackFitness::red_fitness`] values the stopping rule's plateau
+//!     check reads.
+//!
+//! ## Blue's move: gap-closing, monotonic
+//!
+//! After each generation, [`close_blue_gaps`] walks that generation's
+//! [`GenerationOutcome::evaded_techniques`] (already sorted -- see that
+//! field's own doc) and, for each one, tries every strategy id NOT already
+//! present in the live `DetectionConfig`, in [`ALL_DETECTOR_STRATEGIES`]'s
+//! fixed order, building a REAL detector via
+//! [`crate::detector_factory::build_detector_from_strategy`] and running it
+//! over that technique's own materialized events
+//! ([`technique_events_for_generation`] re-derives them independently --
+//! see that function's doc for why re-deriving, rather than widening
+//! [`run_generation`]'s own return type, is this task's choice). The FIRST
+//! candidate that catches anything is enabled; probing for that technique
+//! stops there. A technique no available candidate catches is left alone --
+//! still evaded, and the live detection config is not widened on its
+//! account this generation. Because a strategy is only ever pushed, never
+//! removed, and the same "already enabled" membership check that stops a
+//! technique from being probed against a strategy it does not need also
+//! stops that strategy from being pushed twice, the enabled set is
+//! strictly, monotonically non-shrinking across the whole campaign.
+//!
+//! ## The stopping rule (COEVOLVE-02)
+//!
+//! Evaluated once per generation, immediately after that generation's
+//! outcome and blue move are both recorded, in this fixed order -- so when
+//! more than one condition holds at once, the earlier-listed reason is the
+//! one recorded:
+//!
+//!   1. **`MaxGenerations`** -- `generation + 1 == max_generations`. The
+//!      unconditional backstop: with `generation` drawn from
+//!      `0..max_generations`, this is true on the loop's last possible
+//!      iteration NO MATTER what the other two conditions say, which is the
+//!      whole of [`RedSwarmCampaign::run`]'s termination proof (see
+//!      "Termination" below).
+//!   2. **`Plateau`** -- [`plateaued`]: the last `convergence.patience`
+//!      consecutive generation-to-generation changes in `red_fitness` are
+//!      all smaller in magnitude than `convergence.min_delta`. False while
+//!      fewer than `patience + 1` generations have run -- a partial window
+//!      proves nothing either way.
+//!   3. **`FullCoverage`** -- blue's move closed nothing this generation
+//!      (`close_blue_gaps` returned an empty list) AND this generation
+//!      actually emitted a non-Cover technique. The second clause matters:
+//!      an all-nothing generation ([`GenerationOutcome::evaded_techniques`]
+//!      empty **and** `blue_catch_rate == 0.0` -- the "empty-corpus
+//!      convention" the doc above this one documents) trivially closes
+//!      nothing because there was nothing TO close, and that is not
+//!      evidence blue has caught everything catchable -- it is the absence
+//!      of a measurement. Only a generation that emitted something, for
+//!      which every emitted technique is EITHER already caught OR was just
+//!      proven uncoverable by every strategy not yet enabled, counts as
+//!      having reached the ceiling of what this campaign's corpus and
+//!      detector catalog can settle between them.
+//!
+//! `Plateau` is deliberately checked before `FullCoverage`: the two
+//! conditions are not mutually exclusive (a generation that closes nothing
+//! can simultaneously complete a flat-fitness window), and when both hold
+//! this module reports the convergence signal rather than the coverage one
+//! -- a caller reading `stop_reason` learns more from "red stopped
+//! improving" than from "blue ran out of headroom" when both are true at
+//! once.
+//!
+//! ## Termination
+//!
+//! [`RedSwarmCampaign::run`]'s outer loop is `for generation in
+//! 0..config.max_generations` -- syntactically bounded by a `u32` already
+//! fixed before the loop starts, with no way to extend it from inside the
+//! body. Every iteration either breaks (recording one of the three
+//! [`StopReason`]s) or falls through to the next; the `MaxGenerations`
+//! check is unconditionally true on `generation == max_generations - 1`
+//! (the loop's last iteration, by construction of the range), so the
+//! function cannot fail to break by the time that iteration ends.
+//! `max_generations == 0` is handled before the loop even starts (an empty
+//! report, trivially `MaxGenerations`, since there is no generation zero
+//! for either of the other two reasons to have measured anything against).
+//! Every step inside one generation -- [`run_generation`],
+//! [`close_blue_gaps`], [`plateaued`] -- is itself a finite, non-looping
+//! computation over finite data, so the whole function terminates for
+//! every [`CampaignConfig`].
+//!
+//! ## Determinism
+//!
+//! [`RedSwarmCampaign::run`] reads nothing but `config`: no clock, no
+//! entropy, no filesystem beyond the same tracked corpus files
+//! [`run_generation`] and [`technique_events_for_generation`] already
+//! re-read on every call (see [`GenomeRedSwarm`]'s own determinism
+//! section). Two calls with an identical `config` -- including identical
+//! `suite_paths` file contents -- therefore produce a byte-identical
+//! [`CampaignReport`] (this module's own determinism test pins it), the
+//! same guarantee [`run_generation`] itself carries, extended across the
+//! whole loop.
 
 use super::RedSwarmError;
 use super::ThreatContext;
@@ -146,14 +259,14 @@ use super::budget::StealthBudget;
 use super::genome::{CampaignParams, GeneStep, RedGenome, RedPlan, StepIntent};
 use super::genome_adapter::GenomeRedSwarm;
 use super::graph::TargetGraph;
-use super::pattern_db::AttackPatternRecord;
+use super::pattern_db::{AttackPatternDb, AttackPatternRecord};
 use super::scoring::{AttackFitness, AttackScorer};
 use super::weights::TechniqueWeights;
 use crate::detector_factory::{RuntimeDetector, build_detector_from_strategy};
 use crate::evasion_coverage::{
     DetectorEvasionCoverageReport, EvasionCoverageSnapshot, EvasionScenarioCoverage,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use swarm_core::config::DetectionConfig;
@@ -499,13 +612,401 @@ fn build_snapshot(
     }
 }
 
+/// Every strategy id [`crate::detector_factory::build_detector_from_strategy`]
+/// supports, in the exact order that function's own match arms declare
+/// them. [`close_blue_gaps`] tries a technique's not-yet-enabled candidates
+/// in this fixed order, so which one gets enabled when more than one would
+/// catch a technique is itself deterministic, never an artifact of
+/// iterating a `Vec` or a map in whatever order construction happened to
+/// leave it.
+const ALL_DETECTOR_STRATEGIES: [&str; 14] = [
+    "kill_chain_sequence",
+    "suspicious_process_tree",
+    "fileless_execution",
+    "behavioral_anomaly",
+    "dns_exfiltration",
+    "lateral_movement",
+    "credential_access",
+    "suspicious_scripting",
+    "persistence",
+    "supply_chain",
+    "network_connect",
+    "infrastructure_anomaly",
+    "cloudtrail",
+    "kubernetes_audit",
+];
+
+/// A generation-to-generation convergence rule for the `Plateau` stop
+/// condition (COEVOLVE-02); see [`RedSwarmCampaign::run`]'s "The stopping
+/// rule" doc section.
+///
+/// Neither field has a built-in floor: `patience: 0` makes [`plateaued`]
+/// true as soon as one fitness value has been recorded (a window of zero
+/// required transitions is vacuously satisfied), and a negative `min_delta`
+/// makes it permanently false (no non-negative magnitude is ever smaller
+/// than a negative number). Both are honoured literally rather than
+/// rejected -- validating a caller's [`CampaignConfig`] is that caller's
+/// concern, not this type's.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Convergence {
+    /// The largest generation-to-generation change in `red_fitness` still
+    /// considered "no change".
+    pub min_delta: f64,
+    /// How many CONSECUTIVE such small changes in a row count as a plateau.
+    pub patience: u32,
+}
+
+/// Every input [`RedSwarmCampaign::run`] needs to run one bounded red/blue
+/// campaign (COEVOLVE-01 part B). The whole run is a pure function of this
+/// struct -- see [`RedSwarmCampaign::run`]'s "Determinism" doc section.
+#[derive(Debug, Clone)]
+pub struct CampaignConfig {
+    /// The base seed every generation's [`run_generation`] call derives its
+    /// own effective seed from (see [`RedGenome::plan_weighted`]'s doc).
+    pub seed: u64,
+    /// The campaign's step-count bounds, shared by every generation.
+    pub campaign: CampaignParams,
+    /// The target graph every generation plans against.
+    pub graph: TargetGraph,
+    /// The suite paths `graph` was built from. REQUIRED to be the same
+    /// paths, for the same reason [`GenomeRedSwarm::new`] documents, since
+    /// both [`run_generation`] and this module's own
+    /// [`technique_events_for_generation`] materialize through that
+    /// adapter. Not part of this struct's original brief sketch -- see
+    /// [`run_generation`]'s doc's "A parameter beyond this task's brief"
+    /// section for why that function already needs it; [`CampaignConfig`]
+    /// carries it for the identical, unavoidable reason.
+    pub suite_paths: Vec<PathBuf>,
+    /// The stealth budget every generation's plan is bounded by.
+    pub budget: StealthBudget,
+    /// Blue's starting detection config, before any generation's
+    /// gap-closing move. [`RedSwarmCampaign::run`] never mutates this field
+    /// itself -- it clones it once into a local, growing copy when the run
+    /// starts.
+    pub initial_detection: DetectionConfig,
+    /// The hard cap on how many generations `run` will ever execute,
+    /// regardless of what the convergence or coverage checks say (see
+    /// [`RedSwarmCampaign::run`]'s "Termination" doc section). `0` runs no
+    /// generations at all.
+    pub max_generations: u32,
+    /// The plateau rule for the `Plateau` stop condition.
+    pub convergence: Convergence,
+}
+
+/// Why [`RedSwarmCampaign::run`] stopped (COEVOLVE-02). See that method's
+/// "The stopping rule" doc section for the exact, ordered conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StopReason {
+    /// `generation + 1 == max_generations`: the hard cap was reached.
+    MaxGenerations,
+    /// Red's fitness stopped moving: `convergence.patience` consecutive
+    /// generation-to-generation changes each fell under
+    /// `convergence.min_delta`.
+    Plateau,
+    /// Blue's gap-closing move closed nothing this generation, on a
+    /// generation that emitted at least one non-Cover technique -- every
+    /// technique still evaded was just proven uncoverable by every
+    /// strategy not yet enabled.
+    FullCoverage,
+}
+
+/// The full record of one bounded [`RedSwarmCampaign::run`] call: every
+/// generation's measured outcome, in order, why the run stopped, and the
+/// last generation's blue catch rate for a quick read without re-deriving
+/// it from `generations.last()`.
+///
+/// Deliberately carries no timestamp and no persistence identity
+/// (`generated_at_ms`, `corpus_sequence_id`): this is the in-memory result
+/// of a pure computation over a [`CampaignConfig`], and a later task's
+/// persistence layer should stamp those onto it (or onto an enclosing
+/// envelope) at the point it is actually written down -- never inside this
+/// module, which would break the "identical config -> identical report"
+/// guarantee this struct's whole reason for existing depends on.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CampaignReport {
+    /// One entry per generation actually run, in generation order. Length
+    /// is always `<= max_generations`, and exactly the number of
+    /// generations [`RedSwarmCampaign::run`] executed before `stop_reason`
+    /// fired.
+    pub generations: Vec<GenerationOutcome>,
+    /// Why the run stopped.
+    pub stop_reason: StopReason,
+    /// `generations.last().blue_catch_rate`, or `0.0` if `generations` is
+    /// empty (`max_generations == 0`) -- the same "an empty run caught
+    /// nothing" convention [`GenerationOutcome::blue_catch_rate`]'s own doc
+    /// uses for an empty corpus.
+    pub final_blue_catch_rate: f64,
+}
+
+/// The bidirectional red/blue campaign loop (Phase 290, COEVOLVE-01 part B /
+/// COEVOLVE-02). A namespace for [`Self::run`], not a thing with its own
+/// state -- like [`RedGenome`], it holds nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RedSwarmCampaign;
+
+impl RedSwarmCampaign {
+    /// Runs a bounded red/blue campaign against `config` (see the module
+    /// doc's "The campaign loop" section for the full pipeline, the blue
+    /// move, the stopping rule, its termination proof, and its determinism
+    /// guarantee).
+    pub fn run(config: &CampaignConfig) -> Result<CampaignReport, RedSwarmError> {
+        // A zero-generation campaign runs nothing; `MaxGenerations` is the
+        // only reason that could possibly apply, and there is no generation
+        // zero for either of the other two to have measured anything
+        // against.
+        if config.max_generations == 0 {
+            return Ok(CampaignReport {
+                generations: Vec::new(),
+                stop_reason: StopReason::MaxGenerations,
+                final_blue_catch_rate: 0.0,
+            });
+        }
+
+        let mut generations: Vec<GenerationOutcome> = Vec::new();
+        let mut db = AttackPatternDb::default();
+        let mut detection = config.initial_detection.clone();
+        let mut fitness_history: Vec<f64> = Vec::new();
+        let mut final_blue_catch_rate = 0.0;
+        let mut stop_reason = StopReason::MaxGenerations;
+
+        for generation in 0..config.max_generations {
+            // 1. Weight from whatever red's memory holds so far (empty at
+            //    generation 0, so this reproduces the unweighted plan --
+            //    see the module doc's "The campaign loop" section).
+            let weights = TechniqueWeights::from_pattern_db(&db, &config.graph);
+
+            // 2. Run the generation against blue's CURRENT (pre-move)
+            //    detection config, then fold its records into red's memory.
+            let outcome = run_generation(
+                generation,
+                config.seed,
+                &config.campaign,
+                &config.graph,
+                &config.suite_paths,
+                &detection,
+                &config.budget,
+                Some(&weights),
+            )?;
+            for record in &outcome.records {
+                db.append(record.clone());
+            }
+            final_blue_catch_rate = outcome.blue_catch_rate;
+            fitness_history.push(outcome.red_fitness.red_fitness);
+
+            // 3. Blue's move: close whatever gaps this generation's evaded
+            //    techniques admit, over that generation's own materialized
+            //    events (re-derived only when there is anything evaded to
+            //    probe at all -- see the module doc's "Blue's move"
+            //    section).
+            let nothing_emitted =
+                outcome.evaded_techniques.is_empty() && outcome.blue_catch_rate == 0.0;
+            let closed = if outcome.evaded_techniques.is_empty() {
+                Vec::new()
+            } else {
+                let events_by_technique = technique_events_for_generation(
+                    generation,
+                    config.seed,
+                    &config.campaign,
+                    &config.graph,
+                    &config.suite_paths,
+                    &config.budget,
+                    Some(&weights),
+                )?;
+                close_blue_gaps(
+                    &mut detection,
+                    &outcome.evaded_techniques,
+                    &events_by_technique,
+                )?
+            };
+
+            generations.push(outcome);
+
+            // 4. The stopping rule, in its documented, fixed order (see the
+            //    module doc's "The stopping rule" section).
+            if generation + 1 == config.max_generations {
+                stop_reason = StopReason::MaxGenerations;
+                break;
+            }
+            if plateaued(&fitness_history, &config.convergence) {
+                stop_reason = StopReason::Plateau;
+                break;
+            }
+            if !nothing_emitted && closed.is_empty() {
+                stop_reason = StopReason::FullCoverage;
+                break;
+            }
+        }
+
+        Ok(CampaignReport {
+            generations,
+            stop_reason,
+            final_blue_catch_rate,
+        })
+    }
+}
+
+/// Whether `history`'s last `convergence.patience` consecutive
+/// generation-to-generation changes are all smaller in magnitude than
+/// `convergence.min_delta` (the `Plateau` stop condition, COEVOLVE-02).
+///
+/// `false` while `history` holds `patience` or fewer values -- a window
+/// that is not yet full proves nothing, so this never fires early just
+/// because too little history exists to disprove it.
+fn plateaued(history: &[f64], convergence: &Convergence) -> bool {
+    let patience = convergence.patience as usize;
+    if history.len() <= patience {
+        return false;
+    }
+    history
+        .windows(2)
+        .rev()
+        .take(patience)
+        .all(|pair| (pair[1] - pair[0]).abs() < convergence.min_delta)
+}
+
+/// Blue's gap-closing move for one generation (see the module doc's "Blue's
+/// move" section).
+///
+/// For each technique in `evaded` (in the given order -- `run_generation`
+/// hands this a sorted, deterministic list), tries every strategy id in
+/// [`ALL_DETECTOR_STRATEGIES`] not already present in `detection.strategies`,
+/// building a REAL detector via
+/// [`crate::detector_factory::build_detector_from_strategy`] and running it
+/// over `events_by_technique`'s events for that technique
+/// ([`technique_events_for_generation`]'s output); the first candidate that
+/// catches anything is pushed onto `detection.strategies` and probing for
+/// that technique stops there. A technique absent from `events_by_technique`
+/// (never expected in practice -- see that function's doc) is treated as
+/// having no events to be caught by, rather than a lookup failure.
+///
+/// `detection.strategies` only ever grows: the membership check that skips
+/// an already-enabled candidate also means this never pushes a duplicate,
+/// and nothing in this function ever removes an entry.
+///
+/// Returns the subset of `evaded` this call actually closed, in the same
+/// order -- the stopping rule's `FullCoverage` check reads whether this is
+/// empty to know whether blue made any progress this generation.
+fn close_blue_gaps(
+    detection: &mut DetectionConfig,
+    evaded: &[String],
+    events_by_technique: &BTreeMap<String, Vec<TelemetryEvent>>,
+) -> Result<Vec<String>, RedSwarmError> {
+    let mut closed = Vec::new();
+    for technique in evaded {
+        let events = events_by_technique
+            .get(technique)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let mut newly_enabled: Option<&'static str> = None;
+        for candidate in ALL_DETECTOR_STRATEGIES {
+            if detection
+                .strategies
+                .iter()
+                .any(|enabled| enabled == candidate)
+            {
+                continue;
+            }
+            if technique_is_caught_by(events, candidate, detection)? {
+                newly_enabled = Some(candidate);
+                break;
+            }
+        }
+        if let Some(strategy_id) = newly_enabled {
+            detection.strategies.push(strategy_id.to_string());
+            closed.push(technique.clone());
+        }
+    }
+    Ok(closed)
+}
+
+/// Whether a real detector built from `strategy_id` finds anything on any of
+/// `events` -- the same "any finding on any event" catch criterion
+/// [`attribute_catches`] uses, but built fresh for this one probe and
+/// discarded immediately after, never reused across techniques or steps --
+/// so unlike [`attribute_catches`]'s deliberate `fold`, nothing is lost by
+/// letting `any` short-circuit: there is no later step this same instance
+/// would otherwise have missed feeding.
+fn technique_is_caught_by(
+    events: &[TelemetryEvent],
+    strategy_id: &str,
+    detection: &DetectionConfig,
+) -> Result<bool, RedSwarmError> {
+    let detector = build_detector_from_strategy(strategy_id, detection)?;
+    Ok(events
+        .iter()
+        .any(|event| !detector.evaluate(event).is_empty()))
+}
+
+/// Re-derives generation `generation`'s emitted, non-[`StepIntent::Cover`]
+/// steps' materialized events, grouped by technique (a technique named by
+/// more than one admitted step collects every one of those steps' events,
+/// in step order).
+///
+/// Mirrors [`run_generation`]'s own steps 1 and 2 exactly -- plan, budget,
+/// materialize through [`GenomeRedSwarm::materialize_by_step`] -- run
+/// independently here so [`close_blue_gaps`]'s probe has real events to run
+/// a candidate detector over, without widening [`run_generation`]'s own
+/// return type (see the module doc's "Why the plan is drawn twice" section
+/// for the underlying equivalence this relies on). Pure and deterministic
+/// in exactly the arguments `run_generation` is itself pure in, so a call
+/// with the arguments [`RedSwarmCampaign::run`] just called `run_generation`
+/// with reproduces that same call's own internal materialization byte for
+/// byte.
+fn technique_events_for_generation(
+    generation: u32,
+    seed: u64,
+    campaign: &CampaignParams,
+    graph: &TargetGraph,
+    suite_paths: &[PathBuf],
+    budget: &StealthBudget,
+    weights: Option<&TechniqueWeights>,
+) -> Result<BTreeMap<String, Vec<TelemetryEvent>>, RedSwarmError> {
+    let plan = RedGenome::plan_weighted(seed, generation, campaign, graph, weights)?;
+    let outcome = budget.apply(plan.steps);
+
+    let mut genome = GenomeRedSwarm::new(
+        graph.clone(),
+        suite_paths.to_vec(),
+        campaign.clone(),
+        seed,
+        generation,
+        *budget,
+    );
+    if let Some(weights) = weights {
+        genome = genome.with_weights(weights.clone());
+    }
+    let grouped = genome.materialize_by_step(&measurement_context(generation))?;
+
+    let mut by_technique: BTreeMap<String, Vec<TelemetryEvent>> = BTreeMap::new();
+    for (step, (technique, events)) in outcome.steps.iter().zip(grouped.iter()) {
+        if matches!(step.intent, StepIntent::Cover { .. }) {
+            continue;
+        }
+        by_technique
+            .entry(technique.clone())
+            .or_default()
+            .extend(events.iter().cloned());
+    }
+    Ok(by_technique)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::evasion_coverage::EvasionTechniqueCatalog;
     use crate::red_swarm::OperatorRole;
-    use crate::red_swarm::graph::{ScenarioRef, TargetGraph};
+    use crate::red_swarm::graph::{LoadedSuite, ScenarioRef, TargetGraph};
+    use crate::replay::{
+        LoadedReplayScenario, ReplayExpectations, ReplayScenarioClass, ReplayScenarioInput,
+        ReplayScenarioManifest, ReplayScenarioMetadata, ReplayScenarioStep, ReplaySuiteManifest,
+        ReplaySuiteMetadata,
+    };
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use swarm_core::types::ResponseAction;
     use swarm_whisker::{ProcessStartEvent, TelemetryPayload};
 
     fn repo_root() -> PathBuf {
@@ -900,5 +1401,574 @@ mod tests {
         );
 
         assert!(matches!(result, Err(RedSwarmError::DetectorBuild(_))));
+    }
+
+    /// A fresh, uniquely-named directory under the OS temp dir, mirroring
+    /// `replay::tests::unique_temp_dir` (this module cannot reuse that one --
+    /// it is private to `replay::tests` -- but needs the identical shape for
+    /// the identical reason: [`SC3_TECHNIQUES`]'s fixture writes real,
+    /// on-disk suite/scenario YAML so [`GenomeRedSwarm`] can materialize it
+    /// exactly as it would the tracked repository corpus). `SystemTime` here
+    /// names a THROWAWAY fixture directory only, so parallel test runs never
+    /// collide -- it has no bearing on the campaign loop's own determinism,
+    /// which depends only on `CampaignConfig`, never on when a test happened
+    /// to build the files that config's `suite_paths` point at.
+    fn sc3_temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "swarm-runtime-red-swarm-campaign-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("temp fixture dir should be creatable");
+        path
+    }
+
+    /// Six hand-picked `(technique id, catching strategy id, event)` triples,
+    /// each event chosen (by direct sweep against every real detector this
+    /// crate ships) to trip EXACTLY one of the fourteen strategies in
+    /// [`ALL_DETECTOR_STRATEGIES`] and none of the other thirteen -- so a
+    /// generation built from these techniques never has an accidental
+    /// double-catch that would collapse the multi-generation ramp SC3 (see
+    /// `run_closes_gaps_gradually_and_shifts_red_away_from_caught_techniques`
+    /// below) needs to observe. `process_event`'s
+    /// winword/powershell pairing is the same fixture the cover-steps test
+    /// above already relies on for `suspicious_process_tree`; the other five
+    /// events are this test's own, one payload variant per strategy family
+    /// that specific strategy's default profile is tuned to notice.
+    fn sc3_techniques() -> Vec<(&'static str, &'static str, TelemetryEvent)> {
+        vec![
+            (
+                "SC3-PROC-TREE",
+                "suspicious_process_tree",
+                process_event("sc3-proc-tree", "winword", "powershell"),
+            ),
+            (
+                "SC3-FILELESS",
+                "fileless_execution",
+                TelemetryEvent {
+                    source: "sc3-fixture".to_string(),
+                    event_id: "sc3-fileless".to_string(),
+                    timestamp: 0,
+                    host_id: Some("host-sc3".to_string()),
+                    payload: TelemetryPayload::ProcessMemoryAccess(
+                        swarm_whisker::ProcessMemoryAccessEvent {
+                            source_process: "explorer.exe".to_string(),
+                            target_process: "lsass.exe".to_string(),
+                            allocation_type: "private".to_string(),
+                            protection_flags: vec!["PAGE_EXECUTE_READWRITE".to_string()],
+                            region_size: 8192,
+                            call_stack_hint: Some("unbacked".to_string()),
+                        },
+                    ),
+                },
+            ),
+            (
+                "SC3-NETCONNECT",
+                "network_connect",
+                TelemetryEvent {
+                    source: "sc3-fixture".to_string(),
+                    event_id: "sc3-netconnect".to_string(),
+                    timestamp: 0,
+                    host_id: Some("host-sc3".to_string()),
+                    payload: TelemetryPayload::NetworkConnect(swarm_whisker::NetworkConnectEvent {
+                        process_name: "svchost.exe".to_string(),
+                        destination_ip: "198.51.100.23".to_string(),
+                        destination_port: 4444,
+                        protocol: "tcp".to_string(),
+                    }),
+                },
+            ),
+            (
+                "SC3-DNSEXFIL",
+                "dns_exfiltration",
+                TelemetryEvent {
+                    source: "sc3-fixture".to_string(),
+                    event_id: "sc3-dnsexfil".to_string(),
+                    timestamp: 0,
+                    host_id: Some("host-sc3".to_string()),
+                    payload: TelemetryPayload::DnsQuery(swarm_whisker::DnsQueryEvent {
+                        query_name:
+                            "dGhpc2lzYXZlcnlsb25nZW5jb2RlZHN1YmRvbWFpbnN0cmluZw.badguy.example"
+                                .to_string(),
+                        query_type: "TXT".to_string(),
+                        source_ip: Some("10.1.2.3".to_string()),
+                        process_name: Some("powershell.exe".to_string()),
+                        response_code: Some("NOERROR".to_string()),
+                    }),
+                },
+            ),
+            (
+                "SC3-PERSIST",
+                "persistence",
+                TelemetryEvent {
+                    source: "sc3-fixture".to_string(),
+                    event_id: "sc3-persist".to_string(),
+                    timestamp: 0,
+                    host_id: Some("host-sc3".to_string()),
+                    payload: TelemetryPayload::RegistryPersistence(
+                        swarm_whisker::RegistryPersistenceEvent {
+                            process_name: "powershell.exe".to_string(),
+                            registry_path:
+                                "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+                                    .to_string(),
+                            value_name: Some("Updater".to_string()),
+                            value_data: Some("C:\\Users\\Public\\evil.exe".to_string()),
+                            access_type: "write".to_string(),
+                        },
+                    ),
+                },
+            ),
+            (
+                "SC3-SCRIPT",
+                "suspicious_scripting",
+                TelemetryEvent {
+                    source: "sc3-fixture".to_string(),
+                    event_id: "sc3-script".to_string(),
+                    timestamp: 0,
+                    host_id: Some("host-sc3".to_string()),
+                    payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                        parent_process: "cmd.exe".to_string(),
+                        process_name: "powershell.exe".to_string(),
+                        command_line: "powershell -enc SGVsbG8gV29ybGQgdGhpcyBpcyBhIHRlc3Q="
+                            .to_string(),
+                        user: Some("alice".to_string()),
+                        executable_path: None,
+                        signer: None,
+                        signature_valid: None,
+                    }),
+                },
+            ),
+        ]
+    }
+
+    /// Builds the on-disk suite/scenario YAML [`sc3_techniques`] describes
+    /// (real files, in a fresh [`sc3_temp_dir`], loaded through the exact
+    /// same [`crate::replay`] loaders the tracked repository corpus goes
+    /// through -- see [`GenomeRedSwarm`]'s module doc for why that real,
+    /// on-disk materialization cannot be swapped for an in-memory-only
+    /// fixture) and the matching in-memory [`TargetGraph`] (via
+    /// [`TargetGraph::from_parts`], since a graph needs no disk access of
+    /// its own -- see that method's doc). Returns the graph and the
+    /// `suite_paths` a [`CampaignConfig`] should carry to materialize it.
+    ///
+    /// A fresh call writes a fresh directory; the files are never cleaned up
+    /// (they sit under the OS temp dir, where the existing
+    /// `replay::tests::unique_temp_dir` fixtures already leave theirs).
+    fn sc3_fixture() -> (TargetGraph, Vec<PathBuf>) {
+        let root = sc3_temp_dir("sc3-fixture");
+        let suite_name = "sc3-fixture-suite".to_string();
+
+        let mut scenario_refs = Vec::new();
+        let mut loaded_scenarios = Vec::new();
+        for (technique, _strategy, event) in sc3_techniques() {
+            let scenario_name = format!("{}-scenario", technique.to_lowercase());
+            let manifest = ReplayScenarioManifest {
+                name: scenario_name.clone(),
+                description: format!("SC3 fixture scenario realising {technique}"),
+                seed_time_ms: 1,
+                requested_by: "sc3-fixture".to_string(),
+                receipt_chain: Vec::new(),
+                metadata: ReplayScenarioMetadata {
+                    class: ReplayScenarioClass::Adversarial,
+                    threat_class: Some(ThreatClass::Execution),
+                    campaign: None,
+                    techniques: vec![technique.to_string()],
+                    tags: Vec::new(),
+                },
+                input: ReplayScenarioInput::Events {
+                    events: vec![ReplayScenarioStep {
+                        action: ResponseAction::IsolateHost {
+                            host_id: "host-sc3".to_string(),
+                        },
+                        event,
+                    }],
+                },
+                expectations: ReplayExpectations::default(),
+            };
+            let file_name = format!("{scenario_name}.yaml");
+            let file_path = root.join(&file_name);
+            std::fs::write(
+                &file_path,
+                serde_yaml::to_string(&manifest).expect("scenario manifest should serialize"),
+            )
+            .expect("scenario manifest should write");
+            scenario_refs.push(file_name);
+            loaded_scenarios.push(LoadedReplayScenario {
+                path: file_path,
+                manifest,
+            });
+        }
+
+        let suite_manifest = ReplaySuiteManifest {
+            name: suite_name.clone(),
+            description: "SC3 fixture suite".to_string(),
+            corpus_version: "sc3-fixture-v1".to_string(),
+            metadata: ReplaySuiteMetadata::default(),
+            scenarios: scenario_refs,
+        };
+        let suite_path = root.join("suite.yaml");
+        std::fs::write(
+            &suite_path,
+            serde_yaml::to_string(&suite_manifest).expect("suite manifest should serialize"),
+        )
+        .expect("suite manifest should write");
+
+        let loaded_suite = LoadedSuite {
+            name: suite_name,
+            scenarios: loaded_scenarios,
+        };
+        let catalog = EvasionTechniqueCatalog {
+            schema_version: 1,
+            suite: "synthetic://sc3-fixture".to_string(),
+            detectors: Vec::new(),
+        };
+        let graph = TargetGraph::from_parts(&catalog, &[loaded_suite]);
+
+        (graph, vec![suite_path])
+    }
+
+    /// A campaign with `max_steps: 0` always emits an empty plan --
+    /// `round_robin` (`genome.rs`) returns `[]` the instant `out.len() >=
+    /// max_steps` is checked with `max_steps == 0`, before any operator's
+    /// proposal is even considered, regardless of seed, generation, or
+    /// weights. [`budget.apply`](StealthBudget::apply) on an empty plan
+    /// proposes zero events, so `stealth == 1.0` (the "nothing proposed"
+    /// branch, not a `0.0 / 0.0`); [`AttackScorer::score`] on an empty plan
+    /// takes `evasion_rate == 1.0` (the empty-plan branch
+    /// `mean_technique_catch_rate` documents) times that `stealth`, so
+    /// `red_fitness == 1.0`, EVERY generation, unconditionally -- no
+    /// dependence on the real corpus's content at all. Used by the
+    /// stopping-rule mechanism tests below to get a `red_fitness` (and a
+    /// `blue_catch_rate`/`evaded_techniques`, via the "empty-corpus
+    /// convention") that is trivially, provably constant, so those tests
+    /// pin the LOOP's own behaviour rather than an accident of which
+    /// techniques a chosen seed happens to sample from the tracked corpus.
+    fn empty_plan_campaign() -> CampaignParams {
+        let mut campaign = campaign();
+        campaign.max_steps = 0;
+        campaign
+    }
+
+    #[test]
+    fn run_executes_exactly_max_generations_and_never_a_seventh() {
+        // `empty_plan_campaign` makes `red_fitness` provably constant, so
+        // `Plateau` could fire the moment its window fills; `patience: 100`
+        // makes that window (101 generations) unreachable within this run's
+        // `max_generations: 6`, so `MaxGenerations` is the only reachable
+        // stop reason. `FullCoverage` is structurally excluded regardless
+        // of `patience`: an empty plan emits nothing, so `run`'s
+        // `nothing_emitted` guard (see the module doc's "The stopping rule"
+        // section) forces `full_coverage` false every generation.
+        let config = CampaignConfig {
+            seed: 7,
+            campaign: empty_plan_campaign(),
+            graph: repo_graph(),
+            suite_paths: suite_paths(),
+            budget: StealthBudget::DEFAULT,
+            initial_detection: detection_config(&[]),
+            max_generations: 6,
+            convergence: Convergence {
+                min_delta: 1e-9,
+                patience: 100,
+            },
+        };
+
+        let report = RedSwarmCampaign::run(&config).expect("run should succeed");
+
+        assert_eq!(
+            report.generations.len(),
+            6,
+            "SC1: expected exactly 6 generations"
+        );
+        assert_eq!(report.stop_reason, StopReason::MaxGenerations);
+        // A 7th generation is never even attempted: `generations` has no
+        // index 6, and `run`'s loop range is `0..6` regardless.
+        assert!(report.generations.get(6).is_none());
+    }
+
+    #[test]
+    fn run_stops_at_plateau_before_max_generations_when_fitness_never_moves() {
+        // Same empty-plan trick, but with a `patience` small enough (2) for
+        // its window (3 generations) to fill well before `max_generations`
+        // (50): `red_fitness` is EXACTLY `1.0` every generation (see
+        // `empty_plan_campaign`'s doc), so the plateau condition
+        // (`|delta| < min_delta`) is satisfied the instant there is history
+        // enough to check it.
+        let config = CampaignConfig {
+            seed: 3,
+            campaign: empty_plan_campaign(),
+            graph: repo_graph(),
+            suite_paths: suite_paths(),
+            budget: StealthBudget::DEFAULT,
+            initial_detection: detection_config(&[]),
+            max_generations: 50,
+            convergence: Convergence {
+                min_delta: 1e-9,
+                patience: 2,
+            },
+        };
+
+        let report = RedSwarmCampaign::run(&config).expect("run should succeed");
+
+        assert_eq!(
+            report.generations.len(),
+            3,
+            "SC2: plateau should fire as soon as its 3-generation window fills"
+        );
+        assert_eq!(report.stop_reason, StopReason::Plateau);
+        assert!(
+            report.generations.len() < 50,
+            "plateau must stop the run well before max_generations"
+        );
+        for outcome in &report.generations {
+            assert_eq!(outcome.red_fitness.red_fitness, 1.0);
+            assert_eq!(outcome.blue_catch_rate, 0.0);
+            assert!(outcome.evaded_techniques.is_empty());
+        }
+    }
+
+    #[test]
+    fn run_stops_at_full_coverage_when_every_strategy_is_already_enabled() {
+        // With every strategy `close_blue_gaps` could ever enable already
+        // live in `initial_detection`, its "not yet enabled" candidate pool
+        // is empty from generation 0 on: whatever that generation emits
+        // (certainly something, against the real corpus's default campaign
+        // bounds), it closes nothing new, because there is nothing left
+        // to try. That is exactly the stopping rule's `FullCoverage`
+        // condition: no evaded technique could be closed by any AVAILABLE
+        // detector, because no detector is available any more.
+        let config = CampaignConfig {
+            seed: 21,
+            campaign: campaign(),
+            graph: repo_graph(),
+            suite_paths: suite_paths(),
+            budget: StealthBudget::DEFAULT,
+            initial_detection: detection_config(&ALL_DETECTOR_STRATEGIES),
+            max_generations: 10,
+            convergence: Convergence {
+                min_delta: 0.0,
+                patience: 1_000,
+            },
+        };
+
+        let report = RedSwarmCampaign::run(&config).expect("run should succeed");
+
+        assert_eq!(report.stop_reason, StopReason::FullCoverage);
+        assert_eq!(report.generations.len(), 1);
+    }
+
+    #[test]
+    fn run_closes_gaps_over_several_generations_and_shifts_red_away_from_a_gen0_catch() {
+        // A small, fully controlled six-technique corpus (`sc3_fixture`):
+        // each technique's one hand-crafted event is caught by exactly one
+        // of the fourteen real strategies and none of the other thirteen
+        // (pinned by `zzz`-prefixed diagnostics during this task's own
+        // development; the six catching pairs are asserted directly in
+        // `sc3_fixture_techniques_are_each_caught_by_exactly_one_strategy`
+        // below). With only `suspicious_process_tree` enabled at the start
+        // and two techniques sampled per generation, seed `1557`
+        // deterministically: catches `SC3-PROC-TREE` (the one technique
+        // that detector catches) in generation 0 while a second, different
+        // technique goes evaded and gets closed by a freshly-enabled
+        // detector; repeats that gap-closing pattern for two more
+        // generations; and on generation 3 resamples something already
+        // covered by a by-then-enabled detector, catching everything and
+        // triggering `FullCoverage` -- found by sweeping seeds against this
+        // fixture for a run that both catches something in generation 0 and
+        // reaches at least 4 generations, mirroring this crate's own
+        // documented seed-sweep practice (see `run_generation`'s
+        // `a_config_whose_detectors_catch_every_emitted_technique_...`
+        // test).
+        let (graph, suite_paths) = sc3_fixture();
+        let config = CampaignConfig {
+            seed: 1557,
+            campaign: {
+                let mut c = campaign();
+                c.steps_per_operator = 1;
+                c.max_steps = 2;
+                c
+            },
+            graph,
+            suite_paths,
+            budget: StealthBudget::DEFAULT,
+            initial_detection: detection_config(&["suspicious_process_tree"]),
+            max_generations: 8,
+            convergence: Convergence {
+                min_delta: 0.0,
+                patience: 1_000,
+            },
+        };
+
+        let report = RedSwarmCampaign::run(&config).expect("run should succeed");
+
+        assert!(
+            report.generations.len() >= 4,
+            "SC3: expected at least 4 generations, ran {}",
+            report.generations.len()
+        );
+        assert_eq!(report.stop_reason, StopReason::FullCoverage);
+
+        // SC3 part 1: `blue_catch_rate` is non-decreasing on average --
+        // here, monotonic non-decreasing outright, and strictly higher by
+        // the last generation than the first.
+        let rates: Vec<f64> = report
+            .generations
+            .iter()
+            .map(|outcome| outcome.blue_catch_rate)
+            .collect();
+        for window in rates.windows(2) {
+            assert!(
+                window[1] >= window[0],
+                "blue_catch_rate regressed within the run: {rates:?}"
+            );
+        }
+        assert!(
+            rates.last() > rates.first(),
+            "blue_catch_rate should be strictly higher by the last generation: {rates:?}"
+        );
+
+        // SC3 part 2: a technique caught in generation 0 has a strictly
+        // lower selection weight by the last generation than the neutral
+        // `1.0` every technique's weight starts at (generation 0 plans
+        // against an empty `AttackPatternDb`).
+        let gen0_caught: Vec<String> = report.generations[0]
+            .records
+            .iter()
+            .filter(|record| record.detected)
+            .map(|record| record.technique.clone())
+            .collect();
+        assert!(
+            !gen0_caught.is_empty(),
+            "expected generation 0 to have caught at least one technique"
+        );
+
+        let mut final_db = AttackPatternDb::default();
+        for outcome in &report.generations {
+            for record in &outcome.records {
+                final_db.append(record.clone());
+            }
+        }
+        let final_weights = TechniqueWeights::from_pattern_db(&final_db, &config.graph);
+        for technique in &gen0_caught {
+            let weight = final_weights.weight_for(technique);
+            assert!(
+                weight < 1.0,
+                "technique {technique} caught in generation 0 should have a strictly lower \
+                 weight by the last generation (neutral is 1.0), got {weight}"
+            );
+        }
+    }
+
+    #[test]
+    fn sc3_fixture_techniques_are_each_caught_by_exactly_one_strategy() {
+        // Pins the six catching pairs
+        // `run_closes_gaps_over_several_generations_and_shifts_red_away_from_a_gen0_catch`
+        // relies on, directly against the fixture's own materialized
+        // events -- so a future change to a detector's default profile that
+        // silently broke that test's premise would fail HERE first, with an
+        // exact `(technique, expected strategy)` mismatch, rather than as a
+        // confusing assertion failure three layers up.
+        let (graph, suite_paths) = sc3_fixture();
+        let detection = detection_config(&ALL_DETECTOR_STRATEGIES);
+        let mut small_campaign = campaign();
+        small_campaign.steps_per_operator = 1;
+        small_campaign.max_steps = 1;
+
+        for (technique, expected_strategy, _event) in sc3_techniques() {
+            // Every technique is realised by exactly one scenario carrying
+            // exactly one event, so a one-step plan naming it (found by
+            // sweeping seed/generation, mirroring this crate's own
+            // documented practice) exercises exactly that event.
+            let mut found = false;
+            'search: for seed in 0u64..50 {
+                for generation in 0u32..5 {
+                    let outcome = run_generation(
+                        generation,
+                        seed,
+                        &small_campaign,
+                        &graph,
+                        &suite_paths,
+                        &detection,
+                        &StealthBudget::DEFAULT,
+                        None,
+                    )
+                    .expect("run_generation should succeed");
+                    if outcome.records.iter().any(|r| r.technique == technique) {
+                        let caught_by: Vec<&str> = outcome
+                            .records
+                            .iter()
+                            .filter(|r| r.technique == technique && r.detected)
+                            .map(|r| r.detector.as_str())
+                            .collect();
+                        assert_eq!(
+                            caught_by,
+                            vec![expected_strategy],
+                            "technique {technique} should be caught by exactly \
+                             {expected_strategy} and no other strategy"
+                        );
+                        found = true;
+                        break 'search;
+                    }
+                }
+            }
+            assert!(
+                found,
+                "technique {technique} was never emitted by the sweep"
+            );
+        }
+    }
+
+    #[test]
+    fn run_is_deterministic_for_an_identical_config() {
+        let (graph, suite_paths) = sc3_fixture();
+        let config = CampaignConfig {
+            seed: 1557,
+            campaign: {
+                let mut c = campaign();
+                c.steps_per_operator = 1;
+                c.max_steps = 2;
+                c
+            },
+            graph,
+            suite_paths,
+            budget: StealthBudget::DEFAULT,
+            initial_detection: detection_config(&["suspicious_process_tree"]),
+            max_generations: 8,
+            convergence: Convergence {
+                min_delta: 0.0,
+                patience: 1_000,
+            },
+        };
+
+        let first = RedSwarmCampaign::run(&config).expect("first run should succeed");
+        let second = RedSwarmCampaign::run(&config).expect("second run should succeed");
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn run_executes_zero_generations_when_max_generations_is_zero() {
+        let config = CampaignConfig {
+            seed: 1,
+            campaign: campaign(),
+            graph: repo_graph(),
+            suite_paths: suite_paths(),
+            budget: StealthBudget::DEFAULT,
+            initial_detection: detection_config(&[]),
+            max_generations: 0,
+            convergence: Convergence {
+                min_delta: 0.0,
+                patience: 1,
+            },
+        };
+
+        let report = RedSwarmCampaign::run(&config).expect("run should succeed");
+
+        assert!(report.generations.is_empty());
+        assert_eq!(report.stop_reason, StopReason::MaxGenerations);
+        assert_eq!(report.final_blue_catch_rate, 0.0);
     }
 }

@@ -19,7 +19,10 @@ mod rng;
 pub mod scoring;
 pub mod weights;
 
-pub use campaign::{GenerationOutcome, run_generation};
+pub use campaign::{
+    CampaignConfig, CampaignReport, Convergence, GenerationOutcome, RedSwarmCampaign, StopReason,
+    run_generation,
+};
 pub use genome::{
     CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,
 };
