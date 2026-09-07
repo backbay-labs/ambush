@@ -44,6 +44,32 @@ export type PerchShellRoute = {
 };
 
 /**
+ * The bridge names a case channel `case-<case id prefix>` (W3-5, ADR 0012);
+ * a member channel whose name starts with this is a case, not an ordinary
+ * channel, and a relay channel carries no other case marker.
+ */
+const CASE_CHANNEL_NAME_PREFIX = "case-";
+
+/**
+ * The `/cases/$caseId` a channel opens as, or null when it is an ordinary
+ * channel or the perch feature is off.
+ *
+ * W3-5 makes `/cases/$caseId` the only case surface, and the route param is the
+ * channel's OWN id (`cases.$caseId.tsx` resolves the case by `channel.id ===
+ * caseId`). So the sidebar takes a `case-*` channel there rather than to the
+ * ordinary channel view (found-8). With the feature off nothing changes: the
+ * case route itself redirects to `/channels/$channelId` in that case, so the
+ * honest thing is to send it straight there.
+ */
+export function caseChannelRouteId(
+  channel: { readonly id: string; readonly name: string },
+  perchEnabled: boolean,
+): string | null {
+  if (!perchEnabled) return null;
+  return channel.name.startsWith(CASE_CHANNEL_NAME_PREFIX) ? channel.id : null;
+}
+
+/**
  * Path segment `index` of `pathname` (`/cases/<id>` puts the id at 2),
  * percent-decoded, or null when the segment is absent or empty. A malformed
  * percent sequence is returned verbatim rather than thrown: this runs inside
