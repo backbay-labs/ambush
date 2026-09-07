@@ -23,6 +23,7 @@ import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { resetPerchEphemeralStore } from "@/shared/api/perchEphemeralStore";
 import { resetPerchSubscriptionManager } from "@/shared/api/perchSubscriptionManager";
+import { resetPerchTelemetryWanted } from "@/shared/api/perchTelemetryWanted";
 import {
   resetPerchSeqTracking,
   resetPerchSubscriptions,
@@ -86,6 +87,12 @@ export const COMMUNITY_SCOPED_SINGLETONS = [
   "messageLinkMetadataCache",
   // Perch (the operator console). Torn down after the relay is disconnected
   // so the subscription manager's CLOSE frames never race a live socket.
+  //
+  // The telemetry claim goes first: it is an INPUT to the REQ set, and a claim
+  // left standing while the manager tears down would ask the next sync to
+  // re-open the telemetry REQ against a socket that belongs to the next
+  // community.
+  "perchTelemetryWanted",
   "perchSubscriptions",
   "perchEphemeralStore",
   "perchSeqTracking",
@@ -169,6 +176,7 @@ export const RESETTERS: Record<CommunityScopedSingleton, Resetter> = {
   searchHitEventCache: () => clearSearchHitEventCache(),
   markdownNodeCache: () => clearMarkdownNodeCache(),
   messageLinkMetadataCache: () => resetMessageLinkMetadataCache(),
+  perchTelemetryWanted: () => resetPerchTelemetryWanted(),
   // The manager's mount state and the REQ table are cleared in one step,
   // and the awaited part is the REQ teardown.
   perchSubscriptions: async () => {

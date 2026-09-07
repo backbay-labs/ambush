@@ -5,6 +5,7 @@ import {
   getPerchEphemeralSnapshot,
   subscribePerchEphemeral,
 } from "@/shared/api/perchEphemeralStore";
+import { usePerchTelemetryConsumer } from "@/shared/api/perchTelemetryWanted";
 
 import { GOVERNANCE } from "../lib/governanceCopy";
 import {
@@ -36,6 +37,9 @@ const COPY: Record<PerchGovernanceMode, string> = {
  * snapshot would be worse than one saying nothing at all.
  */
 export function GovernanceStrip(): React.ReactElement {
+  // The 26004 frame this strip is made of rides the telemetry REQ, and that
+  // REQ is opened only while a surface says it is reading one.
+  usePerchTelemetryConsumer();
   const snapshot = React.useSyncExternalStore(
     subscribePerchEphemeral,
     getPerchEphemeralSnapshot,

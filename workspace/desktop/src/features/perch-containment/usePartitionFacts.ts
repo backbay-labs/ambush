@@ -5,6 +5,7 @@ import {
   getPerchEphemeralSnapshot,
   subscribePerchEphemeral,
 } from "@/shared/api/perchEphemeralStore";
+import { usePerchTelemetryConsumer } from "@/shared/api/perchTelemetryWanted";
 
 import type { PartitionFacts } from "./ui/PartitionSection";
 
@@ -18,6 +19,10 @@ import type { PartitionFacts } from "./ui/PartitionSection";
  * every state, reads `bridge-down` from the same absence.
  */
 export function usePartitionFacts(): PartitionFacts {
+  // `healthy` here means "the section renders nothing", so an absent frame is
+  // safe — but only because this hook is what asks for the frame in the first
+  // place.
+  usePerchTelemetryConsumer();
   const snapshot = React.useSyncExternalStore(
     subscribePerchEphemeral,
     getPerchEphemeralSnapshot,

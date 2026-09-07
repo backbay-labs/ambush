@@ -5,6 +5,7 @@ import {
   getPerchEphemeralSnapshot,
   subscribePerchEphemeral,
 } from "@/shared/api/perchEphemeralStore";
+import { usePerchTelemetryConsumer } from "@/shared/api/perchTelemetryWanted";
 import { STANDARD_THREAT_CLASSES } from "@/features/perch/wire/types";
 import { ConcentrationCurve } from "@/shared/viz/ConcentrationCurve";
 import { VizDefs } from "@/shared/viz/defs";
@@ -63,6 +64,9 @@ function usePerchEphemeral() {
  * most expensive possible confusion here.
  */
 export function WatchfloorScreen(): React.ReactElement {
+  // Every band on this wall is a 26xxx frame; without the REQ the wall is the
+  // absence state on purpose, which is not the same as the wall being right.
+  usePerchTelemetryConsumer();
   const snapshot = usePerchEphemeral();
   const [nowMs, setNowMs] = React.useState(() => Date.now());
   const historiesRef = React.useRef(new Map<string, ConcentrationSample[]>());
