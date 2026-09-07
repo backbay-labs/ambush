@@ -182,6 +182,16 @@ jobs:
       - name: Check no unrouted authorize_and_execute caller
         run: bash tools/check-no-unrouted-authorize.sh
 
+      # ARMSCI-02. The red lane (`crates/swarm-runtime/src/red_swarm/**`,
+      # `crates/swarm-cli/src/red_swarm_cmd.rs`) generates adversarial
+      # telemetry and scores detectors; it must never grow a path to response
+      # authority. This is a lexical ban on four names -- `execute_response`,
+      # `ResponseAdapter`, `PolicyDecision::Authorize`, `live_response` -- with
+      # its own not-vacuous fixture, same shape as the check above. ARMSCI-03
+      # is its Rust-side companion, `cargo test -p swarm-runtime red_swarm`.
+      - name: Check red-swarm sources hold no response-execution authority
+        run: bash tools/check-red-swarm-no-execution-authority.sh
+
       # Task #15. Three check scripts existed for months and were invoked by no
       # workflow at all, and tools/verify-release-hardening.sh -- which proves
       # the flags that harden the two binaries the container ships -- had never
