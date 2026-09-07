@@ -37,3 +37,43 @@ the line number — is the authoritative, drift-proof locator (grep the
 
 15 rows: 3 `swarm-policy`, 5 `swarm-runtime`, 4 `swarm-spine`, 3
 `swarm-response`.
+
+## Deterministic-simulation harness (DST, phase 286)
+
+`crates/swarm-runtime/tests/dst_fault_injection.rs` is a seeded, deterministic
+fault-injection harness that drives the REAL
+`swarm_runtime::SwarmRuntime::authorize_and_execute`, a real `StaticApprovalGate`,
+and a real `InMemoryPheromoneSubstrate` -- no mocks -- through a hand-rolled
+single-threaded executor (no wall clock, no OS entropy, no tokio). Each seed
+replays an exact fault plan (`SWARM_DST_SEED=<n>`); the 64-seed corpus runs on
+every PR (`.github/workflows/ci.yml`'s `test` job), the >= 5,000-seed deep corpus
+nightly (`.github/workflows/dst-nightly.yml`). Three oracles hold across every seed
+and all four fault classes: **receipt-before-action** (no receipt is ever persisted
+without a distinct, preceding real dispatch it faithfully identifies -- no phantom
+or duplicated audit record), **exact disposition** (the outcome equals the
+deterministic gate verdict), and **no double-dispatch** (a request's action
+executes at most once).
+
+**Evidence boundary.** This harness proves those properties for a **single
+process** against a **single substrate instance** under in-process, mid-operation
+crash and scheduling faults -- future-drop before dispatch, future-drop after
+dispatch but before receipt-persist, and substrate close/reopen between policy-allow
+and persist. It does **not** cover distributed JetStream failover, multi-substrate
+replication, or cross-node consensus; those are out of this harness's scope by
+construction.
+
+**What the engine does and does not guarantee (the load-bearing honesty).**
+`authorize_and_execute` dispatches the response and returns the receipt; it writes
+NOTHING to a substrate, and there is no atomic journal binding the dispatch to a
+persisted receipt -- persistence is the caller's responsibility (the harness
+performs its own real substrate write to model a correct caller). Consequently the
+future-drop-after-dispatch-before-persist fault class legitimately ends with an
+action dispatched and no receipt persisted: that action-without-receipt gap is the
+evidence boundary named here, NOT an oracle violation. The receipt-before-action
+oracle therefore asserts only the SAFE, always-held direction (no false or
+duplicated audit record), which is what the engine actually upholds. The harness's
+"receipt persist" repurposes `PheromoneSubstrate::deposit` (a real, signed substrate
+write) as its persistence step: pheromone deposits are domain-modeled as threat
+indicators, not response receipts, so this is a harness convention exercising the
+real substrate, not a claim that a literal production receipt-persistence path
+exists today.

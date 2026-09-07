@@ -935,6 +935,15 @@ fn seed_from_env() -> u64 {
 /// coverage so a green result is never vacuous.
 const PR_CORPUS_SEED_COUNT: u64 = 64;
 
+/// The nightly deep corpus (DST-04) drives seeds `0..NIGHTLY_CORPUS_SEED_COUNT`
+/// -- the SAME per-seed episode and three oracles the PR corpus runs, at a
+/// scale (>= 5,000) too slow for the PR lane but wide enough to surface a rare
+/// seed the 64-seed lane would miss. Its test is `#[ignore]`d so `cargo test`
+/// skips it in the PR lane; `.github/workflows/dst-nightly.yml` runs it with
+/// `-- --ignored`. Fixed, not env-tunable, so the ">= 5,000 nightly" guarantee
+/// is unconditional.
+const NIGHTLY_CORPUS_SEED_COUNT: u64 = 5_000;
+
 /// Which correctness property a violation came from. Named in the corpus
 /// failure text so a human sees WHICH property broke, not merely that one did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1711,6 +1720,53 @@ fn dst_sixtyfour_seed_corpus_upholds_all_three_oracles_on_the_real_engine() {
         failures.is_empty(),
         "oracle violations across the {PR_CORPUS_SEED_COUNT}-seed corpus (each reproducible in \
          isolation via its SWARM_DST_SEED):\n{}",
+        failures.join("\n")
+    );
+}
+
+/// DST-04 (nightly half): the deterministic deep corpus. The SAME three oracles
+/// and per-seed episode as `dst_sixtyfour_seed_corpus_upholds_all_three_oracles_on_the_real_engine`,
+/// over `NIGHTLY_CORPUS_SEED_COUNT` (>= 5,000) seeds -- a scale that would slow
+/// the PR lane but is exactly where a rare oracle-violating seed the 64-seed
+/// lane never reached would surface. `#[ignore]`d, so it never runs in the PR
+/// lane; `.github/workflows/dst-nightly.yml` runs it via `cargo test --
+/// --ignored`. On any violation it names the exact seed so the one failing
+/// episode replays in isolation via `SWARM_DST_SEED=<n>`.
+#[test]
+#[ignore = "nightly deep corpus (DST-04, >= 5000 seeds); runs in .github/workflows/dst-nightly.yml via `cargo test -- --ignored`, too slow for the PR lane"]
+fn dst_nightly_deep_corpus_upholds_all_three_oracles_across_at_least_five_thousand_seeds() {
+    let expected_verdict = harness_ground_truth_verdict();
+    assert_eq!(
+        expected_verdict,
+        PolicyVerdict::Allow,
+        "the fixed harness request must be a deterministic Allow so completing episodes dispatch; \
+         if this ever changes, Oracle 2's expected dispositions must be revisited"
+    );
+
+    let mut classes_seen: Vec<FaultClass> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for seed in 0..NIGHTLY_CORPUS_SEED_COUNT {
+        let observation = drive_episode_for_seed(seed);
+        if !classes_seen.contains(&observation.plan.class) {
+            classes_seen.push(observation.plan.class);
+        }
+        for violation in evaluate_oracles(&observation, expected_verdict) {
+            failures.push(format_corpus_violation(&observation, &violation));
+        }
+    }
+
+    assert_eq!(
+        classes_seen.len(),
+        ALL_FAULT_CLASSES.len(),
+        "the {NIGHTLY_CORPUS_SEED_COUNT}-seed nightly corpus must exercise all four fault classes \
+         so a green result is not vacuous; only saw {classes_seen:?}"
+    );
+
+    assert!(
+        failures.is_empty(),
+        "oracle violations across the {NIGHTLY_CORPUS_SEED_COUNT}-seed nightly corpus (each \
+         reproducible in isolation via its SWARM_DST_SEED):\n{}",
         failures.join("\n")
     );
 }
