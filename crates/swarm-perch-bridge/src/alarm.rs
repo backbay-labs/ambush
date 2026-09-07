@@ -36,7 +36,7 @@ use crate::holds::{HoldPlan, HoldPublisher};
 use crate::identity::IdentityTable;
 use crate::metrics::BridgeMetrics;
 use crate::pacer::{Frame, FramePublisher, PERCH_FRAME_MAX_BYTES};
-use crate::publish::AlarmAdmission;
+use crate::publish::{AlarmAdmission, OkOutcome};
 use crate::spool::{Spool, SpoolSet};
 use crate::stream::{Stream, threat_class_slug};
 
@@ -163,6 +163,25 @@ pub async fn run<P: FramePublisher>(drainer: AlarmDrainer<P>) -> Result<(), Brid
                                     .await
                                     {
                                         all_ok = false;
+                                        // The same healing the hold sequence performs, on the
+                                        // one path that provisions a case channel without one.
+                                        // `publish_step` renders the outcome into the message,
+                                        // so the refusal is recognised by that rendering.
+                                        if let BridgeError::RelayRejected { message } = &error
+                                            && let Some(channel) = step.channel()
+                                            && (message.as_str()
+                                                == OkOutcome::NotAChannelMember.reason()
+                                                || message.contains("channel not found"))
+                                        {
+                                            holds.routing_mut().forget_channel_created(channel)?;
+                                            tracing::warn!(
+                                                module = module_path!(),
+                                                step = step.label(),
+                                                "the relay no longer knows case channel \
+                                                 {channel}; its create is re-planned before the \
+                                                 next step"
+                                            );
+                                        }
                                         tracing::warn!(
                                             module = module_path!(),
                                             reason = %error,
@@ -350,6 +369,23 @@ async fn publish_hold_sequence<P: FramePublisher>(
         };
         if !outcome.is_success() {
             metrics.admission_rejection(outcome.reason());
+            // The relay's state disagrees with the ledger about whether this channel exists,
+            // and the relay is the ground truth. Forgetting the recorded acceptance is what
+            // makes the next tick re-plan the idempotent `9007` ahead of this step; without it
+            // the create is never offered again and every later hold queues behind this one
+            // (W3-38).
+            if let Some(case) = step.channel()
+                && channel_state_refusal(&outcome)
+            {
+                holds.routing_mut().forget_channel_created(case)?;
+                tracing::warn!(
+                    module = module_path!(),
+                    step = step.label(),
+                    reason = outcome.reason(),
+                    "the relay no longer knows case channel {case}; its create is re-planned \
+                     before the next step"
+                );
+            }
             tracing::warn!(
                 module = module_path!(),
                 step = step.label(),
@@ -363,6 +399,22 @@ async fn publish_hold_sequence<P: FramePublisher>(
         holds.on_ok(step, &event_id, now_ms)?;
     }
     Ok(true)
+}
+
+/// Whether a refusal says the relay does not have the channel the step named.
+///
+/// Two shapes mean it. `restricted: not a channel member` is the membership precondition every
+/// channel-scoped kind acquires, and a channel that does not exist has no members at all, so a
+/// relay whose database was restored answers a perfectly valid write with it. `channel not
+/// found` is the same fact, spelled by whichever handler checked existence first. Neither is a
+/// reason to retry the step as written: no number of ticks adds this bridge to a channel that is
+/// gone, and only a fresh `9007` does.
+fn channel_state_refusal(outcome: &OkOutcome) -> bool {
+    match outcome {
+        OkOutcome::NotAChannelMember => true,
+        OkOutcome::Rejected { message } => message.contains("channel not found"),
+        _ => false,
+    }
 }
 
 /// Signs one hold body into the relay event it is.
@@ -438,9 +490,21 @@ mod tests {
     use crate::publish::OkOutcome;
     use crate::spool::Record;
 
+    /// A per-frame answer: what the relay says to THIS frame, or `None` to fall through to the
+    /// publisher's blanket `answer`.
+    ///
+    /// A single fixed answer cannot express the state W3-38 is about, where the relay accepts
+    /// one kind and refuses another for the same channel, nor a transport failure that must not
+    /// count as a refusal. The reply is a `Result`, not an `OkOutcome`, for exactly that second
+    /// reason: `Err` is the socket failing, which the drainer must treat differently from `OK
+    /// false`.
+    type Reply = Arc<dyn Fn(&Frame) -> Option<Result<OkOutcome, BridgeError>> + Send + Sync>;
+
     struct Recording {
         frames: Vec<Frame>,
         answer: OkOutcome,
+        /// The relay's per-frame answer, when a test needs one.
+        reply: Option<Reply>,
         /// A handle the test keeps after the drainer is moved into a task.
         sink: Option<Arc<Mutex<Vec<Frame>>>>,
         /// The REAL burst window, so the drainer's alarm lane is exercised through the same
@@ -450,13 +514,18 @@ mod tests {
 
     impl FramePublisher for Recording {
         async fn publish(&mut self, frame: &Frame) -> Result<OkOutcome, BridgeError> {
+            // Recorded before the answer, refusals and transport failures included: what a test
+            // asserts on is the frames that LEFT, not the ones the relay liked.
             if let Some(sink) = &self.sink {
                 sink.lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push(frame.clone());
             }
             self.frames.push(frame.clone());
-            Ok(self.answer.clone())
+            match self.reply.as_ref().and_then(|reply| reply(frame)) {
+                Some(answer) => answer,
+                None => Ok(self.answer.clone()),
+            }
         }
 
         async fn submit_alarm(
@@ -531,6 +600,7 @@ mod tests {
             publisher: Recording {
                 frames: vec![],
                 answer,
+                reply: None,
                 sink: None,
                 burst: crate::publish::AlarmBurst::new(crate::publish::PERCH_ALARM_BURST_PER_MIN),
             },
@@ -972,6 +1042,101 @@ mod tests {
             .map(|frame| frame.signed.kind.as_u16())
             .collect();
         assert!(kinds.iter().all(|kind| *kind == 9007), "{kinds:?}");
+    }
+
+    #[tokio::test]
+    async fn a_not_a_channel_member_refusal_forgets_the_created_channel_and_the_next_tick_recreates_it()
+     {
+        // The relay's database was reset between the create and the membership write. The 9007
+        // was accepted and recorded, and the 9000 behind it finds a channel the relay no longer
+        // has. Believing the recorded acceptance would leave the create un-planned forever and
+        // every step after it refused; forgetting it makes the next tick offer the idempotent
+        // 9007 again, and the sequence completes with exactly one card.
+        let dir = tempfile::tempdir().unwrap();
+        let spools = Arc::new(Mutex::new(
+            SpoolSet::open(dir.path(), "c", 1 << 20, 8 << 20).unwrap(),
+        ));
+        let identities = identities();
+        let alarm_idx = identities.alarm();
+        let store = Arc::new(swarm_runtime::held_action::MemoryHeldActionStore::default());
+        let hold = held_fixture();
+        store.create(hold.clone()).unwrap();
+        spools
+            .lock()
+            .unwrap()
+            .append(
+                Stream::Alarm,
+                Record::from_event(
+                    &response_held(&hold, swarm_runtime::held_action::HoldState::Created),
+                    alarm_idx,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let (metrics, _registry) = BridgeMetrics::new();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut built = drainer(
+            &dir,
+            Arc::clone(&spools),
+            Arc::clone(&identities),
+            vec!["68".repeat(32)],
+            Some(Arc::clone(&store) as Arc<dyn swarm_runtime::held_action::HeldActionStore>),
+            OkOutcome::Accepted,
+            metrics,
+            shutdown_rx,
+        );
+        built.config.lane_channels.clear();
+        // The relay's own view of which channels exist. A 9007 creates one; the reset drops
+        // every one of them, once, just before the first membership write.
+        let known: Arc<Mutex<std::collections::HashSet<uuid::Uuid>>> =
+            Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let reset_once = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        built.publisher.reply = Some(Arc::new(move |frame: &Frame| {
+            let channel = frame.channel?;
+            let mut known = known.lock().unwrap_or_else(PoisonError::into_inner);
+            if frame.signed.kind.as_u16() == 9007 {
+                known.insert(channel);
+                return None;
+            }
+            if frame.signed.kind.as_u16() == 9000
+                && !reset_once.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                known.clear();
+            }
+            (!known.contains(&channel)).then_some(Ok(OkOutcome::NotAChannelMember))
+        }));
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        built.publisher.sink = Some(Arc::clone(&recorded));
+        let handle = tokio::spawn(run(built));
+        let sink = Arc::clone(&recorded);
+        let settled = wait_for(|| kind_count(&sink, 26006) == 1).await;
+        shutdown_tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+        assert!(
+            settled,
+            "the sequence never recovered from a channel the relay had lost"
+        );
+
+        let frames = recorded.lock().unwrap().clone();
+        assert_eq!(
+            hold_kinds(&frames, 0),
+            vec![9007, 9000, 9007, 9000, 9, 46010, 26006],
+            "the refused 9000 buys exactly one more create, then the sequence completes"
+        );
+        let routing = channels::CaseRouting::open(&dir.path().join("case-routing.json")).unwrap();
+        let case = routing
+            .case_for_hunt(&hold.action_request.hunt_id.0)
+            .expect("the hold routed its hunt to a case channel");
+        assert!(
+            routing.channel_is_created(case),
+            "the re-created channel is recorded again once the relay accepts it"
+        );
+        assert_eq!(
+            kind_count(&recorded, 9),
+            1,
+            "healing touches the channel ledger only: one card, ever"
+        );
     }
 
     #[tokio::test]

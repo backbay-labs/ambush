@@ -522,6 +522,34 @@ impl CaseRouting {
         self.persist()
     }
 
+    /// Forgets a `kind:9007` acceptance, because the relay has just contradicted it.
+    ///
+    /// # The one write that moves this ledger backwards, and why it is allowed to
+    ///
+    /// Every other write here records something that happened and is never taken back: an
+    /// accepted card id, a routed hunt. This one deletes an acceptance, and it does so because
+    /// the relay -- not this ledger -- is the ground truth for whether a channel exists. The
+    /// ledger records that the relay once said yes; a restore from backup, a migration, or a
+    /// wiped database can make that answer false, and the relay says so by refusing the next
+    /// write into the channel as `not a channel member` or `channel not found`. Believing the
+    /// stale acceptance over the fresh refusal is what leaves a case channel that no tick ever
+    /// re-creates, with every later hold queued behind it (W3-38).
+    ///
+    /// The re-created channel is the SAME id, because the routing entry is untouched: `9007`
+    /// carries a client-supplied UUID and is idempotent, so re-planning it costs one frame and
+    /// never mints a second case.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::SpoolIo`] when the sidecar write fails. Persists only when the id was
+    /// actually recorded, so a refusal on a channel this ledger never accepted costs no I/O.
+    pub fn forget_channel_created(&mut self, channel: Uuid) -> Result<(), BridgeError> {
+        if !self.state.created_channels.remove(&channel.to_string()) {
+            return Ok(());
+        }
+        self.persist()
+    }
+
     /// Whether the `26006` alarm for this hold has reached the relay.
     pub fn alarm_published_for_hold(&self, hold_id: &str) -> bool {
         self.state
@@ -903,6 +931,55 @@ mod tests {
                 .is_empty(),
             "once the relay accepted it, replanning must stop"
         );
+    }
+
+    /// The one write that moves the ledger backwards, and the state that forces it.
+    ///
+    /// The relay's database was restored from before this channel existed. The ledger still
+    /// records the acceptance, so `ensure_case_channel` plans no create and every write into
+    /// that channel is refused forever. Forgetting the acceptance is what makes the next tick
+    /// offer the idempotent `9007` again.
+    #[test]
+    fn forgetting_a_created_channel_replans_its_create_and_survives_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routing.json");
+        let mut routing = CaseRouting::open(&path).unwrap();
+        let case = Uuid::new_v4();
+        let trigger = CasePromotionTrigger::Promoted {
+            hunt_id: "hunt-forget".into(),
+            case_id: case,
+            clause: PromotionClause::Manual,
+        };
+        let ops = vec!["a".repeat(64)];
+        routing.ensure_case_channel(&trigger, &ops, 60).unwrap();
+        routing.record_channel_created(case).unwrap();
+        assert!(
+            routing
+                .ensure_case_channel(&trigger, &ops, 60)
+                .unwrap()
+                .1
+                .is_empty(),
+            "an accepted create is planned once"
+        );
+
+        routing.forget_channel_created(case).unwrap();
+
+        assert!(!routing.channel_is_created(case));
+        assert_eq!(
+            routing
+                .ensure_case_channel(&trigger, &ops, 60)
+                .unwrap()
+                .1
+                .len(),
+            2,
+            "a forgotten channel is planned again: the create, then its operator"
+        );
+        // Persisted, not merely dropped in memory: a restart must not believe an acceptance the
+        // relay has already contradicted.
+        let reopened = CaseRouting::open(&path).unwrap();
+        assert!(!reopened.channel_is_created(case));
+        // A channel the ledger never recorded is not an error to forget.
+        routing.forget_channel_created(Uuid::new_v4()).unwrap();
     }
 
     #[test]
