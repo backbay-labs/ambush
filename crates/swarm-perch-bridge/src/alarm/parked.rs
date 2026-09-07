@@ -286,6 +286,8 @@ mod payload_base64 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use base64::Engine as _;
+
     use super::*;
 
     fn parked(seq: Seq, parked_at_ms: i64) -> ParkedRecord {
@@ -341,6 +343,23 @@ mod tests {
         assert_eq!(reopened.len(), 1);
         let kept = reopened.next_due(40_000, 0).unwrap();
         assert_eq!((kept.seq, kept.retries, kept.parked_at_ms), (7, 1, 40_000));
+
+        // The document an operator reads: a version, the records, and each payload as one
+        // base64 string rather than an array of byte integers.
+        let written = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.contains(r#""version": 1"#), "{written}");
+        assert!(
+            written.contains(
+                &base64::engine::general_purpose::STANDARD
+                    .encode(r#"{"event_type":"response_held","seq":7}"#)
+            ),
+            "{written}"
+        );
+        assert!(
+            written.contains(r#""refusal_budget_exhausted""#)
+                && written.contains(r#""last": "not_a_channel_member""#),
+            "{written}"
+        );
 
         // Corrupt is refused, and left exactly as found: these payloads are the only copy of
         // holds the spool cursor has already moved past.
