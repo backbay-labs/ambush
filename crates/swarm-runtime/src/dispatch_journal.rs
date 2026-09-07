@@ -270,7 +270,7 @@ impl DispatchJournal {
 
     /// Sync the reservation before its permission can reach the executor.
     /// Existing reservations are refused regardless of their recorded outcome.
-    pub fn reserve(
+    pub(crate) fn reserve(
         &self,
         request: &ActionRequest,
         lease: &CapabilityLease,
@@ -314,7 +314,7 @@ impl DispatchJournal {
         Ok(dispatch_id)
     }
 
-    pub fn complete(
+    pub(crate) fn complete(
         &self,
         dispatch_id: &str,
         result: &Result<ResponseReceipt, ResponseError>,
