@@ -52,12 +52,15 @@ export function verdictWriteReducer(
         : state;
 
     case "leg1-failed":
-      // Nothing was written, so nothing needs an outcome. The operator is told
-      // the intent never landed rather than that the daemon refused.
-      return {
-        phase: "daemon-unreachable",
-        reason: `the intent card could not be published: ${event.reason}`,
-      };
+      // Only from sending, mirroring leg1-ok: a recorded decision is a signed
+      // event on the relay and a stray failure does not un-record it. Nothing
+      // was written, so the operator is told exactly that — never that the
+      // decision is recorded (found-14) and never that the daemon refused. The
+      // reason is carried RAW; the one honest sentence is the renderer's, not a
+      // second sentence pre-composed here.
+      return state.phase === "sending"
+        ? { phase: "failed_to_record", reason: event.reason }
+        : state;
 
     case "leg2-unreachable":
       return state.phase === "recorded"

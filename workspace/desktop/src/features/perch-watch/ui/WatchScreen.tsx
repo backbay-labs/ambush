@@ -1,10 +1,14 @@
 import * as React from "react";
 
 import { readPerchCounter } from "@/features/perch-evidence/lib/admittedIssuers";
-import { perchUnadmittedFrameCount } from "@/shared/api/perchEphemeralStore";
+import {
+  getPerchEphemeralServerSnapshot,
+  getPerchEphemeralSnapshot,
+  subscribePerchEphemeral,
+} from "@/shared/api/perchEphemeralStore";
 import { usePerchRelayFeed } from "@/shared/api/perchRelayFeed";
 
-import type { PerchHoldRow } from "../lib/holdRows";
+import { type PerchHoldRow, selectDaemonHold } from "../lib/holdRows";
 import { readReconcileDivergenceCounter } from "../lib/reconcileCounters";
 import {
   PERCH_QUEUE_ORDER,
@@ -72,11 +76,13 @@ export function WatchScreen({ currentPubkey, onOpenCase }: WatchScreenProps) {
   const undeliverable =
     openRows.length > 0 && openRows.every((row) => !row.noticed);
 
-  const selectedRow = rows.find((row) => rowKey(row) === selected);
-  const selectedHold =
-    selectedRow && selectedRow.kind !== "unreconciled"
-      ? selectedRow.hold
-      : null;
+  // Resolve the selection against the TERMINAL-INCLUSIVE daemon list, not the
+  // reconciled rows. A granted hold turns `executed` and leaves the open queue
+  // the instant it is decided, but the daemon still holds its record; resolving
+  // against the rows would lose the pane's subject and read "no record" for a
+  // hold the daemon plainly holds (found-10). Absence from this list is the
+  // only thing that is truly no record.
+  const selectedHold = selectDaemonHold(queue.daemonHolds, selected);
   const selectedCaseChannel = selectedHold?.case_channel ?? null;
 
   return (
@@ -171,10 +177,13 @@ export function WatchScreen({ currentPubkey, onOpenCase }: WatchScreenProps) {
 }
 
 /**
- * The three numbers the governance strip renders, as data attributes.
+ * The four numbers the governance strip renders, as data attributes.
  *
  * Rendered rather than logged: a divergence that only ever reached a console
- * log would be a divergence nobody sees.
+ * log would be a divergence nobody sees. The frame counters are read through
+ * the store's subscription rather than called: a frame arrives on a relay
+ * socket, not on a render, and a number that only moved when something else
+ * repainted the screen would be a number nobody sees either.
  */
 function PerchCounterStrip({
   openCount,
@@ -185,13 +194,19 @@ function PerchCounterStrip({
   storeDurable: boolean;
   queueDepthAlarm: boolean;
 }) {
+  const frames = React.useSyncExternalStore(
+    subscribePerchEphemeral,
+    getPerchEphemeralSnapshot,
+    getPerchEphemeralServerSnapshot,
+  );
   // The divergence total is read from the counter module, not added to the
   // current reconciliation's number: `useHoldQueue` already folded this
   // reconciliation in, and adding it again would double every divergence.
   const divergences = readReconcileDivergenceCounter();
+  // One number for two refusals of the same shape: a 26xxx frame and a durable
+  // card, each rejected because its signer is not an admitted bridge identity.
   const unadmitted =
-    perchUnadmittedFrameCount() +
-    readPerchCounter("perch_marker_unadmitted_total");
+    frames.unadmittedFrames + readPerchCounter("perch_marker_unadmitted_total");
   return (
     <div
       data-testid="perch-counter-strip"
@@ -209,6 +224,15 @@ function PerchCounterStrip({
         data-perch-counter-value={unadmitted}
       >
         unadmitted frames {unadmitted}
+      </span>
+      {/* Not folded into `unadmitted frames`: that number is an accusation
+          about a signer, and this one says only that the bridge sent bytes
+          this console could not read. */}
+      <span
+        data-perch-counter="perch_frame_undecodable_total"
+        data-perch-counter-value={frames.droppedFrames}
+      >
+        undecodable frames {frames.droppedFrames}
       </span>
       <span
         data-perch-counter="perch_queue_open_count"

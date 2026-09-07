@@ -5,6 +5,7 @@ import {
   getPerchEphemeralSnapshot,
   subscribePerchEphemeral,
 } from "@/shared/api/perchEphemeralStore";
+import { usePerchTelemetryConsumer } from "@/shared/api/perchTelemetryWanted";
 
 import { ConcentrationCurve } from "@/shared/viz/ConcentrationCurve";
 import { VizDefs } from "@/shared/viz/defs";
@@ -54,6 +55,8 @@ export function LaneScreen({
   threatClass,
   policy,
 }: LaneScreenProps): React.ReactElement {
+  // The header numbers are the 26001 frame, never the channel topic.
+  usePerchTelemetryConsumer();
   const snapshot = React.useSyncExternalStore(
     subscribePerchEphemeral,
     getPerchEphemeralSnapshot,

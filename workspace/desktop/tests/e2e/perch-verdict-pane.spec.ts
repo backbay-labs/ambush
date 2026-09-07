@@ -5,6 +5,8 @@ import {
   PERCH_HOLD_A,
   perchHold,
   installPerchWatchBridge,
+  readBlastRadius,
+  setPerchHolds,
   waitForPerchQueue,
 } from "../helpers/perchBridge";
 
@@ -197,4 +199,78 @@ test("an UNRECONCILED selection gets no Verdict Row at all", async ({
   await page.goto("/");
   await waitForPerchQueue(page);
   await expect(page.getByTestId("perch-verdict-pane")).toHaveCount(0);
+});
+
+test("a failed leg 1 renders one honest register and never the recorded copy", async ({
+  page,
+}) => {
+  // found-14: leg 1 never published, so the pane says exactly that. Not the
+  // recorded sentence, not "the daemon did not answer" — both would be false.
+  await installPerchWatchBridge(page, {
+    holds: [perchHold({ hold_id: PERCH_HOLD_A })],
+    legOneError: "relay refused the verdict card: rate limited",
+  });
+  await page.goto("/");
+  await waitForPerchQueue(page);
+  await page.getByTestId(`perch-queue-row-${PERCH_HOLD_A}`).click();
+  await expect(page.getByTestId("perch-verdict-pane")).toBeVisible();
+  await page.keyboard.press("r");
+
+  const row = page.locator('[data-perch-decision-state="failed_to_record"]');
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Nothing was recorded:");
+  await expect(row).toContainText(
+    "relay refused the verdict card: rate limited",
+  );
+  await expect(row).toContainText("The daemon was not asked.");
+  await expect(row).not.toContainText("recorded on the case");
+  await expect(row).not.toContainText("daemon did not answer");
+  // The one register is the only decision state rendered.
+  await expect(page.locator("[data-perch-decision-state]")).toHaveCount(1);
+});
+
+test("after a decision the pane keeps its hold and renders the receipt, not the no-record copy", async ({
+  page,
+}) => {
+  // found-10: a granted hold turns `executed` and leaves the open queue, but
+  // the daemon still holds its record. Resolved against that terminal-inclusive
+  // list, the pane keeps its subject and shows the outcome — never "no record".
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await installPerchWatchBridge(page, {
+    holds: [perchHold({ hold_id: PERCH_HOLD_A })],
+    decide: {
+      outcome: "dispatched",
+      receipt_id: "receipt-77c0aa10",
+      dispatched: true,
+    },
+    decideDelayMs: 1_200,
+  });
+  await page.goto("/");
+  await waitForPerchQueue(page);
+  await page.getByTestId(`perch-queue-row-${PERCH_HOLD_A}`).click();
+  await expect(page.getByTestId("perch-verdict-pane")).toBeVisible();
+
+  await readBlastRadius(page);
+  await page.keyboard.press("g");
+  await expect(page.getByTestId("perch-grant-armed")).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.locator('[data-perch-decision-state="recorded"]'),
+  ).toBeVisible();
+
+  // The hold leaves the open queue the instant it is decided.
+  await setPerchHolds(
+    page,
+    [perchHold({ hold_id: PERCH_HOLD_A, state: "executed" })],
+    { openCount: 0 },
+  );
+  await expect(
+    page.locator('[data-perch-decision-state="acknowledged"]'),
+  ).toBeVisible({ timeout: 10_000 });
+
+  await expect(page.getByTestId("perch-verdict-pane")).toBeVisible();
+  await expect(page.getByTestId("perch-write-state-receipt")).toContainText(
+    "receipt-77c0aa10",
+  );
+  await expect(page.getByTestId("perch-detail-unreconciled")).toHaveCount(0);
 });

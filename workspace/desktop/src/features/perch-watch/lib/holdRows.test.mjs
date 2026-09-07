@@ -13,6 +13,7 @@ import fixture from "../../../testing/perch/daemonHoldFixture.json" with {
 import {
   PERCH_QUEUE_DEPTH_ALARM,
   reconcileHoldQueue,
+  selectDaemonHold,
   UNRECONCILED_DURABLE_REASON,
   UNRECONCILED_NON_DURABLE_REASON,
 } from "./holdRows.ts";
@@ -332,4 +333,32 @@ test("rows sort oldest first and unreconciled rows sort last", () => {
     ),
     ["h_older000", "h_newer000", "h_unknown0"],
   );
+});
+
+test("a decided hold leaves the rows but still resolves from the daemon list (found-10)", () => {
+  // The instant a grant is recorded the hold turns `executed` and the queue
+  // stops asking a human about it — so it is not a row. But the daemon still
+  // holds the record, and the pane must resolve the selection against that
+  // terminal-inclusive list or it loses its subject and reads "no record".
+  const executed = hold("h_decided0", { state: "executed" });
+  const open = hold("h_open0000");
+  const out = reconcileHoldQueue({
+    daemon: daemon([executed, open]),
+    relayNotices: [],
+    admitted: new Set(),
+    nowMs: NOW,
+  });
+  assert.equal(
+    out.rows.some(
+      (row) => row.kind !== "unreconciled" && row.hold.hold_id === "h_decided0",
+    ),
+    false,
+    "a decided hold is not a queue row",
+  );
+
+  const holds = [executed, open];
+  assert.equal(selectDaemonHold(holds, "h_decided0")?.hold_id, "h_decided0");
+  assert.equal(selectDaemonHold(holds, "h_open0000")?.hold_id, "h_open0000");
+  assert.equal(selectDaemonHold(holds, "h_absent00"), null);
+  assert.equal(selectDaemonHold(holds, null), null);
 });

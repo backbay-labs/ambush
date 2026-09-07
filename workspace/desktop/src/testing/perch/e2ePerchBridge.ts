@@ -61,6 +61,57 @@ export const PERCH_UNADMITTED_ISSUER =
 /** The colony the mock daemon speaks for. */
 export const PERCH_COLONY_ID = "colony-e2e";
 
+// ===========================================================================
+// The ephemeral frames (26000-26006)
+// ===========================================================================
+
+/** What a spec says about the frame it wants on the wire. */
+export type PerchMockFrameInput = {
+  /** 26000-26006. Outside that block the console refuses it, which is testable. */
+  readonly kind: number;
+  /** The RAW SIGNER. INV-15 admits on this and on nothing else. */
+  readonly pubkey?: string;
+  /** The frame body, JSON-encoded into the event content. */
+  readonly body?: Record<string, unknown>;
+  /**
+   * Content verbatim, for the undecodable path. Wins over `body`: a frame whose
+   * content is not JSON is a real thing a bridge can send and the console has a
+   * counter for it, so a spec must be able to send one.
+   */
+  readonly content?: string;
+  readonly createdAt?: number;
+};
+
+/** One frame, normalised into what the mock socket needs to put on the wire. */
+export type PerchMockFrame = {
+  readonly kind: number;
+  readonly pubkey: string;
+  readonly content: string;
+  readonly createdAt: number | undefined;
+};
+
+/**
+ * Normalise a spec's frame request.
+ *
+ * The perch vocabulary lives here and the socket lives in `e2eBridge.ts`, which
+ * is what emits the result: an ephemeral frame carries NO `h` tag, so on the
+ * real relay it takes the global path (BUZZ handlers/event.rs:875-903) and
+ * reaches every subscribed member rather than a channel's membership. The mock
+ * mirrors that by emitting on its global subscription set.
+ *
+ * The default signer is the admitted bridge, because that is the frame the
+ * console is supposed to render; a spec exercising INV-15 passes
+ * `PERCH_UNADMITTED_ISSUER` and changes nothing else.
+ */
+export function perchMockFrame(input: PerchMockFrameInput): PerchMockFrame {
+  return {
+    kind: input.kind,
+    pubkey: input.pubkey ?? PERCH_ADMITTED_ISSUER,
+    content: input.content ?? JSON.stringify(input.body ?? {}),
+    createdAt: input.createdAt,
+  };
+}
+
 /**
  * The lane the specs render cards in. It is a real mock channel id
  * (`random`), because a lane the mock bridge cannot navigate to is a lane no

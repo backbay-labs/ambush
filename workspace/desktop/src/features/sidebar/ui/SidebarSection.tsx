@@ -31,6 +31,9 @@ import {
 } from "@/shared/ui/sidebar";
 import { ChannelActivityPopover } from "@/features/sidebar/ui/ChannelActivityPopover";
 import { useAppShell } from "@/app/AppShellContext";
+import { caseChannelRouteId } from "@/app/perchViews";
+import { useFeatureEnabled } from "@/shared/features";
+import { useNavigate } from "@tanstack/react-router";
 
 const SECTION_LABEL_BUTTON_CLASS =
   "group/section-label flex w-fit max-w-[calc(100%-3rem)] cursor-pointer appearance-none items-center gap-1 text-left transition-colors hover:text-sidebar-foreground focus-visible:text-sidebar-foreground";
@@ -263,6 +266,12 @@ export function ChannelMenuButton({
 }) {
   const resolvedLabel = label ?? channel.name;
   const ephemeralDisplay = getEphemeralChannelDisplay(channel);
+  const navigate = useNavigate();
+  // A `case-*` channel is a case, and W3-5 makes `/cases/$caseId` its only
+  // surface — so the sidebar takes it there rather than to the ordinary channel
+  // view (found-8). Gated on the perch feature: with it off nothing changes.
+  const perchEnabled = useFeatureEnabled("perch");
+  const caseRouteId = caseChannelRouteId(channel, perchEnabled);
   const {
     hasSidebarUnreadProjections,
     topLevelUnreadChannelIds,
@@ -309,7 +318,16 @@ export function ChannelMenuButton({
       data-channel-id={channel.id}
       data-testid={`channel-${channel.name}`}
       isActive={isActive}
-      onClick={() => onSelectChannel(channel.id)}
+      onClick={() => {
+        if (caseRouteId !== null) {
+          void navigate({
+            to: "/cases/$caseId",
+            params: { caseId: caseRouteId },
+          });
+          return;
+        }
+        onSelectChannel(channel.id);
+      }}
       tooltip={resolvedLabel}
       type="button"
     >

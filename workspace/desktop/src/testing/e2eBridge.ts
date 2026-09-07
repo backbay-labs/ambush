@@ -28,6 +28,8 @@ import { getMarkdownParseCount } from "@/shared/ui/markdown/nodeCache";
 import {
   handlePerchMockCommand,
   isPerchMockCommand,
+  perchMockFrame,
+  type PerchMockFrameInput,
 } from "@/testing/perch/e2ePerchBridge";
 import { syncAgentTurnsFromEvents } from "@/features/agents/activeAgentTurnsStore";
 import { recordTimeoutFromRejection } from "@/features/moderation/lib/timeoutStore";
@@ -1435,6 +1437,8 @@ declare global {
       createdAt: number;
       slotId: string;
     }) => unknown;
+    /** Put one 26000-26006 ephemeral frame on the wire. See `perchMockFrame`. */
+    __AMBUSH_E2E_EMIT_MOCK_FRAME__?: (input: PerchMockFrameInput) => RelayEvent;
     __AMBUSH_E2E_SEED_MOCK_REMINDERS__?: (reminders: RelayEvent[]) => void;
     __AMBUSH_E2E_QUERY_CLIENT__?: {
       invalidateQueries: (filters: {
@@ -11434,6 +11438,22 @@ export function maybeInstallE2eTauriMocks() {
       ],
       getMockMemberPubkey(config),
       createdAt,
+    );
+    emitMockLiveEvent(GLOBAL_MOCK_SUBSCRIPTION, event);
+    return event;
+  };
+  window.__AMBUSH_E2E_EMIT_MOCK_FRAME__ = (input) => {
+    const frame = perchMockFrame(input);
+    // No `h` tag and the global subscription set, because that is the only
+    // shape a 26xxx has on the real relay: an ephemeral WITH an h tag takes the
+    // channel-scoped branch and a membership check, and the console's telemetry
+    // REQ carries no `#h` to match it.
+    const event = createMockEvent(
+      frame.kind,
+      frame.content,
+      [],
+      frame.pubkey,
+      frame.createdAt,
     );
     emitMockLiveEvent(GLOBAL_MOCK_SUBSCRIPTION, event);
     return event;

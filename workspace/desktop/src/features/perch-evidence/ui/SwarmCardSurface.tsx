@@ -2,7 +2,7 @@ import * as React from "react";
 import { type AnyRouter, useRouter } from "@tanstack/react-router";
 
 import { derivePerchShellRoute } from "@/app/perchViews";
-import { usePerchSubscriptionsMount } from "@/shared/api/perchLaneMovement";
+import { usePerchSubscriptionsMount } from "@/shared/api/perchSubscriptionManager";
 import { useFeatureEnabled } from "@/shared/features/useFeatureEnabled";
 
 /**

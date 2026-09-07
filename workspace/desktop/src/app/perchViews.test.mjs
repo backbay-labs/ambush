@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { derivePerchShellRoute } from "./perchViews.ts";
+import { caseChannelRouteId, derivePerchShellRoute } from "./perchViews.ts";
 
 const full = (over) => ({
   selectedView: "other",
@@ -84,4 +84,32 @@ test("a prefix is not a match: /policyholders is not /policy", () => {
   assert.equal(derivePerchShellRoute("/policyholders").selectedView, "other");
   assert.equal(derivePerchShellRoute("/watch-floors").selectedView, "other");
   assert.equal(derivePerchShellRoute("/policy/rules").selectedView, "policy");
+});
+
+test("a case channel opens as a case only while the perch feature is on (found-8)", () => {
+  // W3-5: `/cases/$caseId` is the only case surface, and the route param is the
+  // channel's own id. The sidebar takes a `case-*` channel there instead of the
+  // ordinary channel view — but only when the operator has the feature on.
+  const caseChannel = {
+    id: "9499a6e2-8872-453b-80d9-dafc6fc7fc69",
+    name: "case-9499a6e2",
+  };
+  const ordinary = {
+    id: "8db2b1e0-0000-0000-0000-000000000000",
+    name: "random",
+  };
+
+  assert.equal(
+    caseChannelRouteId(caseChannel, true),
+    "9499a6e2-8872-453b-80d9-dafc6fc7fc69",
+    "the case id is the channel id, so /cases/$caseId resolves the channel",
+  );
+  assert.equal(
+    caseChannelRouteId(ordinary, true),
+    null,
+    "an ordinary channel is never a case",
+  );
+  // Feature off: nothing changes, even for a case-named channel.
+  assert.equal(caseChannelRouteId(caseChannel, false), null);
+  assert.equal(caseChannelRouteId(ordinary, false), null);
 });
