@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use swarm_whisker::TelemetryEvent;
 
+pub mod budget;
 mod genome;
 mod graph;
 mod operators;
