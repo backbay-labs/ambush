@@ -32,7 +32,6 @@ use super::graph::{ScenarioRef, TargetGraph};
 use super::operators::{RedOperator, builtin_operators};
 use super::rng::RedGenomeRng;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use swarm_core::pheromone::ThreatClass;
 
 /// The scheduler that assembles operator proposals into a plan. The string is a
@@ -299,13 +298,13 @@ impl RedGenome {
         let mut jitter = root.fork(SCHEDULE_STREAM_LABEL);
 
         let max_steps = usize::from(campaign.max_steps);
-        let mut interleaved = round_robin(&proposals, max_steps);
+        let mut steps = round_robin(&proposals, max_steps);
 
         // Validate against the graph (OPFOR-04). Reject fails the whole plan;
-        // Skip filters, keeping the surviving steps contiguous.
+        // Skip drops the offending step, keeping the survivors contiguous.
         match validation {
             Validation::Reject => {
-                for (_global, step) in &interleaved {
+                for step in &steps {
                     if !graph.is_technique(&step.technique) {
                         return Err(RedSwarmError::UnknownTechnique {
                             technique: step.technique.clone(),
@@ -314,23 +313,17 @@ impl RedGenome {
                 }
             }
             Validation::Skip => {
-                interleaved.retain(|(_global, step)| graph.is_technique(&step.technique));
+                steps.retain(|step| graph.is_technique(&step.technique));
             }
         }
 
-        // Map global (proposal-order) indices to final indices, then finalise.
-        let mut global_to_final: HashMap<usize, usize> = HashMap::with_capacity(interleaved.len());
-        for (final_index, (global_index, _)) in interleaved.iter().enumerate() {
-            global_to_final.insert(*global_index, final_index);
-        }
-
-        let mut steps = Vec::with_capacity(interleaved.len());
-        for (final_index, (_global_index, mut step)) in interleaved.into_iter().enumerate() {
-            step.intent = remap_intent(step.intent, &global_to_final, final_index);
+        // Resolve Chain/Cover references against FINAL order so none points
+        // forward, then assign the monotone jittered schedule (own stream).
+        resolve_back_references(&mut steps, &so_far);
+        for (index, step) in steps.iter_mut().enumerate() {
             let jit = i64::try_from(jitter.next_below(JITTER_BOUND)).unwrap_or(0);
-            let ordinal = i64::try_from(final_index).unwrap_or(0);
+            let ordinal = i64::try_from(index).unwrap_or(0);
             step.offset_ms = ordinal * STEP_SPACING_MS + jit;
-            steps.push(step);
         }
 
         Ok(RedPlan {
@@ -369,55 +362,87 @@ impl RedGenome {
 }
 
 /// Round-robin interleave: take proposal `0` from each operator list in call
-/// order, then proposal `1`, and so on, stopping at `max_steps`. Each kept step
-/// is tagged with its global (proposal-order) index for later remapping.
-fn round_robin(proposals: &[Vec<GeneStep>], max_steps: usize) -> Vec<(usize, GeneStep)> {
-    let mut list_offsets = Vec::with_capacity(proposals.len());
-    let mut acc = 0usize;
-    for list in proposals {
-        list_offsets.push(acc);
-        acc += list.len();
-    }
-
+/// order, then proposal `1`, and so on, stopping at `max_steps`. The result is
+/// the plan's final step order; references are resolved against it afterwards.
+fn round_robin(proposals: &[Vec<GeneStep>], max_steps: usize) -> Vec<GeneStep> {
     let depth = proposals.iter().map(Vec::len).max().unwrap_or(0);
-    let mut out: Vec<(usize, GeneStep)> = Vec::new();
+    let mut out: Vec<GeneStep> = Vec::new();
     for round in 0..depth {
-        for (list_index, list) in proposals.iter().enumerate() {
+        for list in proposals {
             if out.len() >= max_steps {
                 return out;
             }
             if let Some(step) = list.get(round) {
-                let global_index = list_offsets[list_index] + round;
-                out.push((global_index, step.clone()));
+                out.push(step.clone());
             }
         }
     }
     out
 }
 
-/// Rewrite a `Chain`/`Cover` reference from a global (proposal-order) index to
-/// the referenced step's final-plan index. A reference whose target was
-/// truncated away (never happens under the default bounds) falls back to the
-/// immediate predecessor, which is always a valid earlier index.
-fn remap_intent(
-    intent: StepIntent,
-    global_to_final: &HashMap<usize, usize>,
-    current_final_index: usize,
-) -> StepIntent {
-    let resolve = |global: usize| -> usize {
-        global_to_final
-            .get(&global)
-            .copied()
-            .unwrap_or_else(|| current_final_index.saturating_sub(1))
-    };
-    match intent {
-        StepIntent::Chain { from } => StepIntent::Chain {
-            from: resolve(from),
-        },
-        StepIntent::Cover { step } => StepIntent::Cover {
-            step: resolve(step),
-        },
-        other => other,
+/// Resolve every `Chain{from}`/`Cover{step}` reference to point STRICTLY BACKWARD
+/// in final order, so a Chain step names an earlier predecessor and a Cover step
+/// an earlier noisy step -- never the referrer's own future.
+///
+/// An operator records its referent in PROPOSAL order (an index into the plan so
+/// far it was handed). Round-robin interleaving can move that referent AFTER the
+/// referring step in final order, which would make the reference point forward
+/// (this happened at the documented smoke seed before this pass existed). So the
+/// reference is resolved here, against final order: each referring step is
+/// re-anchored to the nearest EARLIER final step of the correct kind -- for a
+/// Chain step, a non-cover step in the kill-chain predecessor's class (read from
+/// the referent the operator picked, so the planner needs no kill-chain table of
+/// its own); for a Cover step, a preceding noisy (exploitation) step. If no such
+/// referent exists -- which the default bounds never reach, since a Chain step is never
+/// earlier than the fourth final slot and a Cover step never earlier than the
+/// sixth -- the annotation drops to a plain intent rather than ship forward.
+fn resolve_back_references(steps: &mut [GeneStep], so_far: &[GeneStep]) {
+    // Snapshot each step's class, whether it is a noisy step, and whether it is
+    // a benign cover step, from the pre-resolution intents, so the resolution
+    // never depends on its own order.
+    let classes: Vec<ThreatClass> = steps.iter().map(|s| s.threat_class.clone()).collect();
+    let noisy: Vec<bool> = steps
+        .iter()
+        .map(|s| matches!(s.intent, StepIntent::Exploit))
+        .collect();
+    let is_cover: Vec<bool> = steps
+        .iter()
+        .map(|s| matches!(s.intent, StepIntent::Cover { .. }))
+        .collect();
+
+    for (index, step) in steps.iter_mut().enumerate() {
+        let resolved = match &step.intent {
+            StepIntent::Chain { from } => {
+                // The class of the predecessor the operator chose is the
+                // kill-chain predecessor of this step's class; re-anchor to the
+                // nearest earlier NON-cover step of that class. Cover steps are
+                // benign filler, and the operator never chains from one (Opsec
+                // runs after Chain), so excluding them keeps the chain honest.
+                let predecessor_class = so_far.get(*from).map(|s| s.threat_class.clone());
+                match predecessor_class.and_then(|class| {
+                    (0..index)
+                        .rev()
+                        .find(|&j| !is_cover[j] && classes[j] == class)
+                }) {
+                    Some(j) => StepIntent::Chain { from: j },
+                    None => StepIntent::Exploit,
+                }
+            }
+            StepIntent::Cover { .. } => match (0..index).rev().find(|&j| noisy[j]) {
+                Some(j) => StepIntent::Cover { step: j },
+                None => StepIntent::Probe,
+            },
+            other => other.clone(),
+        };
+        // A shipped Chain/Cover reference must point strictly backward. This
+        // holds by construction (the search range is `0..index`); the debug
+        // assertion is a regression tripwire, compiled out of the release daemon.
+        match &resolved {
+            StepIntent::Chain { from } => debug_assert!(*from < index),
+            StepIntent::Cover { step } => debug_assert!(*step < index),
+            _ => {}
+        }
+        step.intent = resolved;
     }
 }
 
@@ -665,5 +690,34 @@ mod tests {
         // The first offset is below one full step of spacing, so it is a virtual
         // schedule value (index 0 * spacing + jitter), not a wall-clock stamp.
         assert!(plan.steps[0].offset_ms < STEP_SPACING_MS);
+    }
+
+    /// Every `Chain{from}` and `Cover{step}` reference names a strictly EARLIER
+    /// step in final order: a Chain step chains from a predecessor, a Cover step
+    /// covers a preceding noisy step. Round-robin ordering must never leave a
+    /// reference pointing at the referrer's own future (seed 7 was a
+    /// counterexample before references were resolved against final order).
+    #[test]
+    fn every_chain_and_cover_reference_points_strictly_backward() {
+        let graph = repo_graph();
+        let campaign = campaign(CampaignParams::DEFAULT_MAX_STEPS);
+        for seed in 0..20u64 {
+            for generation in 0..2u32 {
+                let plan = RedGenome::plan(seed, generation, &campaign, &graph);
+                for (index, step) in plan.steps.iter().enumerate() {
+                    match &step.intent {
+                        StepIntent::Chain { from } => assert!(
+                            *from < index,
+                            "seed {seed} gen {generation}: step {index} chains from {from}, not strictly earlier"
+                        ),
+                        StepIntent::Cover { step: covered } => assert!(
+                            *covered < index,
+                            "seed {seed} gen {generation}: step {index} covers {covered}, not strictly earlier"
+                        ),
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 }
