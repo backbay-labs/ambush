@@ -453,4 +453,92 @@ mod tests {
         assert_eq!(outcome.events_emitted, 0);
         assert_eq!(outcome.stealth, 1.0);
     }
+
+    #[test]
+    fn a_plan_admits_every_step_when_its_total_events_equal_the_cap_exactly() {
+        let steps = distinct_steps(4, 2); // 8 proposed events total
+        let budget = StealthBudget {
+            max_events_per_generation: 8,
+            max_distinct_hosts: 10,
+            max_technique_repeats: 10,
+        };
+
+        let outcome = budget.apply(steps);
+
+        assert!(!outcome.truncated);
+        assert_eq!(outcome.steps.len(), 4);
+        assert_eq!(outcome.events_emitted, 8);
+        assert_eq!(outcome.stealth, 1.0);
+    }
+
+    #[test]
+    fn a_plan_truncates_at_the_step_that_would_cross_the_event_cap() {
+        // Same plan as the exact-boundary test above, but the cap is one
+        // event short of the plan's total: the running sum after each step
+        // is 2, 4, 6, 8, so the fourth step is the first to cross a cap of
+        // 7, and it alone -- not a partial step -- is dropped.
+        let steps = distinct_steps(4, 2); // 8 proposed events total
+        let budget = StealthBudget {
+            max_events_per_generation: 7,
+            max_distinct_hosts: 10,
+            max_technique_repeats: 10,
+        };
+
+        let outcome = budget.apply(steps);
+
+        assert!(outcome.truncated);
+        assert_eq!(outcome.steps.len(), 3);
+        assert_eq!(outcome.events_emitted, 6);
+    }
+
+    #[test]
+    fn a_budget_admits_nothing_when_max_distinct_hosts_is_zero() {
+        let steps = distinct_steps(3, 1);
+        let budget = StealthBudget {
+            max_events_per_generation: 100,
+            max_distinct_hosts: 0,
+            max_technique_repeats: 100,
+        };
+
+        // Must not panic: with no hosts available, the first candidate step
+        // breaches the host cap and the loop breaks before it ever reaches
+        // the `host_slots.len() as u8` cast.
+        let outcome = budget.apply(steps);
+
+        assert!(outcome.truncated);
+        assert!(outcome.steps.is_empty());
+        assert_eq!(outcome.events_emitted, 0);
+    }
+
+    #[test]
+    fn a_budget_admits_nothing_when_max_technique_repeats_is_zero() {
+        let steps = distinct_steps(3, 1);
+        let budget = StealthBudget {
+            max_events_per_generation: 100,
+            max_distinct_hosts: 100,
+            max_technique_repeats: 0,
+        };
+
+        let outcome = budget.apply(steps);
+
+        assert!(outcome.truncated);
+        assert!(outcome.steps.is_empty());
+        assert_eq!(outcome.events_emitted, 0);
+    }
+
+    #[test]
+    fn a_budget_admits_nothing_when_max_events_per_generation_is_zero() {
+        let steps = distinct_steps(3, 1);
+        let budget = StealthBudget {
+            max_events_per_generation: 0,
+            max_distinct_hosts: 100,
+            max_technique_repeats: 100,
+        };
+
+        let outcome = budget.apply(steps);
+
+        assert!(outcome.truncated);
+        assert!(outcome.steps.is_empty());
+        assert_eq!(outcome.events_emitted, 0);
+    }
 }
