@@ -42,19 +42,52 @@
 //! # Granularity: distinct technique, not distinct step
 //!
 //! A technique may be emitted by more than one admitted step (a repeat
-//! [`super::budget::StealthBudget`] allows). This module attributes catches
-//! at the DISTINCT-TECHNIQUE granularity, not once per step: a `(technique,
-//! detector)` pair is `detected` if *any* step naming that technique drew a
-//! finding from that detector on *any* of its events. One
+//! [`super::budget::StealthBudget`] allows, or a
+//! [`super::genome::StepIntent::Cover`] step -- see "Cover steps are
+//! excluded from attribution" below). This module attributes catches at the
+//! DISTINCT-TECHNIQUE granularity, not once per step: a `(technique,
+//! detector)` pair is `detected` if *any* (non-Cover) step naming that
+//! technique drew a finding from that detector on *any* of its events. One
 //! [`AttackPatternRecord`] is produced per distinct `(technique, detector)`
 //! pair evaluated -- never one per `(step, detector)` -- which is also
 //! exactly what the assembled [`EvasionCoverageSnapshot`] needs, since
 //! [`AttackScorer::score`]'s per-technique catch rate is already a max over
 //! every scenario naming a technique, so a step-level and a technique-level
-//! assembly agree there regardless. This module does not special-case
-//! [`super::genome::StepIntent::Cover`] steps: [`AttackScorer::score`] reads
-//! every `plan.steps` entry's `technique` uniformly (Cover included), so
-//! `run_generation` measures the same uniform step surface it scores.
+//! assembly agree there regardless.
+//!
+//! # Cover steps are excluded from attribution
+//!
+//! [`super::operators::OpsecOperator`] deliberately builds a `Cover` step
+//! that keeps its *covered* exploit step's `technique` string (so the plan
+//! still resolves against the graph -- OPFOR-04) but replays a **benign**
+//! control scenario's events, unrelated to that technique's actual attack
+//! realization. If a Cover step's benign events were allowed to feed the
+//! same `hits` entry as the technique's real attack step, a detector that
+//! merely fires on the cover material -- a false positive, or a heuristic
+//! that matches generically on borderline-benign activity -- would flip that
+//! technique from evaded to detected without blue ever having caught the
+//! attack itself; because the merge is OR-only, this can only ever inflate
+//! the catch signal, never deflate it. [`attribute_catches`] therefore skips
+//! every [`super::genome::StepIntent::Cover`] step entirely: its events are
+//! never fed to a detector for attribution purposes (though they are still
+//! part of the materialized corpus [`GenomeRedSwarm::materialize_by_step`]
+//! returns -- blue still runs its detectors over them, this module simply
+//! does not let the result count toward the technique's catch bit). A
+//! technique is never lost by this exclusion: `genome.rs`'s private
+//! `resolve_back_references` anchors every `Cover{step}` reference to an
+//! earlier, already-final step, so a Cover step survives
+//! [`super::budget::StealthBudget`]'s contiguous-prefix truncation only if
+//! the step it covers -- appearing earlier in final order -- survived too;
+//! the covered step alone already supplies the technique to
+//! `emitted_techniques`/`hits`.
+//!
+//! This exclusion is scoped to *attribution* only. [`AttackScorer::score`]
+//! itself is untouched and keeps reading every `emitted_plan.steps` entry's
+//! `technique` uniformly, Cover included -- `emitted_plan` (fed to the
+//! scorer) is built from `outcome.steps` unfiltered, exactly as before this
+//! fix. Only the separate `hits`/`emitted_techniques` bookkeeping this
+//! module derives for `blue_catch_rate`, `evaded_techniques`, and `records`
+//! now skips Cover steps.
 //!
 //! # Catch criterion
 //!
@@ -110,7 +143,7 @@
 use super::RedSwarmError;
 use super::ThreatContext;
 use super::budget::StealthBudget;
-use super::genome::{CampaignParams, GeneStep, RedGenome, RedPlan};
+use super::genome::{CampaignParams, GeneStep, RedGenome, RedPlan, StepIntent};
 use super::genome_adapter::GenomeRedSwarm;
 use super::graph::TargetGraph;
 use super::pattern_db::AttackPatternRecord;
@@ -125,7 +158,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use swarm_core::config::DetectionConfig;
 use swarm_core::pheromone::ThreatClass;
-use swarm_whisker::DetectionStrategy;
+use swarm_whisker::{DetectionStrategy, TelemetryEvent};
 
 /// The measured result of running exactly one generation's red/blue round
 /// (see the module doc for the full pipeline).
@@ -218,76 +251,30 @@ pub fn run_generation(
     }
     let grouped = genome.materialize_by_step(&measurement_context(generation))?;
 
-    // 3. Build every enabled detector for real.
+    // 3. Build every enabled detector for real. NOTE: if `detection.strategies`
+    //    ever names the same strategy id twice, the two `RuntimeDetector`
+    //    instances share one `id()` and therefore one `hits` key below --
+    //    the second silently collapses into the first rather than doubling
+    //    up. No caller in this crate constructs a `DetectionConfig` that
+    //    way today.
     let detectors: Vec<RuntimeDetector> = detection
         .strategies
         .iter()
         .map(|strategy_id| build_detector_from_strategy(strategy_id, detection))
         .collect::<Result<_, _>>()?;
 
-    // 4. Run every enabled detector over every emitted step's events, on the
-    //    same detector instance across steps. A `(technique, detector)` pair
-    //    is `detected` if any event from any step naming that technique drew
-    //    a finding from that detector (see the module doc's "Catch
-    //    criterion" and "Granularity" sections). Every event is handed to
-    //    `evaluate` unconditionally -- `fold`, never a short-circuiting
-    //    `any` -- so a stateful detector (e.g. `behavioral_anomaly`, which
-    //    updates an internal baseline on every call) observes the whole
-    //    step's events even after an earlier one already produced a finding,
-    //    matching `evaluate_evasion_coverage`'s own unconditional per-event
-    //    walk rather than starving the detector's state of events later
-    //    steps' catches could depend on.
-    let mut hits: BTreeMap<(String, String), bool> = BTreeMap::new();
-    let mut emitted_techniques: BTreeSet<String> = BTreeSet::new();
-    for (technique, events) in &grouped {
-        emitted_techniques.insert(technique.clone());
-        for detector in &detectors {
-            // `fold`, deliberately not the `any` clippy suggests: `any`
-            // short-circuits on the first hit, which would skip feeding a
-            // caught step's later events to a stateful detector like
-            // `behavioral_anomaly` (see the comment above).
-            #[allow(clippy::unnecessary_fold)]
-            let caught = events.iter().fold(false, |any_hit, event| {
-                any_hit || !detector.evaluate(event).is_empty()
-            });
-            let entry = hits
-                .entry((technique.clone(), detector.id().to_string()))
-                .or_insert(false);
-            *entry = *entry || caught;
-        }
-    }
+    // 4. Attribute catches to distinct techniques, excluding Cover steps
+    //    (see the module doc's "Cover steps are excluded from attribution"
+    //    section).
+    let (hits, emitted_techniques) = attribute_catches(&emitted_plan.steps, &grouped, &detectors);
 
-    // 5. Blue catch rate and the evaded set, over distinct emitted
-    //    techniques (see the module doc's "Empty-corpus convention").
-    let caught_techniques: BTreeSet<String> = hits
-        .iter()
-        .filter(|(_, detected)| **detected)
-        .map(|((technique, _), _)| technique.clone())
-        .collect();
-    let blue_catch_rate = if emitted_techniques.is_empty() {
-        0.0
-    } else {
-        caught_techniques.len() as f64 / emitted_techniques.len() as f64
-    };
-    let evaded_techniques: Vec<String> = emitted_techniques
-        .difference(&caught_techniques)
-        .cloned()
-        .collect();
+    // 5. Blue catch rate, the evaded set, and one `AttackPatternRecord` per
+    //    distinct `(technique, detector)` pair (see the module doc's
+    //    "Empty-corpus convention" and "Granularity" sections).
+    let (blue_catch_rate, evaded_techniques, records) =
+        summarize_catches(generation, &hits, &emitted_techniques);
 
-    // 6. One `AttackPatternRecord` per distinct `(technique, detector)` pair
-    //    evaluated. `hits` iterates in key order, so this is already sorted
-    //    and needs no further ordering pass to stay deterministic.
-    let records: Vec<AttackPatternRecord> = hits
-        .iter()
-        .map(|((technique, detector), detected)| AttackPatternRecord {
-            generation,
-            technique: technique.clone(),
-            detector: detector.clone(),
-            detected: *detected,
-        })
-        .collect();
-
-    // 7. Assemble a minimal `EvasionCoverageSnapshot` from the same live
+    // 6. Assemble a minimal `EvasionCoverageSnapshot` from the same live
     //    catches and score with 289's scorer, verbatim.
     let snapshot = build_snapshot(
         generation,
@@ -326,6 +313,101 @@ fn measurement_context(generation: u32) -> ThreatContext {
     )
 }
 
+/// Attributes detector catches to distinct emitted techniques (see the
+/// module doc's "Granularity" section), skipping every
+/// [`StepIntent::Cover`] step (see "Cover steps are excluded from
+/// attribution").
+///
+/// `steps` and `grouped` MUST be the same plan's emitted steps, in the same
+/// order -- `run_generation` passes `&emitted_plan.steps` (from its own
+/// direct `plan_weighted` + `budget.apply` call) alongside `grouped` (from
+/// [`GenomeRedSwarm::materialize_by_step`]'s independent re-derivation of
+/// the identical plan and budget); see the module doc's "Why the plan is
+/// drawn twice" section for why the two are guaranteed to agree, index for
+/// index, on both length and technique.
+///
+/// Returns the `(technique, detector id)` -> detected map (deduplicated by
+/// construction, one entry per distinct pair evaluated) and the set of
+/// distinct non-Cover emitted techniques.
+fn attribute_catches(
+    steps: &[GeneStep],
+    grouped: &[(String, Vec<TelemetryEvent>)],
+    detectors: &[RuntimeDetector],
+) -> (BTreeMap<(String, String), bool>, BTreeSet<String>) {
+    let mut hits: BTreeMap<(String, String), bool> = BTreeMap::new();
+    let mut emitted_techniques: BTreeSet<String> = BTreeSet::new();
+    for (step, (technique, events)) in steps.iter().zip(grouped.iter()) {
+        if matches!(step.intent, StepIntent::Cover { .. }) {
+            continue;
+        }
+        emitted_techniques.insert(technique.clone());
+        for detector in detectors {
+            // `fold`, deliberately not the `any` clippy suggests: `any`
+            // short-circuits on the first hit, which would skip feeding a
+            // caught step's later events to a stateful detector (e.g.
+            // `behavioral_anomaly`, which updates an internal baseline on
+            // every call) -- matching `evaluate_evasion_coverage`'s own
+            // unconditional per-event walk rather than starving the
+            // detector's state of events later steps' catches could depend
+            // on.
+            #[allow(clippy::unnecessary_fold)]
+            let caught = events.iter().fold(false, |any_hit, event| {
+                any_hit || !detector.evaluate(event).is_empty()
+            });
+            let entry = hits
+                .entry((technique.clone(), detector.id().to_string()))
+                .or_insert(false);
+            *entry = *entry || caught;
+        }
+    }
+    (hits, emitted_techniques)
+}
+
+/// Derives `blue_catch_rate`, `evaded_techniques`, and `records` from
+/// [`attribute_catches`]'s output. Pure and total: an empty
+/// `emitted_techniques` (the module doc's "Empty-corpus convention") yields
+/// `blue_catch_rate: 0.0`, no records, and no evaded techniques.
+///
+/// Returns `(blue_catch_rate, evaded_techniques, records)`.
+fn summarize_catches(
+    generation: u32,
+    hits: &BTreeMap<(String, String), bool>,
+    emitted_techniques: &BTreeSet<String>,
+) -> (f64, Vec<String>, Vec<AttackPatternRecord>) {
+    let caught_techniques: BTreeSet<String> = hits
+        .iter()
+        .filter(|(_, detected)| **detected)
+        .map(|((technique, _), _)| technique.clone())
+        .collect();
+    let blue_catch_rate = if emitted_techniques.is_empty() {
+        0.0
+    } else {
+        caught_techniques.len() as f64 / emitted_techniques.len() as f64
+    };
+    // `BTreeSet::difference` iterates in sorted order, so `evaded_techniques`
+    // is already sorted -- no further ordering pass needed to stay
+    // deterministic.
+    let evaded_techniques: Vec<String> = emitted_techniques
+        .difference(&caught_techniques)
+        .cloned()
+        .collect();
+
+    // One `AttackPatternRecord` per distinct `(technique, detector)` pair
+    // evaluated. `hits` iterates in key order, so `records` is already
+    // sorted too.
+    let records: Vec<AttackPatternRecord> = hits
+        .iter()
+        .map(|((technique, detector), detected)| AttackPatternRecord {
+            generation,
+            technique: technique.clone(),
+            detector: detector.clone(),
+            detected: *detected,
+        })
+        .collect();
+
+    (blue_catch_rate, evaded_techniques, records)
+}
+
 /// The first-seen threat class per technique, read off the emitted steps
 /// themselves. Used only to fill [`EvasionScenarioCoverage::threat_class`]
 /// for readability -- [`AttackScorer::score`] never reads that field (only
@@ -359,7 +441,6 @@ fn threat_classes_by_technique(steps: &[GeneStep]) -> BTreeMap<String, ThreatCla
 /// values (`campaign.virtual_clock_start_ms`, a synthetic `suite_path`
 /// marker mirroring [`GenomeRedSwarm`]'s own `genome://` marker, and the
 /// graph's own fingerprint) for a reader's sake, never for the scorer's.
-#[allow(clippy::too_many_arguments)]
 fn build_snapshot(
     generation: u32,
     campaign: &CampaignParams,
@@ -422,8 +503,10 @@ fn build_snapshot(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::red_swarm::graph::TargetGraph;
+    use crate::red_swarm::OperatorRole;
+    use crate::red_swarm::graph::{ScenarioRef, TargetGraph};
     use std::path::PathBuf;
+    use swarm_whisker::{ProcessStartEvent, TelemetryPayload};
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -697,6 +780,107 @@ mod tests {
         assert!(!missing.records[0].detected);
         assert_eq!(missing.evaded_techniques, vec!["T1620".to_string()]);
         assert_eq!(missing.blue_catch_rate, 0.0);
+    }
+
+    /// A `GeneStep` naming `technique` with `intent`, carrying no real
+    /// scenario reference of its own -- `attribute_catches` and
+    /// `summarize_catches` read only `.technique` and `.intent` off a
+    /// `GeneStep`, so every other field is a fixed, otherwise-arbitrary
+    /// placeholder (mirrors `scoring.rs` and `budget.rs`'s own fixture
+    /// helpers, which make the identical simplification for the identical
+    /// reason).
+    fn step_with_intent(technique: &str, intent: StepIntent) -> GeneStep {
+        GeneStep {
+            operator: OperatorRole::Opsec,
+            technique: technique.to_string(),
+            threat_class: ThreatClass::Execution,
+            scenario: ScenarioRef {
+                suite: "test-suite".to_string(),
+                scenario: format!("{technique}_scenario"),
+                event_count: 1,
+            },
+            event_indices: vec![0],
+            host_slot: 0,
+            offset_ms: 0,
+            intent,
+        }
+    }
+
+    /// A `process_start` event naming `parent_process`/`process_name` --
+    /// `suspicious_process_tree`'s default profile catches any pairing where
+    /// the (lowercased) parent is in `["winword", "excel", "outlook",
+    /// "acrord32", "teams"]` and the (lowercased) child is in
+    /// `["powershell", "pwsh", "cmd", "sh", "bash", "curl", "wget"]`
+    /// (`swarm_whisker::detector::default_suspicious_parents`/
+    /// `default_suspicious_children`) -- used here to hand-build one event
+    /// that is guaranteed caught (`"winword"`/`"powershell"`) and one that
+    /// is guaranteed not (`"explorer"`/`"notepad"`), without depending on
+    /// the real corpus's content.
+    fn process_event(event_id: &str, parent_process: &str, process_name: &str) -> TelemetryEvent {
+        TelemetryEvent {
+            source: "test".to_string(),
+            event_id: event_id.to_string(),
+            timestamp: 0,
+            host_id: Some("host-test".to_string()),
+            payload: TelemetryPayload::ProcessStart(ProcessStartEvent {
+                parent_process: parent_process.to_string(),
+                process_name: process_name.to_string(),
+                command_line: format!("{process_name} --test"),
+                user: Some("alice".to_string()),
+                executable_path: None,
+                signer: None,
+                signature_valid: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_cover_steps_benign_events_do_not_falsely_catch_the_technique_it_covers() {
+        // The covered (non-Cover) step realises `T9001` with a benign-shaped
+        // event `suspicious_process_tree` does not match ("explorer" is not
+        // a suspicious parent). Its `Cover` step keeps the SAME technique
+        // (exactly as `OpsecOperator` builds one -- see the module doc's
+        // "Cover steps are excluded from attribution" section) but carries a
+        // benign-control event that WOULD trip the detector
+        // ("winword"/"powershell") if it were allowed to count.
+        let steps = vec![
+            step_with_intent("T9001", StepIntent::Probe),
+            step_with_intent("T9001", StepIntent::Cover { step: 0 }),
+        ];
+        let grouped = vec![
+            (
+                "T9001".to_string(),
+                vec![process_event("evt-covered", "explorer", "notepad")],
+            ),
+            (
+                "T9001".to_string(),
+                vec![process_event("evt-cover", "winword", "powershell")],
+            ),
+        ];
+        let detection = detection_config(&["suspicious_process_tree"]);
+        let detectors: Vec<RuntimeDetector> = detection
+            .strategies
+            .iter()
+            .map(|strategy_id| {
+                build_detector_from_strategy(strategy_id, &detection)
+                    .expect("detector should build")
+            })
+            .collect();
+
+        let (hits, emitted_techniques) = attribute_catches(&steps, &grouped, &detectors);
+        let (blue_catch_rate, evaded_techniques, records) =
+            summarize_catches(0, &hits, &emitted_techniques);
+
+        assert!(emitted_techniques.contains("T9001"));
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].technique, "T9001");
+        assert_eq!(records[0].detector, "suspicious_process_tree");
+        assert!(
+            !records[0].detected,
+            "the Cover step's benign-control event must not count toward T9001's catch"
+        );
+        assert_eq!(evaded_techniques, vec!["T9001".to_string()]);
+        assert_eq!(blue_catch_rate, 0.0);
     }
 
     #[test]

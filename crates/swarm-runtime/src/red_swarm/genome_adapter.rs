@@ -95,26 +95,28 @@
 //! # Weighted planning
 //!
 //! [`GenomeRedSwarm::with_weights`] (Phase 290, COEVOLVE-01/-03) attaches an
-//! optional [`TechniqueWeights`] snapshot after construction; [`Self::new`]
-//! leaves it unset, so every existing call site keeps planning through
-//! [`RedGenome::plan_weighted`]'s `None` arm -- byte-identical to Phase 288's
-//! `RedGenome::plan` forever (see that function's doc). Both
-//! [`Self::generate_sequence_artifact`] and [`Self::materialize_by_step`]
-//! plan through the same `self.weights.as_ref()`, so the two entry points
-//! never disagree about which plan they are materializing.
+//! optional [`TechniqueWeights`] snapshot after construction;
+//! [`GenomeRedSwarm::new`] leaves it unset, so every existing call site
+//! keeps planning through [`RedGenome::plan_weighted`]'s `None` arm --
+//! byte-identical to Phase 288's `RedGenome::plan` forever (see that
+//! function's doc). Both [`GenomeRedSwarm::generate_sequence_artifact`] and
+//! [`GenomeRedSwarm::materialize_by_step`] plan through the same
+//! `self.weights.as_ref()`, so the two entry points never disagree about
+//! which plan they are materializing.
 //!
 //! # Step-grouped materialization
 //!
-//! [`Self::materialize_by_step`] (Phase 290, COEVOLVE-01 part B) runs the
-//! same plan -> budget -> materialize pipeline as
-//! [`Self::generate_sequence_artifact`], reusing [`Self::materialize_step`]
-//! for the re-stamping itself, but returns each admitted step's events
-//! grouped by that step instead of flattened and globally re-sorted. A
-//! [`TelemetryEvent`] carries no technique field, so a caller that must map a
-//! detector finding back to the technique that produced it -- red_swarm's
-//! own measured run, [`super::campaign::run_generation`] -- needs exactly
-//! this grouping, which the flattened artifact has already discarded by the
-//! time it leaves [`Self::generate_sequence_artifact`].
+//! [`GenomeRedSwarm::materialize_by_step`] (Phase 290, COEVOLVE-01 part B)
+//! runs the same plan -> budget -> materialize pipeline as
+//! [`GenomeRedSwarm::generate_sequence_artifact`], reusing the private
+//! `materialize_step` for the re-stamping itself, but returns each admitted
+//! step's events grouped by that step instead of flattened and globally
+//! re-sorted. A [`TelemetryEvent`] carries no technique field, so a caller
+//! that must map a detector finding back to the technique that produced it
+//! -- red_swarm's own measured run, [`super::campaign::run_generation`] --
+//! needs exactly this grouping, which the flattened artifact has already
+//! discarded by the time it leaves
+//! [`GenomeRedSwarm::generate_sequence_artifact`].
 
 use super::budget::StealthBudget;
 use super::genome::{CampaignParams, GeneStep, OperatorRole, RedGenome, StepIntent};
@@ -566,6 +568,52 @@ mod tests {
         // Only the context-derived artifact metadata may differ.
         assert_eq!(first.generated_at_ms, 1_800_000_000_000);
         assert_eq!(second.generated_at_ms, 42);
+    }
+
+    /// Pins the load-bearing equivalence the module doc's "Step-grouped
+    /// materialization" section claims: [`GenomeRedSwarm::materialize_by_step`]
+    /// and [`GenomeRedSwarm::generate_sequence_artifact`] re-derive the same
+    /// underlying event set for the same adapter -- the only difference is
+    /// final assembly (grouped and left in plan order, vs. flattened and
+    /// globally sorted by `(timestamp, event_id)`). `run_generation`
+    /// (`campaign.rs`) depends on this: it calls `generate_sequence_artifact`'s
+    /// plan-and-budget steps directly for scoring and
+    /// `materialize_by_step` separately for attribution, and trusts the two
+    /// to agree byte for byte. This test would fail red if a future edit to
+    /// either method (e.g. a change to which steps are included, or to how
+    /// `step_index` is computed) ever broke that agreement.
+    #[tokio::test]
+    async fn materialize_by_step_reproduces_generate_sequence_artifacts_events() {
+        let genome = adapter(13, 2);
+
+        let artifact = genome
+            .generate_sequence_artifact(&context(1_800_000_000_000, "compare-artifact"))
+            .await
+            .expect("artifact materialization should succeed");
+        let grouped = genome
+            .materialize_by_step(&context(1_800_000_000_000, "compare-grouped"))
+            .expect("grouped materialization should succeed");
+
+        assert!(
+            !artifact.events.is_empty(),
+            "fixture campaign should admit at least one event"
+        );
+
+        // Flatten and sort exactly the way `generate_sequence_artifact`
+        // does internally, since `materialize_by_step` leaves its events in
+        // plan order rather than pre-sorting them.
+        let mut flattened: Vec<TelemetryEvent> =
+            grouped.into_iter().flat_map(|(_, events)| events).collect();
+        flattened.sort_by(|left, right| {
+            left.timestamp
+                .cmp(&right.timestamp)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+
+        assert_eq!(
+            event_fingerprint(&artifact.events),
+            event_fingerprint(&flattened)
+        );
     }
 
     #[tokio::test]
