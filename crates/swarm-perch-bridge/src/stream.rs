@@ -124,6 +124,10 @@ pub fn classify(event: &RuntimeEvent) -> Stream {
         RuntimeEvent::ConcentrationSnapshot { .. } => Stream::Telemetry,
         RuntimeEvent::AgentHealth { .. } => Stream::Telemetry,
         RuntimeEvent::AgentAction { .. } => Stream::Telemetry,
+        // The 1 Hz governance heartbeat. A whole-colony reading, coalesced
+        // newest-wins into one `26004` per publish tick and never spooled to
+        // disk — a replayed governance reading is a lie about now.
+        RuntimeEvent::GovernanceStatus { .. } => Stream::Telemetry,
 
         // --- Dropped at source -------------------------------------------------------------
         // `Ingest` is published once per accepted telemetry event and is reduced, deliberately,
@@ -717,6 +721,21 @@ mod tests {
             "partition_state_at_execution": "healthy"
         }));
         assert_eq!(classify(&released), Stream::Evidence);
+    }
+
+    /// The governance heartbeat is telemetry: a whole-colony reading, coalesced
+    /// and memory-spooled, never a disk-spooled record.
+    #[test]
+    fn a_governance_status_is_telemetry_not_disk_spooled() {
+        let reading = event(serde_json::json!({
+            "event_type": "governance_status", "emitted_at_ms": 1,
+            "partition_state": "healthy", "total_governors": 1, "healthy_governors": 1,
+            "quorum_threshold": 1, "unauthorized_partition_actions": 0,
+            "active_contingency_leases": 0, "last_transition_at_ms": null,
+            "last_reconciliation_report_id": null, "contingency_lease_ttl_ms": 300000
+        }));
+        assert_eq!(classify(&reading), Stream::Telemetry);
+        assert!(!Stream::Telemetry.is_disk_spooled());
     }
 
     #[test]

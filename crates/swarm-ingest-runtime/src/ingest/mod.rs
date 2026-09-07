@@ -819,7 +819,12 @@ fn runtime_event_matches_scope(event: &RuntimeEvent, scope: &ProvidenceContextSc
         // B1c. A rollback receipt names a host and a governance attestation, so
         // it belongs on no Providence-scoped stream and, until B5, no anonymous
         // one either.
-        | RuntimeEvent::ContainmentReleased { .. } => false,
+        | RuntimeEvent::ContainmentReleased { .. }
+        // A governance reading is a community-global aggregate that names no
+        // host, finding or hunt and no threat class to scope on — like
+        // AgentHealth, it belongs on the colony-wide telemetry the bridge
+        // publishes, not on a Providence-scoped or anonymous context stream.
+        | RuntimeEvent::GovernanceStatus { .. } => false,
     }
 }
 

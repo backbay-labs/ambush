@@ -1133,6 +1133,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             tokio::spawn(async move { sweep.run_until_shutdown(interval_ms, sweep_shutdown).await })
         });
+        // The governance heartbeat: the 1 Hz source of the `26004` frame the
+        // console's governance strip reads (16-PLAN-WINDOW-WALK Task 3,
+        // found-3). Beside the hold sweep and for a kindred reason — governance
+        // health is evaluated event-driven inside the authority, so without a
+        // task sampling it on a clock the strip has no reading to render and
+        // stays bridge-down on a perfectly healthy daemon. It reads the SAME
+        // `governance_policy` the readyz `governance` component and the
+        // dispatcher hold, and writes nothing.
+        let mut governance_heartbeat_handle = Some({
+            let authority: Arc<dyn swarm_policy::governance::GovernanceAuthority> =
+                governance_policy.clone();
+            let heartbeat = swarm_runtime::governance_heartbeat::GovernanceHeartbeat::new(
+                Some(authority),
+                runtime_events.clone(),
+                config.runtime.partition_contingency_lease_ttl_ms,
+            );
+            let heartbeat_shutdown = shutdown_rx.clone();
+            let interval_ms = swarm_runtime::governance_heartbeat::GOVERNANCE_HEARTBEAT_INTERVAL_MS;
+            tracing::info!(
+                module = module_path!(),
+                interval_ms,
+                contingency_lease_ttl_ms = config.runtime.partition_contingency_lease_ttl_ms,
+                "governance heartbeat started"
+            );
+            tokio::spawn(async move {
+                heartbeat
+                    .run_until_shutdown(interval_ms, heartbeat_shutdown)
+                    .await
+            })
+        });
         // The perch bridge: the daemon's only writer of daemon-sourced facts to the relay.
         // A misconfigured bridge must not silently ship a daemon that publishes nothing, so
         // `build` fails loudly on a missing seed, a spool inside the workspace, a missing lane,
@@ -1318,6 +1348,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(handle) = hold_sweep_handle.take() {
                     await_background_task("hold_sweep", handle).await;
                 }
+                if let Some(handle) = governance_heartbeat_handle.take() {
+                    await_background_task("governance_heartbeat", handle).await;
+                }
                 if let Some(handle) = perch_bridge_handle.take() {
                     await_background_task("perch_bridge", handle).await;
                 }
@@ -1381,6 +1414,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if let Some(handle) = hold_sweep_handle.take() {
                     await_background_task("hold_sweep", handle).await;
+                }
+                if let Some(handle) = governance_heartbeat_handle.take() {
+                    await_background_task("governance_heartbeat", handle).await;
                 }
                 if let Some(handle) = perch_bridge_handle.take() {
                     await_background_task("perch_bridge", handle).await;

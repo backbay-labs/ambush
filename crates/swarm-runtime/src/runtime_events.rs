@@ -145,6 +145,10 @@ pub enum RuntimeEventKind {
     ResponseHeld,
     /// A containment lease was released and its rollback ran (B1c).
     ContainmentReleased,
+    /// A governance-authority reading, taken on the daemon's 1 Hz heartbeat
+    /// (16-PLAN-WINDOW-WALK Task 3, found-3). The bridge turns it into the
+    /// `26004` frame the console's governance strip reads healthy.
+    GovernanceStatus,
 }
 
 impl RuntimeEventKind {
@@ -164,6 +168,7 @@ impl RuntimeEventKind {
             Self::CasePromoted => "case_promoted",
             Self::ResponseHeld => "response_held",
             Self::ContainmentReleased => "containment_released",
+            Self::GovernanceStatus => "governance_status",
         }
     }
 
@@ -183,6 +188,7 @@ impl RuntimeEventKind {
             "case_promoted" => Some(Self::CasePromoted),
             "response_held" => Some(Self::ResponseHeld),
             "containment_released" => Some(Self::ContainmentReleased),
+            "governance_status" => Some(Self::GovernanceStatus),
             _ => None,
         }
     }
@@ -411,6 +417,42 @@ pub enum RuntimeEvent {
         /// The partition the daemon was in when the rollback ran.
         partition_state_at_execution: Option<PartitionState>,
     },
+    /// A reading of the governance authority, taken on the daemon's 1 Hz
+    /// heartbeat (16-PLAN-WINDOW-WALK Task 3, found-3).
+    ///
+    /// Carries the whole [`swarm_policy::governance::GovernanceStatusReport`]
+    /// PLUS `contingency_lease_ttl_ms`, and here is why the variant is wider
+    /// than the six numbers the strip renders. The `26004` frame the bridge
+    /// builds from this requires the TTL (a non-optional body field whose own
+    /// doc forbids a surface guessing it) and carries the two optional report
+    /// fields; the daemon is the only place that holds BOTH the authority
+    /// reading and `runtime.partition_contingency_lease_ttl_ms`. The bridge is a
+    /// pure projector with no access to runtime config, so anything the frame
+    /// needs must ride the event. Dropping fields the authority already supplies
+    /// would only disable the frame's staleness clock for no gain.
+    GovernanceStatus {
+        /// When the reading was taken (unix ms).
+        emitted_at_ms: i64,
+        /// Where the quorum sits on the partition/heal path.
+        partition_state: PartitionState,
+        /// Configured governors.
+        total_governors: usize,
+        /// Governors currently healthy.
+        healthy_governors: usize,
+        /// Threshold for a quorum.
+        quorum_threshold: usize,
+        /// Actions taken during a partition without authorization.
+        unauthorized_partition_actions: usize,
+        /// Contingency leases open right now.
+        active_contingency_leases: usize,
+        /// The last partition/heal transition, when one has happened. The
+        /// frame's `recv Nm ago` staleness clock reads this.
+        last_transition_at_ms: Option<i64>,
+        /// The last reconciliation report id, when one exists.
+        last_reconciliation_report_id: Option<String>,
+        /// `runtime.partition_contingency_lease_ttl_ms`, so no surface guesses.
+        contingency_lease_ttl_ms: i64,
+    },
 }
 
 impl RuntimeEvent {
@@ -429,7 +471,8 @@ impl RuntimeEvent {
             | Self::ModeTransition { emitted_at_ms, .. }
             | Self::CasePromoted { emitted_at_ms, .. }
             | Self::ResponseHeld { emitted_at_ms, .. }
-            | Self::ContainmentReleased { emitted_at_ms, .. } => *emitted_at_ms,
+            | Self::ContainmentReleased { emitted_at_ms, .. }
+            | Self::GovernanceStatus { emitted_at_ms, .. } => *emitted_at_ms,
         }
     }
 
@@ -449,6 +492,7 @@ impl RuntimeEvent {
             Self::CasePromoted { .. } => RuntimeEventKind::CasePromoted,
             Self::ResponseHeld { .. } => RuntimeEventKind::ResponseHeld,
             Self::ContainmentReleased { .. } => RuntimeEventKind::ContainmentReleased,
+            Self::GovernanceStatus { .. } => RuntimeEventKind::GovernanceStatus,
         }
     }
 }
@@ -647,5 +691,41 @@ mod tests {
         assert_eq!(json["event_type"], "containment_released");
         assert_eq!(json["trigger"], "expiry");
         assert_eq!(json["partition_state_at_execution"], "healthy");
+    }
+
+    /// The heartbeat's event round-trips through the wire spelling the bridge
+    /// deserializes it from, and its `partition_state` is the snake_case string
+    /// the `26004` frame's `PartitionState` is too.
+    #[test]
+    fn governance_status_round_trips_through_kind_parse_and_serde() {
+        assert_eq!(
+            RuntimeEventKind::parse("governance_status"),
+            Some(RuntimeEventKind::GovernanceStatus)
+        );
+        assert_eq!(
+            RuntimeEventKind::GovernanceStatus.as_str(),
+            "governance_status"
+        );
+        let event = RuntimeEvent::GovernanceStatus {
+            emitted_at_ms: 1_787_754_973_300,
+            partition_state: swarm_policy::governance::PartitionState::Healthy,
+            total_governors: 1,
+            healthy_governors: 1,
+            quorum_threshold: 1,
+            unauthorized_partition_actions: 0,
+            active_contingency_leases: 0,
+            last_transition_at_ms: None,
+            last_reconciliation_report_id: None,
+            contingency_lease_ttl_ms: 300_000,
+        };
+        assert_eq!(event.kind(), RuntimeEventKind::GovernanceStatus);
+        assert_eq!(event.emitted_at_ms(), 1_787_754_973_300);
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["event_type"], "governance_status");
+        assert_eq!(json["partition_state"], "healthy");
+        assert_eq!(json["quorum_threshold"], 1);
+        assert_eq!(json["contingency_lease_ttl_ms"], 300_000);
+        let back: RuntimeEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back.kind(), RuntimeEventKind::GovernanceStatus);
     }
 }
