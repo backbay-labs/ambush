@@ -97,12 +97,16 @@ The engine roadmap already plans these as phases 285–313. The console changes 
 because every bet below becomes something an operator sees on The Watch, the case canvas, or
 the tuning bench.
 
-1. **Red swarm in-tree** — phase 288 (red operator genome and target graph) **LANDED**
-   (`034efd2f7`, 2026-09-07): the deterministic genome PRNG with no entropy path, the target
-   graph, six operators behind a shared trait, the pure `RedGenome::plan`, and `swarmctl
-   red-swarm plan`. Next: 289 (attack scoring, stealth budget, pattern memory — plan drafted),
-   290 (bidirectional co-evolution), 291 (CI arms-race gate and structural isolation: the red
-   lane can never reach response authority).
+1. **Red swarm in-tree** — phases 288 and 289 **LANDED** (2026-09-07).
+   - 288 (`034efd2f7`): the deterministic genome PRNG with no entropy path, the target graph, six
+     operators behind a shared trait, the pure `RedGenome::plan`, and `swarmctl red-swarm plan`.
+   - 289 (`e8f923252`): `AttackScorer` (evasion × stealth fitness against a coverage snapshot),
+     `StealthBudget` (tail truncation so red can't win by volume — proven as a system property),
+     `AttackPatternDb` (append-only per-technique memory), and `swarmctl red-swarm score --json`.
+     Whole-branch review (opus): merge, 0 Critical / 0 Important; four Minor fixes folded in.
+   - Next: 290 (bidirectional co-evolution and convergence — designed, one open question flagged),
+     291 (CI arms-race gate and structural isolation: the red lane can never reach response
+     authority; note the ARMSCI-02 forbidden-symbol gate goes in `tools/`, not `scripts/`).
 2. **Open agent protocol** — a new milestone the roadmap's "bring your own agent" paragraph
    promises: deposit INGRESS. An admitted external identity publishes a signed deposit fact over
    the wire the bridge already speaks; the daemon verifies it and deposits a pheromone; the TCB
@@ -138,3 +142,4 @@ Then, and only then: packaging for outside installation.
 | 2026-09-07 | `16-PLAN-WINDOW-WALK.md` desktop half (Tasks 1,2,4) merged to `main` (`a6590f811`): the REQs open and feed the ephemeral store, the governance strip fills its templates, the pane keeps its hold after a decision, a case channel opens as a case | 369 perch unit tests, `tsc --noEmit` clean |
 | 2026-09-07 | Phase 288 merged to `main` (`034efd2f7`): first v1.80 phase complete. Final-review I1 fixed and re-verified (references strictly backward). | `feat/red-swarm-288`; swarm-runtime 455 + swarm-cli 27 tests, fmt+clippy clean, CLI 7506 bytes deterministic, 174 refs / 0 forward |
 | 2026-09-07 | **Ruling — the second landing push went `--no-verify`.** The pre-push desktop `tsc` lane *hung* (0.09 s CPU over 15 min at 0 %, an environment fault, not slowness) and was killed. Backing before pushing: the workspace file-size ratchet re-run green here (desktop/web/mobile exit 0); the engine 288 tree fully re-verified this session (fmt, clippy `-D warnings`, 482 crate tests, CLI determinism); the desktop plan-16 tree verified clean the prior session (`tsc` exit 0, 369 tests) and unchanged since (no perch flip). Every other pre-push lane (workspace-rust, tauri, mobile) skips — no files. Cost if wrong: main's own CI re-runs the full gate and fixes go forward. | this ledger |
+| 2026-09-07 | Phase 289 (attack scoring, stealth budget, pattern memory) merged to `main` (`e8f923252`): `AttackScorer`, `StealthBudget`, `AttackPatternDb`, `swarmctl red-swarm score`. Executed with parallel SDD worktrees (Tasks 2/3 concurrent, Task 4 with Task 3's review). Whole-branch review (opus) = merge, 0 Critical / 0 Important; four Minor fixes folded in. Push clean (engine-only, every workspace pre-push lane skipped). Mid-flight: reclaimed 66 GB from a 99%-full disk (stale main `target/`). | `e8f923252`; swarm-runtime 55 lib + swarm-cli score tests, fmt+clippy `-D warnings`, `check-workspace-layering` (TCB isolation), score `--json` byte-identical |
