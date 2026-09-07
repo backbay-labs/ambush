@@ -1,3 +1,5 @@
+import type { PerchGovernanceMode } from "./governanceMode";
+
 /**
  * Every rendered string on the governance strip.
  *
@@ -34,6 +36,27 @@ export const GOVERNANCE = {
   watchNone: "no watch claimed — classes 1–3 page everyone",
   derived: "derived · derivePerchGovernanceMode()",
 } as const;
+
+/**
+ * The copy the strip paints per register — and the ONLY strings it fills at
+ * runtime.
+ *
+ * The strip supplies exactly four values (`ago`, `lastSeen`, `n`,
+ * `unauthorized`), so every template here may reference only those; a copy that
+ * reaches for a fifth name throws the instant its mode renders. This map is the
+ * shared source of truth so `governanceCopy.test.mjs` can render each entry
+ * with the strip's real four-value object — a copy edit that breaks the
+ * contract then fails a test rather than the window.
+ */
+export const GOVERNANCE_BY_MODE: Record<PerchGovernanceMode, string> = {
+  healthy: GOVERNANCE.healthy,
+  degraded: GOVERNANCE.degraded,
+  partitioned: GOVERNANCE.partitioned,
+  healing: GOVERNANCE.healing,
+  "fail-closed-no-transport": GOVERNANCE.failClosed,
+  stale: GOVERNANCE.stale,
+  "bridge-down": GOVERNANCE.bridgeDown,
+};
 
 /**
  * Substitute every `{name}`, and THROW on one the values do not cover.

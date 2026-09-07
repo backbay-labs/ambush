@@ -5,6 +5,7 @@ import {
   fillGovernanceCopy,
   formatGovernanceAge,
   GOVERNANCE,
+  GOVERNANCE_BY_MODE,
 } from "./governanceCopy.ts";
 
 /** Every string leaf of the copy map, however deeply the `mode` group nests. */
@@ -36,6 +37,25 @@ test("no placeholder survives any governance copy the strip can render", () => {
       !rendered.includes("{"),
       `a placeholder survived rendering: ${rendered}`,
     );
+  }
+});
+
+// The exact four-value object GovernanceStrip builds — no wider. EVERY_VALUE
+// above is a superset (it carries mode/seconds/holder/since for the unrendered
+// copies), so it would pass a copy edit that added `{holder}` to a rendered
+// register while that register threw uncaught in production. This pins the real
+// runtime contract: every register the strip paints must fill from these four.
+const STRIP_VALUES = { ago: "5s", lastSeen: "never", n: 1, unauthorized: 0 };
+
+test("every rendered register fills from exactly the four values the strip supplies", () => {
+  const rendered = Object.values(GOVERNANCE_BY_MODE);
+  assert.ok(rendered.length > 0, "expected some rendered register");
+  for (const template of rendered) {
+    let filled;
+    assert.doesNotThrow(() => {
+      filled = fillGovernanceCopy(template, STRIP_VALUES);
+    }, `a rendered register reached for a value the strip does not supply: ${template}`);
+    assert.ok(!filled.includes("{"), `a placeholder survived: ${filled}`);
   }
 });
 

@@ -11,22 +11,12 @@ import {
   fillGovernanceCopy,
   formatGovernanceAge,
   GOVERNANCE,
+  GOVERNANCE_BY_MODE,
 } from "../lib/governanceCopy";
 import {
   derivePerchGovernanceMode,
   GOVERNANCE_STALE_AFTER_MS,
-  type PerchGovernanceMode,
 } from "../lib/governanceMode";
-
-const COPY: Record<PerchGovernanceMode, string> = {
-  healthy: GOVERNANCE.healthy,
-  degraded: GOVERNANCE.degraded,
-  partitioned: GOVERNANCE.partitioned,
-  healing: GOVERNANCE.healing,
-  "fail-closed-no-transport": GOVERNANCE.failClosed,
-  stale: GOVERNANCE.stale,
-  "bridge-down": GOVERNANCE.bridgeDown,
-};
 
 /**
  * S14. The one line that is on screen wherever Perch is.
@@ -85,15 +75,28 @@ export function GovernanceStrip(): React.ReactElement {
   const ageMs =
     receivedAtMs === null ? null : Math.max(0, nowMs - receivedAtMs);
   const ago = ageMs === null ? "never" : formatGovernanceAge(ageMs);
-  const line = fillGovernanceCopy(COPY[mode], {
-    ago,
-    lastSeen: ageMs === null ? "never" : `${ago} ago`,
-    n: totalGovernors,
-    unauthorized:
-      typeof body.unauthorized_partition_actions === "number"
-        ? body.unauthorized_partition_actions
-        : 0,
-  });
+  const template = GOVERNANCE_BY_MODE[mode];
+  // A future copy edit that references a value the strip does not supply makes
+  // `fillGovernanceCopy` throw. This is the one line that reports whether
+  // governance is visible at all, so it must degrade — to the raw template,
+  // with the mistake logged — rather than white-screen the surface. The test
+  // suite renders every register through the strip's four values so this catch
+  // stays a safety net, never the normal path.
+  let line: string;
+  try {
+    line = fillGovernanceCopy(template, {
+      ago,
+      lastSeen: ageMs === null ? "never" : `${ago} ago`,
+      n: totalGovernors,
+      unauthorized:
+        typeof body.unauthorized_partition_actions === "number"
+          ? body.unauthorized_partition_actions
+          : 0,
+    });
+  } catch (error) {
+    console.error("governance strip copy failed to fill", error);
+    line = template;
+  }
 
   return (
     <p
