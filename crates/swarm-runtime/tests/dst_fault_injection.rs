@@ -714,6 +714,26 @@ fn harness_action_request() -> ActionRequest {
     }
 }
 
+/// A request the REAL `StaticApprovalGate` genuinely DENIES: `IsolateHost` is a
+/// destructive action, and a destructive action at `Severity::Low` hits the
+/// gate's `static.minimum_severity` rule -> `PolicyVerdict::Deny` (mirrors the
+/// gate's own `low_severity_isolation_is_denied` test). `authorize_and_execute`
+/// returns `Err(ApprovalError::Denied)` at the verdict match, BEFORE the
+/// dispatch await and before `prepare_containment`, so this never dispatches
+/// and needs no containment store. Used only by the denied-disposition fixture,
+/// so Oracle 2's denied branch is positively exercised, not merely present.
+fn harness_denied_action_request() -> ActionRequest {
+    ActionRequest {
+        hunt_id: HuntId("dst-hunt-denied".to_string()),
+        requested_by: AgentId("dst-harness".to_string()),
+        action: ResponseAction::IsolateHost {
+            host_id: "dst-denied-host".to_string(),
+        },
+        severity: Severity::Low,
+        evidence: serde_json::json!({ "signal": "dst_fault_injection_harness_denied" }),
+    }
+}
+
 /// The fixed `ApprovalContext` Task 1's episode drives under. `live_mode` and
 /// `now_ms` are constants, not the wall clock, so every episode's context is
 /// byte-identical.
@@ -788,21 +808,30 @@ fn run_episode_under_fault(
 }
 
 /// Build a fresh, real, no-mock stack and drive exactly one episode for
-/// `plan`.
+/// `plan`, using the fixed `Allow` harness request.
 ///
 /// A fresh stack every call: episodes must not share mutable state (an
 /// adapter's dispatch log, a substrate's deposits) across episodes, or one
 /// episode's observation would be contaminated by another's.
 fn drive_episode(plan: FaultPlan) -> EpisodeObservation {
+    drive_episode_with_request(plan, &harness_action_request())
+}
+
+/// Drive one episode for `plan` against a caller-supplied `request` on a fresh
+/// real stack. Factored out of [`drive_episode`] so the denied-disposition
+/// fixture can drive a request the real gate genuinely denies (which never
+/// dispatches, so there is no fault surface) through the SAME real
+/// `authorize_and_execute` path every other episode uses -- no mock, no second
+/// code path.
+fn drive_episode_with_request(plan: FaultPlan, request: &ActionRequest) -> EpisodeObservation {
     let adapter = RecordingResponseAdapter::default();
     let gate = StaticApprovalGate::from_config(&harness_policy_config());
     let runtime = SwarmRuntime::new(RuntimeMode::LiveResponse, gate, adapter.clone());
     let substrate = SubstrateSeam::open(harness_pheromone_config());
-    let request = harness_action_request();
     let context = harness_approval_context();
 
     let episode: Pin<Box<dyn Future<Output = EpisodeOutcome> + '_>> =
-        Box::pin(run_episode(&runtime, &substrate, &request, &context));
+        Box::pin(run_episode(&runtime, &substrate, request, &context));
     let (outcome, polls) = run_episode_under_fault(episode, plan.class, &substrate);
 
     let query: Pin<Box<dyn Future<Output = Result<Vec<PheromoneDeposit>, SubstrateError>> + '_>> =
@@ -1017,13 +1046,29 @@ fn oracle_receipt_before_action(observation: &EpisodeObservation) -> Result<(), 
         match backing {
             Some(i) => claimed[i] = true,
             None => {
+                // Distinguish the two dangerous shapes so a failing seed's
+                // diagnostic says which it is: the identity was recorded (but
+                // already accounted for by an earlier persisted receipt) -- a
+                // DUPLICATE audit record -- versus never recorded at all -- a
+                // PHANTOM record for an action-effect that did not happen.
+                let ever_dispatched = dispatched.iter().any(|d| d.0 == hunt_id && d.1 == order);
+                let (label, why) = if ever_dispatched {
+                    (
+                        "duplicate receipt",
+                        "was recorded but is already accounted for by an earlier persisted receipt \
+                         (two receipts for one dispatch)",
+                    )
+                } else {
+                    (
+                        "phantom receipt",
+                        "was never recorded -- an action-effect that did not happen",
+                    )
+                };
                 return Err(OracleViolation::new(
                     Oracle::ReceiptBeforeAction,
                     format!(
-                        "phantom receipt: persisted deposit #{index} records dispatch \
-                         (hunt_id={hunt_id:?}, order={order}), but no such unclaimed dispatch was \
-                         ever recorded (dispatch_log={:?}) -- a receipt exists for an \
-                         action-effect that did not happen",
+                        "{label}: persisted deposit #{index} records dispatch \
+                         (hunt_id={hunt_id:?}, order={order}), which {why}; dispatch_log={:?}",
                         observation.dispatch_log
                     ),
                 ));
@@ -1221,19 +1266,25 @@ fn evaluate_oracles(
     violations
 }
 
-/// The deterministic ground-truth verdict for this harness's fixed request,
-/// computed from the REAL `StaticApprovalGate` (not hardcoded) -- the
-/// `Allow`/`Deny`/`RequireHuman` decision Oracle 2 measures each episode's
-/// disposition against. `Escalate`/Medium falls through to `default_allow`, so
-/// this is `Allow`; the corpus asserts that, so a policy-config change that
-/// silently altered it would surface rather than quietly skew every oracle.
-fn harness_ground_truth_verdict() -> PolicyVerdict {
+/// The deterministic ground-truth verdict for `request`, computed from the
+/// REAL `StaticApprovalGate` (not hardcoded) -- the `Allow`/`Deny`/`RequireHuman`
+/// decision Oracle 2 measures an episode's disposition against. Both the Allow
+/// corpus and the denied-disposition fixture derive their expected verdict
+/// through this one path, so neither is a guess.
+fn ground_truth_verdict_for(request: &ActionRequest) -> PolicyVerdict {
     let gate = StaticApprovalGate::from_config(&harness_policy_config());
-    let request = harness_action_request();
     let context = harness_approval_context();
-    gate.evaluate(&request, &context)
-        .expect("evaluating the fixed harness request against the real gate must not error")
+    gate.evaluate(request, &context)
+        .expect("evaluating the harness request against the real gate must not error")
         .verdict
+}
+
+/// The ground-truth verdict for this harness's fixed corpus request.
+/// `Escalate`/Medium falls through to `default_allow`, so this is `Allow`; the
+/// corpus asserts that, so a policy-config change that silently altered it
+/// would surface rather than quietly skew every oracle.
+fn harness_ground_truth_verdict() -> PolicyVerdict {
+    ground_truth_verdict_for(&harness_action_request())
 }
 
 /// Format one oracle violation for a corpus/replay failure: names the seed
@@ -1736,8 +1787,8 @@ fn dst_oracle_receipt_before_action_catches_a_phantom_receipt_and_names_the_seed
         "the violation must name the seed for one-command reproduction: {formatted}"
     );
     assert!(
-        formatted.contains("phantom receipt"),
-        "the violation must name the failure mode: {formatted}"
+        formatted.contains("phantom receipt") && !formatted.contains("duplicate receipt"),
+        "a never-dispatched receipt must read as 'phantom', distinct from 'duplicate': {formatted}"
     );
 
     // Also the DUPLICATE-persist direction: a SECOND receipt claiming the same
@@ -1745,7 +1796,8 @@ fn dst_oracle_receipt_before_action_catches_a_phantom_receipt_and_names_the_seed
     // existence -- is what makes this a violation too: two audit records
     // asserting an action-effect that happened once is as false as an invented
     // record. (This is why Oracle 1 tracks claimed dispatches, not just
-    // presence.)
+    // presence.) Its diagnostic must read 'duplicate', NOT 'phantom' -- the two
+    // shapes are distinguished so a failing seed says which it is.
     let mut duplicated = drive_completing_observation(710411);
     let dup_receipt = ResponseReceipt {
         receipt_id: "dst-receipt:dst-hunt-episode:0".to_string(),
@@ -1762,6 +1814,11 @@ fn dst_oracle_receipt_before_action_catches_a_phantom_receipt_and_names_the_seed
     let dup_violation = oracle_receipt_before_action(&duplicated)
         .expect_err("a duplicated receipt (two for one dispatch) must be caught");
     assert_eq!(dup_violation.oracle, Oracle::ReceiptBeforeAction);
+    let dup_formatted = format_corpus_violation(&duplicated, &dup_violation);
+    assert!(
+        dup_formatted.contains("duplicate receipt") && !dup_formatted.contains("phantom receipt"),
+        "a repeated receipt must read as 'duplicate', distinct from 'phantom': {dup_formatted}"
+    );
 }
 
 /// Non-vacuity proof for Oracle 2: the SAME real completing episode
@@ -1785,6 +1842,79 @@ fn dst_oracle_exact_disposition_catches_a_wrong_verdict_expectation_and_names_th
         formatted.contains("SWARM_DST_SEED=220722"),
         "the violation must name the seed for one-command reproduction: {formatted}"
     );
+}
+
+/// POSITIVE coverage for Oracle 2's denied branch: drive a request the REAL
+/// gate genuinely DENIES (`IsolateHost` at Low -> `Deny`) through the same real
+/// `authorize_and_execute`, and prove Oracle 2 accepts the denied disposition
+/// against the verdict the real gate returns (derived, not hardcoded). Without
+/// this the corpus only ever drove `Allow`, leaving the denied arm logically
+/// sound but unexercised. A denied request never dispatches, so there is no
+/// fault surface -- this is a focused no-fault positive test, and Oracle 1 (no
+/// receipts) and Oracle 3 (no dispatches) must also hold.
+#[test]
+fn dst_oracle_exact_disposition_accepts_a_denied_disposition_for_a_genuinely_denied_request() {
+    let request = harness_denied_action_request();
+    // Ground truth from the REAL gate, exactly as the Allow corpus derives its
+    // own verdict -- not hardcoded.
+    let verdict = ground_truth_verdict_for(&request);
+    assert_eq!(
+        verdict,
+        PolicyVerdict::Deny,
+        "a destructive action (IsolateHost) at Low severity must be a deterministic Deny"
+    );
+
+    // A denied request never dispatches -> no fault surface -> NoFault. A
+    // distinctive seed so any failure names it.
+    let observation = drive_episode_with_request(
+        FaultPlan {
+            seed: 286286,
+            class: FaultClass::NoFault,
+            checkpoint: 0,
+        },
+        &request,
+    );
+
+    // Oracle 2's denied branch, positively exercised: the disposition equals
+    // what the real Deny verdict demands (an authorization Err, no dispatch).
+    assert!(
+        oracle_exact_disposition(&observation, verdict).is_ok(),
+        "Oracle 2 must accept the denied disposition against the real Deny verdict; observed \
+         outcome={:?}",
+        observation.outcome
+    );
+
+    // It is genuinely a denial, observed against the real engine, not a crash.
+    let outcome = observation
+        .outcome
+        .as_ref()
+        .expect("a denied NoFault episode runs to completion");
+    assert!(
+        matches!(outcome.authorize_result, Err(RuntimeError::Approval(_))),
+        "a Deny verdict under LiveResponse must surface an authorization Err; observed {:?}",
+        outcome.authorize_result
+    );
+    assert!(
+        outcome.persist_result.is_none(),
+        "a denied request persists no receipt: {:?}",
+        outcome.persist_result
+    );
+
+    // Oracle 1 (no receipts -> trivially holds) and Oracle 3 (0 dispatches).
+    assert!(
+        observation.dispatch_log.is_empty(),
+        "a denied request never dispatches"
+    );
+    assert!(observation.persisted_deposits.is_empty());
+    assert!(oracle_receipt_before_action(&observation).is_ok());
+    assert!(oracle_no_double_dispatch(&observation).is_ok());
+
+    // The coupling is real in the other direction too: the SAME denied episode
+    // must be FLAGGED when the oracle is told to expect Allow -- exercising the
+    // Allow arm's "demands Ok(receipt); observed Err" path against a real Err.
+    let mis = oracle_exact_disposition(&observation, PolicyVerdict::Allow)
+        .expect_err("a denied disposition must not satisfy an Allow expectation");
+    assert_eq!(mis.oracle, Oracle::ExactDisposition);
 }
 
 /// Non-vacuity proof for Oracle 3: a correct episode dispatches the request at
