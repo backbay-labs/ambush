@@ -111,9 +111,15 @@ the tuning bench.
      campaign` writes byte-identical reports. Proven live: blue catch 0.125→0.778 while red
      fitness fell 0.933→0.125, converging to full_coverage. Whole-branch review (opus): merge,
      0 Critical / 0 Important; three Minor fixes folded in.
-   - Next: 291 (CI arms-race gate and structural isolation: the red lane can never reach response
-     authority; the ARMSCI-02 forbidden-symbol gate goes in `tools/`, not `scripts/`) — the last
-     red-swarm phase.
+   - 291 (`61ddf94d3`): the executed CI arms-race gate (`tools/check-red-swarm-arms-race.sh` runs a
+     bounded campaign, fails below the checked-in 0.75) + the structural-isolation gate + Rust
+     companion (both scan the red lane for `execute_response`/`ResponseAdapter`/`PolicyDecision::Authorize`/
+     `live_response`, plant-a-counterexample non-vacuous) + `red_swarm_campaign` in `evolution status
+     --json`. Whole-branch review (opus): merge, 0C/0I, isolation airtight. **v1.80 RED SWARM
+     MILESTONE (288-291) COMPLETE.**
+   - Next (gameplan Phase 2 order): the open-agent-protocol milestone (a new design; deposit INGRESS),
+     then provenance-grade memory (296-299), assurance (285-287, 292-294), quorum (301-303), herd
+     immunity (305-307), the detection commons (308-311), federation (312-313).
 2. **Open agent protocol** — a new milestone the roadmap's "bring your own agent" paragraph
    promises: deposit INGRESS. An admitted external identity publishes a signed deposit fact over
    the wire the bridge already speaks; the daemon verifies it and deposits a pheromone; the TCB
@@ -151,3 +157,4 @@ Then, and only then: packaging for outside installation.
 | 2026-09-07 | **Ruling — the second landing push went `--no-verify`.** The pre-push desktop `tsc` lane *hung* (0.09 s CPU over 15 min at 0 %, an environment fault, not slowness) and was killed. Backing before pushing: the workspace file-size ratchet re-run green here (desktop/web/mobile exit 0); the engine 288 tree fully re-verified this session (fmt, clippy `-D warnings`, 482 crate tests, CLI determinism); the desktop plan-16 tree verified clean the prior session (`tsc` exit 0, 369 tests) and unchanged since (no perch flip). Every other pre-push lane (workspace-rust, tauri, mobile) skips — no files. Cost if wrong: main's own CI re-runs the full gate and fixes go forward. | this ledger |
 | 2026-09-07 | Phase 289 (attack scoring, stealth budget, pattern memory) merged to `main` (`e8f923252`): `AttackScorer`, `StealthBudget`, `AttackPatternDb`, `swarmctl red-swarm score`. Executed with parallel SDD worktrees (Tasks 2/3 concurrent, Task 4 with Task 3's review). Whole-branch review (opus) = merge, 0 Critical / 0 Important; four Minor fixes folded in. Push clean (engine-only, every workspace pre-push lane skipped). Mid-flight: reclaimed 66 GB from a 99%-full disk (stale main `target/`). | `e8f923252`; swarm-runtime 55 lib + swarm-cli score tests, fmt+clippy `-D warnings`, `check-workspace-layering` (TCB isolation), score `--json` byte-identical |
 | 2026-09-07 | Phase 290 (bidirectional co-evolution) merged to `main` (`0a6095379`): `GenomeRedSwarm`, `plan_weighted`, `run_generation`, `RedSwarmCampaign::run`, `swarmctl red-swarm campaign`. Red-swarm milestone now 3/4. Executed sequentially (pipeline); Task 2 split into 2a/2b; two fix rounds (Cover-attribution, gen-0 doc). Whole-branch review (opus) = merge, 0C/0I; co-evolution proven live (blue 0.125→0.778, red fitness 0.933→0.125, full_coverage in 2 gens). Push clean (engine-only). | `0a6095379`; red_swarm 99 lib + campaign 24 + cross-crate, full workspace 1810, fmt+clippy `-D warnings`, 4 tools/check gates, `campaign --json` byte-identical |
+| 2026-09-07 | Phase 291 (CI arms-race gate + structural isolation) merged to `main` (`61ddf94d3`): `tools/check-red-swarm-{arms-race,no-execution-authority}.sh` + Rust isolation companion + `red_swarm_campaign` in `evolution status --json`. **v1.80 RED SWARM MILESTONE (288-291) COMPLETE.** Executed with parallel worktrees; two review fix rounds; a load-180 over-parallelism spike and a hung reviewer both diagnosed and cleared mid-flight (lesson saved to memory). Whole-branch review (opus) = merge, 0C/0I, isolation airtight (not vacuous, no hole, entropy guard passes). | `61ddf94d3`; both gates wired (check-gates-wired 0), arms-race real 0.7778≥0.75 + bites on raise, isolation exit 0 real / 1 on injected call, evolution_status 11, clippy `-D warnings` |
