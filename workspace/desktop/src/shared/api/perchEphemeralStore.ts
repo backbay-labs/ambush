@@ -107,6 +107,14 @@ export type PerchEphemeralSnapshot = {
   readonly droppedAlarms: number;
 };
 
+/** A frame past the two checks that do not need the admitted set. */
+type AdmittableFrame = {
+  readonly kind: PerchEphemeralKind;
+  readonly pubkey: string;
+  readonly receivedAtMs: number;
+  readonly body: PerchAlarmBody;
+};
+
 const EMPTY_ALARMS: readonly PerchAlarmBody[] = Object.freeze([]);
 const EMPTY_TELEMETRY: ReadonlyMap<PerchEphemeralKind, PerchTelemetryEntry> =
   new Map();
@@ -114,7 +122,7 @@ const EMPTY_TELEMETRY: ReadonlyMap<PerchEphemeralKind, PerchTelemetryEntry> =
 let admitted: ReadonlySet<string> = new Set();
 /** Whether the daemon's identities answer has landed at all. */
 let admittedKnown = false;
-let held: PerchEphemeralFrame[] = [];
+let held: AdmittableFrame[] = [];
 let alarms: PerchAlarmBody[] = [];
 let telemetry = new Map<PerchEphemeralKind, PerchTelemetryEntry>();
 let unadmittedFrames = 0;
@@ -148,8 +156,13 @@ function publish(): void {
  * store that trusted frames before it knew whom to trust would render a
  * stranger's alarm during boot. Mirrors, and is fed from,
  * `features/perch-evidence/lib/admittedIssuers.ts` — `shared/` may not import
- * `features/`, so the sync is an explicit call at The Watch's mount rather
- * than an import, and the daemon stays the single source.
+ * `features/`, so the sync is an explicit call from the subscription manager's
+ * mount, which already performs the daemon read, and the daemon stays the
+ * single source.
+ *
+ * Calling this is also what says the console HAS an answer, so every frame held
+ * since the last reset is put through the admission check here — see
+ * `PERCH_PREADMISSION_BUFFER_CAP`. An empty answer is still an answer.
  */
 export function setPerchAdmittedIssuers(pubkeys: Iterable<string>): void {
   admitted = new Set([...pubkeys].map((pubkey) => pubkey.toLowerCase()));
@@ -170,19 +183,17 @@ function asBody(value: unknown): PerchAlarmBody | null {
 }
 
 /**
- * Route one frame whose kind, body and issuer have all been settled. Does not
+ * Route one frame whose kind and body have already been settled. Does not
  * publish: the two callers batch their own, so one arrival is one snapshot and
  * a replayed buffer is one snapshot rather than thirty-two.
  */
-function admit(frame: PerchEphemeralFrame): boolean {
-  const body = asBody(frame.body);
-  if (body === null) return false;
+function admit(frame: AdmittableFrame): boolean {
   if (!admitted.has(frame.pubkey.toLowerCase())) {
     unadmittedFrames += 1;
     return false;
   }
-  if (perchStreamFor(frame.kind as PerchEphemeralKind) === "alarm") {
-    alarms.push(body);
+  if (perchStreamFor(frame.kind) === "alarm") {
+    alarms.push(frame.body);
     while (alarms.length > PERCH_ALARM_QUEUE_CAP) {
       alarms.shift();
       droppedAlarms += 1;
@@ -191,11 +202,11 @@ function admit(frame: PerchEphemeralFrame): boolean {
     // The telemetry class coalesces on-change: only the latest frame per kind
     // is a fact about now, and keeping the history here would duplicate the
     // daemon's own counters with a worse copy.
-    telemetry.set(frame.kind as PerchEphemeralKind, {
-      kind: frame.kind as PerchEphemeralKind,
+    telemetry.set(frame.kind, {
+      kind: frame.kind,
       pubkey: frame.pubkey,
       receivedAtMs: frame.receivedAtMs,
-      body,
+      body: frame.body,
     });
   }
   return true;
@@ -215,20 +226,29 @@ function admit(frame: PerchEphemeralFrame): boolean {
  * console does not control.
  */
 export function applyPerchEphemeralFrame(frame: PerchEphemeralFrame): boolean {
-  if (!isPerchEphemeralKind(frame.kind)) return false;
+  const kind = frame.kind;
+  if (!isPerchEphemeralKind(kind)) return false;
   // Decodability is decided first and once, so the hold buffer can never fill
-  // with bytes that were never going to be rendered by anyone.
-  if (asBody(frame.body) === null) {
+  // with bytes that were never going to be rendered by anyone, and a replay
+  // never re-parses what it already parsed.
+  const body = asBody(frame.body);
+  if (body === null) {
     droppedFrames += 1;
     publish();
     return false;
   }
+  const admittable: AdmittableFrame = {
+    kind,
+    pubkey: frame.pubkey,
+    receivedAtMs: frame.receivedAtMs,
+    body,
+  };
   if (!admittedKnown) {
-    held.push(frame);
+    held.push(admittable);
     while (held.length > PERCH_PREADMISSION_BUFFER_CAP) held.shift();
     return false;
   }
-  const stored = admit(frame);
+  const stored = admit(admittable);
   publish();
   return stored;
 }

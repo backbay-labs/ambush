@@ -200,7 +200,7 @@ export function perchActiveCaseIds(
 }
 
 // ===========================================================================
-// §2  The sink
+// §2  What the manager currently believes, and the sink it installs
 // ===========================================================================
 
 let queryClientForSink: QueryClient | null = null;
@@ -365,19 +365,33 @@ function scheduleSync(): void {
 // holds no state, and a sync with nothing mounted builds an empty inventory.
 subscribePerchTelemetryWanted(scheduleSync);
 
+/** The admitted set this file last handed the frame store, by identity. */
+let mirroredAdmitted: ReadonlySet<string> | null = null;
+
 /**
  * Mirror the daemon's admitted-issuer set into the frame store.
  *
  * `shared/` may not import `features/` for the SET — the store says so at its
  * own gate — so the two are joined here, at the mount that already reads the
- * daemon's answer. Guarded on `admittedIssuersKnown()` because a FAILED load
- * leaves the feature module's set empty: mirroring that would tell the store it
- * has an answer, and every frame of the session would then be counted as
- * unadmitted on the strength of a read that never returned.
+ * daemon's answer. Before this, `setPerchAdmittedIssuers` had no caller outside
+ * its own tests: the store's admitted set was permanently empty, so a frame
+ * that reached it would have been refused whatever the daemon said.
+ *
+ * Guarded on `admittedIssuersKnown()` because a FAILED load leaves the feature
+ * module's set empty: mirroring that would tell the store it has an answer, and
+ * every frame of the session would then be counted as unadmitted on the
+ * strength of a read that never returned.
+ *
+ * `perchAdmittedIssuerSet()` is reference-stable until the daemon's answer
+ * changes, so the identity check is what keeps this a no-op on the hundreds of
+ * row mounts that call it and nothing else.
  */
 function mirrorAdmittedIssuers(): void {
   if (!admittedIssuersKnown()) return;
-  setPerchAdmittedIssuers(perchAdmittedIssuerSet());
+  const current = perchAdmittedIssuerSet();
+  if (current === mirroredAdmitted) return;
+  mirroredAdmitted = current;
+  setPerchAdmittedIssuers(current);
 }
 
 // ===========================================================================
@@ -477,6 +491,9 @@ export function usePerchSubscriptionShell(enabled = true): void {
 export function resetPerchSubscriptionManager(): void {
   cancelRetry();
   retryDelayMs = RETRY_BASE_MS;
+  // The frame store's own resetter clears the set this remembers handing over,
+  // so forgetting it here is what lets the next community's answer through.
+  mirroredAdmitted = null;
   inputs = {
     myPubkey: null,
     laneChannelIds: NO_IDS,
