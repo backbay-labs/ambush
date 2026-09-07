@@ -1750,6 +1750,9 @@ async fn approval_vote_endpoint_resumes_demo_runtime_and_proof_export() {
     let mut runtime_config = operator_config();
     runtime_config.runtime.mode = swarm_runtime::RuntimeMode::LiveResponse;
     runtime_config.runtime.demo_mode = true;
+    runtime_config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: root.join("runtime-replay-bundles").display().to_string(),
+    };
     runtime_config.policy.human_gate_severity = swarm_core::types::Severity::Low;
     // Lowering `human_gate_severity` is not sufficient on its own. `operator_config()`
     // inherits `permissive_policy_rules()`, whose sole rule has an empty `actions`

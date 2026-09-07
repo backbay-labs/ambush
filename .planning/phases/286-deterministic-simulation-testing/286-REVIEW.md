@@ -204,3 +204,45 @@ passing claims or mark source inspection as a passed runtime test.
 
 Phase 286 remains **IN PROGRESS / REOPENED** until every obligation is supported.
 The full goal remains the approved gameplan and canonical phases 285–313.
+
+
+## Recovery checkpoint evidence (2026-09-07; acceptance still open)
+
+Production checkpoint: `5df3c228bcb8a6801a2ac2c6d016cc36c6860466` on
+`codex/dst-286-recovery`. Its source review passed for dispatch journal, helper
+and runtime enforcement. The reviewer explicitly excluded Cargo execution and
+phase acceptance. The final two-line delta restricts reservation/completion
+writes to `pub(crate)`; the reviewer acknowledged this exact immutable hash.
+
+Terminal observations, retained separately from final-tree acceptance:
+
+- Runtime library command `cargo test --locked -j 2 -p swarm-runtime --lib --
+  --test-threads=1` exited 101: **583 passed, 1 failed**. The failed existing
+  `process_event_with_investigation_stays_nonblocking_and_persists_bundle`
+  asserted elapsed time below 75 ms and observed 184.947625 ms. A deterministic
+  asynchronous-completion proof is being prepared; no timing-threshold waiver
+  or whole-suite pass is claimed. This build began before the final source
+  visibility/client retry edits and is not exact-final-tree acceptance.
+- Current response command `cargo test --locked -j2 -p swarm-response --lib --
+  --test-threads=1 --quiet` at the production checkpoint compiled successfully
+  and exited 101: **43 passed, 28 failed**. All 28 failures rejected local TCP
+  listener creation with OS error 1 (`Operation not permitted`) in this
+  restricted environment. Log: `/private/tmp/ambush-response-5df3c228b.log`.
+  An earlier snapshot passed 71 tests before the four explicit reqwest
+  `retry(never())` additions. That older pass is not current-tree HTTP evidence.
+- Current static gates exited zero: `check-no-unrouted-authorize.sh` (zero
+  production callers), `check-workspace-layering.sh` (11 fixture cases and live
+  graph), `check-red-swarm-no-execution-authority.sh`,
+  `check-visibility-baseline.sh`, and `check-no-include-files.sh` (12 fixture
+  cases). Mapping, negative registry, gate wiring and runtime panic gates also
+  passed in the immediately preceding checkpoint; their final rerun remains
+  part of acceptance after all test-source changes.
+- Mutation preparation found the replacement sandbox adapter still asserted a
+  durable intent before writing its effect marker. That would kill a bad
+  ordering mutation before observing the forbidden effect. The harness is
+  being refined into a passive observer so the named independent oracles,
+  rather than an adapter-side safety guard, reject production mutations.
+
+Current progress does not close any pending obligation in the acceptance table.
+The sandbox TCP restriction is a concrete limitation on local HTTP verification;
+no approval escalation or alternative-environment result is claimed.

@@ -134,6 +134,37 @@
 
     #[tokio::test]
     async fn process_event_with_investigation_stays_nonblocking_and_persists_bundle() {
+        #[derive(Clone)]
+        struct GatedInvestigator {
+            started: std::sync::Arc<tokio::sync::Notify>,
+            release: std::sync::Arc<tokio::sync::Notify>,
+        }
+
+        #[async_trait]
+        impl InvestigationStrategy for GatedInvestigator {
+            fn id(&self) -> &str {
+                "gated_service_test_investigator"
+            }
+
+            async fn investigate(
+                &self,
+                replay: &ReplayBundle,
+            ) -> Result<InvestigationOutcome, String> {
+                self.started.notify_one();
+                self.release.notified().await;
+                Ok(InvestigationOutcome {
+                    summary: format!("investigated {}", replay.audit.hunt_id),
+                    evidence_points: vec!["host_id=host-1".to_string()],
+                    correlation_keys: vec!["host:host-1".to_string()],
+                    candidate_interpretations: Vec::new(),
+                    vote_lineage: Vec::new(),
+                })
+            }
+        }
+
+        let investigation_started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release_investigation = std::sync::Arc::new(tokio::sync::Notify::new());
+        let watchdog = std::time::Duration::from_secs(5);
         let mut config = service_config(
             RuntimeMode::LiveResponse,
             PheromoneBackendConfig::InMemory,
@@ -143,7 +174,8 @@
             enabled: true,
             worker_count: 1,
             max_pending_jobs: 2,
-            time_budget_ms: 250,
+            // The worker deadline must not release the latch during the watchdog.
+            time_budget_ms: 30_000,
             bundle_store: BundleStoreConfig::Memory,
             ..InvestigationConfig::default()
         };
@@ -165,7 +197,10 @@
         let investigation_store = MemoryInvestigationBundleStore::default();
         let coordinator = crate::investigation::InvestigationCoordinator::new(
             config.investigation.clone(),
-            SlowInvestigator { delay_ms: 75 },
+            GatedInvestigator {
+                started: investigation_started.clone(),
+                release: release_investigation.clone(),
+            },
             investigation_store.clone(),
         );
         let event = TelemetryEvent {
@@ -191,9 +226,9 @@
         };
         let agent_id = test_agent_id();
 
-        let started = std::time::Instant::now();
-        let persisted = service
-            .process_event_with_store_and_investigation(
+        let persisted = tokio::time::timeout(
+            watchdog,
+            service.process_event_with_store_and_investigation(
                 &detector,
                 &substrate,
                 &replay_store,
@@ -210,28 +245,55 @@
                         target_zone: "dmz".to_string(),
                     })
                 },
-            )
-            .await
-            .unwrap()
-            .unwrap();
-        let elapsed = started.elapsed();
-
-        assert!(
-            elapsed < std::time::Duration::from_millis(70),
-            "expected nonblocking path to return before the 75ms investigation delay, elapsed={elapsed:?}"
-        );
+            ),
+        )
+        .await
+        .expect("event processing must return while investigation is held at its latch")
+        .unwrap()
+        .unwrap();
         let investigation = persisted.investigation.expect("queued investigation");
         assert_eq!(
             investigation.status,
             swarm_spine::InvestigationStatus::Queued
         );
 
-        tokio::time::sleep(std::time::Duration::from_millis(125)).await;
-
-        let by_hunt = service
+        tokio::time::timeout(watchdog, investigation_started.notified())
+            .await
+            .expect("queued investigation must start");
+        let pending = service
             .load_persisted_investigation_by_hunt_id(&investigation_store, "evt-investigation-1")
             .unwrap()
             .unwrap();
+        assert_eq!(
+            pending.bundle.status,
+            swarm_spine::InvestigationStatus::Running
+        );
+        let snapshot = coordinator.snapshot();
+        assert_eq!(snapshot.running_jobs, 1);
+        assert_eq!(snapshot.completed_jobs, 0);
+        assert_eq!(snapshot.timed_out_jobs, 0);
+
+        // Only release the investigator after the service has returned and its
+        // persisted result is demonstrably still pending.
+        release_investigation.notify_one();
+        let by_hunt = tokio::time::timeout(watchdog, async {
+            loop {
+                let by_hunt = service
+                    .load_persisted_investigation_by_hunt_id(
+                        &investigation_store,
+                        "evt-investigation-1",
+                    )
+                    .unwrap()
+                    .unwrap();
+                match by_hunt.bundle.status {
+                    swarm_spine::InvestigationStatus::Completed => return by_hunt,
+                    swarm_spine::InvestigationStatus::Running => tokio::task::yield_now().await,
+                    status => panic!("expected running or completed investigation, got {status:?}"),
+                }
+            }
+        })
+        .await
+        .expect("released investigation must persist its completed result");
         assert_eq!(
             by_hunt.bundle.status,
             swarm_spine::InvestigationStatus::Completed
