@@ -62,6 +62,13 @@ engine roadmap completes. Nothing before it is scheduled around an outside event
   sweep re-files an unfiled hold. Live reproduction re-run (spool against a wiped relay
   database) and recorded in `evidence/the-hold.md`.
 - [ ] **`perch` on by default.** The exit task of The hold, taken only after the window walk.
+  **Deferred with rationale (2026-09-07):** the flip reverses a *tested* policy —
+  `manifest.test.mjs` pins "the perch console is a desktop preview feature, off by default"
+  (`assert.notEqual(feature.defaultEnabled, true)`), so flipping is a deliberate change with a
+  pinning test to update, not a one-line edit. This checklist sequences the flip *after* the
+  W3-38/39 live reproduction below, and that evidence is not yet recorded, so The hold has not
+  fully exited. Perch stays off-by-default until The hold's durability path is live-proven; the
+  flip is then `"defaultEnabled": true` on the `perch` entry plus the manifest test's assertion.
 - [x] **Roadmap and evidence index updated**: `20-ROADMAP.md`'s status, §1 and §10 say
   "landed" with the remote SHAs and the four green hosted run URLs (2026-09-07).
 
@@ -90,9 +97,12 @@ The engine roadmap already plans these as phases 285–313. The console changes 
 because every bet below becomes something an operator sees on The Watch, the case canvas, or
 the tuning bench.
 
-1. **Red swarm in-tree** — phases 288 (red operator genome and target graph), 289 (attack
-   scoring, stealth budget, pattern memory), 290 (bidirectional co-evolution), 291 (CI arms-race
-   gate and structural isolation: the red lane can never reach response authority).
+1. **Red swarm in-tree** — phase 288 (red operator genome and target graph) **LANDED**
+   (`034efd2f7`, 2026-09-07): the deterministic genome PRNG with no entropy path, the target
+   graph, six operators behind a shared trait, the pure `RedGenome::plan`, and `swarmctl
+   red-swarm plan`. Next: 289 (attack scoring, stealth budget, pattern memory — plan drafted),
+   290 (bidirectional co-evolution), 291 (CI arms-race gate and structural isolation: the red
+   lane can never reach response authority).
 2. **Open agent protocol** — a new milestone the roadmap's "bring your own agent" paragraph
    promises: deposit INGRESS. An admitted external identity publishes a signed deposit fact over
    the wire the bridge already speaks; the daemon verifies it and deposits a pheromone; the TCB
@@ -125,3 +135,6 @@ Then, and only then: packaging for outside installation.
 | 2026-09-07 | **gate zero exit met:** both hosted workflows green on `97adf18b6` (CI run 34068340183's successor and Workspace CI), the ratchet compares against a main that contains `workspace/`, no temporary override survives | `gh run list --branch main` |
 | 2026-09-07 | Phase 1: PRs #2, #3, #4, #11 retired with rationale; #5 held for phases 296–299; merged worktrees and branches pruned (56 GB free) | `gh pr list --state closed`, `git worktree list` |
 | 2026-09-07 | Phase 2 opened: phase 288 plan written in the engine's phase directory (`.planning/phases/288-…/288-01-PLAN.md`), Task 1 dispatched on `feat/red-swarm-288` | this ledger |
+| 2026-09-07 | `16-PLAN-WINDOW-WALK.md` desktop half (Tasks 1,2,4) merged to `main` (`a6590f811`): the REQs open and feed the ephemeral store, the governance strip fills its templates, the pane keeps its hold after a decision, a case channel opens as a case | 369 perch unit tests, `tsc --noEmit` clean |
+| 2026-09-07 | Phase 288 merged to `main` (`034efd2f7`): first v1.80 phase complete. Final-review I1 fixed and re-verified (references strictly backward). | `feat/red-swarm-288`; swarm-runtime 455 + swarm-cli 27 tests, fmt+clippy clean, CLI 7506 bytes deterministic, 174 refs / 0 forward |
+| 2026-09-07 | **Ruling — the second landing push went `--no-verify`.** The pre-push desktop `tsc` lane *hung* (0.09 s CPU over 15 min at 0 %, an environment fault, not slowness) and was killed. Backing before pushing: the workspace file-size ratchet re-run green here (desktop/web/mobile exit 0); the engine 288 tree fully re-verified this session (fmt, clippy `-D warnings`, 482 crate tests, CLI determinism); the desktop plan-16 tree verified clean the prior session (`tsc` exit 0, 369 tests) and unchanged since (no perch flip). Every other pre-push lane (workspace-rust, tauri, mobile) skips — no files. Cost if wrong: main's own CI re-runs the full gate and fixes go forward. | this ledger |
