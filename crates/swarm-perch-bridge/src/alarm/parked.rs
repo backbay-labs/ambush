@@ -66,6 +66,64 @@ impl ParkReason {
     }
 }
 
+/// What a parked record is about: the id an operator searches for, and the key that says two
+/// entries are the same work.
+///
+/// # Why the spool key is not enough
+///
+/// The daemon's sweep re-publishes a hold that is still unfiled every `refile_after_ms`, and an
+/// alarm record is never coalesced, so every re-file is a new spool record with a new `seq`.
+/// Against a relay that refuses the hold's sequence forever — the exact relay this whole
+/// mechanism exists for — that is one parked entry per interval, roughly a hundred and twenty
+/// over a hold's TTL, out of [`super::PARKED_CAPACITY`]. Evicting oldest-first, those duplicates
+/// would push out records that are genuinely distinct and that nothing re-files: a case
+/// promotion, or a hold whose terminal card was refused.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParkSubject {
+    /// A held destructive action, by its daemon-minted hold id.
+    Hold(String),
+    /// A case promotion, by its case id.
+    Case(String),
+    /// An event carrying no id of its own. Never equal to anything, itself included: two such
+    /// records are two records. Also what a ledger written before this field existed reads as.
+    #[default]
+    Unknown,
+}
+
+impl ParkSubject {
+    /// The hold id, when this subject is a hold.
+    #[must_use]
+    pub fn hold_id(&self) -> Option<&str> {
+        match self {
+            Self::Hold(hold_id) => Some(hold_id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The case id, when this subject is a promotion.
+    #[must_use]
+    pub fn case_id(&self) -> Option<&str> {
+        match self {
+            Self::Case(case_id) => Some(case_id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Whether both name the same hold, or the same case.
+    ///
+    /// [`ParkSubject::Unknown`] matches nothing, itself included, so a record with no id is
+    /// never deduplicated against another.
+    fn is_same_work(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Hold(left), Self::Hold(right)) | (Self::Case(left), Self::Case(right)) => {
+                left == right
+            }
+            _ => false,
+        }
+    }
+}
+
 /// One abandoned spool record, with everything needed to publish it later.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParkedRecord {
@@ -85,6 +143,13 @@ pub struct ParkedRecord {
     pub retries: u32,
     /// Why it is here.
     pub reason: ParkReason,
+    /// The hold or case this record is about.
+    ///
+    /// Persisted so that a re-filed hold replaces its own entry across a restart, and so that
+    /// the eviction that drops a record can still name what was lost. Defaulted for a ledger
+    /// written before this field existed, whose payloads still carry the id.
+    #[serde(default)]
+    pub subject: ParkSubject,
     /// Set when a retry could not deserialize [`ParkedRecord::payload`] at all.
     ///
     /// The record stays on disk with its bytes intact, because they are the only copy of the
@@ -177,22 +242,33 @@ impl ParkedLedger {
     ///
     /// # One record has ONE entry
     ///
-    /// Re-parking `(issuer, seq)` REPLACES the entry it already had. Parking and committing the
-    /// spool cursor are two files and two renames, so a crash between them leaves the record at
-    /// the spool head to be refused and parked a second time. Two entries for one record is not
-    /// a cosmetic duplicate: [`ParkedLedger::next_due`] selects on the smallest `parked_at_ms`
-    /// while [`ParkedLedger::touch`] advances the first entry that matches, so the younger twin
-    /// would stay the oldest due record forever, be selected every idle tick, and keep every
-    /// other parked record from ever being retried.
+    /// Re-parking REPLACES the entry the same work already had, matched on `(issuer, seq)` OR
+    /// on [`ParkedRecord::subject`]. Both halves answer a real duplicate.
+    ///
+    /// The spool key: parking and committing the cursor are two files and two renames, so a
+    /// crash between them leaves the record at the spool head to be refused and parked a second
+    /// time. Two entries for one record is not a cosmetic duplicate —
+    /// [`ParkedLedger::next_due`] selects on the smallest `parked_at_ms` while
+    /// [`ParkedLedger::touch`] advances the first entry that matches, so the younger twin would
+    /// stay the oldest due record forever, be selected every idle tick, and keep every other
+    /// parked record from being retried at all.
+    ///
+    /// The subject: the daemon re-files an unfiled hold under a NEW `seq` every
+    /// `refile_after_ms`, so the spool key alone would let one hold fill the dead-letter and
+    /// evict records nothing re-files. See [`ParkSubject`].
+    ///
+    /// The survivor is always the entry written last, which carries the newest payload and the
+    /// newest stamp; every other method still addresses a record by `(issuer, seq)`.
     ///
     /// # Errors
     ///
     /// [`BridgeError::SpoolIo`] when the file cannot be written. The caller must then leave the
     /// record where it is: a park that is not durable is a drop.
     pub fn park(&mut self, record: ParkedRecord) -> Result<Option<ParkedRecord>, BridgeError> {
-        self.state
-            .records
-            .retain(|held| (held.issuer, held.seq) != (record.issuer, record.seq));
+        self.state.records.retain(|held| {
+            (held.issuer, held.seq) != (record.issuer, record.seq)
+                && !held.subject.is_same_work(&record.subject)
+        });
         self.state.records.push(record);
         let evicted = (self.state.records.len() > super::PARKED_CAPACITY)
             .then(|| {
@@ -353,6 +429,10 @@ mod tests {
     use super::*;
 
     fn parked(seq: Seq, parked_at_ms: i64) -> ParkedRecord {
+        hold_record(seq, parked_at_ms, &format!("hold-{seq}"))
+    }
+
+    fn hold_record(seq: Seq, parked_at_ms: i64, hold_id: &str) -> ParkedRecord {
         ParkedRecord {
             issuer: 3,
             seq,
@@ -360,7 +440,15 @@ mod tests {
             parked_at_ms,
             retries: 0,
             reason: ParkReason::refusal_budget_exhausted("not_a_channel_member"),
+            subject: ParkSubject::Hold(hold_id.to_string()),
             unreadable: false,
+        }
+    }
+
+    fn case_record(seq: Seq, parked_at_ms: i64, case_id: &str) -> ParkedRecord {
+        ParkedRecord {
+            subject: ParkSubject::Case(case_id.to_string()),
+            ..hold_record(seq, parked_at_ms, "unused")
         }
     }
 
@@ -422,6 +510,10 @@ mod tests {
             written.contains(r#""refusal_budget_exhausted""#)
                 && written.contains(r#""last": "not_a_channel_member""#),
             "{written}"
+        );
+        assert!(
+            written.contains(r#""subject""#) && written.contains(r#""hold": "hold-7""#),
+            "the record says which hold it is, for the operator and for the dedupe\n{written}"
         );
 
         // Corrupt is refused, and left exactly as found: these payloads are the only copy of
@@ -520,6 +612,60 @@ mod tests {
                 .map(|record| record.seq),
             Some(9),
             "with one entry per record, advancing it gives the next record its turn"
+        );
+    }
+
+    #[test]
+    fn re_filing_one_hold_keeps_one_entry_and_leaves_other_subjects_alone() {
+        // The daemon's sweep re-publishes an unfiled hold every `refile_after_ms`, and an alarm
+        // record is never coalesced, so each re-file is a NEW spool record with a new `seq`. A
+        // relay that refuses one hold forever therefore parks it once per interval: about a
+        // hundred and twenty entries over a hold's TTL, out of a capacity of 256, evicting
+        // records that are genuinely distinct -- a case promotion, a terminal card -- and that
+        // nothing re-files. One hold takes one slot, however many times it is re-filed.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("parked-alarms.json");
+        let mut ledger = ParkedLedger::open(&path).unwrap();
+
+        for (seq, parked_at_ms) in [(1, 1_000), (2, 31_000), (3, 61_000)] {
+            assert!(
+                ledger
+                    .park(hold_record(seq, parked_at_ms, "hold-refiled"))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+
+        assert_eq!(ledger.len(), 1, "one hold, one entry");
+        let survivor = ledger.next_due(i64::MAX, 0, &BTreeSet::new()).unwrap();
+        assert_eq!(
+            (survivor.seq, survivor.parked_at_ms),
+            (3, 61_000),
+            "the entry that survives is the newest re-file, not the first"
+        );
+
+        // A different hold is a different record, and a case is never a hold.
+        ledger.park(case_record(4, 70_000, "case-abc")).unwrap();
+        ledger.park(hold_record(5, 80_000, "hold-other")).unwrap();
+        assert_eq!(ledger.len(), 3, "other subjects are left alone");
+
+        // The subject comes back off disk: re-parking the same case after a reopen still
+        // replaces its entry rather than adding a fourth.
+        let mut reopened = ParkedLedger::open(&path).unwrap();
+        assert_eq!(reopened.len(), 3);
+        reopened.park(case_record(6, 90_000, "case-abc")).unwrap();
+        assert_eq!(
+            reopened.len(),
+            3,
+            "a reopened ledger still knows its subjects"
+        );
+        assert_eq!(
+            ParkedLedger::open(&path)
+                .unwrap()
+                .next_due(i64::MAX, 0, &BTreeSet::new())
+                .map(|record| record.seq),
+            Some(3),
+            "and the hold's own entry is untouched by all of it"
         );
     }
 

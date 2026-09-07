@@ -78,6 +78,10 @@ swarm-spine.workspace = true
 # daemon would never produce.
 swarm-runtime = { workspace = true, features = ["test-fixtures"] }
 tempfile = "3"
+# The dead-letter overflow is the one path here that loses a record for good, and what it must
+# do is NAME the record in its log line. Asserting that needs a subscriber, and this crate has
+# no other reason to hold one: the daemon installs its own.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

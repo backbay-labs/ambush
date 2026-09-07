@@ -60,7 +60,7 @@ use crate::stream::{Stream, threat_class_slug};
 
 mod parked;
 
-pub use parked::{ParkReason, ParkedLedger, ParkedRecord};
+pub use parked::{ParkReason, ParkSubject, ParkedLedger, ParkedRecord};
 
 /// The case TTL used when neither the threat class nor `default` is configured: thirty days.
 pub const FALLBACK_CASE_TTL_SECONDS: i32 = 2_592_000;
@@ -605,6 +605,7 @@ fn park_head(
     reason: &'static str,
     now_ms: i64,
 ) -> Result<(), BridgeError> {
+    let subject = subject_of(event);
     let evicted = parked.park(ParkedRecord {
         issuer: record.issuer,
         seq: record.seq,
@@ -612,45 +613,127 @@ fn park_head(
         parked_at_ms: now_ms,
         retries: 0,
         reason: ParkReason::refusal_budget_exhausted(reason),
+        subject: subject.clone(),
         unreadable: false,
     })?;
     if let Some(evicted) = evicted {
         // The dead-letter is bounded, so the record abandoned longest ago goes. That IS a drop:
         // nothing will retry it again, and it is counted where every other lost event is.
         metrics.dropped_event(Stream::Alarm, "parked_overflow");
-        tracing::error!(
-            module = module_path!(),
-            issuer = evicted.issuer,
-            seq = evicted.seq,
-            parked_at_ms = evicted.parked_at_ms,
-            "the parked alarm dead-letter is full; its oldest record was dropped to make room"
-        );
+        log_evicted(&evicted);
     }
     metrics.alarm_parked(reason);
-    let (subject, id) = subject_of(event);
-    tracing::error!(
-        module = module_path!(),
-        subject,
-        id,
-        refusals = budget.refusals,
-        reason,
-        blocked_for_ms = now_ms - budget.first_refused_at_ms,
-        "a hold sequence was refused {} times in a row and is parked; later holds no longer \
-         wait behind it",
-        budget.refusals
-    );
+    log_parked(&subject, record, budget, reason, now_ms);
     Ok(())
 }
 
-/// Which identifier a record is about, for a log line: `("hold_id", ...)` or
-/// `("case_id", ...)`.
-fn subject_of(event: &RuntimeEvent) -> (&'static str, &str) {
+/// Logs a parked record at error, under the id name an operator greps for.
+///
+/// Three calls and not one field, because a `tracing` field name is a literal: a pipeline
+/// filtering `hold_id="X"` must find this line, and a promotion is named by its case.
+fn log_parked(
+    subject: &ParkSubject,
+    record: &crate::spool::Record,
+    budget: &HeadBudget,
+    reason: &'static str,
+    now_ms: i64,
+) {
+    let refusals = budget.refusals;
+    let blocked_for_ms = now_ms - budget.first_refused_at_ms;
+    match subject {
+        ParkSubject::Hold(hold_id) => tracing::error!(
+            module = module_path!(),
+            hold_id = hold_id.as_str(),
+            refusals,
+            reason,
+            blocked_for_ms,
+            "a hold sequence was refused {refusals} times in a row and is parked; later holds no \
+             longer wait behind it"
+        ),
+        ParkSubject::Case(case_id) => tracing::error!(
+            module = module_path!(),
+            case_id = case_id.as_str(),
+            refusals,
+            reason,
+            blocked_for_ms,
+            "a case promotion was refused {refusals} times in a row and is parked; later holds \
+             no longer wait behind it"
+        ),
+        // No id of its own, so the spool coordinates are the only handle there is.
+        ParkSubject::Unknown => tracing::error!(
+            module = module_path!(),
+            issuer = record.issuer,
+            seq = record.seq,
+            refusals,
+            reason,
+            blocked_for_ms,
+            "an alarm record was refused {refusals} times in a row and is parked; later holds no \
+             longer wait behind it"
+        ),
+    }
+}
+
+/// Logs the record the dead-letter dropped to make room, naming what was lost.
+///
+/// This is the one path on the hold lane that loses a record for good: after this line its id is
+/// nowhere. Not on the relay, which never took it; not in the spool, whose cursor moved past it
+/// when it was parked; and no longer in the dead-letter. So the line says which record it was,
+/// and an operator can go to the daemon's store for the rest.
+fn log_evicted(evicted: &ParkedRecord) {
+    let (issuer, seq, parked_at_ms) = (evicted.issuer, evicted.seq, evicted.parked_at_ms);
+    match evicted_subject(evicted) {
+        ParkSubject::Hold(hold_id) => tracing::error!(
+            module = module_path!(),
+            hold_id = hold_id.as_str(),
+            issuer,
+            seq,
+            parked_at_ms,
+            "the parked alarm dead-letter is full; this hold was abandoned longest ago and its \
+             record is dropped"
+        ),
+        ParkSubject::Case(case_id) => tracing::error!(
+            module = module_path!(),
+            case_id = case_id.as_str(),
+            issuer,
+            seq,
+            parked_at_ms,
+            "the parked alarm dead-letter is full; this case promotion was abandoned longest ago \
+             and its record is dropped"
+        ),
+        ParkSubject::Unknown => tracing::error!(
+            module = module_path!(),
+            issuer,
+            seq,
+            parked_at_ms,
+            "the parked alarm dead-letter is full; its oldest record was dropped to make room, \
+             and its payload named no id this build could read"
+        ),
+    }
+}
+
+/// The subject an evicted record is about.
+///
+/// The stored subject, and for a record parked by a build that did not store one, whatever its
+/// payload still says. Both can come back [`ParkSubject::Unknown`], which is the honest answer
+/// when the bytes name nothing this build can read.
+fn evicted_subject(evicted: &ParkedRecord) -> ParkSubject {
+    if evicted.subject != ParkSubject::Unknown {
+        return evicted.subject.clone();
+    }
+    serde_json::from_slice(&evicted.payload)
+        .map(|event: RuntimeEvent| subject_of(&event))
+        .unwrap_or_default()
+}
+
+/// What a record is about: the id an operator searches for, and the key that says two parked
+/// entries are the same work.
+fn subject_of(event: &RuntimeEvent) -> ParkSubject {
     match event {
-        RuntimeEvent::ResponseHeld { hold_id, .. } => ("hold_id", hold_id.as_str()),
-        RuntimeEvent::CasePromoted { case_id, .. } => ("case_id", case_id.as_str()),
+        RuntimeEvent::ResponseHeld { hold_id, .. } => ParkSubject::Hold(hold_id.clone()),
+        RuntimeEvent::CasePromoted { case_id, .. } => ParkSubject::Case(case_id.clone()),
         // Unreachable in practice: no other event is ever refused, because no other event
         // publishes anything.
-        _ => ("event", ""),
+        _ => ParkSubject::Unknown,
     }
 }
 
@@ -1629,6 +1712,7 @@ mod tests {
             parked_at_ms,
             retries: 0,
             reason: ParkReason::refusal_budget_exhausted("not_a_channel_member"),
+            subject: ParkSubject::Hold(format!("hold-seeded-{seq}")),
             unreadable: false,
         }
     }
@@ -1642,6 +1726,64 @@ mod tests {
         let mut ledger = ParkedLedger::open(&dir.path().join("parked-alarms.json")).unwrap();
         for record in records {
             ledger.park(record).unwrap();
+        }
+    }
+
+    /// Everything this test binary has logged at error, since the first test that asked.
+    ///
+    /// The drainer runs in a spawned task on another thread, so a thread-local subscriber would
+    /// see nothing and this installs the global one — once per binary, for every test at once.
+    /// A test that reads the buffer must therefore look for a line naming an id unique to
+    /// itself, because the other tests are logging into it in parallel.
+    fn captured_logs() -> CapturedLogs {
+        static LOGS: std::sync::OnceLock<CapturedLogs> = std::sync::OnceLock::new();
+        LOGS.get_or_init(|| {
+            let logs = CapturedLogs::default();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(logs.clone())
+                .with_ansi(false)
+                .with_max_level(tracing::Level::ERROR)
+                .finish();
+            // Another test got here first, or a harness installed one: either way the buffer
+            // this returns is the one that subscriber writes into.
+            let _ = tracing::subscriber::set_global_default(subscriber);
+            logs
+        })
+        .clone()
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+    impl CapturedLogs {
+        /// The one logged line containing `needle`, if any.
+        fn line_with(&self, needle: &str) -> Option<String> {
+            String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner))
+                .lines()
+                .find(|line| line.contains(needle))
+                .map(str::to_string)
+        }
+    }
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedLogs {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
         }
     }
 
@@ -1678,6 +1820,7 @@ mod tests {
         let (behind_hold, behind_case) =
             route_and_spool_hold(&dir, &spools, &store, alarm_idx, "hunt-behind");
 
+        let logs = captured_logs();
         let (metrics, registry) = BridgeMetrics::new();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut built = drainer(
@@ -1759,6 +1902,18 @@ mod tests {
             store.get(&blocked_hold.hold_id).unwrap().unwrap().state,
             swarm_runtime::held_action::HoldState::Created,
             "parking publishes nothing; the parked hold is exactly as the daemon left it"
+        );
+        // And the line that reports it is greppable by the id an operator has.
+        let line = logs
+            .line_with(&blocked_hold.hold_id)
+            .unwrap_or_else(|| panic!("nothing logged names {}", blocked_hold.hold_id));
+        assert!(
+            line.contains(&format!(r#"hold_id="{}""#, blocked_hold.hold_id)),
+            "the id is under the field name a log pipeline filters on\n{line}"
+        );
+        assert!(
+            line.contains("refusals=30") && line.contains("is parked"),
+            "{line}"
         );
     }
 
@@ -2306,16 +2461,28 @@ mod tests {
         let alarm_idx = identities.alarm();
         let store = Arc::new(swarm_runtime::held_action::MemoryHeldActionStore::default());
         let (_hold, case) = route_and_spool_hold(&dir, &spools, &store, alarm_idx, "hunt-overflow");
+        let logs = captured_logs();
         // A dead-letter already at capacity. Every entry is stamped in the recent past, so all
         // of them are older than the record about to be parked and none is due to be retried
-        // while this test runs.
+        // while this test runs. The oldest — the one that will be dropped — is a hold parked by
+        // a build that stored no subject, so its id can only come from the payload it carries,
+        // which is the fallback an existing ledger file needs.
+        let lost = held_fixture();
+        let lost_payload = serde_json::to_vec(&response_held(
+            &lost,
+            swarm_runtime::held_action::HoldState::Created,
+        ))
+        .unwrap();
         let base = chrono::Utc::now().timestamp_millis() - 5_000;
-        seed_parked(
-            &dir,
-            (0..PARKED_CAPACITY)
-                .map(|index| seeded(index as crate::spool::Seq, base + index as i64, b"{}"))
-                .collect(),
+        let mut seeds = vec![ParkedRecord {
+            subject: ParkSubject::Unknown,
+            ..seeded(0, base, &lost_payload)
+        }];
+        seeds.extend(
+            (1..PARKED_CAPACITY)
+                .map(|index| seeded(index as crate::spool::Seq, base + index as i64, b"{}")),
         );
+        seed_parked(&dir, seeds);
 
         let (metrics, registry) = BridgeMetrics::new();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -2367,6 +2534,17 @@ mod tests {
             1,
             "and the newly parked hold took its place"
         );
+
+        // The record is now nowhere: not on the relay, not in the spool, not in this file. The
+        // log line is all an operator has left, so it names the hold it dropped.
+        let line = logs
+            .line_with(&lost.hold_id)
+            .unwrap_or_else(|| panic!("no logged line names the dropped hold {}", lost.hold_id));
+        assert!(
+            line.contains(&format!(r#"hold_id="{}""#, lost.hold_id)),
+            "under the field name a log pipeline filters on\n{line}"
+        );
+        assert!(line.contains("dead-letter is full"), "{line}");
     }
 
     #[tokio::test]
