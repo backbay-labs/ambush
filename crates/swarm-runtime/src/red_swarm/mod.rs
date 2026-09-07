@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use swarm_whisker::TelemetryEvent;
 
 pub mod budget;
+pub mod campaign;
 mod genome;
 pub mod genome_adapter;
 mod graph;
@@ -18,6 +19,7 @@ mod rng;
 pub mod scoring;
 pub mod weights;
 
+pub use campaign::{GenerationOutcome, run_generation};
 pub use genome::{
     CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,
 };
@@ -142,6 +144,17 @@ pub enum RedSwarmError {
         scenario: String,
         reason: String,
     },
+
+    /// [`crate::detector_factory::build_detector_from_strategy`] could not
+    /// build one of a measured run's enabled detectors -- an invalid profile
+    /// somewhere in the [`swarm_core::config::DetectionConfig`] handed to
+    /// [`campaign::run_generation`], or a `detection.strategies` entry naming
+    /// a strategy id [`crate::detector_factory`] does not recognise.
+    /// Surfaced verbatim rather than skipping the offending strategy, so a
+    /// misconfigured detector set fails the measured run closed instead of
+    /// silently scoring against fewer detectors than the caller asked for.
+    #[error(transparent)]
+    DetectorBuild(#[from] crate::detector_factory::DetectorFactoryError),
 }
 
 /// Deterministic seam for generating adversarial telemetry without the historical Python runtime.

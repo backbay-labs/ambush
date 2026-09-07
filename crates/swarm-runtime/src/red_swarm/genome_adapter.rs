@@ -48,8 +48,8 @@
 //! # Determinism (SC 2 / SC 4)
 //!
 //! `.events` is a pure function of `(self.seed, self.generation,
-//! self.campaign, self.graph, self.budget, self.suite_paths' file contents)`
-//! alone. `context: &ThreatContext` is accepted only because
+//! self.campaign, self.graph, self.budget, self.weights, self.suite_paths'
+//! file contents)` alone. `context: &ThreatContext` is accepted only because
 //! [`RedSwarmAdapter`] is the one trait shared with the suite-backed adapter;
 //! it contributes `generated_at_ms` to the artifact -- mirroring
 //! `SuiteRedSwarmAdapter`, which sets that field from `context.requested_at_ms`
@@ -92,16 +92,34 @@
 //!     field names benign material that is present, not material that was
 //!     dropped.
 //!
-//! # Weighted planning (reserved)
+//! # Weighted planning
 //!
-//! A later task adds weighted technique selection. [`GenomeRedSwarm::new`] is
-//! the only construction path and every field is private, so that task can
-//! add an `Option<_>` weights field plus its own builder method (e.g.
-//! `with_weights`) without requiring any existing call site to change.
+//! [`GenomeRedSwarm::with_weights`] (Phase 290, COEVOLVE-01/-03) attaches an
+//! optional [`TechniqueWeights`] snapshot after construction; [`Self::new`]
+//! leaves it unset, so every existing call site keeps planning through
+//! [`RedGenome::plan_weighted`]'s `None` arm -- byte-identical to Phase 288's
+//! `RedGenome::plan` forever (see that function's doc). Both
+//! [`Self::generate_sequence_artifact`] and [`Self::materialize_by_step`]
+//! plan through the same `self.weights.as_ref()`, so the two entry points
+//! never disagree about which plan they are materializing.
+//!
+//! # Step-grouped materialization
+//!
+//! [`Self::materialize_by_step`] (Phase 290, COEVOLVE-01 part B) runs the
+//! same plan -> budget -> materialize pipeline as
+//! [`Self::generate_sequence_artifact`], reusing [`Self::materialize_step`]
+//! for the re-stamping itself, but returns each admitted step's events
+//! grouped by that step instead of flattened and globally re-sorted. A
+//! [`TelemetryEvent`] carries no technique field, so a caller that must map a
+//! detector finding back to the technique that produced it -- red_swarm's
+//! own measured run, [`super::campaign::run_generation`] -- needs exactly
+//! this grouping, which the flattened artifact has already discarded by the
+//! time it leaves [`Self::generate_sequence_artifact`].
 
 use super::budget::StealthBudget;
 use super::genome::{CampaignParams, GeneStep, OperatorRole, RedGenome, StepIntent};
 use super::graph::{ScenarioRef, TargetGraph};
+use super::weights::TechniqueWeights;
 use super::{
     AdversarialSequenceArtifact, RedSwarmAdapter, RedSwarmError, ThreatContext,
     sanitize_identifier, validate_context,
@@ -128,6 +146,7 @@ pub struct GenomeRedSwarm {
     seed: u64,
     generation: u32,
     budget: StealthBudget,
+    weights: Option<TechniqueWeights>,
 }
 
 impl GenomeRedSwarm {
@@ -138,6 +157,8 @@ impl GenomeRedSwarm {
     /// is not checked here -- it surfaces as
     /// [`RedSwarmError::UnresolvedScenario`] the first time a plan step's
     /// scenario fails to resolve.
+    ///
+    /// Plans unweighted (see [`Self::with_weights`]) until a caller opts in.
     pub fn new(
         graph: TargetGraph,
         suite_paths: Vec<PathBuf>,
@@ -153,7 +174,18 @@ impl GenomeRedSwarm {
             seed,
             generation,
             budget,
+            weights: None,
         }
+    }
+
+    /// Attaches a [`TechniqueWeights`] snapshot: every later plan drawn by
+    /// this adapter (through [`Self::generate_sequence_artifact`] or
+    /// [`Self::materialize_by_step`]) biases technique selection through it,
+    /// via [`RedGenome::plan_weighted`]. See the module doc's "Weighted
+    /// planning" section for the determinism contract this preserves.
+    pub fn with_weights(mut self, weights: TechniqueWeights) -> Self {
+        self.weights = Some(weights);
+        self
     }
 
     /// Plans, budgets, and materializes one generation's
@@ -167,7 +199,13 @@ impl GenomeRedSwarm {
     ) -> Result<AdversarialSequenceArtifact, RedSwarmError> {
         validate_context(context)?;
 
-        let plan = RedGenome::plan(self.seed, self.generation, &self.campaign, &self.graph);
+        let plan = RedGenome::plan_weighted(
+            self.seed,
+            self.generation,
+            &self.campaign,
+            &self.graph,
+            self.weights.as_ref(),
+        )?;
         let graph_fingerprint = plan.graph_fingerprint;
         let outcome = self.budget.apply(plan.steps);
         let scenario_index = self.load_scenario_index()?;
@@ -220,6 +258,51 @@ impl GenomeRedSwarm {
             benign_control_scenarios: benign_control_scenarios.into_iter().collect(),
             events,
         })
+    }
+
+    /// Plans, budgets, and materializes one generation's corpus exactly as
+    /// [`Self::generate_sequence_artifact`] does, but returns each admitted
+    /// step's re-stamped events grouped by that step -- one entry per
+    /// [`GeneStep`], tagged with the step's own `technique` -- instead of one
+    /// flattened, globally re-sorted [`AdversarialSequenceArtifact`] (Phase
+    /// 290, COEVOLVE-01 part B). See the module doc's "Step-grouped
+    /// materialization" section for why this exists.
+    ///
+    /// Reuses [`Self::materialize_step`] for the re-stamping itself, so
+    /// nothing about how an event is re-addressed is duplicated between this
+    /// method and [`Self::generate_sequence_artifact`]; the only difference
+    /// is the final assembly (grouped here, flattened-and-sorted there).
+    ///
+    /// Entries are in the plan's own final schedule order (never re-sorted
+    /// the way [`Self::generate_sequence_artifact`]'s `.events` is). Depends
+    /// on exactly the inputs that method's doc names -- `context` only gates
+    /// [`validate_context`] here too; it contributes nothing to the returned
+    /// events, so two calls on the same adapter with two different valid
+    /// contexts return identical groupings (mirrors
+    /// [`Self::generate_sequence_artifact`]'s own determinism contract).
+    pub fn materialize_by_step(
+        &self,
+        context: &ThreatContext,
+    ) -> Result<Vec<(String, Vec<TelemetryEvent>)>, RedSwarmError> {
+        validate_context(context)?;
+
+        let plan = RedGenome::plan_weighted(
+            self.seed,
+            self.generation,
+            &self.campaign,
+            &self.graph,
+            self.weights.as_ref(),
+        )?;
+        let outcome = self.budget.apply(plan.steps);
+        let scenario_index = self.load_scenario_index()?;
+
+        let mut grouped = Vec::with_capacity(outcome.steps.len());
+        for (step_index, step) in outcome.steps.iter().enumerate() {
+            let scenario_events = resolve_scenario_events(&scenario_index, &step.scenario)?;
+            let events = self.materialize_step(step_index, step, scenario_events)?;
+            grouped.push((step.technique.clone(), events));
+        }
+        Ok(grouped)
     }
 
     /// Every scenario named by `self.suite_paths`, keyed by `(suite name,
