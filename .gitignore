@@ -78,6 +78,7 @@ data/evolution-portfolios/
 data/evolution-governance-review-packets/
 data/evolution-packet-sets/
 data/evolution-portfolio-history/
+data/red-swarm/campaigns/
 # correlation.incident_store for rulesets-dev/perch-dev.yaml (local_files, cwd-relative).
 data/incidents/
 # Runtime state the daemon writes beside a config that is not under rulesets/

@@ -749,6 +749,24 @@ pub struct CampaignReport {
     pub final_blue_catch_rate: f64,
 }
 
+/// The `"generation-<n>"` corpus sequence id for generation `generation`
+/// (Task 4, COEVOLVE-04), matching the existing
+/// `EvolutionEpisodeRecord::adversarial_corpus_sequence_id` convention (see
+/// `crate::evolution_status::EvolutionAdversarialSummary`'s own
+/// `corpus_sequence_id`, which that record's value flows into unchanged --
+/// that struct's shape test pins the id this function produces still fits
+/// its existing `Option<String>` field).
+///
+/// A pure string format, deliberately kept OUT of [`CampaignReport`] and
+/// [`GenerationOutcome`] themselves (see [`CampaignReport`]'s doc's
+/// "Deliberately carries no timestamp and no persistence identity"
+/// paragraph): this function is the shared source of truth for the id's
+/// shape, called from the CLI persistence layer (Task 4) to label each
+/// [`GenerationOutcome`] it serializes, never stored on the outcome itself.
+pub fn generation_corpus_sequence_id(generation: u32) -> String {
+    format!("generation-{generation}")
+}
+
 /// The bidirectional red/blue campaign loop (Phase 290, COEVOLVE-01 part B /
 /// COEVOLVE-02). A namespace for [`Self::run`], not a thing with its own
 /// state -- like [`RedGenome`], it holds nothing.
@@ -2125,5 +2143,25 @@ mod tests {
         assert!(report.generations.is_empty());
         assert_eq!(report.stop_reason, StopReason::MaxGenerations);
         assert_eq!(report.final_blue_catch_rate, 0.0);
+    }
+
+    #[test]
+    fn generation_corpus_sequence_id_formats_as_generation_dash_n() {
+        assert_eq!(generation_corpus_sequence_id(0), "generation-0");
+        assert_eq!(generation_corpus_sequence_id(7), "generation-7");
+        assert_eq!(generation_corpus_sequence_id(42), "generation-42");
+    }
+
+    #[test]
+    fn generation_corpus_sequence_id_is_distinct_per_generation_and_deterministic() {
+        let first = generation_corpus_sequence_id(3);
+        let second = generation_corpus_sequence_id(3);
+        let third = generation_corpus_sequence_id(4);
+
+        assert_eq!(
+            first, second,
+            "identical generations must format identically"
+        );
+        assert_ne!(first, third, "distinct generations must format distinctly");
     }
 }

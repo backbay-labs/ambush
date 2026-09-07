@@ -21,7 +21,7 @@ pub mod weights;
 
 pub use campaign::{
     CampaignConfig, CampaignReport, Convergence, GenerationOutcome, RedSwarmCampaign, StopReason,
-    run_generation,
+    generation_corpus_sequence_id, run_generation,
 };
 pub use genome::{
     CampaignParams, Determinism, GeneStep, OperatorRole, RedGenome, RedPlan, StepIntent,
