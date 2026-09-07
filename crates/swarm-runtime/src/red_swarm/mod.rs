@@ -9,8 +9,10 @@ use std::path::PathBuf;
 use swarm_whisker::TelemetryEvent;
 
 mod graph;
+mod rng;
 
 pub use graph::{LoadedSuite, Node, ScenarioRef, TargetGraph, TechniqueNode};
+pub use rng::RedGenomeRng;
 
 /// Runtime-owned context for deterministic adversarial corpus generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
