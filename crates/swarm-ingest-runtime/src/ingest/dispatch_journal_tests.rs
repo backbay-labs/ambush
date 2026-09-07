@@ -1,3 +1,5 @@
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod dispatch_journal_composition {
     use super::*;
     use swarm_policy::configurable_gate::ConfigurableApprovalGate;

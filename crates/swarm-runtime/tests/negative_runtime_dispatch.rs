@@ -156,6 +156,8 @@ async fn negative_runtime_dispatch_intent_required() {
         panic!("expected missing-journal response refusal, got {error}");
     };
     assert_eq!(error.failure.details["status"], "dispatch_refused");
+    assert_eq!(error.failure.details["response_attempted"], false);
+    assert_eq!(error.failure.details["retry_permitted"], false);
     assert_eq!(error.failure.details["prior_reservation"], false);
     assert!(error.failure.message.contains("journal is not configured"));
     assert_eq!(real_executor.calls(), 0);
@@ -232,6 +234,8 @@ async fn negative_runtime_dispatch_identity_consumed_once() {
         panic!("expected consumed-identity response refusal, got {error}");
     };
     assert_eq!(error.failure.details["status"], "dispatch_refused");
+    assert_eq!(error.failure.details["response_attempted"], false);
+    assert_eq!(error.failure.details["retry_permitted"], false);
     assert_eq!(error.failure.details["prior_reservation"], true);
     assert!(error.failure.message.contains("already reserved"));
     assert_eq!(real_executor.calls(), 1);

@@ -1,13 +1,14 @@
 # The invariant map
 
-Phase 285 (v1.79 assurance floor). Each row below is one fail-closed
-invariant found by reading `swarm-policy`, `swarm-runtime`, `swarm-response`,
-and `swarm-spine` for the source points where malformed, weak, unauthorized,
-or unverified input is **denied** rather than defaulted open. `Path` is the
-exact `crate::module::function` that enforces the invariant, verified to
-exist at HEAD (see `.superpowers/sdd/285-01-PLAN/task-1-report.md` for the
-grep proving each one). `Assumption` is the `docs/assurance/assumptions.toml`
-ID the invariant rests on.
+Phase 285 established this v1.79 assurance map; the Phase 286 repair adds
+two dispatch-boundary invariants. Each row identifies an enforcing source point
+in `swarm-policy`, `swarm-runtime`, `swarm-response` or `swarm-spine` where a
+malformed, weak, unauthorized or unverified operation is **denied**.
+`Path` is the exact `crate::module::function` resolved against the current source
+tree by `tools/check-mapping.sh`. `Assumption` names the environmental or
+primitive contract in `docs/assurance/assumptions.toml` that enforcement rests on.
+Mapping synchronization is not proof that the new runtime tests passed or that
+Phase 286 is accepted; its pending evidence is tracked in the DST section below.
 
 Phase 285 Task 2 adds a `// INVARIANT: <Name>` comment at each `Source` call
 site and a gate that keeps this table, those markers, and the real paths in
