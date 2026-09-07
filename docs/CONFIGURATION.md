@@ -555,6 +555,7 @@ cargo run -p swarm-runtime-http --bin swarmctl -- first-run --config rulesets/de
 cargo run -p swarm-runtime-http --bin swarmctl -- playbook-preview --config rulesets/default.yaml --threat-class execution --severity HIGH --confidence 0.97 --mode incident --json
 cargo run -p swarm-runtime-http --bin swarmctl -- init --mode detect_only
 cargo run -p swarm-runtime-http --bin swarmctl -- init --mode live_response --output rulesets/custom-live.yaml
+cargo run -p swarm-runtime-http --bin swarmctl -- red-swarm plan --seed 7 --generation 0 --campaign smoke --virtual-clock-start-ms 1700000000000 --json
 ```
 
 The CLI labels output by origin:
@@ -588,6 +589,7 @@ Deployment bootstrap commands:
 - `swarmctl playbook-preview` evaluates the checked-in `pheromone.response_playbook` config with one explicit `--threat-class`, `--severity`, `--confidence`, and `--mode` tuple, then returns the matched rule or branch, typed rehearsal blast-radius and rollback metadata for each ordered action, and the approval verdict summary that would govern the live path. The command is side-effect free: it does not call live executors, mint governance receipts, or mutate durable runtime state.
 - `swarmctl status` now carries `false_positive_tracking` in JSON and prints the recent reviewed-finding count plus the top detector and host false-positive rates in text mode. The rollup is bounded to the same recent-incident window used by the operator review surface.
 - `swarmctl status` now also carries `alert_tuning` in JSON and prints the current recommendation count plus the highest-priority advisory recommendation in text mode. These recommendations remain advisory; the CLI does not write exclusions or detector thresholds automatically.
+- `swarmctl red-swarm plan --seed <u64> --generation <u32> --campaign <name>` prints a deterministic red-team plan drawn by the Phase 288 red genome. It builds the target graph from the evasion technique catalog (default `rulesets/evasion/attack-technique-catalog.yaml`, override with `--catalog`) and the scenario suites (default every `scenario-suites/*.yaml`, override with repeated `--suite`), then plans one generation of one campaign. `--json` emits the `RedPlan` with the `determinism` object (`rng_seed`, `virtual_clock_start_ms`, `scheduler`) at the top level and the graph fingerprint as hex; without `--json` it prints a step table. `--virtual-clock-start-ms` is required: a plan's bytes must never depend on the wall clock, so omitting it is refused with exit code 1 rather than defaulted to now. The command is side-effect free and reaches no response authority: it only reads the catalog and suites and prints a plan. `--max-steps` overrides the interleaved step cap.
 
 ### Helm Deployment
 

@@ -295,6 +295,12 @@ impl Cli {
     }
 }
 
+// The `red-swarm` verbs live in their own `.rs` module (not inline here): the
+// path is relative to this file, so it resolves to `swarm-cli/src/red_swarm_cmd.rs`
+// from both crates that `#[path]`-include core.inc.
+#[path = "red_swarm_cmd.rs"]
+mod red_swarm_cmd;
+
 #[derive(Debug, Subcommand)]
 enum Command {
     Validate(ValidateArgs),
@@ -308,6 +314,7 @@ enum Command {
     Serve,
     Status,
     Evolution(EvolutionArgs),
+    RedSwarm(red_swarm_cmd::RedSwarmArgs),
     Replay(ReplayArgs),
     Investigation(InvestigationArgs),
     Incident(IncidentArgs),
@@ -3194,6 +3201,12 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Identity(args) => return run_identity_command(&cli.config, args, cli.json),
         Command::Quarantine(args) => return run_quarantine_command(&cli, args).await,
+        // `red-swarm plan` is a pure, offline planner: it reads a catalog and
+        // suites and prints a plan. It needs neither the runtime config nor the
+        // control plane, so it returns here, before either is loaded -- like the
+        // other offline verbs above, and unlike `evolution`, whose handler needs
+        // the loaded harnesses below.
+        Command::RedSwarm(args) => return red_swarm_cmd::run(args, cli.json),
         _ => {}
     }
 
@@ -3338,7 +3351,8 @@ pub async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         | Command::Quickstart(_)
         | Command::PlaybookPreview(_)
         | Command::Identity(_)
-        | Command::Quarantine(_) => {
+        | Command::Quarantine(_)
+        | Command::RedSwarm(_) => {
             unreachable!("handled before harness bootstrap")
         }
         Command::Serve => {
