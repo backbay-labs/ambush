@@ -14,8 +14,11 @@
 //! the plan's [`Determinism`] block so a reader can re-derive it:
 //!   - the seed is `seed ^ (generation as u64).rotate_left(32)`, so a generation
 //!     shifts the whole stream without colliding with a nearby seed;
-//!   - each operator draws from its *own* forked stream, labelled by role, so
-//!     inserting or reordering an operator never perturbs another's draws;
+//!   - each operator draws from its *own* forked stream, labelled by role, so no
+//!     two operators share a draw; the operator call order is itself part of the
+//!     contract (`fork` advances the parent once per call, coupling a later
+//!     operator's stream to its position), so the `scheduler` string names that
+//!     order and a reorder is a declared breaking change, not a transparent one;
 //!   - offsets come from a monotone virtual schedule with a bounded jitter drawn
 //!     from the planner's own stream, never from the wall clock (SC 4).
 //!
@@ -70,9 +73,13 @@ pub enum OperatorRole {
 }
 
 impl OperatorRole {
-    /// The stable fork label for this role's PRNG stream. Forking by a fixed
-    /// per-role label rather than by call position is what lets a future
-    /// operator be inserted or reordered without shifting another role's draws.
+    /// The stable fork label for this role's PRNG stream. The label decorrelates
+    /// sibling streams -- two forks of the same parent state with different labels
+    /// diverge -- but it does NOT make an operator's stream position-independent:
+    /// `fork` advances the parent once per call, so inserting or reordering an
+    /// operator shifts every later operator's draws. The operator order is a
+    /// versioned contract instead: the `scheduler` string names it, and changing
+    /// the order changes that string, so a reorder is a declared breaking change.
     fn stream_label(self) -> &'static str {
         match self {
             OperatorRole::Recon => "recon",
@@ -467,14 +474,23 @@ mod tests {
                     let node = graph.technique(&step.technique).unwrap_or_else(|| {
                         panic!("step named unknown technique {}", step.technique)
                     });
-                    // The scenario the step points at is one of the technique's
-                    // own scenarios, and every event index is in range.
-                    assert!(
-                        node.scenarios.contains(&step.scenario),
-                        "technique {} does not carry scenario {:?}",
-                        step.technique,
-                        step.scenario
-                    );
+                    // Every step names a real technique. A cover step replays a
+                    // benign-control scenario (not one of its technique's own);
+                    // every other step's scenario is one the technique realises.
+                    if matches!(step.intent, StepIntent::Cover { .. }) {
+                        assert!(
+                            graph.benign_scenarios().contains(&step.scenario),
+                            "cover step scenario {:?} is not a benign one",
+                            step.scenario
+                        );
+                    } else {
+                        assert!(
+                            node.scenarios.contains(&step.scenario),
+                            "technique {} does not carry scenario {:?}",
+                            step.technique,
+                            step.scenario
+                        );
+                    }
                     assert!(!step.event_indices.is_empty());
                     for &index in &step.event_indices {
                         assert!(

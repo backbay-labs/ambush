@@ -5,12 +5,16 @@
 //! graph into a handful of proposed [`GeneStep`]s. Every operator obeys two
 //! rules that make the arms race classical and safe:
 //!   - **It invents nothing.** A step may only name a technique the graph
-//!     contains and one of that technique's own scenarios. An operator that
-//!     cannot find applicable graph material returns an empty `Vec` -- it is
-//!     *total*, never a panic.
+//!     contains and replay real corpus events: one of that technique's own
+//!     scenarios, or -- for an Opsec cover step -- a benign-control scenario the
+//!     graph carries. An operator that finds no applicable material returns an
+//!     empty `Vec` -- it is *total*, never a panic.
 //!   - **It draws only from the stream it is handed.** No clock, no entropy; the
-//!     planner forks each operator its own stream so its draws are reproducible
-//!     and independent of the others'.
+//!     planner forks each operator its own stream, so no two operators share a
+//!     draw. The streams are not order-independent, though: `fork` advances the
+//!     parent once per call, so the operator call order is part of the
+//!     determinism contract (the `scheduler` string names it), not something a
+//!     reorder may change silently.
 
 use super::genome::{GeneStep, OperatorRole, StepIntent};
 use super::graph::{ScenarioRef, TargetGraph, TechniqueNode};

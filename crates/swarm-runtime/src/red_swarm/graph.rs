@@ -128,15 +128,19 @@ impl LoadedSuite {
 
 /// The bounded world the red operators plan within (OPFOR-02).
 ///
-/// Stored as three collections whose orderings are canonical: detectors in
+/// Stored as four collections whose orderings are canonical: detectors in
 /// catalog order (which is meaningful), techniques keyed by id in a
-/// `BTreeMap`, and threat classes in a `BTreeSet`. That canonical form is what
-/// makes [`TargetGraph::fingerprint`] a stable name for the graph.
+/// `BTreeMap`, threat classes in a `BTreeSet`, and the benign-control scenarios
+/// (sorted [`ScenarioRef`]s) the corpus carries but that name no technique. That
+/// canonical form is what makes [`TargetGraph::fingerprint`] a stable name for
+/// the graph; the benign scenarios belong to that name because a plan that draws
+/// cover from them is planned against them too.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TargetGraph {
     detectors: Vec<String>,
     techniques: BTreeMap<String, TechniqueNode>,
     threat_classes: BTreeSet<ThreatClass>,
+    benign: Vec<ScenarioRef>,
 }
 
 impl TargetGraph {
@@ -158,11 +162,12 @@ impl TargetGraph {
     ///
     /// Techniques come from two sources, unioned: every technique a catalog
     /// detector declares intentionally uncovered, and every technique an
-    /// adversarial scenario declares. Benign scenarios are not adversary
-    /// material and so are not sources of events; they contribute nothing the
-    /// adversarial scenarios and catalog do not already carry. A catalog gap
-    /// contributes its detector and its threat class to the technique; a
-    /// scenario contributes a scenario reference and its own threat class.
+    /// adversarial scenario declares. A catalog gap contributes its detector and
+    /// its threat class to the technique; a scenario contributes a scenario
+    /// reference and its own threat class. Benign-control scenarios name no
+    /// attack technique, so they add no technique node; they are recorded
+    /// separately in `benign` as cover material the red lane's Opsec role
+    /// replays, without widening the technique, detector or threat-class sets.
     pub fn from_parts(catalog: &EvasionTechniqueCatalog, suites: &[LoadedSuite]) -> Self {
         let detectors = catalog
             .detectors
@@ -172,6 +177,7 @@ impl TargetGraph {
 
         let mut techniques: BTreeMap<String, TechniqueNode> = BTreeMap::new();
         let mut threat_classes: BTreeSet<ThreatClass> = BTreeSet::new();
+        let mut benign: Vec<ScenarioRef> = Vec::new();
 
         for detector in &catalog.detectors {
             for gap in &detector.intentionally_uncovered {
@@ -192,6 +198,16 @@ impl TargetGraph {
 
         for suite in suites {
             for scenario in &suite.scenarios {
+                // Benign-control scenarios have events but name no technique, so
+                // they seed no node; record them separately as cover material.
+                if scenario.manifest.metadata.class == ReplayScenarioClass::Benign {
+                    benign.push(ScenarioRef {
+                        suite: suite.name.clone(),
+                        scenario: scenario.manifest.name.clone(),
+                        event_count: scenario_event_count(scenario),
+                    });
+                    continue;
+                }
                 if scenario.manifest.metadata.class != ReplayScenarioClass::Adversarial {
                     continue;
                 }
@@ -223,11 +239,14 @@ impl TargetGraph {
             node.scenarios.sort();
             node.declared_uncovered_by.sort();
         }
+        benign.sort();
+        benign.dedup();
 
         Self {
             detectors,
             techniques,
             threat_classes,
+            benign,
         }
     }
 
@@ -256,6 +275,18 @@ impl TargetGraph {
     /// scenario, in sorted order.
     pub fn threat_classes(&self) -> impl Iterator<Item = &ThreatClass> {
         self.threat_classes.iter()
+    }
+
+    /// The benign-control scenarios the corpus carries, as sorted references.
+    ///
+    /// A benign scenario has events but names no attack technique, so it is not a
+    /// technique node and does not appear in any technique's scenario list. It is
+    /// exposed here so the red lane's Opsec role can replay genuinely benign
+    /// activity as low-signal cover for a noisy step, rather than reaching for an
+    /// attack scenario. Built the same way technique scenario references are
+    /// (suite, name, event count), from the scenarios the technique builder drops.
+    pub fn benign_scenarios(&self) -> &[ScenarioRef] {
+        &self.benign
     }
 
     /// Every technique that belongs to the given threat class, ordered by id.
@@ -520,6 +551,40 @@ mod tests {
     }
 
     #[test]
+    fn the_graph_exposes_benign_scenarios_without_making_them_technique_nodes() {
+        let graph = TargetGraph::from_repo(&catalog_path(), &suite_paths()).unwrap();
+        let benign = graph.benign_scenarios();
+
+        // The three benign controls the suites reference are exposed as refs.
+        let names: BTreeSet<&str> = benign.iter().map(|s| s.scenario.as_str()).collect();
+        assert!(names.contains("benign_baseline"));
+        assert!(names.contains("python_maintenance_benign"));
+        assert!(names.contains("command_line_deobfuscation_benign"));
+
+        // Every benign ref carries events (real cover material).
+        for scenario_ref in benign {
+            assert!(
+                scenario_ref.event_count > 0,
+                "benign scenario {} has no events",
+                scenario_ref.scenario
+            );
+        }
+
+        // A benign scenario is never a technique's scenario source, even when it
+        // names a technique: python_maintenance_benign declares T1105, but
+        // T1105's realising scenarios are all adversarial.
+        if let Some(t1105) = graph.technique("T1105") {
+            assert!(
+                t1105
+                    .scenarios
+                    .iter()
+                    .all(|s| s.scenario != "python_maintenance_benign"),
+                "a benign scenario leaked into a technique's scenario list"
+            );
+        }
+    }
+
+    #[test]
     fn the_graph_fingerprint_is_stable_and_changes_with_one_technique() {
         let catalog = small_catalog(vec![detector(
             "suspicious_process_tree",
@@ -553,5 +618,42 @@ mod tests {
         });
         let with_extra = TargetGraph::from_parts(&catalog, &suites_plus);
         assert_ne!(first.fingerprint(), with_extra.fingerprint());
+    }
+
+    #[test]
+    fn the_fingerprint_reflects_the_benign_cover_scenarios() {
+        let catalog = small_catalog(vec![detector(
+            "suspicious_process_tree",
+            vec![gap("T1204.001", ThreatClass::InitialAccess)],
+        )]);
+        let adversarial = vec![LoadedSuite {
+            name: "synthetic_v1".to_string(),
+            scenarios: vec![scenario(
+                "exec",
+                ReplayScenarioClass::Adversarial,
+                Some(ThreatClass::Execution),
+                &["T1059.001"],
+            )],
+        }];
+        let without_benign = TargetGraph::from_parts(&catalog, &adversarial);
+        assert!(without_benign.benign_scenarios().is_empty());
+
+        let mut with_benign_suites = adversarial.clone();
+        with_benign_suites.push(LoadedSuite {
+            name: "controls_v1".to_string(),
+            scenarios: vec![scenario("control", ReplayScenarioClass::Benign, None, &[])],
+        });
+        let with_benign = TargetGraph::from_parts(&catalog, &with_benign_suites);
+
+        // The benign scenario adds no technique node, but it is part of the
+        // graph's name: a plan that could draw cover from it is planned against
+        // it, so the fingerprint changes.
+        assert_eq!(
+            without_benign.techniques().count(),
+            with_benign.techniques().count(),
+            "a benign scenario must not add a technique node"
+        );
+        assert_eq!(with_benign.benign_scenarios().len(), 1);
+        assert_ne!(without_benign.fingerprint(), with_benign.fingerprint());
     }
 }

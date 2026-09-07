@@ -1,27 +1,19 @@
-//! `OpsecOperator` (Cover): hide a noisy step behind quiet activity.
+//! `OpsecOperator` (Cover): hide a noisy step behind benign-control activity.
 //!
 //! Opsec reads the plan so far for a noisy step -- an exploitation step -- and
-//! proposes a `Cover(step)` step that replays the quietest catalogued activity
-//! available, so the loud step travels next to low-signal traffic. It proposes
-//! at most `steps_per_operator` covers and is total: with no noisy step, it
-//! proposes nothing.
-//!
-//! DEVIATION PENDING CONFIRMATION (see task escalation). The brief specifies
-//! that a cover reuses a *benign-control* scenario's events (`class: Benign`).
-//! Task 1's `TargetGraph` excludes benign scenarios entirely and exposes no
-//! benign material, and an operator can reach only the graph, so a benign source
-//! is not reachable here. Until the graph exposes benign scenarios, "cover" is
-//! read as "the quietest catalogued scenario" (fewest events), which is the
-//! nearest low-signal material the graph offers. If the graph gains a
-//! `benign_scenarios()` accessor, only the cover-selection below changes.
+//! proposes a `Cover(step)` step that replays a benign-control scenario's events
+//! (the corpus's `class: Benign` scenarios, exposed by
+//! [`TargetGraph::benign_scenarios`]) so the loud step travels next to genuinely
+//! benign traffic. The cover step keeps the covered step's technique id -- a real
+//! graph node, so the plan still resolves against the graph (OPFOR-04) -- while
+//! its events come from the benign scenario, not from an attack scenario. It
+//! proposes at most `steps_per_operator` covers and is total: with no noisy step,
+//! or no benign material in the graph, it proposes nothing.
 
 use super::super::genome::{GeneStep, OperatorRole, StepIntent};
-use super::super::graph::{TargetGraph, TechniqueNode};
+use super::super::graph::{ScenarioRef, TargetGraph};
 use super::super::rng::RedGenomeRng;
-use super::{RedOperator, choose_distinct, quietest_scenario, step_from, usable_techniques};
-
-/// The largest event count a scenario may have and still count as "quiet" cover.
-const COVER_MAX_EVENTS: usize = 3;
+use super::RedOperator;
 
 /// Opsec operator: proposes `Cover` steps for noisy exploitation steps.
 #[derive(Debug, Clone, Copy)]
@@ -62,48 +54,127 @@ impl RedOperator for OpsecOperator {
         if so_far.is_empty() {
             return Vec::new();
         }
-        // The quiet cover tier: usable techniques whose quietest scenario is
-        // small. This stands in for benign-control scenarios (see module note).
-        let cover_tier: Vec<&TechniqueNode> = usable_techniques(graph)
-            .into_iter()
-            .filter(|node| {
-                quietest_scenario(node)
-                    .is_some_and(|scenario| scenario.event_count <= COVER_MAX_EVENTS)
-            })
+        // Event-backed benign controls are the cover material.
+        let benign: Vec<&ScenarioRef> = graph
+            .benign_scenarios()
+            .iter()
+            .filter(|scenario| scenario.event_count > 0)
             .collect();
-        if cover_tier.is_empty() {
+        if benign.is_empty() {
             return Vec::new();
         }
 
         let budget = usize::from(self.steps_per_operator);
-        let noisy_indices: Vec<usize> = so_far
+        let noisy: Vec<(usize, &GeneStep)> = so_far
             .iter()
             .enumerate()
             .filter(|(_, step)| is_noisy(step))
-            .map(|(index, _)| index)
             .take(budget)
             .collect();
-        if noisy_indices.is_empty() {
+        if noisy.is_empty() {
             return Vec::new();
         }
 
-        let covers = choose_distinct(rng, &cover_tier, noisy_indices.len());
         let mut steps = Vec::new();
-        for (node, &noisy_index) in covers.iter().zip(noisy_indices.iter()) {
-            let Some(scenario) = quietest_scenario(node) else {
+        for (index, covered) in noisy {
+            let Some(cover) = rng.choose(&benign).copied() else {
                 continue;
             };
-            let Some(class) = node.threat_classes.iter().next().cloned() else {
-                continue;
-            };
-            steps.push(step_from(
-                OperatorRole::Opsec,
-                node,
-                class,
-                scenario,
-                StepIntent::Cover { step: noisy_index },
-            ));
+            // The cover keeps the covered step's technique (a real graph node),
+            // so the plan resolves, but replays the benign scenario's events.
+            steps.push(GeneStep {
+                operator: OperatorRole::Opsec,
+                technique: covered.technique.clone(),
+                threat_class: covered.threat_class.clone(),
+                scenario: cover.clone(),
+                event_indices: (0..cover.event_count).collect(),
+                host_slot: 0,
+                offset_ms: 0,
+                intent: StepIntent::Cover { step: index },
+            });
         }
         steps
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use swarm_core::pheromone::ThreatClass;
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn repo_graph() -> TargetGraph {
+        let catalog = repo_root().join("rulesets/evasion/attack-technique-catalog.yaml");
+        let suites: Vec<PathBuf> = [
+            "scenario-suites/command-line-deobfuscation-v1.yaml",
+            "scenario-suites/evasion-breadth-v1.yaml",
+            "scenario-suites/hellcat-office-v1.yaml",
+            "scenario-suites/kill-chain-sequences-v1.yaml",
+        ]
+        .iter()
+        .map(|rel| repo_root().join(rel))
+        .collect();
+        TargetGraph::from_repo(&catalog, &suites).unwrap()
+    }
+
+    fn exploit_step() -> GeneStep {
+        GeneStep {
+            operator: OperatorRole::Injection,
+            technique: "T1059.001".to_string(),
+            threat_class: ThreatClass::Execution,
+            scenario: ScenarioRef {
+                suite: "s".to_string(),
+                scenario: "s".to_string(),
+                event_count: 1,
+            },
+            event_indices: vec![0],
+            host_slot: 0,
+            offset_ms: 0,
+            intent: StepIntent::Exploit,
+        }
+    }
+
+    #[test]
+    fn the_opsec_operator_covers_a_noisy_step_with_a_benign_scenario() {
+        let graph = repo_graph();
+        let opsec = OpsecOperator::new(3);
+
+        // A noisy exploitation step draws cover, and the cover replays a benign
+        // scenario while keeping a real graph technique.
+        let so_far = vec![exploit_step()];
+        let mut rng = RedGenomeRng::from_u64(4);
+        let covers = opsec.propose_steps(&graph, &mut rng, &so_far);
+        assert!(!covers.is_empty(), "a noisy step should draw cover");
+        let benign = graph.benign_scenarios();
+        for cover in &covers {
+            assert!(matches!(cover.intent, StepIntent::Cover { .. }));
+            assert!(
+                benign.contains(&cover.scenario),
+                "cover scenario {:?} is not a benign one",
+                cover.scenario
+            );
+            assert!(
+                graph.is_technique(&cover.technique),
+                "cover technique {} is not a graph node",
+                cover.technique
+            );
+        }
+
+        // No noisy step -> nothing to cover: the operator is total.
+        let probe_only = vec![GeneStep {
+            intent: StepIntent::Probe,
+            ..exploit_step()
+        }];
+        let mut rng = RedGenomeRng::from_u64(4);
+        assert!(
+            opsec
+                .propose_steps(&graph, &mut rng, &probe_only)
+                .is_empty()
+        );
     }
 }
