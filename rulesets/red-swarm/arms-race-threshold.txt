@@ -1,0 +1,26 @@
+# Checked-in floor for blue's `final_blue_catch_rate` out of a bounded
+# `swarmctl red-swarm campaign` run (ARMSCI-01). Read by
+# tools/check-red-swarm-arms-race.sh -- do not rename this file without
+# updating that script (or its STS_RED_SWARM_ARMS_RACE_THRESHOLD_FILE
+# override).
+#
+# Measured against the real repo catalog (rulesets/evasion/attack-technique-
+# catalog.yaml) and the real scenario-suites/*.yaml on 2026-09-07 with the
+# gate's own fixed, bounded parameters:
+#   swarmctl red-swarm campaign --seed 42 --campaign ci-arms-race \
+#     --max-generations 5 --virtual-clock-start-ms 1700000000000
+#
+# Observed final_blue_catch_rate = 0.7777777777777778 (7/9), stop_reason =
+# full_coverage (blue converges at generation 1, well inside the
+# max-generations=5 cap). Reproduced byte-identical across repeated runs --
+# the campaign has no wall-clock or other hidden entropy input, so this
+# number is not a flaky measurement to pad heavily around.
+#
+# Set a little below the measured value: any real regression of at least one
+# detected technique moves the ratio by >= 1/9 (~0.111), far more than the
+# margin below, so the gate stays maximally sensitive to a real catch-rate
+# drop while carrying a small cushion for legitimate cross-platform
+# floating-point noise. Raise this only after deliberately re-measuring on
+# the real tree and updating the measurement note above with the new value
+# and date -- never to paper over a measured regression.
+0.75

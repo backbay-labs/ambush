@@ -779,6 +779,56 @@ jobs:
         if: always()
         run: bash tools/check-worktree-clean.sh "the proof-surface run"
 
+  # ARMSCI-01 / ARMSCI-05. Runs ONE fixed, bounded `swarmctl red-swarm
+  # campaign` end to end against the real repo catalog/scenario-suites and
+  # compares the `final_blue_catch_rate` the executor persists to
+  # data/red-swarm/campaigns/<campaign>-<seed>.json against the checked-in
+  # floor in rulesets/red-swarm/arms-race-threshold.txt. Nothing else in this
+  # workflow executes the campaign loop at all -- `test` and `clippy` compile
+  # it, and red_swarm_cmd.rs's own tests exercise it only against small
+  # synthetic fixtures -- so this is the only place a real regression in
+  # blue's convergence would ever go red. Wrapped in `timeout` inside the
+  # script itself (ARMSCI-05): a hang fails this job loudly rather than
+  # inflating CI time.
+  red-swarm-arms-race:
+    needs:
+      - changes
+      - build
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Restore shared target cache
+        uses: actions/cache@v4
+        with:
+          path: target/ci
+          key: cargo-target-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the red-swarm CI arms-race gate against its tracked threshold
+        run: bash tools/check-red-swarm-arms-race.sh
+
   jetstream:
     needs:
       - changes
