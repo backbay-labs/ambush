@@ -129,15 +129,45 @@ fn mean_technique_catch_rate(plan: &RedPlan, coverage: &EvasionCoverageSnapshot)
 /// own per-scenario breakdown -- so this walks all of them rather than
 /// assuming a shortcut the type does not offer. `fold`'s `0.0` identity
 /// element is also the answer for a technique no scenario names: uncovered,
-/// not missing data.
+/// not missing data. Each scenario's raw `catch_rate` is normalized (see
+/// [`normalize_catch_rate`]) before the fold, so a malformed snapshot can
+/// never carry an out-of-range or non-finite rate into the max.
 fn technique_catch_rate(coverage: &EvasionCoverageSnapshot, technique: &str) -> f64 {
     coverage
         .detectors
         .iter()
         .flat_map(|detector| detector.scenarios.iter())
         .filter(|scenario| scenario.techniques.iter().any(|named| named == technique))
-        .map(|scenario| scenario.catch_rate)
+        .map(|scenario| normalize_catch_rate(scenario.catch_rate))
         .fold(0.0_f64, f64::max)
+}
+
+/// Normalizes a scenario's raw `catch_rate` into the `[0.0, 1.0]` domain
+/// every caller of [`technique_catch_rate`] assumes.
+///
+/// `f64::clamp` alone is not enough: it leaves `NaN` untouched (clamp only
+/// bounds an already-ordered value, and `NaN` has no order), so a `NaN`
+/// `catch_rate` would otherwise survive the fold and poison `evasion_rate`
+/// and `red_fitness` into `NaN` too. A non-finite rate -- `NaN` or either
+/// infinity -- is therefore mapped to `0.0` first: an unmeasurable scenario
+/// caught nothing we can trust, the same reading this module already gives
+/// a technique `coverage` has no record of at all. A finite rate outside
+/// `[0.0, 1.0]` (a `catch_rate` above `1.0`, say) is a plain out-of-range
+/// value once that guard is past, so `f64::clamp` alone is sufficient for
+/// it.
+///
+/// Unreachable today: the `--coverage` deserializer this snapshot's data
+/// arrives through already rejects non-finite JSON numbers, so no live
+/// input can trigger the `NaN`/infinity branch. This guards the domain
+/// invariant at the scorer itself rather than assuming every future caller
+/// -- Phase 290's in-process snapshots included -- routes through that same
+/// deserializer.
+fn normalize_catch_rate(catch_rate: f64) -> f64 {
+    if catch_rate.is_finite() {
+        catch_rate.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
@@ -329,6 +359,42 @@ mod tests {
         let fitness = AttackScorer.score_unbudgeted(&plan, &coverage);
 
         assert_eq!(fitness.evasion_rate, 1.0);
+        assert_eq!(fitness.red_fitness, 1.0);
+    }
+
+    #[test]
+    fn a_scenario_with_an_infinite_catch_rate_scores_a_finite_red_fitness() {
+        // `f64::clamp` alone does not defuse a non-finite value's poisoning
+        // reach for `NaN` -- and this pins that an out-of-domain infinity is
+        // also normalized away, not merely clamped to `1.0` as "fully
+        // caught" would be.
+        let plan = plan_for(&["T1055", "T1059.001"]);
+        let coverage = snapshot(&[("T1055", f64::INFINITY)]);
+
+        let fitness = AttackScorer.score_unbudgeted(&plan, &coverage);
+
+        assert!(fitness.evasion_rate.is_finite());
+        assert!(fitness.red_fitness.is_finite());
+        assert_eq!(
+            fitness.evasion_rate, 1.0,
+            "an unmeasurable catch_rate must not be trusted as a catch"
+        );
+        assert_eq!(fitness.red_fitness, 1.0);
+    }
+
+    #[test]
+    fn a_scenario_with_a_nan_catch_rate_scores_a_finite_red_fitness() {
+        let plan = plan_for(&["T1055", "T1059.001"]);
+        let coverage = snapshot(&[("T1055", f64::NAN)]);
+
+        let fitness = AttackScorer.score_unbudgeted(&plan, &coverage);
+
+        assert!(fitness.evasion_rate.is_finite());
+        assert!(fitness.red_fitness.is_finite());
+        assert_eq!(
+            fitness.evasion_rate, 1.0,
+            "an unmeasurable catch_rate must not be trusted as a catch"
+        );
         assert_eq!(fitness.red_fitness, 1.0);
     }
 }
