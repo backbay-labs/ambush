@@ -145,16 +145,16 @@ impl AttackPatternDb {
     /// Loads a db from the JSONL file at `path`, via [`Self::from_reader`].
     ///
     /// A thin wrapper for a future CLI. A failure to open `path` is reported
-    /// as [`RedSwarmError::MalformedPatternRecord`] with `line: 0` -- a
-    /// sentinel for "not a specific data line", since the failure happens
-    /// before any line is read. Unit tests exercise the parser itself
+    /// as [`RedSwarmError::PatternStoreIo`], not
+    /// [`RedSwarmError::MalformedPatternRecord`] -- nothing was malformed,
+    /// the file was never read. Unit tests exercise the parser itself
     /// through [`Self::from_reader`] on an in-memory buffer instead of this
     /// wrapper.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RedSwarmError> {
         let path = path.as_ref();
-        let file = File::open(path).map_err(|source| RedSwarmError::MalformedPatternRecord {
-            line: 0,
-            reason: format!("failed to open {}: {source}", path.display()),
+        let file = File::open(path).map_err(|source| RedSwarmError::PatternStoreIo {
+            path: path.display().to_string(),
+            source,
         })?;
         Self::from_reader(BufReader::new(file))
     }
@@ -163,8 +163,10 @@ impl AttackPatternDb {
     /// creating it if absent.
     ///
     /// A thin wrapper for a future CLI, mirroring [`Self::write`]'s line
-    /// format without holding the whole history in memory. Not exercised by
-    /// this module's unit tests, which do no file IO.
+    /// format without holding the whole history in memory. A failure to
+    /// open `path` is [`RedSwarmError::PatternStoreIo`], for the same
+    /// reason [`Self::load`]'s is. Not exercised by this module's unit
+    /// tests, which do no file IO.
     pub fn append_line(
         path: impl AsRef<Path>,
         record: &AttackPatternRecord,
@@ -174,9 +176,9 @@ impl AttackPatternDb {
             .create(true)
             .append(true)
             .open(path)
-            .map_err(|source| RedSwarmError::MalformedPatternRecord {
-                line: 0,
-                reason: format!("failed to open {} for append: {source}", path.display()),
+            .map_err(|source| RedSwarmError::PatternStoreIo {
+                path: path.display().to_string(),
+                source,
             })?;
         write_record_line(&mut file, record, 0)
     }
@@ -268,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn technique_success_rate_only_counts_records_naming_that_technique() {
+    fn a_technique_success_rate_only_counts_records_naming_that_technique() {
         let db = db_with([
             record(1, "T1055", "det-a", true),
             record(2, "T1027", "det-a", false),
@@ -281,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn write_then_from_reader_round_trips_the_same_records() {
+    fn a_write_then_from_reader_round_trip_returns_the_same_records() {
         let db = db_with([
             record(1, "T1055", "det-a", true),
             record(1, "T1027", "det-b", false),
@@ -342,5 +344,19 @@ mod tests {
             result,
             Err(RedSwarmError::MalformedPatternRecord { line: 2, .. })
         ));
+    }
+
+    #[test]
+    fn a_pattern_store_io_error_displays_the_path_and_the_source() {
+        let source = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file or directory");
+        let error = RedSwarmError::PatternStoreIo {
+            path: "attack-patterns.jsonl".to_string(),
+            source,
+        };
+
+        let rendered = error.to_string();
+
+        assert!(rendered.contains("attack-patterns.jsonl"));
+        assert!(rendered.contains("no such file or directory"));
     }
 }

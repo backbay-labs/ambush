@@ -103,11 +103,24 @@ pub enum RedSwarmError {
     /// into an `AttackPatternRecord` (ATKSCORE-03, SC 3). The store fails
     /// the whole read closed rather than skipping the line, so a corrupt
     /// pattern-history file never silently understates a technique's
-    /// detection history. Reused by the store's file wrappers for a
-    /// file-level open failure, with `line: 0` standing in for "not a
-    /// specific data line" -- see those wrappers' doc comments.
+    /// detection history. A file-level open failure is
+    /// [`Self::PatternStoreIo`] instead -- see that variant's doc for why
+    /// the two are kept distinct.
     #[error("malformed attack-pattern record on line {line}: {reason}")]
     MalformedPatternRecord { line: usize, reason: String },
+
+    /// [`pattern_db::AttackPatternDb::load`] or
+    /// [`pattern_db::AttackPatternDb::append_line`] could not open the
+    /// pattern-store file at `path`. Kept distinct from
+    /// [`Self::MalformedPatternRecord`]: an open failure means nothing was
+    /// ever read, so nothing was malformed -- reusing the parse-error
+    /// variant (with its `line: 0` sentinel) for this case would describe a
+    /// data problem the store never observed.
+    #[error("attack pattern store IO error at {path}: {source}")]
+    PatternStoreIo {
+        path: String,
+        source: std::io::Error,
+    },
 }
 
 /// Deterministic seam for generating adversarial telemetry without the historical Python runtime.
