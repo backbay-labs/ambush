@@ -43,7 +43,7 @@ the line number — is the authoritative, drift-proof locator (grep the
 
 ## Deterministic-simulation harness (DST, phase 286)
 
-**Status: reopened / assurance not established, 2026-09-07.** Candidate
+**Status: repaired local evidence recorded; full acceptance pending, 2026-09-07.** Candidate
 `1a5c9003b` was rejected; its green seed counts do not prove the phase's safety
 properties. See `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md`
 and `286-02-PLAN.md` for the evidence and replacement acceptance contract.
@@ -65,7 +65,10 @@ Production composition must bind a bounded, fsynced, exclusive-writer journal to
 the configured audit directory and preserve the store across runtime reload.
 Corruption, conflicting identity reuse, unavailable storage and exhausted capacity
 must close dispatch. Internal effectful retries must not bypass the reservation.
-These are repair requirements; this section does not yet claim they are verified.
+Current journal and runtime unit tests and eleven composition regressions pass.
+The whole phase remains unaccepted because required network-enabled regressions
+still need terminal evidence. All 17 registered negative tests and full workspace
+Clippy pass; scoped final source review passed with the stated evidence limits.
 
 **Three required oracles.** Every observed effect must have a matching durable
 prior intent; the deterministic policy's forbidden outcomes must produce no
@@ -84,9 +87,15 @@ requests, vary effective fault schedules, report the failing seed and support
 `.github/workflows/dst-nightly.yml` must run at least 5,000; distinct seed labels
 alone do not establish distinct schedules. Production-source mutation controls
 must make the normal harness reject effect-before-intent, duplicate dispatch and
-forbidden effects after cancellation. No repaired corpus or mutation control is
-declared passed here; terminal evidence and immutable tree identity belong in
-the phase review before closure.
+forbidden effects after cancellation. Three independent production mutations at
+`92df4f4c8` were rejected by their named safety oracles, and the restored positive
+DST suite passed. At `af250a8e8`, the 64-seed suite passed with 53 yielded event
+traces and 16 verdict/fault pairs; two explicit seed-57 replays matched exactly.
+The 5,000-seed nightly run passed with 897 yielded event traces and all 18 pairs.
+These trace counts include polling variation, not just crash/effect ordering;
+requests run sequentially with one shared verdict per seed. Retained commands,
+patches, source hashes and terminal logs are under the phase review evidence directory. These facts
+do not claim full phase acceptance or passing network-enabled regressions.
 
 **Evidence boundary.** The intended scope is single-host/process recovery over
 one logical local persistent substrate, including closing and reopening that

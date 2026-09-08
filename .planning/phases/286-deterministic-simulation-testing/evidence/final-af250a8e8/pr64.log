@@ -1,0 +1,14 @@
+   Compiling swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.01s
+     Running tests/dst_fault_injection.rs (target/debug/deps/dst_fault_injection-dc5212cfe305318f)
+
+running 5 tests
+test dst_every_verdict_survives_every_cancellation_and_reopen_boundary ... ok
+test dst_nightly_deep_corpus_replays_real_crash_recovery ... ignored, 5000-seed nightly crash/recovery corpus
+test dst_oracles_reject_reordered_intent_forbidden_cancelled_effect_and_duplicate ... ok
+test dst_pr_corpus_or_exact_seed_replays_real_crash_recovery ... DST corpus: seeds=64 verdict_fault_pairs=16 effective_traces=53
+ok
+test dst_same_seed_produces_identical_executed_trace_and_durable_effects ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 11.11s
+

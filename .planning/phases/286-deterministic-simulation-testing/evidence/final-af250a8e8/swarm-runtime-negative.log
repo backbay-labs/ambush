@@ -1,0 +1,45 @@
+   Compiling swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.02s
+     Running tests/negative_runtime_continuity_proof_signature_invalid.rs (target/debug/deps/negative_runtime_continuity_proof_signature_invalid-2bb7a673f9f91dad)
+
+running 1 test
+test negative_runtime_continuity_proof_signature_invalid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_runtime_dispatch.rs (target/debug/deps/negative_runtime_dispatch-04d1507f966f1899)
+
+running 2 tests
+test negative_runtime_dispatch_identity_consumed_once ... ok
+test negative_runtime_dispatch_intent_required ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/negative_runtime_identity_derived_id_mismatch.rs (target/debug/deps/negative_runtime_identity_derived_id_mismatch-08668a3912980e97)
+
+running 1 test
+test negative_runtime_identity_derived_id_mismatch ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_runtime_keystore_key_integrity.rs (target/debug/deps/negative_runtime_keystore_key_integrity-4739991066ff4f62)
+
+running 1 test
+test negative_runtime_keystore_key_integrity ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_runtime_lease_must_be_active.rs (target/debug/deps/negative_runtime_lease_must_be_active-424e3ee905bb8e38)
+
+running 1 test
+test negative_runtime_lease_must_be_active ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_runtime_require_human_blocks_live_execution.rs (target/debug/deps/negative_runtime_require_human_blocks_live_execution-bf6c6da1ba6273d3)
+
+running 1 test
+test negative_runtime_require_human_blocks_live_execution ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

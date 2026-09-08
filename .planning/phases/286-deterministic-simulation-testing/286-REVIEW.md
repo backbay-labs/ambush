@@ -196,11 +196,11 @@ passing claims or mark source inspection as a passed runtime test.
 | Internal adapter retry | Ambiguous first effect is never executed a second time by resilience logic | Current non-HTTP resilience tests pass; current real HTTP effect/timeout checks blocked at local listener creation |
 | DST-01 / DST-02 | Real sandbox effects, runtime/gate, persistent substrate reopen and redelivery with named fault schedules | Corrected ordinary DST suite passes before and after production mutations, including 64 seeds and full verdict/fault matrix |
 | DST-03 | Effect-before-intent, denied-cancellation and duplicate-redelivery production mutations cause the expected oracle failures | All three actual production mutations rejected with named failures; restored positive suite passes; see retained patches/results/logs |
-| DST-04 | Exact PR/nightly commands, 64 and >=5,000 seeds, measured effective schedule diversity and terminal exit statuses | 64-seed corpus and diversity assertions pass; >=5,000 corpus still pending |
-| DST-05 | Repeated selected-seed executions reproduce effective schedules and observations | Same-seed effective trace/durable-effect test passes; explicit successful environment-variable replay commands still to record |
+| DST-04 | Exact PR/nightly commands, 64 and >=5,000 seeds, measured effective schedule diversity and terminal exit statuses | Final 64 seeds pass with 53 traces / 16 pairs; 5,000 nightly pass with 897 traces / all 18 pairs at af250a8e8; CI command selection verified in source |
+| DST-05 | Repeated selected-seed executions reproduce effective schedules and observations | Same-seed trace/durable-effect test passes; two explicit seed-57 commands passed with identical full plan/trace; explicit seed-11 passed |
 | DST-06 | Final MAPPING claims match demonstrated storage/process scope and journal/audit distinctions | Pending |
-| Required regressions | Formatting, affected suites, existing negative tests, Clippy, layering/mapping/routing/gate-wiring and all applicable existing gates | Pending |
-| Independent review | Final-tree review disposition plus fixes and re-review where needed | Pending |
+| Required regressions | Formatting, affected suites, existing negative tests, Clippy, layering/mapping/routing/gate-wiring and all applicable existing gates | Local static gates, all 17 registered negatives and full Clippy pass; network-enabled affected regressions pending |
+| Independent review | Final-tree review disposition plus fixes and re-review where needed | Scoped source/evidence PASS at af250a8e8, moderate confidence; final one-line Clippy delta acknowledgment pending; no HTTP/full-phase acceptance claimed |
 
 Phase 286 remains **IN PROGRESS / REOPENED** until every obligation is supported.
 The full goal remains the approved gameplan and canonical phases 285–313.
@@ -371,3 +371,58 @@ pair count and effective executed trace count after corpus assertions succeed.
 It changes no oracle, schedule, cancellation, or production logic. Its final
 positive/deep-corpus runs are still required; prior mutation evidence remains
 explicitly bound to the preserved `92df4f4c8` source snapshot.
+
+
+### Final corpus and explicit replay terminal evidence
+
+At source checkpoint `af250a8e883695f92cdbf9f21f3175ff1f1e5d19`, the ordinary
+suite passed with **64 seeds / 53 effective traces / 16 verdict-fault pairs**.
+Two exact `SWARM_DST_SEED=57` commands passed and produced identical full printed
+plan/traces; `SWARM_DST_SEED=11` also passed. The ignored nightly command passed
+with **5,000 seeds / 897 effective traces / all 18 verdict-fault pairs** in
+693.741 seconds. All five Cargo invocations exited zero. Exact records:
+[evidence/final-af250a8e8](evidence/final-af250a8e8/README.md).
+
+The engine PR test lane calls `cargo test -p swarm-runtime -p
+swarm-ingest-runtime -- --test-threads=1`, which selects the unignored 64-seed
+suite; the nightly workflow calls the same integration target with `--ignored`,
+which executed exactly the one 5,000-seed test. This is source-selection and local
+execution evidence; no hosted GitHub run is claimed. The later registry, Clippy
+and source-review results follow below. Network-enabled regressions remain open.
+
+
+### Registered negatives, full Clippy and final source review
+
+All **17 registered invariant test functions** executed and passed, grouped into
+3 policy, 7 runtime, 4 spine and 3 response entries. The runner required each exact
+registered function name to appear with `ok` in terminal output; registry parsing
+alone was not counted as execution. The canonicalization unreachability deviation
+remains documented. Grouped commands, logs and results are retained in
+[evidence/final-af250a8e8](evidence/final-af250a8e8/README.md).
+
+Full workspace all-targets Clippy initially exited 101 for one unnecessary
+`ok_or_else` closure in first-run replay publication. Changing only that call to
+`ok_or` yielded a clean rerun of `CARGO_INCREMENTAL=0 cargo clippy --locked -j2
+--workspace --all-targets -- -D warnings`, terminal exit 0. The source delta changes
+no policy, journal, retry or DST code. All four selected first-run regressions then passed, including same-config replay
+lookup beside a live daemon. The one-line source delta was independently reviewed
+without findings; an immutable checkpoint acknowledgment follows.
+
+Independent final source/evidence review at `af250a8e8` returned **PASS**, with
+moderate confidence and no introduced P0/P1/P2 finding. It verified mutation patch
+and restored-source digests, the unchanged production source between 92df4f4c8
+and af250a8e8, actual named mutation failures, final corpus results and explicit
+replay equality. It did not claim HTTP-regression or whole-phase acceptance.
+
+The diversity metric counts complete event traces, including actual `Poll(n)`
+variation. **897 yielded event traces is not a claim of 897 distinct crash/effect
+orderings**. Requests are sequential, with one shared verdict per seed. The
+three production mutations independently establish the named safety-oracle
+failures. These boundaries remain part of any final acceptance claim.
+
+The targeted HTTP approval/proof-export test compiled after the Clippy fix, then
+failed at `http/tests.rs:1745` when binding its local listener (`Operation not
+permitted`), before the updated live-response fixture ran. This remains an
+environment-blocked regression, not a passing HTTP test. The PR workflow includes
+all affected runtime/ingest tests and the response/HTTP crates, with no draft
+exclusion; hosted terminal results are still required.

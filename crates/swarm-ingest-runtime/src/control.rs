@@ -474,7 +474,7 @@ impl DefaultControlPlane {
             let replay = walkthrough_replay_store
                 .load_by_bundle_id(&record.bundle_id)
                 .map_err(ServiceError::from)?
-                .ok_or_else(|| ControlError::NotFound {
+                .ok_or(ControlError::NotFound {
                     entity: "first-run replay bundle",
                     lookup: record.bundle_id,
                 })?;

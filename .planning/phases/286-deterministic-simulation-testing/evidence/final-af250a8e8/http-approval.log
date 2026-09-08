@@ -1,0 +1,142 @@
+   Compiling log v0.4.29
+   Compiling tracing-core v0.1.36
+   Compiling jobserver v0.1.34
+   Compiling tracing v0.1.44
+   Compiling cc v1.2.62
+   Compiling tinystr v0.8.3
+   Compiling icu_locale_core v2.2.0
+   Compiling cmake v0.1.58
+   Compiling ring v0.17.14
+   Compiling aws-lc-sys v0.41.0
+   Compiling zerotrie v0.2.4
+   Compiling icu_collections v2.2.0
+   Compiling icu_provider v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling h2 v0.4.16
+   Compiling idna_adapter v1.2.2
+   Compiling hyper v1.9.0
+   Compiling idna v1.1.0
+   Compiling hyper-util v0.1.20
+   Compiling url v2.5.8
+   Compiling swarm-core v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-core)
+   Compiling num-traits v0.2.19
+   Compiling tower v0.5.3
+   Compiling time-macros v0.2.27
+   Compiling time v0.3.47
+   Compiling regex-automata v0.4.14
+   Compiling tower-http v0.6.10
+   Compiling errno v0.3.14
+   Compiling rustix v1.1.4
+   Compiling tempfile v3.27.0
+   Compiling prost-build v0.13.5
+   Compiling chrono v0.4.44
+   Compiling getrandom v0.3.4
+   Compiling axum-core v0.5.6
+   Compiling rand_core v0.9.5
+   Compiling tonic-build v0.13.1
+   Compiling regex v1.12.3
+   Compiling axum v0.8.9
+   Compiling swarm-ingest-tetragon v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-tetragon)
+   Compiling nkeys v0.4.5
+   Compiling rand_chacha v0.9.0
+   Compiling swarm-policy v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-policy)
+   Compiling swarm-whisker v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-whisker)
+   Compiling hyper-timeout v0.5.2
+   Compiling tonic v0.13.1
+   Compiling rand v0.9.4
+   Compiling swarm-guard v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-guard)
+   Compiling swarm-ingest-json v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-json)
+   Compiling swarm-consensus v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-consensus)
+   Compiling secp256k1-sys v0.10.1
+   Compiling block-padding v0.3.3
+   Compiling minimal-lexical v0.2.1
+   Compiling nom v7.1.3
+   Compiling inout v0.1.4
+   Compiling opentelemetry v0.31.0
+   Compiling arrayvec v0.7.8
+   Compiling hex-conservative v0.2.3
+   Compiling cipher v0.4.4
+   Compiling swarm-perch-wire v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-perch-wire)
+   Compiling bitcoin-io v0.1.101
+   Compiling rusticata-macros v4.1.0
+   Compiling prost-derive v0.14.3
+   Compiling sha1 v0.10.7
+   Compiling lazy_static v1.5.0
+   Compiling asn1-rs v0.6.2
+   Compiling prost v0.14.3
+   Compiling bitcoin_hashes v0.14.101
+   Compiling chacha20 v0.9.1
+   Compiling secp256k1 v0.29.1
+   Compiling tonic v0.14.6
+   Compiling num-integer v0.1.46
+   Compiling futures-executor v0.3.32
+   Compiling bech32 v0.11.1
+   Compiling nostr v0.44.8
+   Compiling opentelemetry_sdk v0.31.0
+   Compiling num-bigint v0.4.6
+   Compiling tonic-prost v0.14.6
+   Compiling sharded-slab v0.1.7
+   Compiling matchers v0.2.0
+   Compiling tracing-serde v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling instant v0.1.13
+   Compiling nu-ansi-term v0.50.3
+   Compiling tracing-subscriber v0.3.23
+   Compiling notify-types v1.0.1
+   Compiling opentelemetry-proto v0.31.0
+   Compiling der-parser v9.0.0
+   Compiling oid-registry v0.7.1
+   Compiling yasna v0.5.2
+   Compiling pem v3.0.6
+   Compiling filetime v0.2.29
+   Compiling fsevent-sys v4.1.0
+   Compiling notify v7.0.0
+   Compiling rcgen v0.13.2
+   Compiling x509-parser v0.16.0
+   Compiling tracing-opentelemetry v0.32.1
+   Compiling rustls-pemfile v2.2.0
+   Compiling aws-lc-rs v1.17.0
+   Compiling rustls v0.23.40
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling tokio-websockets v0.10.1
+   Compiling async-nats v0.47.0
+   Compiling swarm-response v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-response)
+   Compiling swarm-pheromone v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-pheromone)
+   Compiling swarm-spine v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-spine)
+   Compiling swarm-ingest-sentinel v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-sentinel)
+   Compiling swarm-ingest-taxii v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-taxii)
+   Compiling swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+   Compiling tungstenite v0.29.0
+   Compiling tokio-tungstenite v0.29.0
+   Compiling ambush-ws-client v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/workspace/crates/ambush-ws-client)
+   Compiling opentelemetry-http v0.31.0
+   Compiling opentelemetry-otlp v0.31.1
+   Compiling swarm-ingest-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-runtime)
+   Compiling swarm-evolution v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-evolution)
+   Compiling swarm-runtime-workbench v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime-workbench)
+   Compiling swarm-agents v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-agents)
+   Compiling swarm-perch-bridge v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-perch-bridge)
+   Compiling swarm-runtime-http v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime-http)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 42s
+     Running unittests src/lib.rs (target/debug/deps/swarm_runtime_http-14d21ba2002aeda6)
+
+running 1 test
+test http::tests::approval_vote_endpoint_resumes_demo_runtime_and_proof_export ... 
+thread 'http::tests::approval_vote_endpoint_resumes_demo_runtime_and_proof_export' (139051345) panicked at crates/swarm-runtime-http/src/http/tests.rs:1745:79:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    http::tests::approval_vote_endpoint_resumes_demo_runtime_and_proof_export
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 106 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p swarm-runtime-http --lib`

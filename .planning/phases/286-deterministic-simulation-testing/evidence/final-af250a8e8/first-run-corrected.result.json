@@ -1,0 +1,8 @@
+{
+  "source_base": "af250a8e883695f92cdbf9f21f3175ff1f1e5d19",
+  "source_delta": "control.rs first-run ok_or_else -> ok_or",
+  "command": "cargo test --locked -j2 -p swarm-ingest-runtime --lib first_run -- --test-threads=1",
+  "exit_code": 0,
+  "passed": 4,
+  "failed": 0
+}

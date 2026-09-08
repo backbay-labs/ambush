@@ -1146,14 +1146,14 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Prove durable authorization-before-effect ordering and no-double-dispatch under adversarial scheduling, cancellation and crash/recovery. A pre-effect dispatch intent records authorization; a completion receipt records an observed post-effect outcome.
 **Requirements:** DST-01, DST-02, DST-03, DST-04, DST-05, DST-06
 **Depends on:** Phase 285
-**Status:** IN PROGRESS / REOPENED (2026-09-07); candidate `1a5c9003b` rejected, replacement unverified.
+**Status:** IN PROGRESS / REOPENED (2026-09-07); candidate `1a5c9003b` rejected; repaired local corpus/mutation evidence recorded, final acceptance pending.
 **Plans:** `286-01-PLAN.md` (superseded/rejected), `286-02-PLAN.md` (active repair).
 **Review:** `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md`.
 **Success Criteria**:
-1. The harness drives real runtime, gate, sandbox effect and persistent substrate paths. Both production runtime authorization entry sites require the same durable intent journal, and composition/reload preserve reservations. **Open; no replacement acceptance evidence recorded.**
+1. The harness drives real runtime, gate, sandbox effect and persistent substrate paths. Both production runtime authorization entry sites require the same durable intent journal, and composition/reload preserve reservations. **Local unit/composition and DST evidence recorded; full regression acceptance pending.**
 2. Inject future-drop before dispatch, future-drop after effect but before completion publication, and persistent-substrate close/reopen between policy allowance and publication. Reopen the same storage and redeliver the same immutable request; unresolved outcomes must never dispatch again. **Open.**
-3. Run 64 seeds on every PR and >=5,000 nightly, with measured effective schedule diversity and failing-seed diagnostics. Independently observe effects and persisted intent: forbidden effects must fail even without a returned outcome, and no request may effect twice across recovery. Production mutation controls must falsify each safety oracle. **Open.**
-4. `SWARM_DST_SEED=<n>` reproduces the exact fault schedule. MAPPING states what the final evidence covers: one host/process recovery model and one logical persistent substrate; signed audit remains distinct from the unsigned local journal. **Open.**
+3. Run 64 seeds on every PR and >=5,000 nightly, with measured effective schedule diversity and failing-seed diagnostics. Independently observe effects and persisted intent: forbidden effects must fail even without a returned outcome, and no request may effect twice across recovery. Production mutation controls must falsify each safety oracle. **Three actual production mutations rejected; restored positive run passed. Final 64 seeds produced 53 yielded event traces; 5,000 nightly seeds passed with 897 yielded event traces/all 18 pairs (including polling variation).**
+4. `SWARM_DST_SEED=<n>` reproduces the exact fault schedule. MAPPING states what the final evidence covers: one host/process recovery model and one logical persistent substrate; signed audit remains distinct from the unsigned local journal. **Explicit seed-57 replay matched; boundary documented. Phase acceptance remains open.**
 
 The prior green corpus is not acceptance evidence: its reverse-subset receipt
 oracle accepted unrecorded effects, dropped denied episodes could hide effects,

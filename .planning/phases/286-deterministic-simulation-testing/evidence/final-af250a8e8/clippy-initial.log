@@ -1,0 +1,164 @@
+    Checking log v0.4.29
+    Checking tracing-core v0.1.36
+   Compiling libc v0.2.186
+    Checking tracing v0.1.44
+   Compiling displaydoc v0.2.5
+   Compiling jobserver v0.1.34
+   Compiling cc v1.2.62
+    Checking swarm-crypto v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-crypto)
+   Compiling dunce v1.0.5
+   Compiling cmake v0.1.58
+   Compiling fs_extra v1.3.0
+    Checking swarm-core v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-core)
+   Compiling aws-lc-sys v0.41.0
+   Compiling ring v0.17.14
+   Compiling aws-lc-rs v1.17.0
+    Checking tinystr v0.8.3
+    Checking icu_locale_core v2.2.0
+    Checking zerotrie v0.2.4
+    Checking icu_collections v2.2.0
+    Checking icu_provider v2.2.0
+   Compiling rustls v0.23.40
+    Checking bitflags v2.11.1
+    Checking icu_normalizer v2.2.0
+    Checking icu_properties v2.2.0
+    Checking idna_adapter v1.2.2
+    Checking idna v1.1.0
+    Checking h2 v0.4.16
+    Checking url v2.5.8
+   Compiling num-traits v0.2.19
+    Checking hyper v1.9.0
+    Checking security-framework v3.7.0
+    Checking hyper-util v0.1.20
+    Checking rustls-native-certs v0.8.3
+    Checking tower v0.5.3
+    Checking tower-http v0.6.10
+    Checking chrono v0.4.44
+    Checking swarm-policy v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-policy)
+   Compiling time-core v0.1.8
+   Compiling num-conv v0.2.1
+   Compiling time-macros v0.2.27
+    Checking regex-automata v0.4.14
+    Checking time v0.3.47
+    Checking swarm-whisker v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-whisker)
+   Compiling rustix v1.1.4
+    Checking axum-core v0.5.6
+    Checking axum v0.8.9
+    Checking regex v1.12.3
+   Compiling errno v0.3.14
+   Compiling getrandom v0.4.2
+   Compiling tempfile v3.27.0
+   Compiling prost-build v0.13.5
+    Checking nkeys v0.4.5
+   Compiling tonic-build v0.13.1
+   Compiling swarm-ingest-tetragon v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-tetragon)
+    Checking hyper-timeout v0.5.2
+    Checking tonic v0.13.1
+    Checking swarm-consensus v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-consensus)
+    Checking swarm-guard v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-guard)
+    Checking swarm-ingest-json v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-json)
+    Checking swarm-perch-wire v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-perch-wire)
+    Checking plotters v0.3.7
+    Checking criterion v0.5.1
+   Compiling getrandom v0.3.4
+    Checking rand_core v0.9.5
+    Checking rand_chacha v0.9.0
+    Checking rand v0.9.4
+   Compiling secp256k1-sys v0.10.1
+    Checking block-padding v0.3.3
+   Compiling bitcoin-io v0.1.101
+    Checking inout v0.1.4
+    Checking arrayvec v0.7.8
+    Checking hex-conservative v0.2.3
+    Checking cipher v0.4.4
+    Checking sha1 v0.10.7
+    Checking lazy_static v1.5.0
+    Checking bitcoin_hashes v0.14.101
+    Checking chacha20 v0.9.1
+    Checking secp256k1 v0.29.1
+    Checking minimal-lexical v0.2.1
+    Checking bech32 v0.11.1
+    Checking nostr v0.44.8
+    Checking nom v7.1.3
+    Checking sharded-slab v0.1.7
+    Checking matchers v0.2.0
+    Checking opentelemetry v0.31.0
+    Checking tracing-serde v0.2.0
+    Checking tracing-log v0.2.0
+    Checking thread_local v1.1.9
+    Checking nu-ansi-term v0.50.3
+    Checking tracing-subscriber v0.3.23
+    Checking rusticata-macros v4.1.0
+   Compiling prost-derive v0.14.3
+   Compiling asn1-rs-derive v0.5.1
+   Compiling asn1-rs-impl v0.2.0
+    Checking asn1-rs v0.6.2
+    Checking prost v0.14.3
+    Checking tonic v0.14.6
+    Checking num-integer v0.1.46
+    Checking futures-executor v0.3.32
+   Compiling oid-registry v0.7.1
+    Checking opentelemetry_sdk v0.31.0
+    Checking num-bigint v0.4.6
+    Checking tonic-prost v0.14.6
+    Checking instant v0.1.13
+    Checking notify-types v1.0.1
+    Checking opentelemetry-proto v0.31.0
+    Checking der-parser v9.0.0
+    Checking filetime v0.2.29
+    Checking fsevent-sys v4.1.0
+    Checking notify v7.0.0
+    Checking x509-parser v0.16.0
+    Checking tracing-opentelemetry v0.32.1
+    Checking rustls-pemfile v2.2.0
+    Checking yasna v0.5.2
+    Checking pem v3.0.6
+    Checking rcgen v0.13.2
+    Checking fastrand v2.4.1
+    Checking rustls-webpki v0.103.13
+    Checking tokio-rustls v0.26.4
+    Checking tungstenite v0.29.0
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.12.28
+    Checking tokio-websockets v0.10.1
+    Checking async-nats v0.47.0
+    Checking swarm-response v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-response)
+    Checking swarm-spine v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-spine)
+    Checking swarm-ingest-taxii v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-taxii)
+    Checking swarm-ingest-sentinel v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-sentinel)
+    Checking swarm-pheromone v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-pheromone)
+    Checking tokio-tungstenite v0.29.0
+    Checking ambush-ws-client v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/workspace/crates/ambush-ws-client)
+    Checking opentelemetry-http v0.31.0
+    Checking opentelemetry-otlp v0.31.1
+    Checking swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+    Checking swarm-ingest-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-runtime)
+    Checking swarm-agents v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-agents)
+    Checking swarm-perch-bridge v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-perch-bridge)
+error: unnecessary closure used to substitute value for `Option::None`
+   --> crates/swarm-ingest-runtime/src/control.rs:474:26
+    |
+474 |               let replay = walkthrough_replay_store
+    |  __________________________^
+475 | |                 .load_by_bundle_id(&record.bundle_id)
+476 | |                 .map_err(ServiceError::from)?
+477 | |                 .ok_or_else(|| ControlError::NotFound {
+478 | |                     entity: "first-run replay bundle",
+479 | |                     lookup: record.bundle_id,
+480 | |                 })?;
+    | |__________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#unnecessary_lazy_evaluations
+    = note: `-D clippy::unnecessary-lazy-evaluations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_lazy_evaluations)]`
+help: use `ok_or` instead
+    |
+477 ~                 .ok_or(ControlError::NotFound {
+478 +                     entity: "first-run replay bundle",
+479 +                     lookup: record.bundle_id,
+480 ~                 })?;
+    |
+
+error: could not compile `swarm-ingest-runtime` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `swarm-ingest-runtime` (lib test) due to 1 previous error

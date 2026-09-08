@@ -1,0 +1,30 @@
+{
+  "base_commit": "af250a8e883695f92cdbf9f21f3175ff1f1e5d19",
+  "crate": "swarm-runtime",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-runtime",
+    "--test",
+    "negative_runtime_continuity_proof_signature_invalid",
+    "--test",
+    "negative_runtime_dispatch",
+    "--test",
+    "negative_runtime_identity_derived_id_mismatch",
+    "--test",
+    "negative_runtime_keystore_key_integrity",
+    "--test",
+    "negative_runtime_lease_must_be_active",
+    "--test",
+    "negative_runtime_require_human_blocks_live_execution",
+    "--",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 9.665,
+  "registered_count": 7,
+  "missing_named_passes": []
+}
