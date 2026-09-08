@@ -300,6 +300,7 @@ fn weighted_score(
             ),
             shared_values: entity_keys.clone(),
             weight: entity_keys.len(),
+            graph_path: None,
         });
     }
 
@@ -318,6 +319,7 @@ fn weighted_score(
             ),
             shared_values: causal_values.clone(),
             weight: causal_values.len(),
+            graph_path: None,
         });
     }
 
@@ -331,6 +333,7 @@ fn weighted_score(
             ),
             shared_values: semantic_values.clone(),
             weight: semantic_values.len(),
+            graph_path: None,
         });
     }
 
@@ -343,6 +346,7 @@ fn weighted_score(
             ),
             shared_values: vec![format!("delta_ms:{time_delta_ms}")],
             weight: 1,
+            graph_path: None,
         });
     }
 

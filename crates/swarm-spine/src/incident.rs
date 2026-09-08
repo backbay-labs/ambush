@@ -129,6 +129,16 @@ pub struct IncidentEvidenceLink {
     pub shared_values: Vec<String>,
     #[serde(default)]
     pub weight: usize,
+    /// The knowledge-graph evidence hop this link was derived from (Phase
+    /// 298 XHUNT-02), so a reopened incident is re-explainable without
+    /// recomputation. `None` for every link persisted before this field
+    /// existed and for links a later correlation pass has not yet populated
+    /// (`swarm-runtime`'s correlation module does not set this today — a
+    /// later XHUNT task wires it up). Plain ids, same reasoning as
+    /// [`ReconstructedChainHop`]: `swarm-spine` is part of the trusted
+    /// computing base and may never depend on `swarm-runtime`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_path: Option<ReconstructedChainHop>,
 }
 
 /// Durable incident artifact assembled from persisted investigation bundles.
@@ -1128,6 +1138,7 @@ mod tests {
                         explanation: "shared host and user context".to_string(),
                         shared_values: vec!["host:host-1".to_string(), "user:alice".to_string()],
                         weight: 2,
+                        graph_path: None,
                     }],
                     confidence_score: 0.9,
                 },
@@ -1144,6 +1155,7 @@ mod tests {
                         .to_string(),
                     shared_values: vec!["host:host-1".to_string()],
                     weight: 1,
+                    graph_path: None,
                 }],
                 confidence_score: 0.1,
             }],
@@ -1466,5 +1478,77 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Phase 298 (XHUNT-02) added `graph_path` to `IncidentEvidenceLink`.
+    /// Every link persisted before that phase has no such key in its JSON;
+    /// this must still deserialize (and reopening an old incident must not
+    /// fail) with `graph_path` defaulting to `None`. This string mirrors
+    /// exactly what `FileIncidentStore` wrote pre-298 (no `graph_path` key
+    /// at all, not even `null`).
+    #[test]
+    fn an_incident_evidence_link_deserializes_with_no_graph_path_when_the_json_predates_the_field()
+    {
+        let pre_298_json = r#"{
+            "dimension": "entity",
+            "explanation": "shared host and user context",
+            "shared_values": ["host:host-1", "user:alice"],
+            "weight": 2
+        }"#;
+
+        let link: IncidentEvidenceLink = serde_json::from_str(pre_298_json).unwrap();
+
+        assert_eq!(link.dimension, IncidentGraphDimension::Entity);
+        assert_eq!(link.explanation, "shared host and user context");
+        assert_eq!(
+            link.shared_values,
+            vec!["host:host-1".to_string(), "user:alice".to_string()]
+        );
+        assert_eq!(link.weight, 2);
+        assert_eq!(link.graph_path, None);
+    }
+
+    #[test]
+    fn an_incident_evidence_link_with_a_graph_path_round_trips_through_json() {
+        let link = IncidentEvidenceLink {
+            dimension: IncidentGraphDimension::Causal,
+            explanation: "shared causal lineage through receipt-1".to_string(),
+            shared_values: vec!["receipt-1".to_string()],
+            weight: 1,
+            graph_path: Some(ReconstructedChainHop {
+                node_ids: vec!["node-1".to_string(), "node-2".to_string()],
+                edge_ids: vec!["edge-1".to_string()],
+            }),
+        };
+
+        let serialized = serde_json::to_string(&link).unwrap();
+        let reloaded: IncidentEvidenceLink = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(reloaded, link);
+    }
+
+    #[test]
+    fn an_incident_evidence_link_omits_the_graph_path_key_when_it_is_none() {
+        let link = IncidentEvidenceLink {
+            dimension: IncidentGraphDimension::Temporal,
+            explanation: "completed within the correlation window".to_string(),
+            shared_values: vec!["delta_ms:50".to_string()],
+            weight: 1,
+            graph_path: None,
+        };
+
+        let serialized = serde_json::to_value(&link).unwrap();
+
+        assert!(
+            !serialized.as_object().unwrap().contains_key("graph_path"),
+            "skip_serializing_if must drop the key entirely when graph_path is None, \
+             not merely serialize it as null: {serialized}"
+        );
+
+        // And it still deserializes back to the same link (belt and
+        // suspenders alongside the pre-298 back-compat test above).
+        let reloaded: IncidentEvidenceLink =
+            serde_json::from_value(serialized).expect("omitted key must default via serde");
+        assert_eq!(reloaded, link);
     }
 }
