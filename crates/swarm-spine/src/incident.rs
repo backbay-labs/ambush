@@ -307,7 +307,7 @@ pub struct ReconstructedChainHop {
 /// consecutive `attack_chain` stages, so folding it into `hops` would break
 /// `hops.len() == node_ids.len() - 1`). Empty for a chain that spans only
 /// one hunt.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReconstructedKillChain {
     pub chain_id: String,
     pub rule_id: String,
