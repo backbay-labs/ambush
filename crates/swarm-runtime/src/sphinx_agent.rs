@@ -8,7 +8,7 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use swarm_core::agent::{
@@ -692,6 +692,12 @@ impl SphinxAgent {
         }
     }
 
+    /// GRAPH-03 note: this stays a direct, single-hop read. It iterates
+    /// `engagements()` and, per engagement, does a single field lookup
+    /// (`attack_technique_for_node`/`entity_value_for_node`) against the ids
+    /// already stored on that engagement node — it never walks `edges` or
+    /// expands a node's neighbors, so it is not a second traversal
+    /// implementation alongside `KnowledgeGraphSnapshot::provenance_paths`.
     fn matching_contributions(
         &self,
         query: &SphinxMemoryQuery,
@@ -1244,6 +1250,13 @@ impl KnowledgeGraphEdge {
         }
     }
 
+    /// Uniform `(from_node_id, to_node_id)` accessor covering all four edge
+    /// variants, so graph-traversal code (`KnowledgeGraphSnapshot::provenance_paths`)
+    /// never has to match on the edge kind just to find its endpoints.
+    fn endpoints(&self) -> (&str, &str) {
+        (self.from_node_id(), self.to_node_id())
+    }
+
     fn last_observed_at_ms(&self) -> i64 {
         match self {
             Self::Temporal(edge) => edge.last_observed_at_ms,
@@ -1253,6 +1266,25 @@ impl KnowledgeGraphEdge {
         }
     }
 }
+
+/// A bounded-hop path discovered by [`KnowledgeGraphSnapshot::provenance_paths`]:
+/// the ordered node ids visited (`node_ids[0] == from`, the last entry `==
+/// to`) and the edge ids crossed between each consecutive pair, in
+/// traversal order. `edge_ids.len() == node_ids.len() - 1`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenancePath {
+    pub node_ids: Vec<String>,
+    pub edge_ids: Vec<String>,
+}
+
+/// `node_id -> [(neighbor_node_id, edge_id), ...]`, the undirected adjacency
+/// list built by `KnowledgeGraphSnapshot::neighbor_index` for `provenance_paths`.
+type ProvenanceAdjacency<'a> = HashMap<&'a str, Vec<(&'a str, &'a str)>>;
+
+/// `node_id -> total incident-edge count`, the degree map built by
+/// `KnowledgeGraphSnapshot::neighbor_index` and checked against
+/// `KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP`.
+type ProvenanceDegree<'a> = HashMap<&'a str, usize>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KnowledgeGraphSnapshot {
@@ -1265,6 +1297,12 @@ pub struct KnowledgeGraphSnapshot {
 }
 
 impl KnowledgeGraphSnapshot {
+    /// GRAPH-03 hub-degree cap: a node whose total degree (every edge that
+    /// names it as either endpoint, counted without regard to direction)
+    /// exceeds this is never *expanded through* by `provenance_paths` — see
+    /// that method's doc comment for the full security rationale.
+    pub const PROVENANCE_HUB_DEGREE_CAP: usize = 32;
+
     pub fn new(temporal_window_secs: u64) -> Self {
         Self {
             schema_version: KNOWLEDGE_GRAPH_SCHEMA_VERSION,
@@ -1397,6 +1435,133 @@ impl KnowledgeGraphSnapshot {
             || edge_count_before != self.edges.len()
             || processed_before != self.processed_observation_ids.len()
     }
+
+    /// Builds, in one `O(edges)` pass, the undirected adjacency list and
+    /// total-degree map that back `provenance_paths`. Every edge variant is
+    /// read uniformly through `KnowledgeGraphEdge::endpoints()`. This is the
+    /// only place `edges` is walked to build a neighbor structure — the
+    /// shared private helper `provenance_paths` (the graph's SOLE traversal
+    /// API) relies on, so a second hand-rolled edge walk should never be
+    /// needed elsewhere in this file.
+    fn neighbor_index(&self) -> (ProvenanceAdjacency<'_>, ProvenanceDegree<'_>) {
+        let mut adjacency: ProvenanceAdjacency<'_> = HashMap::new();
+        let mut degree: ProvenanceDegree<'_> = HashMap::new();
+        for edge in &self.edges {
+            let (from, to) = edge.endpoints();
+            let edge_id = edge.edge_id();
+            adjacency.entry(from).or_default().push((to, edge_id));
+            adjacency.entry(to).or_default().push((from, edge_id));
+            *degree.entry(from).or_insert(0) += 1;
+            *degree.entry(to).or_insert(0) += 1;
+        }
+        (adjacency, degree)
+    }
+
+    /// Bounded-hop traversal over `edges`, returning the shortest path (as a
+    /// single-element `Vec`, or empty if none exists) from `from` to `to`
+    /// using at most `max_hops` edges. This is the graph's SOLE traversal
+    /// read path: every other multi-hop / neighbor-expanding read in this
+    /// file routes through this method (or its private `neighbor_index`
+    /// helper) rather than hand-rolling a second edge walk. (`matching_contributions`
+    /// stays a direct, single-hop field lookup over `engagements()` — it
+    /// never expands edges, so it is not a second traversal implementation.)
+    ///
+    /// **Directedness.** Edges are traversed as UNDIRECTED: a path may cross
+    /// any edge in either direction regardless of its recorded
+    /// `from_node_id`/`to_node_id`. `provenance_paths` answers "are these two
+    /// graph nodes connected within N hops" — the question `CorrelationEngine`
+    /// needs to ask when deciding whether two hunts share provenance — not
+    /// "replay this causal chain in recorded order". Each edge's own
+    /// `from_node_id`/`to_node_id` still records its original direction for
+    /// audit fidelity; this traversal simply doesn't require walking it that
+    /// way. (A future consumer that needs directed causal replay should add
+    /// a separate, explicitly-directed method rather than repurpose this
+    /// one.)
+    ///
+    /// **Hub-degree cap — the GRAPH-03 security property.** Before a node
+    /// reached mid-search (i.e. not the initial `from` node) is expanded to
+    /// its own neighbors, its total degree (from `neighbor_index`) is
+    /// checked against `PROVENANCE_HUB_DEGREE_CAP`. A node over the cap is
+    /// never expanded through: it can still be *reached* — as the final
+    /// `to` node of a path, or simply visited — but the search will not step
+    /// onward from it to its other neighbors. This is what stops a shared
+    /// high-degree hub (a popular host, a common egress IP, a widely-cited
+    /// attack technique, ...) from silently bridging two otherwise-unrelated
+    /// hunt subgraphs into one connected provenance chain. The initial
+    /// `from` node is exempt from this check for its own first expansion —
+    /// it is the query's own explicit starting point, not a hub the search
+    /// wandered into — but every node discovered thereafter is capped, so a
+    /// hub can never be used as a waypoint.
+    pub fn provenance_paths(&self, from: &str, to: &str, max_hops: usize) -> Vec<ProvenancePath> {
+        if from == to {
+            return vec![ProvenancePath {
+                node_ids: vec![from.to_string()],
+                edge_ids: Vec::new(),
+            }];
+        }
+
+        let (adjacency, degree) = self.neighbor_index();
+        let empty_neighbors: Vec<(&str, &str)> = Vec::new();
+
+        let mut parents: HashMap<&str, (&str, &str)> = HashMap::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        seen.insert(from);
+        let mut frontier: VecDeque<(&str, usize)> = VecDeque::new();
+        frontier.push_back((from, 0));
+
+        while let Some((node_id, hops)) = frontier.pop_front() {
+            if hops >= max_hops {
+                continue;
+            }
+            if hops > 0
+                && degree.get(node_id).copied().unwrap_or(0) > Self::PROVENANCE_HUB_DEGREE_CAP
+            {
+                // Hub cap: this node was reached mid-search, not supplied as
+                // `from` — refuse to expand through it.
+                continue;
+            }
+            for &(neighbor, edge_id) in adjacency.get(node_id).unwrap_or(&empty_neighbors) {
+                if seen.contains(neighbor) {
+                    continue;
+                }
+                seen.insert(neighbor);
+                parents.insert(neighbor, (node_id, edge_id));
+                if neighbor == to {
+                    return vec![reconstruct_provenance_path(from, to, &parents)];
+                }
+                frontier.push_back((neighbor, hops + 1));
+            }
+        }
+
+        Vec::new()
+    }
+}
+
+/// Walks `parents` backward from `to` to `from` to rebuild the ordered path
+/// discovered by `KnowledgeGraphSnapshot::provenance_paths`'s BFS.
+fn reconstruct_provenance_path(
+    from: &str,
+    to: &str,
+    parents: &HashMap<&str, (&str, &str)>,
+) -> ProvenancePath {
+    let mut node_ids = vec![to.to_string()];
+    let mut edge_ids = Vec::new();
+    let mut current = to;
+    while current != from {
+        // Every node this is called with (via `provenance_paths`) was just
+        // inserted into `parents` along with its whole ancestor chain back
+        // to `from`, so `get` always succeeds here; `else { break }` keeps
+        // this panic-free by construction rather than by an unwrap/expect.
+        let Some(&(parent, edge_id)) = parents.get(current) else {
+            break;
+        };
+        edge_ids.push(edge_id.to_string());
+        node_ids.push(parent.to_string());
+        current = parent;
+    }
+    node_ids.reverse();
+    edge_ids.reverse();
+    ProvenancePath { node_ids, edge_ids }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2527,10 +2692,10 @@ fn signed_memory_query_deposit(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        CausalEdge, CausalRelation, DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore,
-        KnowledgeEdgeKind, KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent,
-        entity_node_id, file_node_id, network_flow_node_id, parse_memory_query,
-        process_key_node_id, signed_memory_query_deposit,
+        CausalEdge, CausalRelation, DeceptionAssetNode, EntityEdge, EntityKind,
+        FileKnowledgeGraphStore, KnowledgeEdgeKind, KnowledgeGraphEdge, KnowledgeGraphNode,
+        KnowledgeGraphSnapshot, KnowledgeNodeKind, SphinxAgent, entity_node_id, file_node_id,
+        network_flow_node_id, parse_memory_query, process_key_node_id, signed_memory_query_deposit,
     };
     use crate::AgentTickBoundaryError;
     use crate::calico_agent::{
@@ -3861,5 +4026,143 @@ mod tests {
         )));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn provenance_edge(edge_id: &str, from: &str, to: &str) -> KnowledgeGraphEdge {
+        KnowledgeGraphEdge::Entity(EntityEdge {
+            edge_id: edge_id.to_string(),
+            from_node_id: from.to_string(),
+            to_node_id: to.to_string(),
+            role: "test".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        })
+    }
+
+    fn graph_with_edges(edges: Vec<KnowledgeGraphEdge>) -> KnowledgeGraphSnapshot {
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        for edge in edges {
+            graph.upsert_edge(edge);
+        }
+        graph
+    }
+
+    #[test]
+    fn provenance_paths_finds_a_path_within_max_hops() {
+        let graph = graph_with_edges(vec![
+            provenance_edge("e1", "a", "b"),
+            provenance_edge("e2", "b", "c"),
+        ]);
+
+        let paths = graph.provenance_paths("a", "c", 2);
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].node_ids, vec!["a", "b", "c"]);
+        assert_eq!(paths[0].edge_ids, vec!["e1", "e2"]);
+    }
+
+    #[test]
+    fn provenance_paths_does_not_return_a_path_exceeding_max_hops() {
+        let graph = graph_with_edges(vec![
+            provenance_edge("e1", "a", "b"),
+            provenance_edge("e2", "b", "c"),
+        ]);
+
+        assert!(graph.provenance_paths("a", "c", 1).is_empty());
+        // A direct one-hop path is still found at the boundary.
+        assert_eq!(graph.provenance_paths("a", "b", 1).len(), 1);
+    }
+
+    #[test]
+    fn provenance_paths_treats_edges_as_undirected() {
+        // `provenance_edge` records b -> c, but a query from c back to b
+        // should still find it -- provenance_paths is documented to
+        // traverse undirected.
+        let graph = graph_with_edges(vec![provenance_edge("e1", "b", "c")]);
+
+        let paths = graph.provenance_paths("c", "b", 1);
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].node_ids, vec!["c", "b"]);
+        assert_eq!(paths[0].edge_ids, vec!["e1"]);
+    }
+
+    /// The GRAPH-03 security property: a hub node whose degree exceeds
+    /// `PROVENANCE_HUB_DEGREE_CAP` must not be usable as a bridge that
+    /// connects two otherwise-unrelated hunt subgraphs, even though a path
+    /// plainly exists through it if the hub were freely traversable.
+    #[test]
+    fn provenance_paths_hub_degree_cap_prevents_bridging_unrelated_hunt_subgraphs() {
+        let mut edges = vec![
+            // Subgraph A: hunt-a-1 -- hunt-a-2 -- hub
+            provenance_edge("a-edge-1", "hunt-a-1", "hunt-a-2"),
+            provenance_edge("a-edge-2", "hunt-a-2", "hub"),
+            // Subgraph B: hub -- hunt-b-1 -- hunt-b-2
+            provenance_edge("b-edge-1", "hub", "hunt-b-1"),
+            provenance_edge("b-edge-2", "hunt-b-1", "hunt-b-2"),
+        ];
+        // Inflate the hub's degree well past the cap with filler edges, the
+        // way a real shared host or popular egress IP accumulates edges
+        // across many unrelated engagements over time.
+        for i in 0..(KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP + 5) {
+            edges.push(provenance_edge(
+                &format!("filler-edge-{i}"),
+                "hub",
+                &format!("filler-node-{i}"),
+            ));
+        }
+        let graph = graph_with_edges(edges);
+
+        // Sanity check: the hub really is over the cap.
+        let hub_degree = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                let (from, to) = edge.endpoints();
+                from == "hub" || to == "hub"
+            })
+            .count();
+        assert!(hub_degree > KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP);
+
+        // The security property itself: no path bridges the two subgraphs
+        // through the over-cap hub.
+        assert!(
+            graph.provenance_paths("hunt-a-1", "hunt-b-1", 4).is_empty(),
+            "hub-degree cap should have prevented bridging unrelated hunt subgraphs through a shared hub"
+        );
+        assert!(graph.provenance_paths("hunt-a-1", "hunt-b-2", 5).is_empty());
+
+        // A legitimate within-subgraph path is unaffected by the cap.
+        let within_subgraph = graph.provenance_paths("hunt-a-1", "hunt-a-2", 1);
+        assert_eq!(within_subgraph.len(), 1);
+        assert_eq!(within_subgraph[0].node_ids, vec!["hunt-a-1", "hunt-a-2"]);
+
+        // The hub can still be *reached* as an endpoint -- it just cannot
+        // be traversed THROUGH to reach the other subgraph.
+        let to_hub = graph.provenance_paths("hunt-a-1", "hub", 2);
+        assert_eq!(to_hub.len(), 1);
+        assert_eq!(to_hub[0].node_ids, vec!["hunt-a-1", "hunt-a-2", "hub"]);
+    }
+
+    #[test]
+    fn provenance_paths_returns_empty_when_no_path_exists() {
+        let graph = graph_with_edges(vec![
+            provenance_edge("e1", "a", "b"),
+            provenance_edge("e2", "x", "y"),
+        ]);
+
+        assert!(graph.provenance_paths("a", "y", 5).is_empty());
+    }
+
+    #[test]
+    fn provenance_paths_returns_trivial_path_when_from_equals_to() {
+        let graph = graph_with_edges(vec![provenance_edge("e1", "a", "b")]);
+
+        let paths = graph.provenance_paths("a", "a", 0);
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].node_ids, vec!["a"]);
+        assert!(paths[0].edge_ids.is_empty());
     }
 }
