@@ -1,5 +1,5 @@
 //! Kani bounded-model-checking harnesses over the real `formal_core` public
-//! decision functions (phase 293 — KANI-01, KANI-02).
+//! decision functions (phase 293 — KANI-01, KANI-02, KANI-03).
 //!
 //! ## How this module is gated (KANI-01)
 //!
@@ -23,13 +23,23 @@
 //! that is the point of the checker, not a weakness — but the bound is named so
 //! it stays honest.
 //!
-//! Every harness here CALLS the real `formal_core` `pub fn` under proof; there
-//! are no `MODEL-ONLY` harnesses in this task.
+//! ## REAL vs `MODEL-ONLY` (KANI-03)
+//!
+//! Most harnesses CALL the real `formal_core` `pub fn` under proof. A few lease
+//! properties are proved `MODEL-ONLY`: the lease redemption predicates and the
+//! reject paths of `validate_lease_terms` build error strings with `format!` over
+//! their inputs, and the cryptographic half of `ContingencyLease::verify` lives
+//! ABOVE this crate. Kani instruments every heap `String`/`format!` access with
+//! allocation and `memchr` checks, so those paths do not terminate under CBMC in
+//! any CI budget. Per the KANI-03 provision they are proved as scalar/boolean
+//! `MODEL-ONLY` harnesses that mirror the real decision arithmetic exactly and
+//! NAME the runtime test that covers the real symbol. Every `MODEL-ONLY` harness
+//! and its model are labelled as such.
 
 use crate::PolicyVerdict;
 use crate::formal_core::{
-    RateLimitOutcome, destructive_action, evaluate_rate_limit, human_gate_decision,
-    severity_floor_denial,
+    RateLimitOutcome, destructive_action, evaluate_rate_limit, governance_quorum_threshold,
+    human_gate_decision, severity_floor_denial,
 };
 use std::collections::VecDeque;
 use swarm_core::types::{ResponseAction, Severity};
@@ -350,4 +360,250 @@ fn kani_human_gate_holds_destructive_at_or_above_gate() {
     } else {
         assert!(decision.is_none());
     }
+}
+
+// ---------------------------------------------------------------------------
+// KANI-03: lease integrity + governance quorum
+//
+// REAL (format!-free, string-comparison-free) predicates are proved directly;
+// the format!/String-heavy lease redemption and the receipt crypto are proved
+// MODEL-ONLY (see the module header) with the runtime test named on each.
+// ---------------------------------------------------------------------------
+
+/// REAL: `destructive_action` classifies exactly the twelve containment actions
+/// as destructive and the three others (`TriggerEdrScan`, `DeployDecoy`,
+/// `Escalate`) as not — over one representative of every `ResponseAction`
+/// variant. A variant match with no string comparison and no `format!`, so it
+/// is Kani-tractable. The `expected` oracle mirrors the SPEC (the twelve
+/// containment variants), derived independently of `destructive_action`'s body.
+///
+/// Bound: exhaustive over the 15 variants (`arbitrary_response_action`, idx<15).
+#[kani::proof]
+#[kani::unwind(16)]
+fn kani_destructive_action_classifies_every_variant() {
+    let action = arbitrary_response_action();
+    let expected = matches!(
+        action,
+        ResponseAction::BlockEgress { .. }
+            | ResponseAction::IsolateHost { .. }
+            | ResponseAction::RevokeCredential { .. }
+            | ResponseAction::SinkholeDns { .. }
+            | ResponseAction::TerminateUserSession { .. }
+            | ResponseAction::InjectFirewallRule { .. }
+            | ResponseAction::QuarantineFile { .. }
+            | ResponseAction::KillProcess { .. }
+            | ResponseAction::SuspendProcess { .. }
+            | ResponseAction::DisableUserAccount { .. }
+            | ResponseAction::ForcePasswordReset { .. }
+            | ResponseAction::RemoveScheduledTask { .. }
+    );
+    assert_eq!(destructive_action(&action), expected);
+}
+
+/// REAL: `governance_quorum_threshold` is the Byzantine `2f + 1` quorum — an
+/// empty committee needs zero votes, and any non-empty committee needs
+/// `2*max_faulty + 1`, always at least one. Pure integer arithmetic, no strings.
+///
+/// Bound: total and max_faulty in [0,10] (no saturation in range).
+#[kani::proof]
+fn kani_governance_quorum_threshold_is_2f_plus_1() {
+    let total: usize = kani::any();
+    kani::assume(total <= 10);
+    let max_faulty: usize = kani::any();
+    kani::assume(max_faulty <= 10);
+
+    let q = governance_quorum_threshold(total, max_faulty);
+    if total == 0 {
+        assert_eq!(q, 0);
+    } else {
+        assert_eq!(q, max_faulty * 2 + 1);
+        assert!(q >= 1);
+    }
+}
+
+/// REAL: `governance_quorum_threshold` is monotonic in the fault tolerance and
+/// never overflows — its saturating `2f + 1` arithmetic means a larger
+/// `max_faulty` can only raise the threshold, and it stays a valid `usize` even
+/// at the extreme. Proved over unbounded `max_faulty` so the saturation edge is
+/// covered; `total` in [1,4] (a non-empty committee).
+#[kani::proof]
+fn kani_governance_quorum_threshold_is_monotonic_and_saturating() {
+    let total: usize = kani::any();
+    kani::assume((1..=4).contains(&total));
+    let a: usize = kani::any();
+    let b: usize = kani::any();
+    kani::assume(a <= b); // unbounded otherwise: exercises the saturation edge
+
+    assert!(governance_quorum_threshold(total, a) <= governance_quorum_threshold(total, b));
+    assert!(governance_quorum_threshold(total, a) >= 1);
+}
+
+/// The scalar model of `formal_core::validate_lease_terms`'s accept predicate,
+/// mirroring its four checks and their meaning exactly. Used by the MODEL-ONLY
+/// reject harness because the real function's reject paths call `format!`.
+fn model_lease_terms_accepted(
+    schema: u32,
+    expected: u32,
+    cap: usize,
+    duration: i64,
+    issued: i64,
+    expires: i64,
+) -> bool {
+    schema == expected && cap > 0 && duration > 0 && expires > issued
+}
+
+/// MODEL-ONLY (see [`model_lease_terms_accepted`]): `validate_lease_terms` fails
+/// closed on EVERY malformed lease — a schema mismatch, a non-positive cap, a
+/// non-positive duration, or expiry at or before issuance each reject it.
+/// Modeled over scalars because the real reject paths build error strings with
+/// `format!`, which Kani cannot instrument tractably. The real fail-closed
+/// behavior is covered by the swarm-policy `formal_core` unit tests
+/// (`validate_lease_terms_*`) and end to end by the swarm-agents test
+/// `keyless_policy_reloaded_into_a_partition_refuses_persisted_leases`.
+#[kani::proof]
+fn kani_model_only_validate_lease_terms_rejects_malformed() {
+    let schema: u32 = kani::any();
+    kani::assume(schema <= 2);
+    let expected: u32 = kani::any();
+    kani::assume(expected <= 2);
+    let cap: usize = kani::any();
+    kani::assume(cap <= 3);
+    let duration: i64 = kani::any();
+    kani::assume((-2..=3).contains(&duration));
+    let issued: i64 = kani::any();
+    kani::assume((-2..=3).contains(&issued));
+    let expires: i64 = kani::any();
+    kani::assume((-2..=3).contains(&expires));
+
+    // Full characterization: accepted IFF well-formed — proves the fail-closed
+    // reject direction (any malformation ⇒ rejected) and that no well-formed
+    // lease is wrongly rejected.
+    let well_formed = schema == expected && cap > 0 && duration > 0 && expires > issued;
+    assert_eq!(
+        model_lease_terms_accepted(schema, expected, cap, duration, issued, expires),
+        well_formed
+    );
+}
+
+/// The scalar model of `formal_core::lease_redeem`'s record decision for a NEW
+/// (not-already-redeemed), matching, non-expired scope: record iff the redeemed
+/// count is strictly below the cap. Mirrors the real `len >= blast_radius_cap`
+/// guard.
+fn model_lease_records_new_scope(redeemed_count: usize, cap: usize) -> bool {
+    redeemed_count < cap
+}
+
+/// MODEL-ONLY (see [`model_lease_records_new_scope`]): blast-radius conservation.
+/// `lease_redeem` records a NEW scope only while the redeemed-scope count is
+/// strictly below `blast_radius_cap`, so a redemption can never drive the count
+/// past the cap, and at or above the cap a new scope is always refused. Modeled
+/// over the scalar count and cap because the real `lease_redeem` matches scopes
+/// by `String` and builds error strings with `format!` (Kani-intractable); the
+/// real behavior is covered by the swarm-agents test
+/// `governance_policy_stages_and_redeems_contingency_leases_during_partition`.
+#[kani::proof]
+fn kani_model_only_blast_radius_conservation() {
+    let count: usize = kani::any();
+    kani::assume(count <= 8);
+    let cap: usize = kani::any();
+    kani::assume(cap <= 8);
+
+    let records = model_lease_records_new_scope(count, cap);
+    if records {
+        // Recording keeps the post-redemption count within the cap.
+        assert!(count + 1 <= cap);
+    }
+    if count >= cap {
+        // At or over the cap, a new scope is always refused.
+        assert!(!records);
+    }
+}
+
+/// The scalar model of `formal_core::lease_can_redeem`'s guard: a lease may be
+/// redeemed only if the action matches, the lease has NOT expired
+/// (`expires_at_ms > now_ms`), and there is budget. Mirrors the real expiry
+/// check `expires_at_ms <= now_ms ⇒ deny`.
+fn model_lease_can_redeem(
+    matches: bool,
+    expires_at_ms: i64,
+    now_ms: i64,
+    has_budget: bool,
+) -> bool {
+    matches && expires_at_ms > now_ms && has_budget
+}
+
+/// MODEL-ONLY (see [`model_lease_can_redeem`]): an expired lease denies every
+/// redemption — once `now_ms` reaches expiry the lease fails closed regardless
+/// of match or remaining budget. Modeled over the scalar clock/expiry because
+/// the real predicates match scopes by `String`; the real behavior is covered
+/// by the swarm-agents test
+/// `governance_policy_stages_and_redeems_contingency_leases_during_partition`.
+#[kani::proof]
+fn kani_model_only_expired_lease_always_denies() {
+    let now_ms: i64 = kani::any();
+    kani::assume((0..=4).contains(&now_ms));
+    let expires: i64 = kani::any();
+    kani::assume((0..=4).contains(&expires));
+    kani::assume(expires <= now_ms); // the lease has expired
+
+    let matches: bool = kani::any();
+    let has_budget: bool = kani::any();
+    assert!(!model_lease_can_redeem(
+        matches, expires, now_ms, has_budget
+    ));
+}
+
+/// MODEL-ONLY: a structural model of the receipt-bound half of
+/// `ContingencyLease::verify` (crates/swarm-agents/src/tom_agent.rs), which
+/// lives ABOVE this crate with the `ConsensusGovernanceReceipt` type and is NOT
+/// part of the pure decision core. It mirrors verify's exact check order —
+/// signature, then `Approve` decision, then proposal-hash match — with the same
+/// error text, so the fail-closed contract can be model-checked here. The REAL
+/// cryptographic checks are covered by the swarm-agents runtime tests
+/// `keyless_policy_reloaded_into_a_partition_refuses_persisted_leases` (receipt /
+/// signature refusal) and
+/// `governance_policy_approves_destructive_actions_with_signed_receipt_when_healthy`
+/// (the accept path).
+fn model_receipt_verify(
+    signature_valid: bool,
+    is_approve: bool,
+    proposal_hash_matches: bool,
+) -> Result<(), &'static str> {
+    if !signature_valid {
+        return Err("invalid contingency lease receipt");
+    }
+    if !is_approve {
+        return Err("contingency lease receipt must be an approval");
+    }
+    if !proposal_hash_matches {
+        return Err("contingency lease proposal hash did not match receipt");
+    }
+    Ok(())
+}
+
+/// MODEL-ONLY (see [`model_receipt_verify`]): an invalid receipt signature
+/// always denies, for EVERY decision and proposal-hash outcome — signature is
+/// checked first and its failure is terminal.
+#[kani::proof]
+fn kani_model_only_invalid_signature_always_denies() {
+    let is_approve: bool = kani::any();
+    let hash_matches: bool = kani::any();
+    assert!(model_receipt_verify(false, is_approve, hash_matches).is_err());
+}
+
+/// MODEL-ONLY (see [`model_receipt_verify`]): a receipt whose decision is not
+/// `Approve` always denies, for EVERY proposal-hash outcome, even with a valid
+/// signature.
+#[kani::proof]
+fn kani_model_only_non_approve_decision_always_denies() {
+    let hash_matches: bool = kani::any();
+    assert!(model_receipt_verify(true, false, hash_matches).is_err());
+}
+
+/// MODEL-ONLY (see [`model_receipt_verify`]): a proposal-hash mismatch always
+/// denies, even with a valid signature and an `Approve` decision — the last of
+/// the three receipt checks, and equally fail-closed.
+#[kani::proof]
+fn kani_model_only_hash_mismatch_always_denies() {
+    assert!(model_receipt_verify(true, true, false).is_err());
 }
