@@ -1300,7 +1300,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Executable phases:** 296-299
 
 - [x] **Phase 296: Provenance Graph Substrate** - Add real causal nodes and edges, bounded-hop path queries with a hub-degree cap, and proven retention bounds. (GRAPH-01, GRAPH-04) — Complete 2026-09-08
-- [ ] **Phase 297: Kill-Chain Reconstruction** - Reconstruct multi-stage chains mapped to declared kill-chain stages, with narration. (CHAIN-01, CHAIN-03)
+- [x] **Phase 297: Kill-Chain Reconstruction** - Reconstruct multi-stage chains mapped to declared kill-chain stages, with narration. (CHAIN-01, CHAIN-03) — Complete 2026-09-08
 - [ ] **Phase 298: Cross-Hunt Correlation** - Migrate correlation onto graph traversal and make incidents restart-durable. (XHUNT-01, XHUNT-03)
 - [ ] **Phase 299: Dependency-Aware Triage** - Path-rarity scoring hitting a measured false-positive reduction target. (TRIAGE-01, TRIAGE-03)
 
@@ -1322,13 +1322,13 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** Turn ephemeral sequence detections into durable graph evidence and reconstruct chains that span hunts, producing operator-auditable narratives.
 **Requirements:** CHAIN-01, CHAIN-02, CHAIN-03, CHAIN-04
 **Depends on:** Phase 296
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-08, commit range `509e06e03..29983b692`) — the SECOND of four phases of the v1.82 Provenance Memory And Correlation milestone. v1.82 is NOT complete; Phases 298/299 remain.
+**Plans:** 297-01-PLAN.md
 **Success Criteria**:
-1. All sequence-detector matches are written as semantic kill-chain-stage edges in a new integration test.
-2. At least two existing multi-stage fixtures reconstruct with stage order exactly matching each fixture's declared chain.
-3. Narration produces a non-empty stage-by-stage string for every reconstructed chain.
-4. Two investigations from different hunts sharing a causal path reconstruct into one chain, not two disjoint incidents.
+1. All sequence-detector matches are written as semantic kill-chain-stage edges in a new integration test. — met: `b25b40985` (CHAIN-02). `SphinxAgent` writes each `KillChainSequenceDetector` match as `SemanticRelation::KillChainStage` semantic edge(s) namespaced by rule id, persisted and reloaded; the attack-technique KillChainStage emission is preserved unchanged.
+2. At least two existing multi-stage fixtures reconstruct with stage order exactly matching each fixture's declared chain. — met: `dd494e541` (CHAIN-01) + `522645969` (CHAIN-04). `chain_reconstruction.rs` maps observed `AttackTechnique` nodes onto a rule's declared `attack_chain`, longest connected prefix (≥2 stages), asserted stage-order-exact against `outlook_mshta_transfer` and `remote_service_stager`.
+3. Narration produces a non-empty stage-by-stage string for every reconstructed chain. — met: `522645969` (CHAIN-04). `narrate()` always emits a header plus one line per stage in reconstructed order.
+4. Two investigations from different hunts sharing a causal path reconstruct into one chain, not two disjoint incidents. — met: `522645969` + hardening `b5ac84576`/`29983b692` (CHAIN-03). `join_cross_hunt_kill_chain` emits one `ReconstructedKillChain` (persisted alongside `IncidentRecord` in swarm-spine) when two disjoint-hunt incidents are connected by a **`Causal`-only** path (`KnowledgeGraphSnapshot::causal_provenance_paths`), never through a globally-merged classification node and never via non-causal co-reference; the cross-hunt-bridging class was closed structurally after three adversarial-review iterations, the last verdict (opus) confirming no unrelated-hunt bridge survives. **CAVEAT — producer-wiring gap (same as Phase 296's):** the join is proven by tests but is a fail-closed no-op on production telemetry until `Engagement` anchors carry the Phase 296 raw causal edges (`pid`/`process_key`-keyed) that no normalized telemetry event populates yet — the wiring is Phase 298's scope. This is the SAFE direction (no false joins), disclosed rather than glossed.
 
 ### Phase 298: Cross-Hunt Correlation
 
@@ -1915,7 +1915,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 | 294. Named Safety Properties And Partition-Lease Model | v1.81 | 1/1 | Complete | 294-01 |
 | 295. Z3-Backed Promotion Gate | v1.81 | - | Superseded by 322 | - |
 | 296. Provenance Graph Substrate | v1.82 | 1/1 | Complete | 296-01 |
-| 297. Kill-Chain Reconstruction | v1.82 | 0/TBD | Not started | - |
+| 297. Kill-Chain Reconstruction | v1.82 | 1/1 | Complete | 297-01 |
 | 298. Cross-Hunt Correlation | v1.82 | 0/TBD | Not started | - |
 | 299. Dependency-Aware Triage | v1.82 | 0/TBD | Not started | - |
 | 300. BFT Correctness Repair | v1.83 | - | Superseded by 321 | - |

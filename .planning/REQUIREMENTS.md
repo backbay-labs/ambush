@@ -953,10 +953,10 @@ final review closure under `286-02-PLAN.md`.
 
 #### Kill-Chain Reconstruction
 
-- [ ] **CHAIN-01**: `chain_reconstruction.rs` walks causal, temporal, and semantic edges and maps observed paths onto the stage ordering in `sequences/kill-chain-v1.yaml`.
-- [ ] **CHAIN-02**: `KillChainSequenceDetector` matches are written into the graph as semantic kill-chain-stage edges, making ephemeral detections durable evidence.
-- [ ] **CHAIN-03**: Incidents referencing disjoint `hunt_id`s connected by a causal path emit a `ReconstructedKillChain` persisted alongside `IncidentRecord`.
-- [ ] **CHAIN-04**: `narrate()` produces a stage-by-stage narrative, tested against at least two existing multi-stage fixtures with stage order matching each fixture's declared chain.
+- [x] **CHAIN-01**: `chain_reconstruction.rs` walks causal, temporal, and semantic edges and maps observed paths onto the stage ordering in `sequences/kill-chain-v1.yaml`. — Satisfied 2026-09-08 (`fe51b22bb`, hub-cap fix `ddcf7acc2`, anchor-scope fix `dd494e541`).
+- [x] **CHAIN-02**: `KillChainSequenceDetector` matches are written into the graph as semantic kill-chain-stage edges, making ephemeral detections durable evidence. — Satisfied 2026-09-08 (`b25b40985`).
+- [x] **CHAIN-03**: Incidents referencing disjoint `hunt_id`s connected by a causal path emit a `ReconstructedKillChain` persisted alongside `IncidentRecord`. — Satisfied 2026-09-08 (`522645969`; cross-hunt-bridge hardened to a `Causal`-only traversal `b5ac84576`, fail-closed self-bridge guard `29983b692`). **CAVEAT — producer-wiring gap:** the join is capability-complete and proven by SC4-style tests, but in the real producer `Engagement` anchors carry no `Causal` edges yet (Phase 296's raw causal edges pivot on `pid`/`process_key` no normalized telemetry event carries), so cross-hunt joining is a fail-closed no-op on production traffic until 296→297 producer wiring lands — Phase 298's scope.
+- [x] **CHAIN-04**: `narrate()` produces a stage-by-stage narrative, tested against at least two existing multi-stage fixtures with stage order matching each fixture's declared chain. — Satisfied 2026-09-08 (`522645969`; fixtures `outlook_mshta_transfer` + `remote_service_stager`).
 
 #### Cross-Hunt Correlation
 
@@ -1560,10 +1560,10 @@ final review closure under `286-02-PLAN.md`.
 | GRAPH-04 | Phase 296 | Satisfied 2026-09-08 — faa5d9dae |
 | GRAPH-05 | Phase 296 | Satisfied 2026-09-08 — faa5d9dae |
 | GRAPH-06 | Phase 296 | Satisfied 2026-09-08 — faa5d9dae; line-slip recorded (sphinx_agent.rs:1097 was attack_technique_for_node at the pre-phase base, not the retention/prune site) |
-| CHAIN-01 | Phase 297 | Pending |
-| CHAIN-02 | Phase 297 | Pending |
-| CHAIN-03 | Phase 297 | Pending |
-| CHAIN-04 | Phase 297 | Pending |
+| CHAIN-01 | Phase 297 | Satisfied 2026-09-08 (`dd494e541`) |
+| CHAIN-02 | Phase 297 | Satisfied 2026-09-08 (`b25b40985`) |
+| CHAIN-03 | Phase 297 | Satisfied 2026-09-08 (`b5ac84576`) |
+| CHAIN-04 | Phase 297 | Satisfied 2026-09-08 (`522645969`) |
 | XHUNT-01 | Phase 298 | Pending |
 | XHUNT-02 | Phase 298 | Pending |
 | XHUNT-03 | Phase 298 | Pending |
@@ -1699,7 +1699,7 @@ final review closure under `286-02-PLAN.md`.
 - v1.79 COMPLETE 2026-09-08: 29 requirements across phases 284-287 all Satisfied (Phase 286 accepted via the durable dispatch-intent journal; Phase 287 fuzz/loom/supply complete) (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
 - v1.81 COMPLETE 2026-09-08: 15 requirements across phases 292-294 all Satisfied (DCORE-01-05 Satisfied 2026-09-08 as Phase 292; KANI-01-05 Satisfied 2026-09-08 as Phase 293; SAFEP-01-05 Satisfied 2026-09-08 as Phase 294) (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
-- v1.82 in progress: 19 requirements across phases 296-299 (GRAPH-01-06 Satisfied 2026-09-08 as Phase 296) (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
+- v1.82 in progress: 19 requirements across phases 296-299 (GRAPH-01-06 Satisfied 2026-09-08 as Phase 296; CHAIN-01-04 Satisfied 2026-09-08 as Phase 297) (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
 - v1.83 queued: 14 requirements across phases 301-303 (VRF-01-05 -> Phase 301; REVOKE-01-05 -> Phase 302; DISTGOV-01-04 -> Phase 303)
 - v1.84 queued: 12 requirements across phases 305-307 (IFC-01-04 -> Phase 305; HERD-01-04 -> Phase 306; DECOY-01-04 -> Phase 307)
 - v1.85 queued: 12 requirements across phases 308-311 (SPEC-01-03 -> Phase 308; CONFORM-01-03 -> Phase 309; SDK-01-03 -> Phase 310; COVDOC-01-03 -> Phase 311)
