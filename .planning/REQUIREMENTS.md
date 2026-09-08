@@ -916,11 +916,12 @@ final review closure under `286-02-PLAN.md`.
 
 #### Kani Bounded Model Checking
 
-- [ ] **KANI-01**: An optional `kani` feature and `crates/swarm-policy/src/kani_public_harnesses.rs` hold `#[kani::proof]` functions calling the real `pub fn`s from `formal_core.rs`.
-- [ ] **KANI-02**: Harnesses prove fail-closed evaluation, severity-gate soundness, and rate-limit boundedness within a 60,000ms trailing window.
-- [ ] **KANI-03**: Harnesses prove lease integrity: invalid signature, non-approve decision, and hash-mismatched proposal always deny; redemption never exceeds `blast_radius_cap`; expiry always denies. Model-only harnesses are labeled `MODEL-ONLY`.
-- [ ] **KANI-04**: `formal/kani/swarm-policy-harnesses.toml` enumerates every harness; a unit test fails the build if a `#[kani::proof]` function is missing from the manifest.
-- [ ] **KANI-05**: `scripts/run-kani-swarm-policy.sh` runs every PR-lane harness in CI.
+- [x] **KANI-01** (f0e2067b0, extended 86cd1cc41): An optional `kani` feature and `crates/swarm-policy/src/kani_public_harnesses.rs` hold `#[kani::proof]` functions calling the real `pub fn`s from `formal_core.rs`.
+- [x] **KANI-02** (f0e2067b0): Harnesses prove fail-closed evaluation, severity-gate soundness, and rate-limit boundedness within a 60,000ms trailing window.
+- [x] **KANI-03** (86cd1cc41, review fixes 71fbd08e9): Harnesses prove lease integrity: invalid signature, non-approve decision, and hash-mismatched proposal always deny; redemption never exceeds `blast_radius_cap`; expiry always denies. Model-only harnesses are labeled `MODEL-ONLY`.
+  AS-BUILT DEVIATION (honest, recorded in `293-01-PLAN.md` Design-of-record and `293-01-SUMMARY.md`): Kani cannot instrument the real `lease_redeem`/`lease_can_redeem` (they match scopes by `String`) or `validate_lease_terms` (builds reject-path errors with `format!`) — CBMC's `memchr`/allocation safety checks over every branch, including infeasible `format!` arms, did not terminate within the CI budget. Blast-radius conservation, expiry denial, and `validate_lease_terms` rejection are therefore proved **MODEL-ONLY** (scalar models mirroring the real decision arithmetic, each naming the `formal_core` unit test covering the real symbol), not literal-symbol proofs as originally planned. The ROADMAP SC1 ≥8-REAL floor is still met, substituting `governance_quorum_threshold`×2 and `destructive_action`×1 for the intractable lease functions: 8 REAL (`evaluate_rate_limit`×3, `severity_floor_denial`/`human_gate_decision`×2, `governance_quorum_threshold`×2, `destructive_action`×1) + 6 MODEL-ONLY (the 3 lease predicates above + the 3 receipt-crypto predicates: invalid signature, non-approve decision, hash mismatch). All 14 harnesses prove `VERIFICATION SUCCESSFUL`.
+- [x] **KANI-04** (de0628490): `formal/kani/swarm-policy-harnesses.toml` enumerates every harness; a unit test fails the build if a `#[kani::proof]` function is missing from the manifest.
+- [x] **KANI-05** (df364bc94): `scripts/run-kani-swarm-policy.sh` runs every PR-lane harness in CI.
 
 #### Named Safety Properties And Partition-Lease Model
 
@@ -1537,11 +1538,11 @@ final review closure under `286-02-PLAN.md`.
 | DCORE-03 | Phase 292 | Satisfied 2026-09-08 — 49121d577 |
 | DCORE-04 | Phase 292 | Satisfied 2026-09-08 — 49121d577; path-slip recorded per Design-of-record ruling (repo convention), delivered as `docs/decisions/0012-decision-core-boundary.md` + `tools/check-decision-core-boundary.sh` |
 | DCORE-05 | Phase 292 | Satisfied 2026-09-08 — eb64f7c85, f5cb3d8df; re-verified on the final tree at phase close |
-| KANI-01 | Phase 293 | Pending |
-| KANI-02 | Phase 293 | Pending |
-| KANI-03 | Phase 293 | Pending |
-| KANI-04 | Phase 293 | Pending |
-| KANI-05 | Phase 293 | Pending |
+| KANI-01 | Phase 293 | Satisfied 2026-09-08 — f0e2067b0, extended 86cd1cc41 |
+| KANI-02 | Phase 293 | Satisfied 2026-09-08 — f0e2067b0 |
+| KANI-03 | Phase 293 | Satisfied 2026-09-08 — 86cd1cc41, review fixes 71fbd08e9; MODEL-ONLY deviation on lease blast-radius/expiry/validate_lease_terms (Kani-intractable `String`/`format!` paths), SC1 ≥8-REAL floor met via `governance_quorum_threshold`×2 + `destructive_action`×1 |
+| KANI-04 | Phase 293 | Satisfied 2026-09-08 — de0628490 |
+| KANI-05 | Phase 293 | Satisfied 2026-09-08 — df364bc94 |
 | SAFEP-01 | Phase 294 | Pending |
 | SAFEP-02 | Phase 294 | Pending |
 | SAFEP-03 | Phase 294 | Pending |
@@ -1696,7 +1697,7 @@ final review closure under `286-02-PLAN.md`.
 - v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
 - v1.79 COMPLETE 2026-09-08: 29 requirements across phases 284-287 all Satisfied (Phase 286 accepted via the durable dispatch-intent journal; Phase 287 fuzz/loom/supply complete) (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
-- v1.81 in progress: 15 requirements across phases 292-294 (DCORE-01-05 Satisfied 2026-09-08 as Phase 292) (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
+- v1.81 in progress: 15 requirements across phases 292-294 (DCORE-01-05 Satisfied 2026-09-08 as Phase 292; KANI-01-05 Satisfied 2026-09-08 as Phase 293) (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
 - v1.83 queued: 14 requirements across phases 301-303 (VRF-01-05 -> Phase 301; REVOKE-01-05 -> Phase 302; DISTGOV-01-04 -> Phase 303)
 - v1.84 queued: 12 requirements across phases 305-307 (IFC-01-04 -> Phase 305; HERD-01-04 -> Phase 306; DECOY-01-04 -> Phase 307)

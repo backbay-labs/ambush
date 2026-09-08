@@ -1251,7 +1251,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Executable phases:** 292-294
 
 - [x] **Phase 292: Pure Decision Core Extraction** - Carve out total, clock-injected, lock-free decision functions, enforced by a dependency-boundary script. (DCORE-01, DCORE-02)
-- [ ] **Phase 293: Kani Bounded Model Checking** - Bounded-check fail-closed evaluation, severity gating, rate-limit bounds, and lease integrity. (KANI-01, KANI-03)
+- [x] **Phase 293: Kani Bounded Model Checking** - Bounded-check fail-closed evaluation, severity gating, rate-limit bounds, and lease integrity. (KANI-01, KANI-03)
 - [ ] **Phase 294: Named Safety Properties And Partition-Lease Model** - Name P1-P6, map them, and model-check the highest-risk concurrent protocol with negative falsifiability. (SAFEP-01, SAFEP-04)
 
 ### Phase 292: Pure Decision Core Extraction
@@ -1272,13 +1272,13 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** Catch regressions in fail-closed behavior, blast-radius conservation, and lease-forgery rejection in CI rather than in an incident.
 **Requirements:** KANI-01, KANI-02, KANI-03, KANI-04, KANI-05
 **Depends on:** Phase 292
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-08, commit range f0e2067b0..71fbd08e9)
+**Plans:** 293-01-PLAN.md
 **Success Criteria**:
-1. At least 8 `#[kani::proof]` harnesses call the real public functions from `formal_core.rs`.
-2. Every harness that models an abstraction rather than the literal production symbol is labeled `MODEL-ONLY`, naming the runtime test that provides complementary coverage.
-3. A manifest lists every harness, and a unit test fails the build when a harness is missing from it.
-4. The PR-lane runner completes within configured timeouts and is wired into CI.
+1. At least 8 `#[kani::proof]` harnesses call the real public functions from `formal_core.rs`. — met: 8 REAL harnesses (`evaluate_rate_limit`×3, `severity_floor_denial`/`human_gate_decision`×2, `governance_quorum_threshold`×2, `destructive_action`×1). AS-BUILT DEVIATION: the plan originally assigned the lease predicates (`lease_redeem`/`lease_can_redeem`/`validate_lease_terms`) to the REAL set, but Kani could not instrument them — they match scopes by `String` and `validate_lease_terms` builds errors with `format!`, and CBMC's `memchr`/allocation safety checks over every branch (including infeasible `format!` arms) did not terminate within the CI budget. The floor is met instead with the `format!`-free real functions `governance_quorum_threshold`×2 and `destructive_action`×1, alongside the 5 rate-limit/severity harnesses from KANI-02. See `293-01-PLAN.md` Design-of-record "AS-BUILT DEVIATION" and `293-01-SUMMARY.md`.
+2. Every harness that models an abstraction rather than the literal production symbol is labeled `MODEL-ONLY`, naming the runtime test that provides complementary coverage. — met: 6 MODEL-ONLY harnesses, each labeled and each naming the `formal_core`/`tom_agent` unit test covering the real symbol it models — the 3 lease predicates displaced by the SC1 deviation above (blast-radius conservation, expiry denial, `validate_lease_terms` rejection) plus the 3 receipt-crypto predicates (invalid signature, non-approve decision, hash mismatch) that were MODEL-ONLY as originally planned (receipt crypto lives above `swarm-policy`).
+3. A manifest lists every harness, and a unit test fails the build when a harness is missing from it. — met: de0628490, `formal/kani/swarm-policy-harnesses.toml` (14 rows) + `crates/swarm-policy/tests/kani_harness_manifest.rs` (a NORMAL-lane text-scanner test, no Kani required, that fails the build on any drift between the manifest and the `#[kani::proof]` set).
+4. The PR-lane runner completes within configured timeouts and is wired into CI. — met: df364bc94, `scripts/run-kani-swarm-policy.sh` (proves every `lane = "pr"` harness one at a time, scoped to `-p swarm-policy` to bound CBMC memory) wired into `.github/workflows/ci.yml`'s `kani` job, gated behind the engine-changes path filter.
 
 ### Phase 294: Named Safety Properties And Partition-Lease Model
 
@@ -1910,7 +1910,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 | 290. Bidirectional Co-Evolution And Convergence | v1.80 | 1/1 | Complete | 290-01 |
 | 291. CI Arms Race Gate And Structural Isolation | v1.80 | 1/1 | Complete | 291-01 |
 | 292. Pure Decision Core Extraction | v1.81 | 1/1 | Complete | 292-01 |
-| 293. Kani Bounded Model Checking | v1.81 | 0/TBD | Not started | - |
+| 293. Kani Bounded Model Checking | v1.81 | 1/1 | Complete | 2026-09-08 |
 | 294. Named Safety Properties And Partition-Lease Model | v1.81 | 0/TBD | Not started | - |
 | 295. Z3-Backed Promotion Gate | v1.81 | - | Superseded by 322 | - |
 | 296. Provenance Graph Substrate | v1.82 | 0/TBD | Not started | - |
