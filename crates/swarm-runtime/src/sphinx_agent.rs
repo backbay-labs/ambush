@@ -161,7 +161,7 @@ impl SphinxAgent {
             .iter()
             .map(|entity| entity_node_id(entity.kind, &entity.value))
             .collect::<BTreeSet<_>>();
-        let engagement_id = format!("engagement:{}", sanitize_id(&observation_id));
+        let engagement_id = engagement_node_id(&observation_id);
 
         self.graph
             .upsert_node(KnowledgeGraphNode::ThreatPattern(ThreatPatternNode {
@@ -604,7 +604,7 @@ impl SphinxAgent {
         if !updated_existing {
             self.graph
                 .upsert_node(KnowledgeGraphNode::Engagement(EngagementNode {
-                    node_id: format!("engagement:{}", sanitize_id(&feedback.feedback_id)),
+                    node_id: engagement_node_id(&feedback.feedback_id),
                     observation_id: feedback.feedback_id.clone(),
                     source_agent_id: deposit.agent_id.to_string(),
                     threat_class: threat_class_key(&deposit.threat_class),
@@ -677,7 +677,7 @@ impl SphinxAgent {
     ) -> bool {
         let observed_at_ms = observation_timestamp_ms(deposit);
         let asset_node_id = deception_asset_node_id(&payload.asset_id);
-        let engagement_id = format!("engagement:{}", sanitize_id(observation_id));
+        let engagement_id = engagement_node_id(observation_id);
 
         self.graph
             .upsert_node(KnowledgeGraphNode::DeceptionAsset(DeceptionAssetNode {
@@ -2713,7 +2713,20 @@ fn network_flow_node_id(
     )
 }
 
-fn sanitize_id(raw: &str) -> String {
+/// Canonical Engagement-node id for an observation: `engagement:{sanitize_id(observation_id)}`.
+///
+/// This is the SOLE constructor of an Engagement node id. Both the Sphinx
+/// agent (when it deposits detection findings and Stalker post-investigation
+/// summaries into the graph) and the cross-hunt `CorrelationEngine` (when it
+/// resolves an `InvestigationBundle` back to its graph anchors, Phase 298
+/// XHUNT-01) call THIS function, so a bundle's resolved anchor id is
+/// byte-identical to the node id Sphinx actually emitted. Do not re-inline
+/// `format!("engagement:{}", sanitize_id(..))` anywhere; call this instead.
+pub(crate) fn engagement_node_id(observation_id: &str) -> String {
+    format!("engagement:{}", sanitize_id(observation_id))
+}
+
+pub(crate) fn sanitize_id(raw: &str) -> String {
     let mut sanitized = String::with_capacity(raw.len());
     for ch in raw.chars() {
         if ch.is_ascii_alphanumeric() {
@@ -2807,7 +2820,7 @@ fn q_value_recency_decay(observed_at_ms: i64, now_ms: i64) -> f64 {
     (0.5_f64).powf(elapsed_hours / RECENCY_HALF_LIFE_HOURS)
 }
 
-fn resolve_memory_root(config_path: &Path, memory: &MemoryConfig) -> PathBuf {
+pub(crate) fn resolve_memory_root(config_path: &Path, memory: &MemoryConfig) -> PathBuf {
     let base = config_path.parent().unwrap_or_else(|| Path::new("."));
     let root = Path::new(&memory.knowledge_graph_results_dir);
     if root.is_absolute() {

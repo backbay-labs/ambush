@@ -185,6 +185,10 @@ where
     }
 
     /// Assemble or reload one correlated incident from the configured stores.
+    ///
+    /// This no-graph entry point runs the degraded string-overlap fallback (it
+    /// passes no [`KnowledgeGraphSnapshot`]); to correlate against the persisted
+    /// knowledge graph use [`Self::correlate_hunt_with_persisted_graph`].
     pub fn correlate_hunt(
         &self,
         hunt_id: &str,
@@ -195,6 +199,70 @@ where
             &self.incident_store,
             hunt_id,
         )
+    }
+
+    /// Correlate against an already-loaded knowledge-graph snapshot. `Some`
+    /// runs the graph-native cross-hunt decision; `None` runs the fallback.
+    pub fn correlate_hunt_with_graph(
+        &self,
+        hunt_id: &str,
+        graph: Option<&crate::sphinx_agent::KnowledgeGraphSnapshot>,
+    ) -> Result<Option<CorrelationOutcome>, ServiceError> {
+        self.service.correlate_hunt_with_graph(
+            &self.correlation,
+            &self.investigation_store,
+            &self.incident_store,
+            hunt_id,
+            graph,
+        )
+    }
+
+    /// Load the Sphinx-persisted knowledge-graph snapshot from the configured
+    /// memory root and correlate `hunt_id` against it (XHUNT-01). When memory
+    /// is disabled or no snapshot exists yet, correlation runs with `None` —
+    /// the documented degraded string-overlap fallback — so the call always
+    /// returns cleanly and produces no graph-derived incident.
+    ///
+    /// `config_path` is the runtime config file path (the correlation caller
+    /// owns it; the stack can't self-resolve because
+    /// `knowledge_graph_results_dir` is config-relative). `signer`:
+    /// - `Some(agent_id)` → trusted load: full signature verification bound to
+    ///   that Sphinx signer identity (`load_trusted_snapshot`).
+    /// - `None` → untrusted load (`load_snapshot`): the envelope is still
+    ///   signature-, type- and replay-verified; only the binding to a specific
+    ///   signer identity is skipped. See the module Ruling — correlation is
+    ///   strictly off the critical path (XHUNT-03), so a substituted snapshot's
+    ///   blast radius is advisory incidents only, never policy/response.
+    pub fn correlate_hunt_with_persisted_graph(
+        &self,
+        config_path: &Path,
+        signer: Option<&swarm_core::AgentId>,
+        hunt_id: &str,
+    ) -> Result<Option<CorrelationOutcome>, ServiceError> {
+        let snapshot = self.load_correlation_graph_snapshot(config_path, signer)?;
+        self.correlate_hunt_with_graph(hunt_id, snapshot.as_ref())
+    }
+
+    /// Read the persisted knowledge-graph snapshot for correlation, or `None`
+    /// when memory is disabled or no snapshot has been written yet.
+    fn load_correlation_graph_snapshot(
+        &self,
+        config_path: &Path,
+        signer: Option<&swarm_core::AgentId>,
+    ) -> Result<Option<crate::sphinx_agent::KnowledgeGraphSnapshot>, ServiceError> {
+        if !self.service.config.memory.enabled {
+            return Ok(None);
+        }
+        let memory_root =
+            crate::sphinx_agent::resolve_memory_root(config_path, &self.service.config.memory);
+        let store = crate::sphinx_agent::FileKnowledgeGraphStore::open(memory_root)
+            .map_err(crate::correlation::CorrelationError::from)?;
+        let snapshot = match signer {
+            Some(signer) => store.load_trusted_snapshot(signer),
+            None => store.load_snapshot(),
+        }
+        .map_err(crate::correlation::CorrelationError::from)?;
+        Ok(snapshot)
     }
 
     /// Load a persisted replay bundle from the configured replay store.

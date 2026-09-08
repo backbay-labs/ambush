@@ -1314,7 +1314,17 @@ async fn process_demo_replay_step(
         audit.created_at_ms,
     );
 
-    if let Some(outcome) = stack.correlate_hunt(&bundle.replay.bundle.action_request.hunt_id.0)? {
+    // Correlate against the persisted Sphinx knowledge-graph snapshot (Phase
+    // 298 XHUNT-01). `state.config_path` resolves the same memory root Sphinx
+    // wrote to; `None` signer => untrusted load (still signature/replay
+    // verified) because the Sphinx signer identity is not threaded to this
+    // caller and correlation is off the critical path. Memory off / no snapshot
+    // => the loader passes `None` and correlation degrades cleanly.
+    if let Some(outcome) = stack.correlate_hunt_with_persisted_graph(
+        state.config_path.as_ref(),
+        None,
+        &bundle.replay.bundle.action_request.hunt_id.0,
+    )? {
         state.update_demo_incident(run_id, outcome.incident.clone());
         state.append_demo_timeline(
             run_id,
