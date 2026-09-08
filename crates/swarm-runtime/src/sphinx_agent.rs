@@ -1231,6 +1231,20 @@ pub enum KnowledgeGraphNode {
 }
 
 impl KnowledgeGraphNode {
+    /// Whether this node is a GLOBALLY-MERGED classification node —
+    /// `ThreatPattern` (merged by `threat_class`) or `AttackTechnique` (merged
+    /// by `technique_id`). Such a node folds together every hunt that shares a
+    /// threat class / MITRE technique, so it models a classification
+    /// coincidence, NOT a real relationship between those hunts, and must never
+    /// serve as a cross-hunt bridge waypoint. Concrete identity nodes
+    /// (`Entity`/`Process`/`File`/`NetworkFlow`) are deliberately NOT included:
+    /// two hunts genuinely touching the same host or pid IS hunt-specific
+    /// evidence. Single source of truth shared by cross-hunt correlation
+    /// (XHUNT-01) and kill-chain join (CHAIN-02/T2).
+    pub(crate) fn is_globally_merged_classification(&self) -> bool {
+        matches!(self, Self::ThreatPattern(_) | Self::AttackTechnique(_))
+    }
+
     fn node_id(&self) -> &str {
         match self {
             Self::ThreatPattern(node) => &node.node_id,
@@ -1594,7 +1608,59 @@ impl KnowledgeGraphSnapshot {
     /// wandered into — but every node discovered thereafter is capped, so a
     /// hub can never be used as a waypoint.
     pub fn provenance_paths(&self, from: &str, to: &str, max_hops: usize) -> Vec<ProvenancePath> {
-        self.bounded_paths_where(from, to, max_hops, |_| true)
+        self.bounded_paths_where(from, to, max_hops, |_| true, |_| true)
+    }
+
+    /// Like [`Self::provenance_paths`], but additionally refuses to expand
+    /// THROUGH any globally-merged classification node
+    /// ([`KnowledgeGraphNode::is_globally_merged_classification`] —
+    /// `ThreatPattern`/`AttackTechnique`).
+    ///
+    /// **Why this exists — the XHUNT-01 classification-bridge primitive.** An
+    /// `Engagement` node links directly to the MITRE `AttackTechnique` and
+    /// `ThreatPattern` nodes it matched, via `Semantic` edges. Those
+    /// classification nodes are merged across ALL hunts, so two genuinely
+    /// unrelated hunts that merely share one technique (e.g. `T1059`) share
+    /// that one node. While its degree stays under
+    /// [`Self::PROVENANCE_HUB_DEGREE_CAP`] the hub cap never fires, and a plain
+    /// [`Self::provenance_paths`] would return the 2-hop all-`Semantic` path
+    /// `engagement_A -> AttackTechnique -> engagement_B` — fabricating a
+    /// cross-hunt link out of a classification coincidence (the exact class
+    /// Phase 297 closed for the kill-chain join). Excluding classification
+    /// nodes as WAYPOINTS — rather than post-filtering the single shortest path
+    /// this returns — means a legitimate concrete-node path (a shared
+    /// host/process `Entity`) is still found even when a classification path
+    /// ties for shortest, instead of being masked and then dropped.
+    pub(crate) fn provenance_paths_excluding_classification_nodes(
+        &self,
+        from: &str,
+        to: &str,
+        max_hops: usize,
+    ) -> Vec<ProvenancePath> {
+        let classification_nodes: HashSet<&str> = self
+            .nodes
+            .iter()
+            .filter(|node| node.is_globally_merged_classification())
+            .map(|node| node.node_id())
+            .collect();
+        self.bounded_paths_where(
+            from,
+            to,
+            max_hops,
+            |_| true,
+            |node_id| !classification_nodes.contains(node_id),
+        )
+    }
+
+    /// Whether `node_id` names a globally-merged classification node
+    /// (`ThreatPattern`/`AttackTechnique`) in this snapshot. The single node-id
+    /// resolution shared by cross-hunt correlation (XHUNT-01) and the
+    /// kill-chain join (CHAIN-02/T2), over the one kind predicate
+    /// [`KnowledgeGraphNode::is_globally_merged_classification`].
+    pub(crate) fn is_globally_merged_classification_node(&self, node_id: &str) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| node.node_id() == node_id && node.is_globally_merged_classification())
     }
 
     /// Bounded-hop traversal restricted to `KnowledgeGraphEdge::Causal`
@@ -1625,28 +1691,37 @@ impl KnowledgeGraphSnapshot {
         to: &str,
         max_hops: usize,
     ) -> Vec<ProvenancePath> {
-        self.bounded_paths_where(from, to, max_hops, |edge| {
-            matches!(edge, KnowledgeGraphEdge::Causal(_))
-        })
+        self.bounded_paths_where(
+            from,
+            to,
+            max_hops,
+            |edge| matches!(edge, KnowledgeGraphEdge::Causal(_)),
+            |_| true,
+        )
     }
 
     /// The graph's SOLE bounded-hop BFS, shared by every public traversal on
     /// this type. `edge_allowed` selects which edge-kind subgraph to walk
     /// (all edges for [`Self::provenance_paths`], `Causal`-only for
-    /// [`Self::causal_provenance_paths`]); the walk itself — undirected,
-    /// shortest-path, hub-degree-capped — is identical regardless. Keeping a
-    /// single BFS implementation is a deliberate invariant: adding a new
-    /// scoped traversal means passing a new filter here, never hand-rolling
-    /// a second edge walk. See [`Self::provenance_paths`] for the full
-    /// directedness and hub-degree-cap contract; the cap is applied against
-    /// the `degree` map, which [`Self::neighbor_index_where`] accumulates
-    /// over the SAME filtered subgraph.
+    /// [`Self::causal_provenance_paths`]); `node_expandable` optionally forbids
+    /// expanding THROUGH certain mid-search nodes (the same non-expansion shape
+    /// as the hub-degree cap — used by
+    /// [`Self::provenance_paths_excluding_classification_nodes`] to keep a
+    /// globally-merged classification node from bridging two hunts). The walk
+    /// itself — undirected, shortest-path, hub-degree-capped — is identical
+    /// regardless. Keeping a single BFS implementation is a deliberate
+    /// invariant: adding a new scoped traversal means passing new predicates
+    /// here, never hand-rolling a second edge walk. See [`Self::provenance_paths`]
+    /// for the full directedness and hub-degree-cap contract; the cap is
+    /// applied against the `degree` map, which [`Self::neighbor_index_where`]
+    /// accumulates over the SAME filtered subgraph.
     fn bounded_paths_where(
         &self,
         from: &str,
         to: &str,
         max_hops: usize,
         edge_allowed: impl Fn(&KnowledgeGraphEdge) -> bool,
+        node_expandable: impl Fn(&str) -> bool,
     ) -> Vec<ProvenancePath> {
         if from == to {
             return vec![ProvenancePath {
@@ -1673,6 +1748,15 @@ impl KnowledgeGraphSnapshot {
             {
                 // Hub cap: this node was reached mid-search, not supplied as
                 // `from` — refuse to expand through it.
+                continue;
+            }
+            if hops > 0 && !node_expandable(node_id) {
+                // Waypoint exclusion: this node was reached mid-search and the
+                // caller forbids stepping onward through it (e.g. a globally
+                // merged classification node, which — being below the hub cap —
+                // the degree check alone would let bridge two unrelated hunts).
+                // It can still be *reached* (as a path endpoint), but the search
+                // will not expand it to its other neighbors.
                 continue;
             }
             for &(neighbor, edge_id) in adjacency.get(node_id).unwrap_or(&empty_neighbors) {

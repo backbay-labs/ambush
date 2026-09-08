@@ -577,8 +577,20 @@ fn graph_evidence_links(
 
     for seed_anchor in seed_anchors {
         for cand_anchor in cand_anchors {
-            for path in graph.provenance_paths(seed_anchor, cand_anchor, GRAPH_CORRELATION_MAX_HOPS)
-            {
+            // All-edge path for the Entity/Semantic/Temporal dimensions, but
+            // NEVER expanding through a globally-merged classification node
+            // (`ThreatPattern`/`AttackTechnique`). Two unrelated hunts that
+            // merely share one MITRE technique are joined in the graph only
+            // through such a node; the hub-degree cap does not catch a
+            // low-degree one, so this excludes them as waypoints by kind. The
+            // `Causal` dimension below stays on `causal_provenance_paths`,
+            // which cannot route through a classification node anyway (those
+            // carry only `Semantic` edges).
+            for path in graph.provenance_paths_excluding_classification_nodes(
+                seed_anchor,
+                cand_anchor,
+                GRAPH_CORRELATION_MAX_HOPS,
+            ) {
                 for dimension in [
                     IncidentGraphDimension::Entity,
                     IncidentGraphDimension::Semantic,
@@ -1008,7 +1020,8 @@ fn now_ms() -> i64 {
 mod tests {
     use super::{CorrelationEngine, engagement_node_id};
     use crate::sphinx_agent::{
-        CausalEdge, CausalRelation, EntityEdge, KnowledgeGraphEdge, KnowledgeGraphSnapshot,
+        AttackTechniqueNode, CausalEdge, CausalRelation, EntityEdge, KnowledgeGraphEdge,
+        KnowledgeGraphNode, KnowledgeGraphSnapshot, SemanticEdge, SemanticRelation,
     };
     use swarm_core::config::{BundleStoreConfig, CorrelationConfig};
     use swarm_core::pheromone::ThreatClass;
@@ -1119,6 +1132,35 @@ mod tests {
             first_observed_at_ms: 0,
             last_observed_at_ms: 0,
             occurrence_count: 1,
+        })
+    }
+
+    fn semantic_edge(edge_id: &str, from: &str, to: &str) -> KnowledgeGraphEdge {
+        KnowledgeGraphEdge::Semantic(SemanticEdge {
+            edge_id: edge_id.to_string(),
+            from_node_id: from.to_string(),
+            to_node_id: to.to_string(),
+            relation: SemanticRelation::KillChainStage,
+            kill_chain_stage: "execution".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        })
+    }
+
+    /// A globally-merged `AttackTechnique` classification node — the kind of
+    /// node two unrelated hunts share when they merely match the same MITRE
+    /// technique. It MUST be present in `graph.nodes` for the
+    /// classification-node exclusion to recognise it.
+    fn attack_technique_node(node_id: &str) -> KnowledgeGraphNode {
+        KnowledgeGraphNode::AttackTechnique(AttackTechniqueNode {
+            node_id: node_id.to_string(),
+            technique_id: "T1059".to_string(),
+            name: "Command and Scripting Interpreter".to_string(),
+            kill_chain_stage: "execution".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            observation_count: 1,
         })
     }
 
@@ -1578,6 +1620,170 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Fix round 1 (CRITICAL, PoC regression pin): two GENUINELY UNRELATED
+    /// hunts joined ONLY by a shared LOW-degree `AttackTechnique` classification
+    /// node (via two `Semantic` edges) must NOT be correlated. The technique
+    /// node's degree is 2 — far under the hub cap — so the hub cap never fires;
+    /// the classification-node waypoint exclusion is what prevents the bridge.
+    /// (Before the fix this candidate was INCLUDED with a `Semantic` link.)
+    #[test]
+    fn shared_classification_node_does_not_bridge_unrelated_hunts() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config());
+
+        let seed = default_investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        let unrelated = default_investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&unrelated).unwrap();
+
+        let technique = "attack_technique:t1059";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph.nodes.push(attack_technique_node(technique));
+        graph
+            .edges
+            .push(semantic_edge("s1", &event_anchor("hunt-1"), technique));
+        graph
+            .edges
+            .push(semantic_edge("s2", technique, &event_anchor("hunt-2")));
+
+        let outcome = engine
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            !outcome
+                .incident
+                .included_members
+                .iter()
+                .any(|member| member.hunt_id == "hunt-2"),
+            "a shared low-degree classification node must not bridge unrelated hunts"
+        );
+        assert!(
+            !outcome
+                .incident
+                .graph_dimensions
+                .contains(&swarm_spine::IncidentGraphDimension::Semantic)
+        );
+        let rejected = outcome
+            .incident
+            .rejected_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .unwrap();
+        assert!(rejected.reason.contains("no knowledge-graph path"));
+        // No member anywhere carries a Semantic link fabricated via the
+        // classification node.
+        for member in outcome
+            .incident
+            .included_members
+            .iter()
+            .chain(outcome.incident.rejected_members.iter())
+        {
+            assert!(
+                member
+                    .evidence_links
+                    .iter()
+                    .all(|link| link.dimension != swarm_spine::IncidentGraphDimension::Semantic)
+            );
+        }
+    }
+
+    /// Fix round 1 anti-masking positive: when two hunts share BOTH a MITRE
+    /// technique (classification node) AND a concrete host (`Entity`), the
+    /// classification path must not MASK the real one — the candidate STILL
+    /// correlates via the concrete `Entity` link. Excluding the classification
+    /// node as a waypoint (rather than post-filtering the single shortest path)
+    /// is what lets the tied-length concrete path be found.
+    #[test]
+    fn concrete_entity_link_survives_when_a_classification_path_also_exists() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config());
+
+        let seed = default_investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        let related = default_investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&related).unwrap();
+
+        let technique = "attack_technique:t1059";
+        let host = "entity:host:shared";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph.nodes.push(attack_technique_node(technique));
+        // Classification bridge (must be ignored)...
+        graph
+            .edges
+            .push(semantic_edge("s1", &event_anchor("hunt-1"), technique));
+        graph
+            .edges
+            .push(semantic_edge("s2", technique, &event_anchor("hunt-2")));
+        // ...and a concrete shared-host bridge of the SAME length (must win).
+        graph
+            .edges
+            .push(entity_edge("e1", &event_anchor("hunt-1"), host));
+        graph
+            .edges
+            .push(entity_edge("e2", host, &event_anchor("hunt-2")));
+
+        let outcome = engine
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
+            .unwrap()
+            .unwrap();
+
+        let included = outcome
+            .incident
+            .included_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .expect("candidate must still correlate via the concrete Entity link");
+        let entity_link = included
+            .evidence_links
+            .iter()
+            .find(|link| link.dimension == swarm_spine::IncidentGraphDimension::Entity)
+            .expect("the concrete host Entity link must be present");
+        let hop = entity_link.graph_path.as_ref().unwrap();
+        assert_eq!(
+            hop.node_ids,
+            vec![
+                event_anchor("hunt-1"),
+                host.to_string(),
+                event_anchor("hunt-2")
+            ]
+        );
+        // The classification path is excluded, so no Semantic link is emitted.
+        assert!(
+            included
+                .evidence_links
+                .iter()
+                .all(|link| link.dimension != swarm_spine::IncidentGraphDimension::Semantic)
+        );
     }
 
     /// Pin: the anchor id correlation resolves for a bundle is byte-identical
