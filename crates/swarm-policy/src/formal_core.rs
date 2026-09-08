@@ -18,9 +18,29 @@
 //! returned window back in its place. No verdict changes for any input --
 //! this module is an extraction of existing logic, not a new decision.
 //!
+//! ## Governance predicates (DCORE-02)
+//!
+//! The same discipline is applied to the governance authorization predicates
+//! that used to live in `swarm-agents` (`GovernancePolicy::can_act`'s
+//! partition branch, `ContingencyLease::{verify, can_redeem, redeem}`, and
+//! `governance_quorum_threshold`). Their pure decision logic is lifted here as
+//! total functions over plain values: a lease is decided from its scope,
+//! blast-radius cap, expiry and already-redeemed scopes (a [`LeaseTerms`]
+//! view) plus the action and a caller-supplied `now_ms`, never from the
+//! cryptographic `ConsensusGovernanceReceipt` it also carries. That receipt --
+//! and the `swarm-consensus` crate that defines it -- sits ABOVE this crate in
+//! the dependency graph, so it is deliberately kept out of the decision core:
+//! the redemption verdict is a scope/expiry/blast-radius decision over plain
+//! values, provable (phase 293) without it. `swarm-agents` keeps the
+//! receipt-bearing `ContingencyLease` type and the cryptographic half of
+//! `verify`; it calls these functions with the clock supplied explicitly at
+//! the call site, so no verdict changes for any input.
+//!
 //! [`PolicyDecision`]: crate::PolicyDecision
 
+use crate::static_gate::scope_for_response_action;
 use std::collections::VecDeque;
+use swarm_core::types::ResponseAction;
 
 /// The trailing window a rate-limit budget is measured over, in
 /// milliseconds. Matches the prune threshold `static_gate` and
@@ -79,11 +99,192 @@ pub fn evaluate_rate_limit(
     (RateLimitOutcome::Allowed, window)
 }
 
+// ---------------------------------------------------------------------------
+// Governance predicates (DCORE-02)
+// ---------------------------------------------------------------------------
+
+/// The Byzantine quorum threshold for a committee of `total_governors`, given
+/// that committee's recommended fault tolerance `max_faulty` (a `3f + 1`
+/// committee tolerates `f` faults and commits at `2f + 1` votes).
+///
+/// `max_faulty` is supplied by the caller rather than derived here on purpose:
+/// the `3f + 1` fault model lives in `swarm-consensus`
+/// (`recommended_max_faulty`), which sits above this crate, so the caller
+/// passes the value in and this function stays a pure arithmetic total over
+/// plain integers. The empty committee is special-cased to a threshold of `0`
+/// (no governors, no quorum to reach) rather than `2 * 0 + 1 = 1`, preserving
+/// the pre-extraction behaviour exactly. Saturating arithmetic keeps it total
+/// for any `usize`.
+pub fn governance_quorum_threshold(total_governors: usize, max_faulty: usize) -> usize {
+    if total_governors == 0 {
+        0
+    } else {
+        max_faulty.saturating_mul(2).saturating_add(1)
+    }
+}
+
+/// The plain, receipt-free view of a contingency lease that the redemption
+/// predicates read.
+///
+/// A lease also carries a cryptographic `ConsensusGovernanceReceipt`; it is
+/// deliberately absent here. Redemption is a scope/expiry/blast-radius
+/// decision over plain values, so it is decided in this pure core without the
+/// receipt or the `swarm-consensus` crate that defines it (which sits above
+/// `swarm-policy` in the dependency graph). Borrowed, so the caller keeps
+/// ownership of the lease.
+#[derive(Debug, Clone, Copy)]
+pub struct LeaseTerms<'a> {
+    /// The lease identifier, read only to phrase [`lease_redeem`] error text.
+    pub lease_id: &'a str,
+    /// The action kind this lease authorizes (`ResponseAction::kind`).
+    pub action_kind: &'a str,
+    /// The scope this lease is pinned to, if any. `None` covers every scope of
+    /// the matching action kind.
+    pub scope: Option<&'a str>,
+    /// How many distinct scopes this lease may be redeemed across.
+    pub blast_radius_cap: usize,
+    /// Wall-clock expiry in milliseconds, compared against the caller-supplied
+    /// `now_ms`.
+    pub expires_at_ms: i64,
+    /// Scopes already redeemed under this lease.
+    pub redeemed_scopes: &'a [String],
+}
+
+/// The result of a successful [`lease_redeem`] check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LeaseRedeemOutcome {
+    /// The action's scope was already redeemed under this lease; redeeming it
+    /// again is a no-op and nothing is recorded.
+    AlreadyRedeemed,
+    /// The action's scope is newly redeemed. The caller records the returned
+    /// scope against the lease's `redeemed_scopes`.
+    Recorded(String),
+}
+
+/// Whether `action` falls under `terms`: the same action kind, and -- when the
+/// lease pins a scope -- the action's scope equals it. A scope-less lease
+/// covers every scope of the matching kind. Pure and total.
+pub fn lease_matches_action(terms: &LeaseTerms<'_>, action: &ResponseAction) -> bool {
+    terms.action_kind == action.kind()
+        && terms
+            .scope
+            .is_none_or(|scope| scope_for_response_action(action).as_deref() == Some(scope))
+}
+
+/// The key an action is redeemed under: its policy scope, or a synthetic
+/// `unscoped:<kind>` key when the action has no scope. Pure and total.
+pub fn action_scope_key(action: &ResponseAction) -> String {
+    scope_for_response_action(action).unwrap_or_else(|| format!("unscoped:{}", action.kind()))
+}
+
+/// Whether `action` may be redeemed against `terms` as of `now_ms`: the action
+/// must match, the lease must not have expired, and either its scope is
+/// already redeemed (a re-redemption) or the lease still has blast-radius
+/// budget for a new scope. Pure and total; the clock is the `now_ms`
+/// parameter, never read here.
+pub fn lease_can_redeem(terms: &LeaseTerms<'_>, action: &ResponseAction, now_ms: i64) -> bool {
+    if !lease_matches_action(terms, action) || terms.expires_at_ms <= now_ms {
+        return false;
+    }
+    let scope = action_scope_key(action);
+    terms
+        .redeemed_scopes
+        .iter()
+        .any(|existing| existing == &scope)
+        || terms.redeemed_scopes.len() < terms.blast_radius_cap
+}
+
+/// Decide whether `action` may be redeemed against `terms` as of `now_ms`,
+/// returning what the caller must record. Fails closed with the same error
+/// text the method form produced: a non-matching action, an expired lease, or
+/// a lease already at its blast-radius cap for a new scope. On success it
+/// returns [`LeaseRedeemOutcome::AlreadyRedeemed`] (scope already present, no
+/// change) or [`LeaseRedeemOutcome::Recorded`] with the scope the caller
+/// appends. Pure and total: it never mutates `terms` and reads the clock only
+/// through `now_ms`.
+pub fn lease_redeem(
+    terms: &LeaseTerms<'_>,
+    action: &ResponseAction,
+    now_ms: i64,
+) -> Result<LeaseRedeemOutcome, String> {
+    if !lease_matches_action(terms, action) {
+        return Err(format!(
+            "contingency lease `{}` does not cover action `{}`",
+            terms.lease_id,
+            action.kind()
+        ));
+    }
+    if terms.expires_at_ms <= now_ms {
+        return Err("contingency lease expired".to_string());
+    }
+    let scope = action_scope_key(action);
+    if terms
+        .redeemed_scopes
+        .iter()
+        .any(|existing| existing == &scope)
+    {
+        return Ok(LeaseRedeemOutcome::AlreadyRedeemed);
+    }
+    if terms.redeemed_scopes.len() >= terms.blast_radius_cap {
+        return Err(format!(
+            "contingency lease `{}` exceeded blast radius cap {}",
+            terms.lease_id, terms.blast_radius_cap
+        ));
+    }
+    Ok(LeaseRedeemOutcome::Recorded(scope))
+}
+
+/// The structural, clock-free half of contingency-lease verification: the
+/// schema version matches `expected_schema_version`, the blast-radius cap is
+/// positive, the declared duration is positive, and expiry is strictly after
+/// issuance. Pure and total, and returns the same error text the method form
+/// produced in the same order.
+///
+/// The cryptographic half of `ContingencyLease::verify` -- verifying the
+/// `ConsensusGovernanceReceipt`'s signature, requiring an `Approve` decision,
+/// and rebuilding the proposal hash -- stays in `swarm-agents` with the
+/// receipt type; it is receipt-bound, not part of this IO-free decision core.
+pub fn validate_lease_terms(
+    schema_version: u32,
+    expected_schema_version: u32,
+    blast_radius_cap: usize,
+    max_duration_ms: i64,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+) -> Result<(), String> {
+    if schema_version != expected_schema_version {
+        return Err(format!(
+            "unsupported contingency lease schema_version `{schema_version}`"
+        ));
+    }
+    if blast_radius_cap == 0 {
+        return Err("contingency lease blast radius cap must be positive".to_string());
+    }
+    if max_duration_ms <= 0 {
+        return Err("contingency lease duration must be positive".to_string());
+    }
+    if expires_at_ms <= issued_at_ms {
+        return Err("contingency lease expiry must be after issuance".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{RateLimitOutcome, evaluate_rate_limit};
+    use super::{
+        LeaseRedeemOutcome, LeaseTerms, RateLimitOutcome, action_scope_key, evaluate_rate_limit,
+        governance_quorum_threshold, lease_can_redeem, lease_matches_action, lease_redeem,
+        validate_lease_terms,
+    };
     use std::collections::VecDeque;
+    use swarm_core::types::{ResponseAction, Severity};
+
+    fn block_egress(target: &str) -> ResponseAction {
+        ResponseAction::BlockEgress {
+            target: target.to_string(),
+        }
+    }
 
     #[test]
     fn empty_window_under_limit_is_allowed_and_records_the_timestamp() {
@@ -144,5 +345,156 @@ mod tests {
         // Five seeded timestamps plus the one just recorded.
         assert_eq!(window.len(), 6);
         assert_eq!(window.back().copied(), Some(1_050));
+    }
+
+    #[test]
+    fn governance_quorum_threshold_is_zero_for_an_empty_committee() {
+        // No governors, no quorum to reach -- the empty committee is 0, not the
+        // `2 * 0 + 1 = 1` a naive formula would give.
+        assert_eq!(governance_quorum_threshold(0, 0), 0);
+        assert_eq!(governance_quorum_threshold(0, 5), 0);
+    }
+
+    #[test]
+    fn governance_quorum_threshold_is_two_f_plus_one_for_a_populated_committee() {
+        // f from `recommended_max_faulty`: committee 4 -> f 1 -> threshold 3;
+        // committee 13 -> f 4 -> threshold 9; a solo committee -> f 0 -> 1.
+        assert_eq!(governance_quorum_threshold(1, 0), 1);
+        assert_eq!(governance_quorum_threshold(4, 1), 3);
+        assert_eq!(governance_quorum_threshold(13, 4), 9);
+    }
+
+    fn lease_terms<'a>(
+        blast_radius_cap: usize,
+        expires_at_ms: i64,
+        redeemed_scopes: &'a [String],
+    ) -> LeaseTerms<'a> {
+        LeaseTerms {
+            lease_id: "lease-1",
+            action_kind: "block_egress",
+            scope: None,
+            blast_radius_cap,
+            expires_at_ms,
+            redeemed_scopes,
+        }
+    }
+
+    #[test]
+    fn lease_matches_action_requires_the_same_kind() {
+        let empty: Vec<String> = Vec::new();
+        let terms = lease_terms(1, 10_000, &empty);
+        assert!(lease_matches_action(&terms, &block_egress("10.0.0.1")));
+        assert!(!lease_matches_action(
+            &terms,
+            &ResponseAction::IsolateHost {
+                host_id: "h1".to_string(),
+            }
+        ));
+    }
+
+    #[test]
+    fn lease_matches_action_honours_a_pinned_scope() {
+        let empty: Vec<String> = Vec::new();
+        let mut terms = lease_terms(1, 10_000, &empty);
+        terms.scope = Some("10.0.0.1");
+        assert!(lease_matches_action(&terms, &block_egress("10.0.0.1")));
+        assert!(!lease_matches_action(&terms, &block_egress("10.0.0.2")));
+    }
+
+    #[test]
+    fn action_scope_key_is_the_scope_or_an_unscoped_fallback() {
+        assert_eq!(action_scope_key(&block_egress("10.0.0.1")), "10.0.0.1");
+        assert_eq!(
+            action_scope_key(&ResponseAction::Escalate {
+                summary: "n/a".to_string(),
+                urgency: Severity::Low,
+            }),
+            "unscoped:escalate"
+        );
+    }
+
+    #[test]
+    fn lease_can_redeem_denies_an_expired_lease() {
+        let empty: Vec<String> = Vec::new();
+        let terms = lease_terms(1, 1_000, &empty);
+        // Expiry is `<= now_ms`: exactly-at-expiry is already dead.
+        assert!(!lease_can_redeem(&terms, &block_egress("10.0.0.1"), 1_000));
+        assert!(lease_can_redeem(&terms, &block_egress("10.0.0.1"), 999));
+    }
+
+    #[test]
+    fn lease_can_redeem_respects_the_blast_radius_cap() {
+        let one_scope = vec!["10.0.0.1".to_string()];
+        let terms = lease_terms(1, 10_000, &one_scope);
+        // A new scope is over the cap of 1...
+        assert!(!lease_can_redeem(&terms, &block_egress("10.0.0.2"), 500));
+        // ...but the already-redeemed scope may be redeemed again.
+        assert!(lease_can_redeem(&terms, &block_egress("10.0.0.1"), 500));
+    }
+
+    #[test]
+    fn lease_redeem_records_a_new_scope_within_budget() {
+        let empty: Vec<String> = Vec::new();
+        let terms = lease_terms(2, 10_000, &empty);
+        assert_eq!(
+            lease_redeem(&terms, &block_egress("10.0.0.1"), 500),
+            Ok(LeaseRedeemOutcome::Recorded("10.0.0.1".to_string()))
+        );
+    }
+
+    #[test]
+    fn lease_redeem_is_a_noop_for_an_already_redeemed_scope() {
+        let one_scope = vec!["10.0.0.1".to_string()];
+        let terms = lease_terms(1, 10_000, &one_scope);
+        assert_eq!(
+            lease_redeem(&terms, &block_egress("10.0.0.1"), 500),
+            Ok(LeaseRedeemOutcome::AlreadyRedeemed)
+        );
+    }
+
+    #[test]
+    fn lease_redeem_fails_closed_on_mismatch_expiry_and_cap() {
+        let one_scope = vec!["10.0.0.1".to_string()];
+        let terms = lease_terms(1, 10_000, &one_scope);
+        assert_eq!(
+            lease_redeem(
+                &terms,
+                &ResponseAction::IsolateHost {
+                    host_id: "h1".to_string(),
+                },
+                500,
+            ),
+            Err("contingency lease `lease-1` does not cover action `isolate_host`".to_string())
+        );
+        assert_eq!(
+            lease_redeem(&terms, &block_egress("10.0.0.1"), 20_000),
+            Err("contingency lease expired".to_string())
+        );
+        // A different scope with the cap already full fails closed.
+        assert_eq!(
+            lease_redeem(&terms, &block_egress("10.0.0.2"), 500),
+            Err("contingency lease `lease-1` exceeded blast radius cap 1".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_lease_terms_accepts_well_formed_terms_and_rejects_each_defect() {
+        assert_eq!(validate_lease_terms(1, 1, 1, 1_000, 100, 1_100), Ok(()));
+        assert_eq!(
+            validate_lease_terms(2, 1, 1, 1_000, 100, 1_100),
+            Err("unsupported contingency lease schema_version `2`".to_string())
+        );
+        assert_eq!(
+            validate_lease_terms(1, 1, 0, 1_000, 100, 1_100),
+            Err("contingency lease blast radius cap must be positive".to_string())
+        );
+        assert_eq!(
+            validate_lease_terms(1, 1, 1, 0, 100, 1_100),
+            Err("contingency lease duration must be positive".to_string())
+        );
+        assert_eq!(
+            validate_lease_terms(1, 1, 1, 1_000, 1_100, 1_100),
+            Err("contingency lease expiry must be after issuance".to_string())
+        );
     }
 }

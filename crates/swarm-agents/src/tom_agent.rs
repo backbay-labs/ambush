@@ -18,6 +18,7 @@ use swarm_core::agent::{
 use swarm_core::types::{AgentId, ResponseAction, SwarmAction};
 use swarm_crypto::{canonical_json_bytes, sha256_hex};
 use swarm_policy::ActionRequest;
+use swarm_policy::formal_core;
 use swarm_policy::governance::{GovernanceAuthority, GovernanceRuntimeEventRecord};
 // Both types are declared in `swarm-policy` as of SPLIT-05, so `GovernanceAuthority`
 // can name its own return type. Re-exported rather than merely imported, because the
@@ -49,21 +50,18 @@ pub struct ContingencyLease {
 
 impl ContingencyLease {
     pub fn verify(&self) -> Result<(), String> {
-        if self.schema_version != CONTINGENCY_LEASE_SCHEMA_VERSION {
-            return Err(format!(
-                "unsupported contingency lease schema_version `{}`",
-                self.schema_version
-            ));
-        }
-        if self.blast_radius_cap == 0 {
-            return Err("contingency lease blast radius cap must be positive".to_string());
-        }
-        if self.max_duration_ms <= 0 {
-            return Err("contingency lease duration must be positive".to_string());
-        }
-        if self.expires_at_ms <= self.issued_at_ms {
-            return Err("contingency lease expiry must be after issuance".to_string());
-        }
+        // The structural, clock-free checks (schema version, positive cap and
+        // duration, expiry after issuance) are the pure decision core; the
+        // cryptographic checks below are receipt-bound and stay here with the
+        // `ConsensusGovernanceReceipt` type. Same errors, same order.
+        formal_core::validate_lease_terms(
+            self.schema_version,
+            CONTINGENCY_LEASE_SCHEMA_VERSION,
+            self.blast_radius_cap,
+            self.max_duration_ms,
+            self.issued_at_ms,
+            self.expires_at_ms,
+        )?;
         let receipt = &self.governance_receipt;
         receipt
             .verify()
@@ -89,55 +87,35 @@ impl ContingencyLease {
         Ok(())
     }
 
-    fn matches_action(&self, action: &ResponseAction) -> bool {
-        self.action_kind == action.kind()
-            && self.scope.as_ref().is_none_or(|scope| {
-                scope_for_response_action(action).as_deref() == Some(scope.as_str())
-            })
-    }
-
-    fn scope_key(&self, action: &ResponseAction) -> String {
-        scope_for_response_action(action).unwrap_or_else(|| format!("unscoped:{}", action.kind()))
+    /// The receipt-free view of this lease that the pure redemption predicates
+    /// in [`formal_core`] read. The cryptographic `governance_receipt` is
+    /// deliberately not part of it -- redemption is decided over plain values.
+    fn terms(&self) -> formal_core::LeaseTerms<'_> {
+        formal_core::LeaseTerms {
+            lease_id: &self.lease_id,
+            action_kind: &self.action_kind,
+            scope: self.scope.as_deref(),
+            blast_radius_cap: self.blast_radius_cap,
+            expires_at_ms: self.expires_at_ms,
+            redeemed_scopes: &self.redeemed_scopes,
+        }
     }
 
     fn can_redeem(&self, action: &ResponseAction, now_ms: i64) -> bool {
-        if !self.matches_action(action) || self.expires_at_ms <= now_ms {
-            return false;
-        }
-        let scope = self.scope_key(action);
-        self.redeemed_scopes
-            .iter()
-            .any(|existing| existing == &scope)
-            || self.redeemed_scopes.len() < self.blast_radius_cap
+        formal_core::lease_can_redeem(&self.terms(), action, now_ms)
     }
 
     fn redeem(&mut self, action: &ResponseAction, now_ms: i64) -> Result<(), String> {
-        if !self.matches_action(action) {
-            return Err(format!(
-                "contingency lease `{}` does not cover action `{}`",
-                self.lease_id,
-                action.kind()
-            ));
+        // Bind the outcome first so the immutable borrow of `self` taken by
+        // `self.terms()` has ended before the mutable `push` below.
+        let outcome = formal_core::lease_redeem(&self.terms(), action, now_ms)?;
+        match outcome {
+            formal_core::LeaseRedeemOutcome::AlreadyRedeemed => Ok(()),
+            formal_core::LeaseRedeemOutcome::Recorded(scope) => {
+                self.redeemed_scopes.push(scope);
+                Ok(())
+            }
         }
-        if self.expires_at_ms <= now_ms {
-            return Err("contingency lease expired".to_string());
-        }
-        let scope = self.scope_key(action);
-        if self
-            .redeemed_scopes
-            .iter()
-            .any(|existing| existing == &scope)
-        {
-            return Ok(());
-        }
-        if self.redeemed_scopes.len() >= self.blast_radius_cap {
-            return Err(format!(
-                "contingency lease `{}` exceeded blast radius cap {}",
-                self.lease_id, self.blast_radius_cap
-            ));
-        }
-        self.redeemed_scopes.push(scope);
-        Ok(())
     }
 }
 
@@ -616,7 +594,10 @@ impl GovernancePolicy {
             })
             .count();
         let healthy_governors = total_governors.saturating_sub(unhealthy_governors);
-        let quorum_threshold = governance_quorum_threshold(total_governors);
+        let quorum_threshold = formal_core::governance_quorum_threshold(
+            total_governors,
+            recommended_max_faulty(total_governors),
+        );
         state.last_healthy_governors = healthy_governors;
         state.last_quorum_threshold = quorum_threshold;
 
@@ -676,6 +657,22 @@ impl GovernancePolicy {
     }
 
     pub fn can_act(&self, action: &ResponseAction) -> GovernanceDecision {
+        // The OS-clock read is confined to this one-line boundary wrapper; the
+        // decision itself is `can_act_at`, a function of the policy state, the
+        // action, and the `now_ms` threaded in here. The wrapper exists because
+        // `can_act`'s public signature is depended on by many call sites
+        // (agents, runtime, and the governance tests DCORE-05 pins unchanged),
+        // and behaviour preservation requires the partition branch to judge
+        // lease expiry against the live clock exactly as before.
+        self.can_act_at(action, now_ms())
+    }
+
+    /// The clock-injected core of [`GovernancePolicy::can_act`]: the identical
+    /// decision with the wall clock supplied as `now_ms` rather than read
+    /// internally. Only the partition branch consults `now_ms` (to reject
+    /// expired contingency leases through the pure
+    /// [`formal_core::lease_can_redeem`]); every other arm is clock-free.
+    fn can_act_at(&self, action: &ResponseAction, now_ms: i64) -> GovernanceDecision {
         if !is_destructive_action(action) {
             return GovernanceDecision::Allow {
                 receipt: None,
@@ -706,7 +703,7 @@ impl GovernancePolicy {
             };
         }
         if state.partition_state == PartitionState::Partitioned {
-            if let Some(lease) = preview_matching_contingency_lease(&state, action, now_ms()) {
+            if let Some(lease) = preview_matching_contingency_lease(&state, action, now_ms) {
                 return GovernanceDecision::Allow {
                     receipt: Some(lease.governance_receipt.clone()),
                     contingency_lease: Some(lease),
@@ -1288,16 +1285,6 @@ fn destructive_action_kinds() -> [&'static str; 12] {
         "force_password_reset",
         "remove_scheduled_task",
     ]
-}
-
-fn governance_quorum_threshold(total_governors: usize) -> usize {
-    if total_governors == 0 {
-        0
-    } else {
-        recommended_max_faulty(total_governors)
-            .saturating_mul(2)
-            .saturating_add(1)
-    }
 }
 
 fn partition_transition_reason(state: PartitionState) -> &'static str {
