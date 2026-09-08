@@ -1,0 +1,108 @@
+# swarm-policy Kani harness manifest (KANI-04).
+#
+# Every `#[kani::proof]` in `crates/swarm-policy/src/kani_public_harnesses.rs`
+# MUST appear here exactly once, and every entry here MUST name a real proof.
+# The `crates/swarm-policy/tests/kani_harness_manifest.rs` unit test enforces
+# that both ways in the NORMAL test lane (no Kani needed) and FAILS the build on
+# any drift — a harness added without a manifest row, or a row whose harness was
+# renamed or removed.
+#
+# Fields:
+#   name        the `#[kani::proof]` function name (verbatim).
+#   lane        "pr" runs on every PR via scripts/run-kani-swarm-policy.sh;
+#               "nightly" is reserved for heavier proofs (none today).
+#   model_only  true when the harness proves a scalar/boolean MODEL of a real
+#               decision that Kani cannot instrument on the real symbol
+#               (String/format!-heavy paths, or receipt crypto above this crate);
+#               `runtime_test` then names the test that covers the real symbol.
+#   property    one line: what the harness proves.
+
+[[harness]]
+name = "kani_rate_limit_allowed_stays_within_limit"
+lane = "pr"
+model_only = false
+property = "Allowed ⇒ limit≥1, returned window ≤ limit, and the recorded entry is now_ms."
+
+[[harness]]
+name = "kani_rate_limit_denied_means_budget_full"
+lane = "pr"
+model_only = false
+property = "Denied ⇒ the pruned window was already ≥ limit and nothing was recorded."
+
+[[harness]]
+name = "kani_rate_limit_retains_only_fresh_timestamps"
+lane = "pr"
+model_only = false
+property = "Every retained timestamp lies within the 60,000ms trailing window as of now_ms."
+
+[[harness]]
+name = "kani_severity_floor_low_is_sound_for_every_action"
+lane = "pr"
+model_only = false
+property = "At Severity::Low the destructive and deploy_decoy floors deny; others pass — over all 15 variants."
+
+[[harness]]
+name = "kani_human_gate_holds_destructive_at_or_above_gate"
+lane = "pr"
+model_only = false
+property = "A destructive action at/above the human-gate severity is held (RequireHuman); below it is not."
+
+[[harness]]
+name = "kani_governance_quorum_threshold_is_2f_plus_1"
+lane = "pr"
+model_only = false
+property = "Empty committee needs 0 votes; a non-empty committee needs 2*max_faulty+1, always ≥ 1."
+
+[[harness]]
+name = "kani_governance_quorum_threshold_is_monotonic_and_saturating"
+lane = "pr"
+model_only = false
+property = "The threshold is monotonic in max_faulty and never overflows (saturating)."
+
+[[harness]]
+name = "kani_destructive_action_classifies_every_variant"
+lane = "pr"
+model_only = false
+property = "destructive_action is true for exactly the twelve containment variants — over all 15."
+
+[[harness]]
+name = "kani_model_only_validate_lease_terms_rejects_malformed"
+lane = "pr"
+model_only = true
+runtime_test = "formal_core validate_lease_terms_* unit tests; swarm-agents keyless_policy_reloaded_into_a_partition_refuses_persisted_leases"
+property = "MODEL of validate_lease_terms: accepted IFF schema matches, cap>0, duration>0, expiry>issuance."
+
+[[harness]]
+name = "kani_model_only_blast_radius_conservation"
+lane = "pr"
+model_only = true
+runtime_test = "swarm-agents governance_policy_stages_and_redeems_contingency_leases_during_partition"
+property = "MODEL of lease_redeem: a new scope records only while count < cap, so redemption never exceeds the cap."
+
+[[harness]]
+name = "kani_model_only_expired_lease_always_denies"
+lane = "pr"
+model_only = true
+runtime_test = "swarm-agents governance_policy_stages_and_redeems_contingency_leases_during_partition"
+property = "MODEL of lease_can_redeem: expires_at_ms <= now_ms ⇒ deny, regardless of match or budget."
+
+[[harness]]
+name = "kani_model_only_invalid_signature_always_denies"
+lane = "pr"
+model_only = true
+runtime_test = "swarm-agents keyless_policy_reloaded_into_a_partition_refuses_persisted_leases"
+property = "MODEL of ContingencyLease::verify: an invalid receipt signature denies, for every decision/hash."
+
+[[harness]]
+name = "kani_model_only_non_approve_decision_always_denies"
+lane = "pr"
+model_only = true
+runtime_test = "swarm-agents governance_policy_approves_destructive_actions_with_signed_receipt_when_healthy"
+property = "MODEL of ContingencyLease::verify: a non-Approve decision denies, even with a valid signature."
+
+[[harness]]
+name = "kani_model_only_hash_mismatch_always_denies"
+lane = "pr"
+model_only = true
+runtime_test = "swarm-agents governance_policy_approves_destructive_actions_with_signed_receipt_when_healthy"
+property = "MODEL of ContingencyLease::verify: a proposal-hash mismatch denies, even when signed and approved."

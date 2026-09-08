@@ -44,6 +44,14 @@ pub mod formal_core;
 pub mod governance;
 pub mod static_gate;
 
+// Kani bounded-model-checking harnesses (phase 293). Compiled ONLY under Kani
+// (`--cfg kani`, set by `cargo kani`) or the explicit, dependency-free `kani`
+// feature -- never in the normal build, so it adds nothing to the shipped
+// dependency graph and leaves `cargo build`/`cargo test` unchanged. The
+// harnesses call the real `formal_core` `pub fn`s.
+#[cfg(any(kani, feature = "kani"))]
+mod kani_public_harnesses;
+
 use serde::{Deserialize, Serialize};
 use swarm_core::types::{AgentId, HuntId, ResponseAction, Severity};
 

@@ -157,7 +157,16 @@ expect_used = "deny"
 # `RUSTFLAGS="--cfg loom"`. Declaring it keeps the `unexpected_cfgs` lint from
 # firing on the `#[cfg(loom)]` markers during ordinary (non-loom) builds; loom
 # itself remains a `cfg(loom)`-gated dev-dependency, never in the shipped graph.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+#
+# `kani` is the same shape (phase 293): `cargo kani` sets `--cfg kani` when it
+# runs the bounded-model-checking harnesses in
+# `swarm-policy/src/kani_public_harnesses.rs`, which are gated
+# `#[cfg(any(kani, feature = "kani"))]`. Declaring it here keeps the
+# `unexpected_cfgs` lint (and `clippy -D warnings`) from firing on that `kani`
+# cfg during ordinary (non-Kani) builds; no `kani` crate ever enters the shipped
+# graph — the `kani::` API is supplied by the Kani compiler, and the optional
+# `kani` feature adds no dependency.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)', 'cfg(kani)'] }
 
 [profile.release]
 panic = "abort"
