@@ -18,37 +18,74 @@ pub struct CircuitBreakerState {
 
 /// Circuit breaking and failure accounting around a response adapter.
 ///
-/// Each call invokes the adapter at most once. A timeout, transport error, 429,
-/// or 5xx response does not prove that an enforced external effect did not
-/// happen. Retrying requires a verified adapter idempotency contract, which
-/// `ResponseExecutor` does not currently provide. The adapter's original
-/// outcome is returned unchanged, including any uncertainty about the effect.
-/// Cross-call and crash recovery deduplication belongs to the durable dispatch
-/// journal; this wrapper only prevents retries within one invocation.
+/// Whether an ambiguous outcome may be retried depends on the caller, not the
+/// adapter, so it is chosen at construction and never inferred here.
+///
+/// [`ResilientExecutor::new`] disables retries: each call invokes the adapter at
+/// most once. A timeout, transport error, 429, or 5xx response does not prove
+/// that an enforced external effect did not happen, and retrying an effectful
+/// response would require a verified adapter idempotency contract this trait
+/// does not provide. The adapter's original outcome is returned unchanged,
+/// including any uncertainty about the effect. Cross-call and crash-recovery
+/// deduplication belongs to the durable dispatch journal.
+///
+/// [`ResilientExecutor::with_retries`] restores controlled, backed-off retries
+/// of transient failures, and is only for duplicate-safe work such as SIEM
+/// finding forwarding, where re-delivering a finding is harmless. It must never
+/// wrap an effectful response dispatch adapter.
 #[derive(Debug)]
 pub struct ResilientExecutor<E> {
     inner: E,
     adapter: String,
+    retry: RetryConfig,
+    retries_enabled: bool,
     circuit_breaker: CircuitBreakerConfig,
     state: CircuitBreakerState,
     dead_letter: Option<Arc<DeadLetterJournal>>,
 }
 
 impl<E> ResilientExecutor<E> {
-    /// Construct an executor that never automatically repeats an invocation.
-    ///
-    /// The retry configuration remains accepted for configuration/source
-    /// compatibility, but cannot authorize retransmission of external effects.
+    /// Construct an executor that invokes its adapter at most once, never
+    /// automatically repeating an invocation. Use this for every effectful
+    /// response dispatch adapter: after an ambiguous outcome the external effect
+    /// may already have happened, so the outcome cannot authorize retransmission.
     pub fn new(
         inner: E,
         adapter: impl Into<String>,
-        _retry: RetryConfig,
+        retry: RetryConfig,
+        circuit_breaker: CircuitBreakerConfig,
+        dead_letter: Option<Arc<DeadLetterJournal>>,
+    ) -> Self {
+        Self::build(inner, adapter, retry, false, circuit_breaker, dead_letter)
+    }
+
+    /// Construct an executor that retries transient failures per `retry` with
+    /// backoff before dead-lettering. Only safe for duplicate-tolerant work such
+    /// as SIEM finding forwarding, never for an effectful response dispatch: a
+    /// retry re-invokes the wrapped adapter.
+    pub fn with_retries(
+        inner: E,
+        adapter: impl Into<String>,
+        retry: RetryConfig,
+        circuit_breaker: CircuitBreakerConfig,
+        dead_letter: Option<Arc<DeadLetterJournal>>,
+    ) -> Self {
+        Self::build(inner, adapter, retry, true, circuit_breaker, dead_letter)
+    }
+
+    fn build(
+        inner: E,
+        adapter: impl Into<String>,
+        retry: RetryConfig,
+        retries_enabled: bool,
         circuit_breaker: CircuitBreakerConfig,
         dead_letter: Option<Arc<DeadLetterJournal>>,
     ) -> Self {
         Self {
             inner,
             adapter: adapter.into(),
+            retry,
+            retries_enabled,
             circuit_breaker,
             state: CircuitBreakerState::default(),
             dead_letter,
@@ -108,6 +145,64 @@ impl<E> ResilientExecutor<E> {
             }),
             audit: Default::default(),
         }
+    }
+
+    fn backoff_for_retry(&self, retry_index: u32) -> Duration {
+        let millis = (self.retry.initial_backoff_ms as f64)
+            * self.retry.backoff_multiplier.powi(retry_index as i32);
+        Duration::from_millis(millis.min(30_000.0).round() as u64)
+    }
+
+    fn receipt_is_retryable(receipt: &ResponseReceipt) -> bool {
+        match receipt.status {
+            ResponseStatus::Timeout => true,
+            ResponseStatus::Failed => {
+                if let Some(status_code) = receipt
+                    .details
+                    .get("status_code")
+                    .and_then(serde_json::Value::as_u64)
+                {
+                    return status_code >= 500 || status_code == 429;
+                }
+                receipt
+                    .details
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+            }
+            ResponseStatus::Simulated | ResponseStatus::Executed => false,
+        }
+    }
+
+    fn error_is_retryable(error: &ResponseError) -> bool {
+        if error
+            .failure
+            .details
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            == Some("timeout")
+        {
+            return true;
+        }
+        if let Some(status_code) = error
+            .failure
+            .details
+            .get("status_code")
+            .and_then(serde_json::Value::as_u64)
+        {
+            return status_code >= 500 || status_code == 429;
+        }
+        if error
+            .failure
+            .details
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+        {
+            return true;
+        }
+        let message = error.failure.message.to_ascii_lowercase();
+        message.contains("timeout") || message.contains("connection")
     }
 
     fn dead_letter_entry_from_receipt(
@@ -173,26 +268,70 @@ where
             return self.inner.execute(request, lease, mode).await;
         }
 
-        if self.circuit_is_open() {
-            return Ok(self.circuit_open_receipt(request, mode));
+        if !self.retries_enabled {
+            // Effectful dispatch: invoke the adapter exactly once. A timeout,
+            // transport error, 429 or 5xx does not prove the external effect did
+            // not happen, so the outcome is returned unchanged and never retried.
+            if self.circuit_is_open() {
+                return Ok(self.circuit_open_receipt(request, mode));
+            }
+            return match self.inner.execute(request, lease, mode).await {
+                Ok(receipt) if receipt.status.indicates_success() => {
+                    self.reset_after_success();
+                    Ok(receipt)
+                }
+                Ok(receipt) => {
+                    self.record_failure();
+                    self.write_dead_letter(&self.dead_letter_entry_from_receipt(&receipt, 1));
+                    Ok(receipt)
+                }
+                Err(error) => {
+                    self.record_failure();
+                    self.write_dead_letter(&self.dead_letter_entry_from_error(&error, 1));
+                    Err(error)
+                }
+            };
         }
 
-        match self.inner.execute(request, lease, mode).await {
-            Ok(receipt) if receipt.status.indicates_success() => {
-                self.reset_after_success();
-                Ok(receipt)
+        // Retries enabled: duplicate-safe telemetry (SIEM finding forwarding).
+        // Transient failures are retried with backoff, then dead-lettered.
+        let total_attempts = self.retry.max_retries.saturating_add(1);
+        for attempt in 0..total_attempts {
+            if self.circuit_is_open() {
+                return Ok(self.circuit_open_receipt(request, mode));
             }
-            Ok(receipt) => {
-                self.record_failure();
-                self.write_dead_letter(&self.dead_letter_entry_from_receipt(&receipt, 1));
-                Ok(receipt)
-            }
-            Err(error) => {
-                self.record_failure();
-                self.write_dead_letter(&self.dead_letter_entry_from_error(&error, 1));
-                Err(error)
+
+            match self.inner.execute(request, lease, mode).await {
+                Ok(receipt) if receipt.status.indicates_success() => {
+                    self.reset_after_success();
+                    return Ok(receipt);
+                }
+                Ok(receipt) => {
+                    self.record_failure();
+                    let attempts = attempt + 1;
+                    if Self::receipt_is_retryable(&receipt) && attempts < total_attempts {
+                        tokio::time::sleep(self.backoff_for_retry(attempt)).await;
+                        continue;
+                    }
+                    self.write_dead_letter(
+                        &self.dead_letter_entry_from_receipt(&receipt, attempts),
+                    );
+                    return Ok(receipt);
+                }
+                Err(error) => {
+                    self.record_failure();
+                    let attempts = attempt + 1;
+                    if Self::error_is_retryable(&error) && attempts < total_attempts {
+                        tokio::time::sleep(self.backoff_for_retry(attempt)).await;
+                        continue;
+                    }
+                    self.write_dead_letter(&self.dead_letter_entry_from_error(&error, attempts));
+                    return Err(error);
+                }
             }
         }
+
+        Ok(self.circuit_open_receipt(request, mode))
     }
 }
 
@@ -547,5 +686,113 @@ mod tests {
         );
         assert!(journal.read_entries(None).unwrap().is_empty());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn with_retries_retries_transient_failure_then_succeeds() {
+        // The duplicate-safe SIEM path: a transient timeout is retried and the
+        // second invocation succeeds. The adapter is invoked more than once by
+        // design, which is exactly why this constructor is forbidden for the
+        // effectful dispatch adapters.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executor = ResilientExecutor::with_retries(
+            StubExecutor {
+                calls: Arc::clone(&calls),
+                outcomes: Arc::new(vec![
+                    Ok(receipt(
+                        ResponseStatus::Timeout,
+                        json!({"status": "timeout"}),
+                    )),
+                    Ok(receipt(ResponseStatus::Executed, json!({}))),
+                ]),
+            },
+            "siem_forward",
+            retries_configured(),
+            CircuitBreakerConfig {
+                threshold: 5,
+                cooldown_ms: 1000,
+            },
+            None,
+        );
+
+        let receipt = executor
+            .execute(&request(), &lease(), ExecutionMode::Enforced)
+            .await
+            .unwrap();
+        assert_eq!(receipt.status, ResponseStatus::Executed);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            executor.state.consecutive_failures.load(Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn with_retries_exhausts_attempts_then_dead_letters() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let path = temp_path("with-retries-dead-letter");
+        let journal = Arc::new(DeadLetterJournal::new(&path, None).unwrap());
+        let executor = ResilientExecutor::with_retries(
+            StubExecutor {
+                calls: Arc::clone(&calls),
+                outcomes: Arc::new(vec![Ok(receipt(
+                    ResponseStatus::Failed,
+                    json!({"status_code": 503}),
+                ))]),
+            },
+            "siem_forward",
+            retries_configured(),
+            CircuitBreakerConfig {
+                threshold: 100,
+                cooldown_ms: 1000,
+            },
+            Some(Arc::clone(&journal)),
+        );
+
+        let receipt = executor
+            .execute(&request(), &lease(), ExecutionMode::Enforced)
+            .await
+            .unwrap();
+        assert_eq!(receipt.status, ResponseStatus::Failed);
+        // max_retries = 3, so four total attempts before dead-lettering.
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        let entries = journal.read_entries(None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].attempts, 4);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn disabled_new_invokes_inner_exactly_once_on_transient_failure() {
+        // The effectful dispatch guarantee at the executor level: a retryable
+        // transient outcome under `new` still invokes the adapter exactly once.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executor = ResilientExecutor::new(
+            StubExecutor {
+                calls: Arc::clone(&calls),
+                outcomes: Arc::new(vec![
+                    Ok(receipt(
+                        ResponseStatus::Timeout,
+                        json!({"status": "timeout"}),
+                    )),
+                    Ok(receipt(ResponseStatus::Executed, json!({}))),
+                ]),
+            },
+            "http_edr",
+            retries_configured(),
+            CircuitBreakerConfig {
+                threshold: 5,
+                cooldown_ms: 1000,
+            },
+            None,
+        );
+
+        let receipt = executor
+            .execute(&request(), &lease(), ExecutionMode::Enforced)
+            .await
+            .unwrap();
+        // The first, ambiguous outcome is returned unchanged; no second attempt.
+        assert_eq!(receipt.status, ResponseStatus::Timeout);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }
