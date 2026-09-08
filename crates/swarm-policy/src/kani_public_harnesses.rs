@@ -374,8 +374,13 @@ fn kani_human_gate_holds_destructive_at_or_above_gate() {
 /// as destructive and the three others (`TriggerEdrScan`, `DeployDecoy`,
 /// `Escalate`) as not — over one representative of every `ResponseAction`
 /// variant. A variant match with no string comparison and no `format!`, so it
-/// is Kani-tractable. The `expected` oracle mirrors the SPEC (the twelve
-/// containment variants), derived independently of `destructive_action`'s body.
+/// is Kani-tractable. The `expected` oracle lists the twelve containment
+/// variants directly — NOT `static_gate::destructive_action_kinds()`, because
+/// that is a `&[&str]` slug list and checking `.contains(&action.kind())` would
+/// reintroduce the String `memcmp` blow-up that forces the lease harnesses
+/// MODEL-ONLY. The variant list is a second, independent statement of the spec:
+/// if `destructive_action` and this oracle ever disagree (a variant added to one
+/// arm-set and not the other), the proof fails.
 ///
 /// Bound: exhaustive over the 15 variants (`arbitrary_response_action`, idx<15).
 #[kani::proof]
@@ -498,9 +503,12 @@ fn model_lease_records_new_scope(redeemed_count: usize, cap: usize) -> bool {
 /// strictly below `blast_radius_cap`, so a redemption can never drive the count
 /// past the cap, and at or above the cap a new scope is always refused. Modeled
 /// over the scalar count and cap because the real `lease_redeem` matches scopes
-/// by `String` and builds error strings with `format!` (Kani-intractable); the
-/// real behavior is covered by the swarm-agents test
-/// `governance_policy_stages_and_redeems_contingency_leases_during_partition`.
+/// by `String` and builds error strings with `format!` (Kani-intractable). The
+/// real `lease_redeem` cap logic is covered by the `formal_core` unit tests that
+/// call it directly — `lease_redeem_records_a_new_scope_within_budget` (records
+/// under budget) and `lease_redeem_fails_closed_on_mismatch_expiry_and_cap` (the
+/// at-or-over-cap refusal) — and end to end by the swarm-agents partition lease
+/// test `governance_policy_stages_and_redeems_contingency_leases_during_partition`.
 #[kani::proof]
 fn kani_model_only_blast_radius_conservation() {
     let count: usize = kani::any();
@@ -535,8 +543,10 @@ fn model_lease_can_redeem(
 /// MODEL-ONLY (see [`model_lease_can_redeem`]): an expired lease denies every
 /// redemption — once `now_ms` reaches expiry the lease fails closed regardless
 /// of match or remaining budget. Modeled over the scalar clock/expiry because
-/// the real predicates match scopes by `String`; the real behavior is covered
-/// by the swarm-agents test
+/// the real predicates match scopes by `String`. The real expiry guard is
+/// covered by the `formal_core` unit test that calls it directly —
+/// `lease_can_redeem_denies_an_expired_lease` — and end to end by the swarm-agents
+/// partition lease test
 /// `governance_policy_stages_and_redeems_contingency_leases_during_partition`.
 #[kani::proof]
 fn kani_model_only_expired_lease_always_denies() {
@@ -556,9 +566,12 @@ fn kani_model_only_expired_lease_always_denies() {
 /// MODEL-ONLY: a structural model of the receipt-bound half of
 /// `ContingencyLease::verify` (crates/swarm-agents/src/tom_agent.rs), which
 /// lives ABOVE this crate with the `ConsensusGovernanceReceipt` type and is NOT
-/// part of the pure decision core. It mirrors verify's exact check order —
-/// signature, then `Approve` decision, then proposal-hash match — with the same
-/// error text, so the fail-closed contract can be model-checked here. The REAL
+/// part of the pure decision core. It mirrors verify's exact check order and
+/// fail-closed precedence — signature, then `Approve` decision, then
+/// proposal-hash match — so the contract can be model-checked here. The error
+/// strings echo the real ones for readability (the signature error is the real
+/// message's prefix); they are documentary only, since the harnesses assert on
+/// the `Err`/`Ok` outcome, not the text. The REAL
 /// cryptographic checks are covered by the swarm-agents runtime tests
 /// `keyless_policy_reloaded_into_a_partition_refuses_persisted_leases` (receipt /
 /// signature refusal) and
