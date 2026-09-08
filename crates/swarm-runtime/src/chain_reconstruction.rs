@@ -75,28 +75,41 @@
 //! first expansion (it is the query's own starting point, not a hub the
 //! search wandered into). So when the direct pairwise call fails,
 //! `stage_connection` falls back to querying FROM every KillChainStage
-//! anchor already known to reach either stage (an Engagement or
-//! ThreatPattern node — both emit `Engagement/ThreatPattern -> technique`
-//! KillChainStage edges; see `sphinx_agent.rs`'s generic technique emission
-//! and CHAIN-02's `extract_kill_chain_sequence_match`), found by
+//! anchor already known to reach either stage, found by
 //! [`kill_chain_stage_anchors`] (a plain edge-attribute scan, not a second
 //! traversal): `provenance_paths(anchor, stage_i, max_hops)` and
 //! `provenance_paths(anchor, stage_j, max_hops)`, each with the anchor as
 //! the literal `from` and therefore cap-exempt for its own first expansion.
 //! If both succeed the two paths are spliced (via [`splice_through_anchor`])
-//! into the logical `stage_i -> anchor -> stage_j` path. This is safe
-//! precisely because the anchor is not an arbitrary node the walk happened
-//! to pass through — it is the specific Engagement/ThreatPattern that
-//! ALREADY, independently, fanned a KillChainStage edge out to one of
-//! these two stages, i.e. the observation record that produced the very
-//! evidence being reconstructed, not a foreign hub bridging unrelated
-//! hunts. A rule whose stages happen to span multiple such anchors
-//! connected to each other by causal/temporal edges is still handled by the
-//! direct pairwise call as long as those intermediate anchors individually
-//! stay under the cap; a chain that would need to bridge through more than
-//! one OVER-cap anchor remains a known, narrower residual limitation (see
-//! the regression test `reconstruct_kill_chains_survives_a_high_degree_engagement_hub`
-//! for the case this fallback does cover).
+//! into the logical `stage_i -> anchor -> stage_j` path.
+//!
+//! **This fallback is scoped to `Engagement` anchors ONLY, never
+//! `ThreatPattern`.** `sphinx_agent.rs` emits `KillChainStage` edges from
+//! both node kinds, but they have very different lineage: an `Engagement`
+//! is keyed by `observation_id` (one observation, one hunt) — anchoring on
+//! it is safe because it IS the observation record that produced the
+//! evidence being reconstructed, so the exemption never reaches past that
+//! one observation's own (possibly-unrelated) degree. A `ThreatPattern` is
+//! keyed only by `threat_class` and merged GLOBALLY across every
+//! observation of that class over the graph's whole lifetime — anchoring
+//! on it would let the exemption bridge mutually-disconnected hunts that
+//! merely share a threat class into one fabricated chain, exactly what the
+//! hub-degree cap
+//! (`provenance_paths_hub_degree_cap_prevents_bridging_unrelated_hunt_subgraphs`
+//! in `sphinx_agent.rs`) exists to prevent. [`kill_chain_stage_anchors`]
+//! therefore filters candidates to actual `EngagementNode`s in the
+//! snapshot (by node kind, not merely by which edge named them) — see
+//! `reconstruct_kill_chains_does_not_bridge_disconnected_hunts_through_a_shared_threat_pattern`
+//! for the pinned regression, and
+//! `reconstruct_kill_chains_survives_a_high_degree_engagement_hub` for the
+//! truncation case this fallback still fixes.
+//!
+//! A rule whose stages happen to span multiple `Engagement` anchors
+//! connected to each other by causal/temporal edges is still handled by
+//! the direct pairwise call as long as those intermediate nodes
+//! individually stay under the cap; a chain that would need to bridge
+//! through more than one over-cap `Engagement` remains a known, narrower
+//! residual limitation.
 //!
 //! Read-only: nothing here calls `upsert_node`/`upsert_edge` or otherwise
 //! mutates a `KnowledgeGraphSnapshot`.
@@ -358,12 +371,32 @@ fn stage_connection(
 }
 
 /// Candidate busy-hub-fallback anchors for the `from_node`/`to_node` pair:
-/// every node that is the `from_node_id` of a `SemanticRelation::KillChainStage`
-/// edge landing on either one — i.e. every Engagement/ThreatPattern node
-/// that has already fanned a KillChainStage edge out to either technique,
-/// and so is a legitimate candidate to re-query from rather than through.
-/// A plain linear scan of the snapshot's public `edges` by attribute, not a
-/// graph walk — the graph's SOLE multi-hop traversal stays
+/// every **`EngagementNode`** that is the `from_node_id` of a
+/// `SemanticRelation::KillChainStage` edge landing on either one.
+///
+/// `sphinx_agent.rs` emits `KillChainStage` edges from TWO different node
+/// kinds: `Engagement` (keyed by `observation_id` — one observation, one
+/// hunt) and `ThreatPattern` (keyed only by `threat_class` — merged
+/// GLOBALLY across every observation of that class, over the graph's whole
+/// lifetime, regardless of hunt). Anchoring the busy-hub fallback on an
+/// `Engagement` is safe: it IS the single observation record that produced
+/// the evidence being reconstructed, so the `from`-exemption never does
+/// more than let reconstruction see past that one observation's own,
+/// possibly-unrelated, degree. Anchoring on a `ThreatPattern` would NOT be
+/// safe — it is exactly the kind of shared, hunt-agnostic hub Phase 296's
+/// hub-degree cap exists to stop from bridging mutually-disconnected hunts
+/// (`provenance_paths_hub_degree_cap_prevents_bridging_unrelated_hunt_subgraphs`
+/// in `sphinx_agent.rs`), and the `from`-exemption would defeat that cap
+/// for it precisely because it IS the query's own starting point in this
+/// fallback. So this function filters candidates to `Engagement` nodes
+/// ONLY — a `ThreatPattern` (or any other node kind) is never returned,
+/// no matter its degree. See
+/// `reconstruct_kill_chains_does_not_bridge_disconnected_hunts_through_a_shared_threat_pattern`
+/// for the regression this excludes.
+///
+/// Implementation: a plain linear scan of the snapshot's public `edges` by
+/// attribute, filtered against the snapshot's public `nodes` by kind — not
+/// a graph walk. The graph's SOLE multi-hop traversal stays
 /// `provenance_paths`.
 fn kill_chain_stage_anchors(
     snapshot: &KnowledgeGraphSnapshot,
@@ -382,10 +415,23 @@ fn kill_chain_stage_anchors(
             }
             _ => None,
         })
+        .filter(|candidate| is_single_observation_anchor(snapshot, candidate))
         .collect::<Vec<_>>();
     anchors.sort();
     anchors.dedup();
     anchors
+}
+
+/// True only if `node_id` names an `EngagementNode` in `snapshot` — the
+/// single-observation, single-hunt node kind `kill_chain_stage_anchors` is
+/// restricted to. `ThreatPattern` (globally merged by `threat_class`) and
+/// every other node kind return `false`, including when `node_id` names no
+/// node at all (an unknown id is never treated as a safe anchor by
+/// default).
+fn is_single_observation_anchor(snapshot: &KnowledgeGraphSnapshot, node_id: &str) -> bool {
+    snapshot.nodes.iter().any(|node| {
+        matches!(node, KnowledgeGraphNode::Engagement(engagement) if engagement.node_id == node_id)
+    })
 }
 
 /// Splices `anchor -> from_node` and `anchor -> to_node` provenance paths
@@ -418,13 +464,15 @@ mod tests {
     };
     use crate::sequence_detector::KillChainSequenceProfile;
     use crate::sphinx_agent::{
-        AttackTechniqueNode, CausalEdge, CausalRelation, KnowledgeGraphEdge, KnowledgeGraphNode,
-        KnowledgeGraphSnapshot, SemanticEdge, SemanticRelation, TemporalEdge,
+        AttackTechniqueNode, CausalEdge, CausalRelation, EngagementNode, KnowledgeGraphEdge,
+        KnowledgeGraphNode, KnowledgeGraphSnapshot, SemanticEdge, SemanticRelation, TemporalEdge,
+        ThreatPatternNode,
     };
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use swarm_core::types::Severity;
 
     fn temp_yaml_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -483,6 +531,45 @@ mod tests {
 
     fn technique_node_id(technique: &KillChainStageTechnique) -> String {
         format!("attack_technique:{}", technique.technique_id)
+    }
+
+    /// An `EngagementNode` for `node_id` -- the single-observation,
+    /// single-hunt anchor kind `kill_chain_stage_anchors` restricts its
+    /// busy-hub fallback to.
+    fn engagement_node(node_id: &str) -> KnowledgeGraphNode {
+        KnowledgeGraphNode::Engagement(EngagementNode {
+            node_id: node_id.to_string(),
+            observation_id: node_id.to_string(),
+            source_agent_id: "sphinx:test".to_string(),
+            threat_class: "command_and_control".to_string(),
+            severity: Severity::High,
+            summary: "test engagement".to_string(),
+            observed_at_ms: 0,
+            related_entity_ids: BTreeSet::new(),
+            attack_technique_ids: BTreeSet::new(),
+            analyst_feedback_ids: BTreeSet::new(),
+            analyst_disposition: None,
+            analyst_note: None,
+            analyst_feedback_at_ms: None,
+            outcome_reward_override: None,
+        })
+    }
+
+    /// A `ThreatPatternNode` for `node_id` -- the GLOBALLY-MERGED,
+    /// hunt-agnostic node kind `kill_chain_stage_anchors` must NEVER treat
+    /// as a busy-hub-fallback anchor.
+    fn threat_pattern_node(node_id: &str) -> KnowledgeGraphNode {
+        KnowledgeGraphNode::ThreatPattern(ThreatPatternNode {
+            node_id: node_id.to_string(),
+            threat_class: "command_and_control".to_string(),
+            title: "command_and_control threat pattern".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            observation_count: 3,
+            latest_severity: Severity::High,
+            attack_technique_ids: BTreeSet::new(),
+            kill_chain_stages: BTreeSet::new(),
+        })
     }
 
     #[test]
@@ -634,6 +721,7 @@ rules:
             snapshot.nodes.push(attack_technique_node(technique));
         }
         let hub = "engagement:evt-busy";
+        snapshot.nodes.push(engagement_node(hub));
         for technique in &rule.attack_chain {
             snapshot
                 .edges
@@ -696,6 +784,95 @@ rules:
         assert_eq!(
             reconstructed[0].technique_ids,
             vec!["T1218.007", "T1218.005", "T1105"]
+        );
+    }
+
+    /// Security-property pin (fix round 2, CRITICAL): a `ThreatPatternNode`
+    /// is keyed only by `threat_class` and merged GLOBALLY across every
+    /// observation of that class over the graph's whole lifetime -- unlike
+    /// an `EngagementNode` (keyed by `observation_id`, one observation, one
+    /// hunt). Three MUTUALLY-DISCONNECTED "hunts", each touching exactly
+    /// one of the rule's technique nodes and nothing else, tied together
+    /// ONLY by a single shared `ThreatPattern` pushed over the hub-degree
+    /// cap via unrelated filler edges, must NEVER be bridged into one
+    /// fabricated multi-stage `ReconstructedChain` -- that is exactly what
+    /// Phase 296's hub-degree cap
+    /// (`provenance_paths_hub_degree_cap_prevents_bridging_unrelated_hunt_subgraphs`
+    /// in `sphinx_agent.rs`) exists to prevent, and what the round-1 fix's
+    /// anchor fallback would have defeated by including `ThreatPattern`
+    /// candidates.
+    #[test]
+    fn reconstruct_kill_chains_does_not_bridge_disconnected_hunts_through_a_shared_threat_pattern()
+    {
+        let rule = rule_fixture();
+        let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+        for technique in &rule.attack_chain {
+            snapshot.nodes.push(attack_technique_node(technique));
+        }
+
+        // A single ThreatPattern, shared by every hunt that happens to
+        // observe this rule's threat_class -- the real emission shape
+        // (`sphinx_agent.rs` links EVERY engagement observing a class to
+        // the SAME ThreatPattern node).
+        let shared_pattern = "threat_pattern:shared";
+        snapshot.nodes.push(threat_pattern_node(shared_pattern));
+
+        // Three mutually-disconnected "hunts": the shared ThreatPattern
+        // fans a KillChainStage edge out to each technique individually,
+        // and NOTHING else ties the three technique nodes together (no
+        // shared Engagement, no causal/temporal edge between them).
+        for technique in &rule.attack_chain {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                    edge_id: format!("semantic:{shared_pattern}:{}", technique.technique_id),
+                    from_node_id: shared_pattern.to_string(),
+                    to_node_id: technique_node_id(technique),
+                    relation: SemanticRelation::KillChainStage,
+                    kill_chain_stage: technique.kill_chain_stage.clone(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+        // Push the ThreatPattern's degree past the cap with unrelated
+        // filler edges -- proving the exclusion is by NODE KIND, not
+        // merely by degree: this anchor must be rejected whether or not it
+        // is over the cap.
+        for index in 0..40 {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Temporal(TemporalEdge {
+                    edge_id: format!("temporal:{shared_pattern}:filler-{index}"),
+                    from_node_id: shared_pattern.to_string(),
+                    to_node_id: format!("threat_pattern_filler:{index}"),
+                    temporal_window_secs: 3_600,
+                    shared_entity_ids: BTreeSet::new(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+        let shared_pattern_degree = snapshot
+            .edges
+            .iter()
+            .filter(|edge| match edge {
+                KnowledgeGraphEdge::Semantic(semantic) => semantic.from_node_id == shared_pattern,
+                KnowledgeGraphEdge::Temporal(temporal) => temporal.from_node_id == shared_pattern,
+                _ => false,
+            })
+            .count();
+        assert!(
+            shared_pattern_degree > KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP,
+            "test setup must actually exceed the hub-degree cap, got degree {shared_pattern_degree}"
+        );
+
+        let reconstructed = reconstruct_kill_chains(&snapshot, std::slice::from_ref(&rule), 6);
+
+        assert!(
+            reconstructed.is_empty(),
+            "a shared, hunt-agnostic ThreatPattern must never bridge mutually-disconnected \
+             hunts into a fabricated chain: {reconstructed:?}"
         );
     }
 
