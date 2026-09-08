@@ -484,6 +484,50 @@ impl SphinxAgent {
                 }));
         }
 
+        // CHAIN-02: durable evidence for `KillChainSequenceDetector` matches.
+        // A sequence-detector deposit's evidence carries the matched rule's
+        // own `attack_chain` prefix (real technique_id + kill_chain_stage
+        // per step) — richer and rule-specific, unlike the generic
+        // per-threat-class `techniques`/`default_attack_techniques` handled
+        // above (left unchanged). Each matched technique becomes (or merges
+        // into) an AttackTechnique node, linked from this observation's
+        // Engagement node by a `SemanticRelation::KillChainStage` edge
+        // carrying that technique's stage, so the ephemeral sequence match
+        // survives as durable, persisted graph evidence for CHAIN-01's
+        // reconstruction. The edge id is namespaced with the rule id so it
+        // never collides with the generic engagement->technique edge above.
+        if let Some(sequence_match) = extract_kill_chain_sequence_match(deposit) {
+            for technique in &sequence_match.techniques {
+                let node_id = technique_node_id(&technique.technique_id);
+                self.graph
+                    .upsert_node(KnowledgeGraphNode::AttackTechnique(AttackTechniqueNode {
+                        node_id: node_id.clone(),
+                        technique_id: technique.technique_id.clone(),
+                        name: technique.name.clone(),
+                        kill_chain_stage: technique.kill_chain_stage.clone(),
+                        first_observed_at_ms: observed_at_ms,
+                        last_observed_at_ms: observed_at_ms,
+                        observation_count: 1,
+                    }));
+                self.graph
+                    .upsert_edge(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                        edge_id: format!(
+                            "semantic:{}:{}:sequence:{}",
+                            sanitize_id(&engagement_id),
+                            sanitize_id(&node_id),
+                            sanitize_id(&sequence_match.rule_id)
+                        ),
+                        from_node_id: engagement_id.clone(),
+                        to_node_id: node_id,
+                        relation: SemanticRelation::KillChainStage,
+                        kill_chain_stage: technique.kill_chain_stage.clone(),
+                        first_observed_at_ms: observed_at_ms,
+                        last_observed_at_ms: observed_at_ms,
+                        occurrence_count: 1,
+                    }));
+            }
+        }
+
         for existing in self.graph.engagements() {
             if existing.node_id == engagement_id {
                 continue;
@@ -2292,6 +2336,50 @@ fn parse_attack_technique(
     }
 }
 
+/// CHAIN-02: one `KillChainSequenceDetector` match, as carried in a
+/// deposit's `indicator.evidence.rule_id` + `indicator.evidence.attack_techniques`
+/// (see `sequence_detector::evaluate_rule`'s `DetectionFinding::evidence`,
+/// which every deposit-building path — `resolve_deposits`,
+/// `persist_findings_as_deposits`, `findings_to_deposits` — nests verbatim
+/// under `indicator.evidence`). `rule_id` is unique to this detector's
+/// evidence shape, so its presence is what identifies a sequence-detector
+/// match rather than any other deposit.
+struct KillChainSequenceMatchObservation {
+    rule_id: String,
+    techniques: Vec<AttackTechniqueObservation>,
+}
+
+/// Parses a [`KillChainSequenceMatchObservation`] out of a deposit, or
+/// `None` if the deposit did not come from `KillChainSequenceDetector` (no
+/// `evidence.rule_id`) or carries no matched techniques.
+fn extract_kill_chain_sequence_match(
+    deposit: &PheromoneDeposit,
+) -> Option<KillChainSequenceMatchObservation> {
+    let evidence = deposit.indicator.get("evidence")?;
+    let rule_id = evidence.get("rule_id").and_then(Value::as_str)?.trim();
+    if rule_id.is_empty() {
+        return None;
+    }
+    let default_stage = default_kill_chain_stage(&deposit.threat_class);
+    let techniques = evidence
+        .get("attack_techniques")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| parse_attack_technique(entry, default_stage))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if techniques.is_empty() {
+        return None;
+    }
+    Some(KillChainSequenceMatchObservation {
+        rule_id: rule_id.to_string(),
+        techniques,
+    })
+}
+
 fn default_attack_techniques(threat_class: &ThreatClass) -> Vec<AttackTechniqueObservation> {
     let (technique_id, name, kill_chain_stage) = match threat_class {
         ThreatClass::Execution => ("T1059", "Command and Scripting Interpreter", "execution"),
@@ -2736,8 +2824,9 @@ mod tests {
     use super::{
         CausalEdge, CausalRelation, DeceptionAssetNode, EntityEdge, EntityKind, EntityNode,
         FileKnowledgeGraphStore, KnowledgeEdgeKind, KnowledgeGraphEdge, KnowledgeGraphNode,
-        KnowledgeGraphSnapshot, KnowledgeNodeKind, SphinxAgent, entity_node_id, file_node_id,
-        network_flow_node_id, parse_memory_query, process_key_node_id, signed_memory_query_deposit,
+        KnowledgeGraphSnapshot, KnowledgeNodeKind, SemanticEdge, SemanticRelation, SphinxAgent,
+        entity_node_id, file_node_id, network_flow_node_id, parse_memory_query,
+        process_key_node_id, signed_memory_query_deposit,
     };
     use crate::AgentTickBoundaryError;
     use crate::calico_agent::{
@@ -3806,6 +3895,164 @@ mod tests {
                 })
                 .expect("process node should survive restart"),
             process
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// CHAIN-02: a `KillChainSequenceDetector` match — carried in
+    /// `indicator.evidence.rule_id` + `indicator.evidence.attack_techniques`,
+    /// the exact shape `sequence_detector::evaluate_rule` puts in a
+    /// `DetectionFinding::evidence` and every deposit-building path nests
+    /// under `indicator.evidence` — persists as durable
+    /// `SemanticRelation::KillChainStage` edges (one per matched rule
+    /// technique, carrying that technique's own stage) and survives a
+    /// restart + reload of the snapshot, making the ephemeral sequence
+    /// detection durable graph evidence.
+    #[tokio::test]
+    async fn sphinx_agent_persists_kill_chain_sequence_match_as_durable_stage_edges_across_restart()
+    {
+        let root = temp_root("kill-chain-sequence");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let deposit = PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
+            indicator: serde_json::json!({
+                "event_id": "evt-seq-1",
+                "host_id": "host-seq",
+                "source": "whisker",
+                "observed_at_ms": 1_800_950_000_i64 * 1000,
+                "evidence": {
+                    "rule_id": "outlook_mshta_transfer",
+                    "rule_name": "Outlook to mshta transfer",
+                    "match_kind": "full",
+                    "attack_techniques": [
+                        {"technique_id": "T1566", "name": "Phishing", "kill_chain_stage": "execution"},
+                        {"technique_id": "T1218.005", "name": "Mshta", "kill_chain_stage": "defense_evasion"},
+                        {"technique_id": "T1071", "name": "Application Layer Protocol", "kill_chain_stage": "command_and_control"},
+                    ],
+                    "kill_chain_stages": ["execution", "defense_evasion", "command_and_control"],
+                },
+            }),
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.91,
+            timestamp: 1_800_950_000,
+            decay_half_life: 3_600.0,
+            agent_id: AgentId::new("whisker", "primary:kill_chain_sequence"),
+            agent_identity: String::new(),
+            agent_role: None,
+            signature: Vec::new(),
+            agent_key: Vec::new(),
+        };
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(vec![deposit.clone()], 1_800_950_001))
+            .await
+            .expect("sphinx tick should persist kill-chain-sequence match edges");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let stage_edges = snapshot
+            .edges
+            .iter()
+            .filter_map(|edge| match edge {
+                KnowledgeGraphEdge::Semantic(semantic)
+                    if semantic.relation == SemanticRelation::KillChainStage
+                        && semantic
+                            .edge_id
+                            .contains(":sequence:outlook_mshta_transfer") =>
+                {
+                    Some(semantic.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<SemanticEdge>>();
+        assert_eq!(
+            stage_edges.len(),
+            3,
+            "one durable KillChainStage edge per matched rule technique, got {stage_edges:?}"
+        );
+        let stages = stage_edges
+            .iter()
+            .map(|edge| edge.kill_chain_stage.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            stages,
+            std::collections::BTreeSet::from([
+                "execution",
+                "defense_evasion",
+                "command_and_control"
+            ])
+        );
+        assert!(
+            stage_edges
+                .iter()
+                .all(|edge| edge.from_node_id.starts_with("engagement:")),
+            "sequence-match edges anchor from this observation's Engagement node"
+        );
+
+        let technique_ids = snapshot
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                KnowledgeGraphNode::AttackTechnique(technique) => {
+                    Some(technique.technique_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(technique_ids.contains("T1566"));
+        assert!(technique_ids.contains("T1218.005"));
+        assert!(technique_ids.contains("T1071"));
+
+        let mut restarted = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should restore kill-chain-sequence match edges");
+        restarted
+            .tick(&env(vec![deposit], 1_800_950_002))
+            .await
+            .expect("duplicate observation should not fail");
+
+        let restored = store
+            .load_snapshot()
+            .expect("snapshot should reload")
+            .expect("snapshot should still exist");
+        assert_eq!(snapshot.nodes.len(), restored.nodes.len());
+        assert_eq!(snapshot.edges.len(), restored.edges.len());
+        let restored_stage_edge_count = restored
+            .edges
+            .iter()
+            .filter(|edge| {
+                matches!(
+                    edge,
+                    KnowledgeGraphEdge::Semantic(semantic)
+                        if semantic.relation == SemanticRelation::KillChainStage
+                            && semantic.edge_id.contains(":sequence:outlook_mshta_transfer")
+                )
+            })
+            .count();
+        assert_eq!(
+            restored_stage_edge_count, 3,
+            "durable kill-chain-stage edges survive persist + reload"
         );
 
         let _ = fs::remove_dir_all(root);
