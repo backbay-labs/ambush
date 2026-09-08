@@ -116,7 +116,7 @@ audit-trail convention: the requirement's original wording is preserved, not ove
 
 ## DCORE-05 final verification (this task, on the closing tree)
 
-- `cargo test -p swarm-policy` — 31 passed, 0 failed (unit tests; `loom_concurrent_decision` and
+- `cargo test -p swarm-policy` — 39 passed, 0 failed (unit tests; `loom_concurrent_decision` and
   the three negative-registry tests also pass, 0 in each when not run under `--cfg loom`).
 - `cargo test -p swarm-agents` — 17 lib tests + 7 `governance_single_key.rs` tests, 0 failed.
 - `tools/check-decision-core-boundary.sh` — exit 0 (self-test: 4 cases, 1 control + 3 planted, all

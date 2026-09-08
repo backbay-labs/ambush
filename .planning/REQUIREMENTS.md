@@ -912,7 +912,7 @@ final review closure under `286-02-PLAN.md`.
 - [x] **DCORE-04** (49121d577): `docs/adr/ADR-0002-decision-core-boundary.md` plus `scripts/check-decision-core-boundary.sh` enforce the forbidden-dependency list in CI.
   Delivered as `docs/decisions/0012-decision-core-boundary.md` plus `tools/check-decision-core-boundary.sh` — path-slip recorded per Design-of-record ruling (repo convention: ADRs live in `docs/decisions/NNNN-…`, gates live in `tools/check-*.sh` so `check-gates-wired.sh` sees them; same ruling as phases 283/285/291).
 - [x] **DCORE-05** (eb64f7c85, f5cb3d8df): Every pre-existing `static_gate`, `configurable_gate`, and `tom_agent` governance test passes unchanged against the new call paths.
-  Verified after every task and RE-VERIFIED on the final tree at Phase 292's close (2026-09-08): `cargo test -p swarm-policy` — 31 passed, 0 failed; `cargo test -p swarm-agents` — 17 lib + 7 governance (`governance_single_key.rs`) passed, 0 failed.
+  Verified after every task and RE-VERIFIED on the final tree at Phase 292's close (2026-09-08): `cargo test -p swarm-policy` — 39 passed, 0 failed; `cargo test -p swarm-agents` — 17 lib + 7 governance (`governance_single_key.rs`) passed, 0 failed.
 
 #### Kani Bounded Model Checking
 
