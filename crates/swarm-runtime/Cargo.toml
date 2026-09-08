@@ -100,6 +100,11 @@ swarm-agents.workspace = true
 swarm-ingest-runtime.workspace = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 tower.workspace = true
+# Dev-only (GRAPH-04, phase 296): backs the `prune_stale` property test in
+# `sphinx_agent.rs`. Never named by non-test code, so it never enters the
+# shipped graph -- see `tools/check-workspace-layering.sh` and
+# `cargo tree -p swarm-runtime` (normal deps).
+proptest.workspace = true
 
 [[bench]]
 name = "hot_path"

@@ -40,6 +40,11 @@ pub struct SphinxAgent {
     substrate: ConfiguredPheromoneSubstrate,
     pheromone_config: swarm_core::config::PheromoneConfig,
     knowledge_retention_days: u64,
+    /// GRAPH-06 defense-in-depth: recorded so `tick()` can tell a legitimate
+    /// "memory disabled" no-op apart from the footgun (`memory.enabled` true
+    /// with `knowledge_retention_days == 0`) `MemoryConfig::validate()`
+    /// should already have rejected. See `warn_if_retention_footgun_reachable`.
+    memory_enabled: bool,
     role: AgentRole,
     health: AgentHealth,
     store: FileKnowledgeGraphStore,
@@ -119,6 +124,7 @@ impl SphinxAgent {
             substrate,
             pheromone_config: runtime_config.pheromone.clone(),
             knowledge_retention_days: runtime_config.memory.knowledge_retention_days,
+            memory_enabled: runtime_config.memory.enabled,
             role: AgentRole::Sphinx,
             health: AgentHealth::Healthy,
             store,
@@ -816,6 +822,38 @@ impl SphinxAgent {
             .map_err(internal_runtime_error)?;
         Ok(())
     }
+
+    /// GRAPH-06 defense-in-depth. `MemoryConfig::validate()` already rejects
+    /// `knowledge_retention_days == 0` whenever `memory.enabled` is true
+    /// (`swarm-core/src/config/state.rs`, tested by
+    /// `memory_requires_positive_retention_days_when_enabled`), so a config
+    /// that went through validation can never reach `tick()` with this
+    /// combination. This closes the gap for a `SwarmConfig` that reached
+    /// `SphinxAgent` WITHOUT going through validation (built and handed to
+    /// `SphinxAgent::new`/`new_with_signing_key` directly): rather than let
+    /// `KnowledgeGraphSnapshot::prune_stale`'s `retention_days == 0` no-op
+    /// run silently forever -- growing the knowledge graph unbounded despite
+    /// memory being "on" -- reaching this combination becomes a loud,
+    /// tested condition. `retention_days == 0` while memory is DISABLED is
+    /// left alone: nobody expects GC from a disabled memory subsystem, so
+    /// that is a legitimate no-op, not the footgun.
+    fn warn_if_retention_footgun_reachable(memory_enabled: bool, knowledge_retention_days: u64) {
+        let footgun_reachable = memory_enabled && knowledge_retention_days == 0;
+        debug_assert!(
+            !footgun_reachable,
+            "knowledge_retention_days == 0 reached SphinxAgent::tick() with memory.enabled; \
+             MemoryConfig::validate() should have rejected this configuration before it ever \
+             reached the runtime"
+        );
+        if footgun_reachable {
+            tracing::warn!(
+                target: "swarm_runtime::sphinx_agent",
+                "knowledge_retention_days is 0 while memory.enabled=true -- prune_stale will \
+                 no-op on every tick and the knowledge graph will grow unbounded; this \
+                 configuration should have been rejected by MemoryConfig::validate()"
+            );
+        }
+    }
 }
 
 #[async_trait]
@@ -889,6 +927,10 @@ impl SwarmAgent for SphinxAgent {
                 changed |= self.link_deception_interaction(&observation_id, deposit, &payload);
             }
         }
+        Self::warn_if_retention_footgun_reachable(
+            self.memory_enabled,
+            self.knowledge_retention_days,
+        );
         changed |= self
             .graph
             .prune_stale(env.now.saturating_mul(1000), self.knowledge_retention_days);
@@ -2692,7 +2734,7 @@ fn signed_memory_query_deposit(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        CausalEdge, CausalRelation, DeceptionAssetNode, EntityEdge, EntityKind,
+        CausalEdge, CausalRelation, DeceptionAssetNode, EntityEdge, EntityKind, EntityNode,
         FileKnowledgeGraphStore, KnowledgeEdgeKind, KnowledgeGraphEdge, KnowledgeGraphNode,
         KnowledgeGraphSnapshot, KnowledgeNodeKind, SphinxAgent, entity_node_id, file_node_id,
         network_flow_node_id, parse_memory_query, process_key_node_id, signed_memory_query_deposit,
@@ -4164,5 +4206,353 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].node_ids, vec!["a"]);
         assert!(paths[0].edge_ids.is_empty());
+    }
+
+    /// GRAPH-04/05/06: `prune_stale`'s GC bounding + retention-footgun tests.
+    /// A nested module (rather than more top-level `tests` items) so the
+    /// proptest-only imports (`proptest::prelude::*`) stay scoped to the code
+    /// that actually needs them. `use super::*` inherits every helper this
+    /// module's parent (`tests`) already defines -- `env`, `configure_memory`,
+    /// `temp_root`, `config_path`, `substrate`, `test_signing_key`, the
+    /// `KnowledgeGraphSnapshot`/`KnowledgeGraphNode`/... imports, etc.
+    mod graph_gc {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::BTreeSet;
+
+        /// A minimal, generic-shape node for GC testing: `prune_stale` only
+        /// ever inspects a node through the kind-agnostic `node_id()` /
+        /// `last_observed_at_ms()` accessors, so an `EntityNode` exercises
+        /// exactly the same GC code path any other `KnowledgeGraphNode`
+        /// variant would.
+        fn synthetic_entity_node(
+            node_id: impl Into<String>,
+            last_observed_at_ms: i64,
+        ) -> KnowledgeGraphNode {
+            let node_id = node_id.into();
+            KnowledgeGraphNode::Entity(EntityNode {
+                node_id: node_id.clone(),
+                entity_kind: EntityKind::Host,
+                value: node_id,
+                first_observed_at_ms: last_observed_at_ms,
+                last_observed_at_ms,
+                observation_count: 1,
+            })
+        }
+
+        fn synthetic_causal_edge(
+            edge_id: impl Into<String>,
+            from_node_id: impl Into<String>,
+            to_node_id: impl Into<String>,
+            last_observed_at_ms: i64,
+        ) -> KnowledgeGraphEdge {
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                edge_id: edge_id.into(),
+                from_node_id: from_node_id.into(),
+                to_node_id: to_node_id.into(),
+                relation: CausalRelation::ProcessParentChild,
+                first_observed_at_ms: last_observed_at_ms,
+                last_observed_at_ms,
+                occurrence_count: 1,
+            })
+        }
+
+        /// Mirrors `KnowledgeGraphSnapshot::prune_stale`'s own cutoff
+        /// arithmetic, so these tests check the GRAPH-04 in-window-survives
+        /// invariant against the exact cutoff `prune_stale` computes rather
+        /// than an approximation of it.
+        fn retention_cutoff_ms(now_ms: i64, retention_days: u64) -> i64 {
+            let retention_window_ms = retention_days.saturating_mul(86_400_000_u64);
+            now_ms.saturating_sub(retention_window_ms.min(i64::MAX as u64) as i64)
+        }
+
+        #[derive(Debug, Clone)]
+        enum PruneStaleOp {
+            InsertNode {
+                last_observed_offset_ms: i64,
+            },
+            InsertEdge {
+                from_seed: usize,
+                to_seed: usize,
+                last_observed_offset_ms: i64,
+            },
+            AdvanceClock {
+                delta_ms: i64,
+            },
+            Prune,
+        }
+
+        fn prune_stale_op_strategy() -> impl Strategy<Value = PruneStaleOp> {
+            prop_oneof![
+                3 => (-20_000_000i64..=0).prop_map(|last_observed_offset_ms| {
+                    PruneStaleOp::InsertNode { last_observed_offset_ms }
+                }),
+                3 => (0usize..64, 0usize..64, -20_000_000i64..=0).prop_map(
+                    |(from_seed, to_seed, last_observed_offset_ms)| PruneStaleOp::InsertEdge {
+                        from_seed,
+                        to_seed,
+                        last_observed_offset_ms,
+                    }
+                ),
+                2 => (0i64..=(10 * 86_400_000i64))
+                    .prop_map(|delta_ms| PruneStaleOp::AdvanceClock { delta_ms }),
+                2 => Just(PruneStaleOp::Prune),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// GRAPH-04: 256 (>= the required 200) randomized sequences of
+            /// `(insert node, insert edge, advance clock, prune_stale)`,
+            /// asserting after every `prune_stale` call that: (a) no
+            /// surviving edge references a node that was pruned (no
+            /// orphan); (b) no record whose `last_observed_at_ms` is still
+            /// inside the retention window was deleted; (c) an immediate
+            /// second `prune_stale` call with the same `(now_ms,
+            /// retention_days)` changes nothing (idempotent). If this ever
+            /// fails, it is reporting a real `prune_stale` bug, not a test
+            /// artifact -- the oracle sets below are computed from
+            /// `prune_stale`'s own documented cutoff formula and the
+            /// edge-orphan contract it already implements.
+            #[test]
+            fn prune_stale_never_orphans_edges_or_evicts_in_window_records_and_is_idempotent(
+                ops in prop::collection::vec(prune_stale_op_strategy(), 1..40),
+                retention_days in 1u64..30,
+            ) {
+                let mut graph = KnowledgeGraphSnapshot::new(3_600);
+                let mut now_ms: i64 = 0;
+                let mut node_counter: u64 = 0;
+                let mut edge_counter: u64 = 0;
+
+                for op in ops {
+                    match op {
+                        PruneStaleOp::InsertNode { last_observed_offset_ms } => {
+                            node_counter += 1;
+                            let node_id = format!("node-{node_counter}");
+                            let last_observed_at_ms = now_ms.saturating_add(last_observed_offset_ms);
+                            graph.nodes.push(synthetic_entity_node(node_id, last_observed_at_ms));
+                        }
+                        PruneStaleOp::InsertEdge { from_seed, to_seed, last_observed_offset_ms } => {
+                            if graph.nodes.is_empty() {
+                                continue;
+                            }
+                            let from = graph.nodes[from_seed % graph.nodes.len()].node_id().to_string();
+                            let to = graph.nodes[to_seed % graph.nodes.len()].node_id().to_string();
+                            edge_counter += 1;
+                            let edge_id = format!("edge-{edge_counter}");
+                            let last_observed_at_ms = now_ms.saturating_add(last_observed_offset_ms);
+                            graph.edges.push(synthetic_causal_edge(edge_id, from, to, last_observed_at_ms));
+                        }
+                        PruneStaleOp::AdvanceClock { delta_ms } => {
+                            now_ms = now_ms.saturating_add(delta_ms);
+                        }
+                        PruneStaleOp::Prune => {
+                            let cutoff_ms = retention_cutoff_ms(now_ms, retention_days);
+
+                            let must_survive_nodes: BTreeSet<String> = graph
+                                .nodes
+                                .iter()
+                                .filter(|node| node.last_observed_at_ms() >= cutoff_ms)
+                                .map(|node| node.node_id().to_string())
+                                .collect();
+                            let must_survive_edges: BTreeSet<String> = graph
+                                .edges
+                                .iter()
+                                .filter(|edge| {
+                                    edge.last_observed_at_ms() >= cutoff_ms
+                                        && must_survive_nodes.contains(edge.from_node_id())
+                                        && must_survive_nodes.contains(edge.to_node_id())
+                                })
+                                .map(|edge| edge.edge_id().to_string())
+                                .collect();
+
+                            graph.prune_stale(now_ms, retention_days);
+
+                            let post_node_ids: BTreeSet<String> =
+                                graph.nodes.iter().map(|node| node.node_id().to_string()).collect();
+                            let post_edge_ids: BTreeSet<String> =
+                                graph.edges.iter().map(|edge| edge.edge_id().to_string()).collect();
+
+                            // (a) no orphan edges.
+                            for edge in &graph.edges {
+                                prop_assert!(post_node_ids.contains(edge.from_node_id()));
+                                prop_assert!(post_node_ids.contains(edge.to_node_id()));
+                            }
+
+                            // (b) in-window records survive.
+                            for node_id in &must_survive_nodes {
+                                prop_assert!(post_node_ids.contains(node_id));
+                            }
+                            for edge_id in &must_survive_edges {
+                                prop_assert!(post_edge_ids.contains(edge_id));
+                            }
+
+                            // (c) idempotent: an immediate second prune changes nothing.
+                            let nodes_before_second = graph.nodes.len();
+                            let edges_before_second = graph.edges.len();
+                            let second_changed = graph.prune_stale(now_ms, retention_days);
+                            prop_assert!(!second_changed);
+                            prop_assert_eq!(graph.nodes.len(), nodes_before_second);
+                            prop_assert_eq!(graph.edges.len(), edges_before_second);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// GRAPH-05 soak test. One synthetic event lands every
+        /// `SOAK_EVENT_STEP_MS` of simulated clock time.
+        const SOAK_EVENT_STEP_MS: i64 = 1_000;
+
+        /// Deliberately tight (1 day) so a `SOAK_EVENT_COUNT`-event soak --
+        /// which spans `SOAK_EVENT_COUNT * SOAK_EVENT_STEP_MS` ==
+        /// 100_000_000ms =~ 27.8h of simulated time -- outgrows the window
+        /// partway through and forces `prune_stale` to actually evict
+        /// records, not merely to run.
+        const SOAK_RETENTION_DAYS: u64 = 1;
+
+        const SOAK_EVENT_COUNT: usize = 100_000;
+
+        /// GC sweep cadence during the soak, mirroring
+        /// `SphinxAgent::tick()` calling `prune_stale` once per batch of
+        /// processed pheromones rather than once per individual record.
+        const SOAK_PRUNE_INTERVAL: usize = 1_000;
+
+        /// Upper bound on how many events can have a `last_observed_at_ms`
+        /// inside a `SOAK_RETENTION_DAYS`-day window when events land one
+        /// per `SOAK_EVENT_STEP_MS`: `window_ms / step_ms`, +1 for the
+        /// event that lands exactly on the inclusive cutoff boundary.
+        /// = 1 * 86_400_000 / 1_000 + 1 = 86_401.
+        const SOAK_MAX_EVENTS_IN_WINDOW: usize =
+            (SOAK_RETENTION_DAYS as usize * 86_400_000 / SOAK_EVENT_STEP_MS as usize) + 1;
+
+        /// Each soak event inserts exactly one new node (this event's
+        /// entity) and one new edge (chaining it to the immediately
+        /// preceding event's node), so live (node, edge) pairs can never
+        /// exceed `SOAK_MAX_EVENTS_IN_WINDOW` once GC has run: surviving
+        /// edges <= surviving nodes <= `SOAK_MAX_EVENTS_IN_WINDOW`. The
+        /// soak calls `prune_stale` once more right after the final event,
+        /// so no periodic-sweep slop remains by the time the ceiling is
+        /// checked -- `+ 64` is pure boundary-rounding headroom, not slack
+        /// the test relies on to pass. = 2 * 86_401 + 64 = 172_866.
+        const SOAK_GRAPH_SIZE_CEILING: usize = 2 * SOAK_MAX_EVENTS_IN_WINDOW + 64;
+
+        /// GRAPH-05. Replays `SOAK_EVENT_COUNT` (100k) synthetic events
+        /// directly against `KnowledgeGraphSnapshot`'s node/edge vectors and
+        /// its real `prune_stale` GC, sweeping periodically the way
+        /// `SphinxAgent::tick()` calls `prune_stale` once per batch --
+        /// **not** through the full `SphinxAgent::tick()` /
+        /// `FileKnowledgeGraphStore::persist_snapshot` pipeline, which does
+        /// one-file-per-node/edge disk I/O on every changed tick and would
+        /// make a 100k-event run far too slow for the test lane. This is a
+        /// representative reduction: it drives the exact same `prune_stale`
+        /// GC production relies on, just without the persistence
+        /// side-effects that path also triggers.
+        #[test]
+        fn prune_stale_keeps_graph_size_bounded_under_a_100k_event_soak() {
+            let mut graph = KnowledgeGraphSnapshot::new(3_600);
+            let mut now_ms: i64 = 0;
+            let mut previous_node_id: Option<String> = None;
+
+            for event_index in 0..SOAK_EVENT_COUNT {
+                now_ms = now_ms.saturating_add(SOAK_EVENT_STEP_MS);
+                let node_id = format!("soak-node-{event_index}");
+                graph
+                    .nodes
+                    .push(synthetic_entity_node(node_id.clone(), now_ms));
+                if let Some(previous) = previous_node_id.take() {
+                    let edge_id = format!("soak-edge-{event_index}");
+                    graph.edges.push(synthetic_causal_edge(
+                        edge_id,
+                        previous,
+                        node_id.clone(),
+                        now_ms,
+                    ));
+                }
+                previous_node_id = Some(node_id);
+
+                if (event_index + 1) % SOAK_PRUNE_INTERVAL == 0 {
+                    graph.prune_stale(now_ms, SOAK_RETENTION_DAYS);
+                }
+            }
+            // Final sweep: removes any in-flight slop left over from the
+            // last partial `SOAK_PRUNE_INTERVAL` batch before the ceiling is
+            // checked.
+            graph.prune_stale(now_ms, SOAK_RETENTION_DAYS);
+
+            let total_size = graph.nodes.len() + graph.edges.len();
+            assert!(
+                total_size <= SOAK_GRAPH_SIZE_CEILING,
+                "post-GC graph size {total_size} exceeded the GRAPH-05 ceiling \
+                 {SOAK_GRAPH_SIZE_CEILING} -- prune_stale is not bounding growth under \
+                 sustained load"
+            );
+        }
+
+        /// GRAPH-06, part 1: the belt-and-suspenders guard itself. Memory
+        /// enabled + `knowledge_retention_days == 0` is exactly the
+        /// combination `MemoryConfig::validate()` already hard-rejects
+        /// (`swarm-core/src/config/state.rs`); reaching
+        /// `SphinxAgent::tick()` with it anyway (a config that bypassed
+        /// validation) must be loud, not a silent `prune_stale` no-op.
+        #[test]
+        fn warn_if_retention_footgun_reachable_panics_when_memory_enabled_and_retention_is_zero() {
+            let result = std::panic::catch_unwind(|| {
+                SphinxAgent::warn_if_retention_footgun_reachable(true, 0);
+            });
+            assert!(
+                result.is_err(),
+                "GRAPH-06: the defense-in-depth guard must panic (debug_assert) rather than \
+                 silently no-op when memory is enabled and knowledge_retention_days is 0"
+            );
+        }
+
+        /// GRAPH-06, part 2: the guard must stay inert for every
+        /// legitimate combination -- memory disabled (retention_days == 0
+        /// is then a harmless no-op nobody expects GC from), and any
+        /// positive retention window regardless of the memory-enabled
+        /// flag. This is what keeps the guard from becoming a new footgun
+        /// of its own.
+        #[test]
+        fn warn_if_retention_footgun_reachable_is_inert_for_every_legitimate_combination() {
+            SphinxAgent::warn_if_retention_footgun_reachable(false, 0);
+            SphinxAgent::warn_if_retention_footgun_reachable(true, 90);
+            SphinxAgent::warn_if_retention_footgun_reachable(false, 90);
+        }
+
+        /// GRAPH-06, part 3: the runtime path itself, exercised end to end.
+        /// Builds a `SwarmConfig` the way `memory_requires_positive_retention_days_when_enabled`
+        /// (`swarm-core/src/config/tests.rs`) proves `SwarmConfig::validate()`
+        /// would reject -- `memory.enabled = true` with
+        /// `knowledge_retention_days = 0` -- but hands it directly to
+        /// `SphinxAgent::new_with_signing_key` without ever calling
+        /// `validate()`, exactly reproducing a config that bypassed that
+        /// gate. `tick()` must not silently no-op `prune_stale` here: it
+        /// must panic loudly instead.
+        #[tokio::test]
+        #[should_panic(
+            expected = "knowledge_retention_days == 0 reached SphinxAgent::tick() with memory.enabled"
+        )]
+        async fn sphinx_agent_tick_closes_the_graph_06_footgun_loudly_instead_of_silently_no_opping()
+         {
+            let root = temp_root("retention-footgun");
+            let mut config = load_config(config_path()).unwrap();
+            configure_memory(&mut config, &root);
+            // The footgun: this is the exact combination `MemoryConfig::validate()`
+            // rejects -- reached here only because `validate()` was never called.
+            config.memory.knowledge_retention_days = 0;
+
+            let mut agent = SphinxAgent::new_with_signing_key(
+                AgentId::new("sphinx", "primary"),
+                test_signing_key(),
+                config_path(),
+                config.clone(),
+                substrate(&config),
+            )
+            .expect("sphinx agent should initialize");
+
+            let _ = agent.tick(&env(Vec::new(), 1_800_000_000)).await;
+        }
     }
 }
