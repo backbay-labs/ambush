@@ -65,7 +65,8 @@ Production composition must bind a bounded, fsynced, exclusive-writer journal to
 the configured audit directory and preserve the store across runtime reload.
 Corruption, conflicting identity reuse, unavailable storage and exhausted capacity
 must close dispatch. Internal effectful retries must not bypass the reservation.
-Current journal and runtime unit tests and eleven composition regressions pass.
+Current journal and dispatch-specific runtime unit tests and eleven composition
+regressions pass.
 The whole phase remains unaccepted because required network-enabled regressions
 still need terminal evidence. All 17 registered negative tests and full workspace
 Clippy pass; scoped final source review passed with the stated evidence limits.
