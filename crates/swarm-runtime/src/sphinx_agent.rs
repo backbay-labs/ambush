@@ -382,6 +382,11 @@ impl SphinxAgent {
                         }));
                 }
                 Some("execute") => {
+                    // Edge direction is File -> Process here, the REVERSE of
+                    // FileWrite's Process -> File above: on execute the file
+                    // (the image) is the cause and the process is the effect
+                    // (the image spawns the process), whereas on write the
+                    // process is the cause and the file the effect.
                     self.graph
                         .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
                             edge_id: format!(
