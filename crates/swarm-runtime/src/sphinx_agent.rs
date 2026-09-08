@@ -224,6 +224,9 @@ impl SphinxAgent {
         let mut process_node_id = None;
         let mut source_ip_node_id = None;
         let mut destination_ip_node_id = None;
+        let mut source_ip_value = None;
+        let mut destination_ip_value = None;
+        let mut credential_subject_node_id = None;
 
         for entity in &entities {
             let node_id = entity_node_id(entity.kind, &entity.value);
@@ -255,8 +258,15 @@ impl SphinxAgent {
             match entity.role.as_str() {
                 "parent_process" => parent_process_node_id = Some(node_id),
                 "process" => process_node_id = Some(node_id),
-                "source_ip" => source_ip_node_id = Some(node_id),
-                "destination_ip" => destination_ip_node_id = Some(node_id),
+                "source_ip" => {
+                    source_ip_node_id = Some(node_id);
+                    source_ip_value = Some(entity.value.clone());
+                }
+                "destination_ip" => {
+                    destination_ip_node_id = Some(node_id);
+                    destination_ip_value = Some(entity.value.clone());
+                }
+                "credential_subject" => credential_subject_node_id = Some(node_id),
                 _ => {}
             }
         }
@@ -307,6 +317,156 @@ impl SphinxAgent {
                     from_node_id: source,
                     to_node_id: destination,
                     relation: CausalRelation::NetworkFlowOrigin,
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    occurrence_count: 1,
+                }));
+        }
+
+        // GRAPH-01/02: raw-telemetry provenance nodes (Process/File/NetworkFlow)
+        // and the causal relations they carry (FileWrite, FileExecute,
+        // DnsResolution, CredentialAccess). These are additive and only fire
+        // when the observation carries the corresponding raw fact — an
+        // observation lacking these fields produces none of this.
+        let raw_process = extract_process_observation(&deposit.indicator);
+        let raw_process_node_id = raw_process.as_ref().map(|process| {
+            let node_id = process_key_node_id(&process.process_key);
+            self.graph
+                .upsert_node(KnowledgeGraphNode::Process(ProcessNode {
+                    node_id: node_id.clone(),
+                    process_key: process.process_key.clone(),
+                    pid: process.pid,
+                    host_id: process.host_id.clone(),
+                    executable_path: process.executable_path.clone(),
+                    command_line: process.command_line.clone(),
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    observation_count: 1,
+                }));
+            node_id
+        });
+
+        let raw_file_event = extract_file_event_observation(&deposit.indicator);
+        let raw_file_node_id = raw_file_event.as_ref().map(|file_event| {
+            let node_id = file_node_id(&file_event.file_path);
+            self.graph.upsert_node(KnowledgeGraphNode::File(FileNode {
+                node_id: node_id.clone(),
+                file_path: file_event.file_path.clone(),
+                host_id: file_event.host_id.clone(),
+                first_observed_at_ms: observed_at_ms,
+                last_observed_at_ms: observed_at_ms,
+                observation_count: 1,
+            }));
+            node_id
+        });
+
+        if let (Some(process_node), Some(file_node)) = (&raw_process_node_id, &raw_file_node_id) {
+            match raw_file_event
+                .as_ref()
+                .and_then(|file_event| file_event.operation.as_deref())
+            {
+                Some("write") => {
+                    self.graph
+                        .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
+                            edge_id: format!(
+                                "causal:{}:{}:file_write",
+                                sanitize_id(process_node),
+                                sanitize_id(file_node)
+                            ),
+                            from_node_id: process_node.clone(),
+                            to_node_id: file_node.clone(),
+                            relation: CausalRelation::FileWrite,
+                            first_observed_at_ms: observed_at_ms,
+                            last_observed_at_ms: observed_at_ms,
+                            occurrence_count: 1,
+                        }));
+                }
+                Some("execute") => {
+                    self.graph
+                        .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
+                            edge_id: format!(
+                                "causal:{}:{}:file_execute",
+                                sanitize_id(file_node),
+                                sanitize_id(process_node)
+                            ),
+                            from_node_id: file_node.clone(),
+                            to_node_id: process_node.clone(),
+                            relation: CausalRelation::FileExecute,
+                            first_observed_at_ms: observed_at_ms,
+                            last_observed_at_ms: observed_at_ms,
+                            occurrence_count: 1,
+                        }));
+                }
+                _ => {}
+            }
+        }
+
+        let source_port = indicator_port(&deposit.indicator, "source_port");
+        let destination_port = indicator_port(&deposit.indicator, "destination_port");
+        let protocol = indicator_str(&deposit.indicator, "protocol");
+        let raw_network_flow_node_id = if let (Some(source_ip), Some(destination_ip)) =
+            (&source_ip_value, &destination_ip_value)
+        {
+            let node_id = network_flow_node_id(
+                source_ip,
+                source_port,
+                destination_ip,
+                destination_port,
+                protocol.as_deref(),
+            );
+            self.graph
+                .upsert_node(KnowledgeGraphNode::NetworkFlow(NetworkFlowNode {
+                    node_id: node_id.clone(),
+                    source_ip: source_ip.clone(),
+                    source_port,
+                    destination_ip: destination_ip.clone(),
+                    destination_port,
+                    protocol: protocol.clone(),
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    observation_count: 1,
+                }));
+            Some(node_id)
+        } else {
+            None
+        };
+
+        let dns_resolution = extract_dns_resolution_observation(&deposit.indicator);
+        if let (Some(dns), Some(process_node), Some(flow_node)) = (
+            &dns_resolution,
+            &raw_process_node_id,
+            &raw_network_flow_node_id,
+        ) && destination_ip_value.as_deref() == Some(dns.resolved_ip.as_str())
+        {
+            self.graph
+                .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
+                    edge_id: format!(
+                        "causal:{}:{}:dns_resolution",
+                        sanitize_id(process_node),
+                        sanitize_id(flow_node)
+                    ),
+                    from_node_id: process_node.clone(),
+                    to_node_id: flow_node.clone(),
+                    relation: CausalRelation::DnsResolution,
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    occurrence_count: 1,
+                }));
+        }
+
+        if let (Some(process_node), Some(credential_node)) =
+            (&raw_process_node_id, &credential_subject_node_id)
+        {
+            self.graph
+                .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
+                    edge_id: format!(
+                        "causal:{}:{}:credential_access",
+                        sanitize_id(process_node),
+                        sanitize_id(credential_node)
+                    ),
+                    from_node_id: process_node.clone(),
+                    to_node_id: credential_node.clone(),
+                    relation: CausalRelation::CredentialAccess,
                     first_observed_at_ms: observed_at_ms,
                     last_observed_at_ms: observed_at_ms,
                     occurrence_count: 1,
@@ -745,6 +905,9 @@ pub enum KnowledgeNodeKind {
     Entity,
     Engagement,
     DeceptionAsset,
+    Process,
+    File,
+    NetworkFlow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -770,6 +933,10 @@ pub enum EntityKind {
 pub enum CausalRelation {
     ProcessParentChild,
     NetworkFlowOrigin,
+    FileWrite,
+    FileExecute,
+    DnsResolution,
+    CredentialAccess,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -855,6 +1022,58 @@ pub struct DeceptionAssetNode {
     pub last_interaction_at_ms: Option<i64>,
 }
 
+/// Raw-telemetry process node: keyed by a process identity (pid / process-key)
+/// rather than the generic `EntityNode` process-name string. Distinct from
+/// `EngagementNode` (keyed by `observation_id`) and from `EntityNode`
+/// (keyed by a generic `(kind, value)` pair) — this carries the actual
+/// telemetry identifiers needed for fine-grained provenance traversal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessNode {
+    pub node_id: String,
+    pub process_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_line: Option<String>,
+    pub first_observed_at_ms: i64,
+    pub last_observed_at_ms: i64,
+    pub observation_count: usize,
+}
+
+/// Raw-telemetry file node: keyed by a filesystem path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileNode {
+    pub node_id: String,
+    pub file_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+    pub first_observed_at_ms: i64,
+    pub last_observed_at_ms: i64,
+    pub observation_count: usize,
+}
+
+/// Raw-telemetry network-flow node: keyed by the network 5-tuple
+/// (source/destination IP + port, protocol).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetworkFlowNode {
+    pub node_id: String,
+    pub source_ip: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_port: Option<u16>,
+    pub destination_ip: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    pub first_observed_at_ms: i64,
+    pub last_observed_at_ms: i64,
+    pub observation_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TemporalEdge {
     pub edge_id: String,
@@ -909,6 +1128,9 @@ pub enum KnowledgeGraphNode {
     Entity(EntityNode),
     Engagement(EngagementNode),
     DeceptionAsset(DeceptionAssetNode),
+    Process(ProcessNode),
+    File(FileNode),
+    NetworkFlow(NetworkFlowNode),
 }
 
 impl KnowledgeGraphNode {
@@ -919,6 +1141,9 @@ impl KnowledgeGraphNode {
             Self::Entity(node) => &node.node_id,
             Self::Engagement(node) => &node.node_id,
             Self::DeceptionAsset(node) => &node.node_id,
+            Self::Process(node) => &node.node_id,
+            Self::File(node) => &node.node_id,
+            Self::NetworkFlow(node) => &node.node_id,
         }
     }
 
@@ -929,6 +1154,9 @@ impl KnowledgeGraphNode {
             Self::Entity(_) => KnowledgeNodeKind::Entity,
             Self::Engagement(_) => KnowledgeNodeKind::Engagement,
             Self::DeceptionAsset(_) => KnowledgeNodeKind::DeceptionAsset,
+            Self::Process(_) => KnowledgeNodeKind::Process,
+            Self::File(_) => KnowledgeNodeKind::File,
+            Self::NetworkFlow(_) => KnowledgeNodeKind::NetworkFlow,
         }
     }
 
@@ -939,6 +1167,14 @@ impl KnowledgeGraphNode {
             Self::Entity(node) => node.value.clone(),
             Self::Engagement(node) => node.summary.clone(),
             Self::DeceptionAsset(node) => node.playbook_entry.clone(),
+            Self::Process(node) => node
+                .executable_path
+                .clone()
+                .unwrap_or_else(|| node.process_key.clone()),
+            Self::File(node) => node.file_path.clone(),
+            Self::NetworkFlow(node) => {
+                format!("{} -> {}", node.source_ip, node.destination_ip)
+            }
         }
     }
 
@@ -949,6 +1185,9 @@ impl KnowledgeGraphNode {
             Self::Entity(node) => node.last_observed_at_ms,
             Self::Engagement(node) => node.observed_at_ms,
             Self::DeceptionAsset(node) => node.last_observed_at_ms,
+            Self::Process(node) => node.last_observed_at_ms,
+            Self::File(node) => node.last_observed_at_ms,
+            Self::NetworkFlow(node) => node.last_observed_at_ms,
         }
     }
 }
@@ -1463,6 +1702,36 @@ struct EntityObservation {
     value: String,
 }
 
+/// Raw process-identity facts pulled directly off the indicator payload
+/// (pid / process-key), as opposed to the generic process-name `EntityObservation`.
+#[derive(Debug, Clone)]
+struct ProcessObservation {
+    process_key: String,
+    pid: Option<i64>,
+    host_id: Option<String>,
+    executable_path: Option<String>,
+    command_line: Option<String>,
+}
+
+/// Raw file-event facts: a concrete path plus the operation performed on it
+/// (e.g. "write" / "execute"), used to emit `CausalRelation::FileWrite` /
+/// `CausalRelation::FileExecute`.
+#[derive(Debug, Clone)]
+struct FileEventObservation {
+    file_path: String,
+    operation: Option<String>,
+    host_id: Option<String>,
+}
+
+/// A DNS query/answer pair, used to emit `CausalRelation::DnsResolution`
+/// when paired with a raw process and network-flow node. The query name is
+/// required to be present (it is what makes this a DNS fact) but is not
+/// itself needed to build the edge, so only the resolved answer is kept.
+#[derive(Debug, Clone)]
+struct DnsResolutionObservation {
+    resolved_ip: String,
+}
+
 fn merge_node(target: &mut KnowledgeGraphNode, incoming: KnowledgeGraphNode) {
     match (target, incoming) {
         (
@@ -1545,6 +1814,48 @@ fn merge_node(target: &mut KnowledgeGraphNode, incoming: KnowledgeGraphNode) {
                 .last_interaction_at_ms
                 .max(incoming.last_interaction_at_ms);
         }
+        (KnowledgeGraphNode::Process(target), KnowledgeGraphNode::Process(incoming)) => {
+            target.first_observed_at_ms = target
+                .first_observed_at_ms
+                .min(incoming.first_observed_at_ms);
+            target.last_observed_at_ms =
+                target.last_observed_at_ms.max(incoming.last_observed_at_ms);
+            target.observation_count += incoming.observation_count;
+            if incoming.pid.is_some() {
+                target.pid = incoming.pid;
+            }
+            if target.host_id.is_none() {
+                target.host_id = incoming.host_id;
+            }
+            if target.executable_path.is_none() {
+                target.executable_path = incoming.executable_path;
+            }
+            if target.command_line.is_none() {
+                target.command_line = incoming.command_line;
+            }
+        }
+        (KnowledgeGraphNode::File(target), KnowledgeGraphNode::File(incoming)) => {
+            target.first_observed_at_ms = target
+                .first_observed_at_ms
+                .min(incoming.first_observed_at_ms);
+            target.last_observed_at_ms =
+                target.last_observed_at_ms.max(incoming.last_observed_at_ms);
+            target.observation_count += incoming.observation_count;
+            if target.host_id.is_none() {
+                target.host_id = incoming.host_id;
+            }
+        }
+        (KnowledgeGraphNode::NetworkFlow(target), KnowledgeGraphNode::NetworkFlow(incoming)) => {
+            target.first_observed_at_ms = target
+                .first_observed_at_ms
+                .min(incoming.first_observed_at_ms);
+            target.last_observed_at_ms =
+                target.last_observed_at_ms.max(incoming.last_observed_at_ms);
+            target.observation_count += incoming.observation_count;
+            if target.protocol.is_none() {
+                target.protocol = incoming.protocol;
+            }
+        }
         (target, incoming) => *target = incoming,
     }
 }
@@ -1602,6 +1913,7 @@ fn extract_entities(indicator: &Value) -> Vec<EntityObservation> {
         ("destination_ip", EntityKind::IpAddress),
         ("remote_ip", EntityKind::IpAddress),
         ("ip_address", EntityKind::IpAddress),
+        ("credential_subject", EntityKind::User),
     ];
 
     for (field, kind) in candidates {
@@ -1623,6 +1935,64 @@ fn extract_entities(indicator: &Value) -> Vec<EntityObservation> {
         });
     }
     entities
+}
+
+/// Trim+fetch a string field off an indicator payload, treating blank strings
+/// as absent (matches the convention already used by `observation_summary`,
+/// `observation_timestamp_ms`, and `observation_id`).
+fn indicator_str(indicator: &Value, field: &str) -> Option<String> {
+    indicator
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn indicator_port(indicator: &Value, field: &str) -> Option<u16> {
+    indicator
+        .get(field)
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+}
+
+/// Raw process-identity facts (pid / process-key), distinct from the
+/// generic process-name `EntityObservation`. Requires a `pid` or an
+/// explicit `process_key` — without one there is no stable raw identifier
+/// to key a `ProcessNode` on.
+fn extract_process_observation(indicator: &Value) -> Option<ProcessObservation> {
+    let pid = indicator.get("pid").and_then(Value::as_i64);
+    let process_key =
+        indicator_str(indicator, "process_key").or_else(|| pid.map(|pid| format!("pid:{pid}")))?;
+    Some(ProcessObservation {
+        process_key,
+        pid,
+        host_id: indicator_str(indicator, "host_id"),
+        executable_path: indicator_str(indicator, "executable_path"),
+        command_line: indicator_str(indicator, "command_line"),
+    })
+}
+
+/// A concrete file-path fact plus the operation performed on it. Requires
+/// `file_path` — the operation is optional context used to pick between
+/// `CausalRelation::FileWrite` / `CausalRelation::FileExecute`.
+fn extract_file_event_observation(indicator: &Value) -> Option<FileEventObservation> {
+    let file_path = indicator_str(indicator, "file_path")?;
+    Some(FileEventObservation {
+        file_path,
+        operation: indicator_str(indicator, "file_operation"),
+        host_id: indicator_str(indicator, "host_id"),
+    })
+}
+
+/// A DNS query/answer fact. Requires both `dns_query_name` and
+/// `dns_resolved_ip` — a resolution is only a resolution once it has an
+/// answer, and requiring the query name too rules out an observation that
+/// merely happens to carry a bare IP under this field name.
+fn extract_dns_resolution_observation(indicator: &Value) -> Option<DnsResolutionObservation> {
+    indicator_str(indicator, "dns_query_name")?;
+    let resolved_ip = indicator_str(indicator, "dns_resolved_ip")?;
+    Some(DnsResolutionObservation { resolved_ip })
 }
 
 fn extract_attack_techniques(deposit: &PheromoneDeposit) -> Vec<AttackTechniqueObservation> {
@@ -1946,6 +2316,34 @@ fn technique_node_id(technique_id: &str) -> String {
     )
 }
 
+fn process_key_node_id(process_key: &str) -> String {
+    format!("process:{}", sanitize_id(&process_key.to_ascii_lowercase()))
+}
+
+fn file_node_id(file_path: &str) -> String {
+    format!("file:{}", sanitize_id(&file_path.to_ascii_lowercase()))
+}
+
+fn network_flow_node_id(
+    source_ip: &str,
+    source_port: Option<u16>,
+    destination_ip: &str,
+    destination_port: Option<u16>,
+    protocol: Option<&str>,
+) -> String {
+    format!(
+        "network_flow:{}",
+        sanitize_id(&format!(
+            "{}_{}_{}_{}_{}",
+            source_ip.to_ascii_lowercase(),
+            source_port.unwrap_or_default(),
+            destination_ip.to_ascii_lowercase(),
+            destination_port.unwrap_or_default(),
+            protocol.unwrap_or_default().to_ascii_lowercase(),
+        ))
+    )
+}
+
 fn sanitize_id(raw: &str) -> String {
     let mut sanitized = String::with_capacity(raw.len());
     for ch in raw.chars() {
@@ -2124,9 +2522,10 @@ fn signed_memory_query_deposit(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
-        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, parse_memory_query,
-        signed_memory_query_deposit,
+        CausalEdge, CausalRelation, DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore,
+        KnowledgeEdgeKind, KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent,
+        entity_node_id, file_node_id, network_flow_node_id, parse_memory_query,
+        process_key_node_id, signed_memory_query_deposit,
     };
     use crate::AgentTickBoundaryError;
     use crate::calico_agent::{
@@ -2245,6 +2644,41 @@ mod tests {
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
             confidence: 0.97,
+            timestamp,
+            decay_half_life: 3_600.0,
+            agent_id: AgentId::new("whisker", "primary"),
+            agent_identity: String::new(),
+            agent_role: None,
+            signature: Vec::new(),
+            agent_key: Vec::new(),
+        }
+    }
+
+    /// Builds a deposit carrying only `event_id` + `observed_at_ms` plus
+    /// whatever raw-telemetry fields the caller layers in via `extra`. Used
+    /// by the GRAPH-01/02 tests to prove the new node/edge kinds are
+    /// strictly opt-in: an observation without these fields (every existing
+    /// fixture) produces none of the new nodes or relations.
+    fn raw_telemetry_pheromone(
+        event_id: &str,
+        timestamp: i64,
+        extra: serde_json::Value,
+    ) -> PheromoneDeposit {
+        let mut indicator = serde_json::json!({
+            "event_id": event_id,
+            "observed_at_ms": timestamp * 1000,
+        });
+        if let (Some(base), Some(extra_fields)) = (indicator.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra_fields {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+        PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
+            indicator,
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.9,
             timestamp,
             decay_half_life: 3_600.0,
             agent_id: AgentId::new("whisker", "primary"),
@@ -3038,6 +3472,388 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(node_paths.iter().all(|name| !name.contains("stale")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_persists_raw_provenance_nodes_across_restart() {
+        let root = temp_root("raw-provenance");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let deposit = raw_telemetry_pheromone(
+            "evt-raw-1",
+            1_800_900_000,
+            serde_json::json!({
+                "pid": 4821,
+                "host_id": "host-raw",
+                "executable_path": "/usr/bin/curl",
+                "command_line": "curl https://example.com",
+                "file_path": "/tmp/payload.bin",
+                "file_operation": "write",
+                "source_ip": "10.1.1.5",
+                "destination_ip": "203.0.113.9",
+                "source_port": 51_000,
+                "destination_port": 443,
+                "protocol": "tcp",
+            }),
+        );
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(vec![deposit.clone()], 1_800_900_001))
+            .await
+            .expect("sphinx tick should persist raw provenance nodes");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process = snapshot
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                KnowledgeGraphNode::Process(process) => Some(process.clone()),
+                _ => None,
+            })
+            .expect("process node should persist");
+        assert_eq!(process.pid, Some(4821));
+        assert_eq!(process.process_key, "pid:4821");
+        assert_eq!(process.host_id, Some("host-raw".to_string()));
+        assert_eq!(process.executable_path, Some("/usr/bin/curl".to_string()));
+
+        let file = snapshot
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                KnowledgeGraphNode::File(file) => Some(file.clone()),
+                _ => None,
+            })
+            .expect("file node should persist");
+        assert_eq!(file.file_path, "/tmp/payload.bin");
+
+        let flow = snapshot
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                KnowledgeGraphNode::NetworkFlow(flow) => Some(flow.clone()),
+                _ => None,
+            })
+            .expect("network flow node should persist");
+        assert_eq!(flow.source_ip, "10.1.1.5");
+        assert_eq!(flow.destination_ip, "203.0.113.9");
+        assert_eq!(flow.source_port, Some(51_000));
+        assert_eq!(flow.destination_port, Some(443));
+        assert_eq!(flow.protocol, Some("tcp".to_string()));
+
+        let node_kinds = snapshot
+            .nodes
+            .iter()
+            .map(KnowledgeGraphNode::kind)
+            .collect::<Vec<_>>();
+        assert!(node_kinds.contains(&KnowledgeNodeKind::Process));
+        assert!(node_kinds.contains(&KnowledgeNodeKind::File));
+        assert!(node_kinds.contains(&KnowledgeNodeKind::NetworkFlow));
+
+        let mut restarted = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should restore raw provenance nodes");
+        restarted
+            .tick(&env(vec![deposit], 1_800_900_002))
+            .await
+            .expect("duplicate observation should not fail");
+
+        let restored = store
+            .load_snapshot()
+            .expect("snapshot should reload")
+            .expect("snapshot should still exist");
+        assert_eq!(snapshot.nodes.len(), restored.nodes.len());
+        assert_eq!(snapshot.edges.len(), restored.edges.len());
+        assert_eq!(
+            restored
+                .nodes
+                .iter()
+                .find_map(|node| match node {
+                    KnowledgeGraphNode::Process(process) => Some(process.clone()),
+                    _ => None,
+                })
+                .expect("process node should survive restart"),
+            process
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_file_write_relation_when_observation_carries_a_write() {
+        let root = temp_root("file-write");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-write-1",
+                    1_800_910_000,
+                    serde_json::json!({
+                        "pid": 501,
+                        "file_path": "/tmp/out.dat",
+                        "file_operation": "write",
+                    }),
+                )],
+                1_800_910_001,
+            ))
+            .await
+            .expect("sphinx tick should emit a file-write relation");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process_id = process_key_node_id("pid:501");
+        let file_id = file_node_id("/tmp/out.dat");
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::FileWrite,
+                from_node_id,
+                to_node_id,
+                ..
+            }) if from_node_id == &process_id && to_node_id == &file_id
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_file_execute_relation_when_observation_carries_an_execute() {
+        let root = temp_root("file-execute");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-execute-1",
+                    1_800_920_000,
+                    serde_json::json!({
+                        "pid": 502,
+                        "file_path": "/tmp/payload.exe",
+                        "file_operation": "execute",
+                    }),
+                )],
+                1_800_920_001,
+            ))
+            .await
+            .expect("sphinx tick should emit a file-execute relation");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process_id = process_key_node_id("pid:502");
+        let file_id = file_node_id("/tmp/payload.exe");
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::FileExecute,
+                from_node_id,
+                to_node_id,
+                ..
+            }) if from_node_id == &file_id && to_node_id == &process_id
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_dns_resolution_relation_when_observation_carries_a_resolution() {
+        let root = temp_root("dns-resolution");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-dns-1",
+                    1_800_930_000,
+                    serde_json::json!({
+                        "pid": 601,
+                        "source_ip": "10.1.1.7",
+                        "destination_ip": "93.184.216.34",
+                        "dns_query_name": "example.com",
+                        "dns_resolved_ip": "93.184.216.34",
+                    }),
+                )],
+                1_800_930_001,
+            ))
+            .await
+            .expect("sphinx tick should emit a dns-resolution relation");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process_id = process_key_node_id("pid:601");
+        let flow_id = network_flow_node_id("10.1.1.7", None, "93.184.216.34", None, None);
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::DnsResolution,
+                from_node_id,
+                to_node_id,
+                ..
+            }) if from_node_id == &process_id && to_node_id == &flow_id
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_credential_access_relation_when_observation_carries_the_fact() {
+        let root = temp_root("credential-access");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-cred-1",
+                    1_800_940_000,
+                    serde_json::json!({
+                        "pid": 701,
+                        "credential_subject": "svc-backup",
+                    }),
+                )],
+                1_800_940_001,
+            ))
+            .await
+            .expect("sphinx tick should emit a credential-access relation");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process_id = process_key_node_id("pid:701");
+        let credential_id = entity_node_id(EntityKind::User, "svc-backup");
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::CredentialAccess,
+                from_node_id,
+                to_node_id,
+                ..
+            }) if from_node_id == &process_id && to_node_id == &credential_id
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_no_raw_provenance_nodes_for_observations_without_raw_fields() {
+        let root = temp_root("no-raw-provenance");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-plain-1",
+                    1_800_950_000,
+                    serde_json::json!({}),
+                )],
+                1_800_950_001,
+            ))
+            .await
+            .expect("sphinx tick should persist graph state");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let node_kinds = snapshot
+            .nodes
+            .iter()
+            .map(KnowledgeGraphNode::kind)
+            .collect::<Vec<_>>();
+        assert!(!node_kinds.contains(&KnowledgeNodeKind::Process));
+        assert!(!node_kinds.contains(&KnowledgeNodeKind::File));
+        assert!(!node_kinds.contains(&KnowledgeNodeKind::NetworkFlow));
+        assert!(snapshot.edges.iter().all(|edge| !matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::FileWrite
+                    | CausalRelation::FileExecute
+                    | CausalRelation::DnsResolution
+                    | CausalRelation::CredentialAccess,
+                ..
+            })
+        )));
 
         let _ = fs::remove_dir_all(root);
     }
