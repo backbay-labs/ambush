@@ -122,6 +122,7 @@ use crate::sphinx_agent::{
     KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeGraphSnapshot, ProvenancePath,
     SemanticRelation,
 };
+use swarm_spine::{ReconstructedChainHop, ReconstructedKillChain};
 
 /// A prefix shorter than this (a single observed stage with nothing
 /// connected to it) is not a reconstructed chain — mirrors
@@ -455,12 +456,266 @@ fn splice_through_anchor(
     ProvenancePath { node_ids, edge_ids }
 }
 
+/// One side of a cross-hunt kill-chain join candidate (CHAIN-03): an
+/// incident plus the graph node id that anchors its own observations — its
+/// `Engagement` node id in the knowledge graph.
+///
+/// Resolving a `hunt_id`/`CorrelatedIncident` to that anchor id is producer
+/// wiring, the same kind of scope [`load_kill_chain_stage_rules`]'s module
+/// doc and Task 2's report both name as deliberately out of CHAIN-01/02's
+/// scope; [`join_cross_hunt_kill_chain`] follows
+/// `CorrelationEngine::graph_provenance_link`'s existing precedent instead
+/// (`correlation.rs`): that function takes literal graph node ids and
+/// leaves resolving a domain concept to one entirely to its caller, rather
+/// than doing that resolution itself. The caller here already holds both
+/// the `CorrelatedIncident` and the graph snapshot, so it is in the right
+/// position to supply the anchor directly.
+#[derive(Debug, Clone, Copy)]
+pub struct CrossHuntIncidentAnchor<'a> {
+    pub incident_id: &'a str,
+    pub hunt_ids: &'a [String],
+    pub anchor_node_id: &'a str,
+}
+
+/// True only if `node_id` names a `ThreatPattern` node in `snapshot` — the
+/// globally-merged (by `threat_class`, across every hunt's whole lifetime)
+/// node kind that must never be treated as evidence of a genuine
+/// relationship between two otherwise-unrelated hunts. See the module doc's
+/// "hub-degree cap" section for why `Engagement` (single-observation,
+/// single-hunt) is safe here and `ThreatPattern` is not.
+///
+/// Today `ThreatPattern` is the only such globally-merged node kind in this
+/// graph (`Entity`/`Process` nodes are also shared across observations, but
+/// keyed by a concrete entity/process identity rather than by threat
+/// classification alone, so a shared `Entity`/`Process` IS itself
+/// meaningful causal evidence — e.g. two hunts touching the same host or
+/// process — where a shared `ThreatPattern` is not).
+fn is_globally_merged_hub(snapshot: &KnowledgeGraphSnapshot, node_id: &str) -> bool {
+    snapshot.nodes.iter().any(|node| {
+        matches!(node, KnowledgeGraphNode::ThreatPattern(pattern) if pattern.node_id == node_id)
+    })
+}
+
+/// Whether `path` may be trusted as genuine evidence connecting its two
+/// endpoints: true only if NO node anywhere on it (either endpoint or any
+/// interior hop) is a globally-merged hub per [`is_globally_merged_hub`].
+///
+/// This is deliberately stricter than [`stage_connection`]'s hub-degree-cap
+/// reliance: `provenance_paths` only refuses to *expand through* an
+/// over-cap node, so a LOW-degree `ThreatPattern` — e.g. one linked to only
+/// the two hunts under test, nowhere near
+/// `KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP` — would sail through
+/// the cap entirely and still get returned as a "connecting" path. Cross-hunt
+/// joining is exactly the place CHAIN-02/T2's fabricated-bridging failure
+/// mode would resurface if this module trusted `provenance_paths`' hub cap
+/// alone (see the module doc's "hub-degree cap" section and Task 2's
+/// report), so this checks node KIND directly, independent of degree.
+fn path_is_free_of_globally_merged_hubs(
+    snapshot: &KnowledgeGraphSnapshot,
+    path: &ProvenancePath,
+) -> bool {
+    !path
+        .node_ids
+        .iter()
+        .any(|node_id| is_globally_merged_hub(snapshot, node_id))
+}
+
+/// A bounded-hop connection between `from` and `to` that is genuine causal
+/// evidence — not merely a shared, globally-merged hub. Tries
+/// `KnowledgeGraphSnapshot::provenance_paths` (the graph's sole traversal
+/// API) directly, then rejects the result unless it is free of every
+/// globally-merged hub per [`path_is_free_of_globally_merged_hubs`].
+///
+/// `provenance_paths` returns at most one path (its BFS returns as soon as
+/// it reaches `to`), so there is no "try a different path" fallback here:
+/// if the one path it finds is hub-bridged, this reports no connection at
+/// all, the same fail-closed choice [`stage_connection`]'s callers already
+/// make for "not the same chain" -- a false negative (missing a genuine but
+/// longer alternate path) is preferable to a false positive (trusting a
+/// fabricated bridge).
+fn hub_free_connection(
+    snapshot: &KnowledgeGraphSnapshot,
+    from: &str,
+    to: &str,
+    max_hops: usize,
+) -> Option<ProvenancePath> {
+    let path = snapshot
+        .provenance_paths(from, to, max_hops)
+        .into_iter()
+        .next()?;
+    if path_is_free_of_globally_merged_hubs(snapshot, &path) {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn hunts_are_disjoint(hunt_ids_a: &[String], hunt_ids_b: &[String]) -> bool {
+    !hunt_ids_a
+        .iter()
+        .any(|hunt_id| hunt_ids_b.contains(hunt_id))
+}
+
+fn to_reconstructed_chain_hop(path: ProvenancePath) -> ReconstructedChainHop {
+    ReconstructedChainHop {
+        node_ids: path.node_ids,
+        edge_ids: path.edge_ids,
+    }
+}
+
+/// Whether `chain`'s own reconstructed evidence is actually reachable from
+/// `anchor` -- i.e. whether this specific rule reconstruction is
+/// attributable to the incident `anchor` anchors, rather than to some other,
+/// unrelated hunt that also happens to share the snapshot. Reuses
+/// [`hub_free_connection`] so a chain can never be attributed to a hunt only
+/// because both touch the same `ThreatPattern`.
+fn chain_is_reachable_from_anchor(
+    snapshot: &KnowledgeGraphSnapshot,
+    chain: &ReconstructedChain,
+    anchor: &str,
+    max_hops: usize,
+) -> bool {
+    chain.node_ids.iter().any(|node_id| {
+        node_id == anchor || hub_free_connection(snapshot, anchor, node_id, max_hops).is_some()
+    })
+}
+
+/// CHAIN-03: joins two incidents that reference DISJOINT `hunt_id`s into ONE
+/// [`ReconstructedKillChain`] per rule, when a genuine causal path in
+/// `snapshot` connects their anchors -- never when the only thing tying them
+/// together is a shared, globally-merged hub such as a `ThreatPattern` node
+/// (see [`hub_free_connection`]; that is not evidence of a real relationship
+/// between the two hunts, exactly the lesson Task 2's `ThreatPattern`
+/// fabricated-bridging fix carries forward into this module's own new
+/// traversal).
+///
+/// Returns one [`ReconstructedKillChain`] for every rule in `rules` whose
+/// whole-snapshot reconstruction (via [`reconstruct_kill_chains`] -- this
+/// function does not re-derive stage-to-stage connectivity, only validates
+/// the cross-hunt link and labels the result) is reachable from BOTH
+/// anchors per [`chain_is_reachable_from_anchor`]; empty when the hunts
+/// are not disjoint, are not connected at all, are connected only via a
+/// rejected hub, or no rule's reconstruction is attributable to both sides.
+pub fn join_cross_hunt_kill_chain(
+    snapshot: &KnowledgeGraphSnapshot,
+    rules: &[KillChainStageRule],
+    incident_a: &CrossHuntIncidentAnchor<'_>,
+    incident_b: &CrossHuntIncidentAnchor<'_>,
+    max_hops: usize,
+    created_at_ms: i64,
+) -> Vec<ReconstructedKillChain> {
+    if !hunts_are_disjoint(incident_a.hunt_ids, incident_b.hunt_ids) {
+        return Vec::new();
+    }
+
+    let Some(bridge) = hub_free_connection(
+        snapshot,
+        incident_a.anchor_node_id,
+        incident_b.anchor_node_id,
+        max_hops,
+    ) else {
+        return Vec::new();
+    };
+
+    let mut hunt_ids = incident_a.hunt_ids.to_vec();
+    for hunt_id in incident_b.hunt_ids {
+        if !hunt_ids.contains(hunt_id) {
+            hunt_ids.push(hunt_id.clone());
+        }
+    }
+    let mut incident_ids = vec![
+        incident_a.incident_id.to_string(),
+        incident_b.incident_id.to_string(),
+    ];
+    incident_ids.sort();
+    let cross_hunt_bridges = vec![to_reconstructed_chain_hop(bridge)];
+
+    reconstruct_kill_chains(snapshot, rules, max_hops)
+        .into_iter()
+        .filter(|chain| {
+            chain_is_reachable_from_anchor(snapshot, chain, incident_a.anchor_node_id, max_hops)
+                && chain_is_reachable_from_anchor(
+                    snapshot,
+                    chain,
+                    incident_b.anchor_node_id,
+                    max_hops,
+                )
+        })
+        .map(|chain| ReconstructedKillChain {
+            chain_id: format!(
+                "chain:{}:{}:{}",
+                chain.rule_id, incident_ids[0], incident_ids[1]
+            ),
+            rule_id: chain.rule_id,
+            rule_name: chain.rule_name,
+            created_at_ms,
+            stages: chain.stages,
+            technique_ids: chain.technique_ids,
+            node_ids: chain.node_ids,
+            hops: chain
+                .hops
+                .into_iter()
+                .map(to_reconstructed_chain_hop)
+                .collect(),
+            hunt_ids: hunt_ids.clone(),
+            incident_ids: incident_ids.clone(),
+            cross_hunt_bridges: cross_hunt_bridges.clone(),
+        })
+        .collect()
+}
+
+/// CHAIN-04: a non-empty, stage-by-stage human-readable narrative of a
+/// [`ReconstructedKillChain`], in reconstructed order (`chain.stages[0]` is
+/// narrated first, matching the rule's declared `attack_chain` order --
+/// [`reconstruct_kill_chains`] never reorders it). Always non-empty: a
+/// persisted `ReconstructedKillChain` always has at least
+/// [`MIN_RECONSTRUCTED_STAGES`] stages, so there is always a header line
+/// plus at least two numbered stage lines.
+pub fn narrate(chain: &ReconstructedKillChain) -> String {
+    let mut lines = Vec::with_capacity(chain.stages.len() + 2);
+
+    let hunts = if chain.hunt_ids.is_empty() {
+        "an unspecified hunt".to_string()
+    } else {
+        chain.hunt_ids.join(", ")
+    };
+    lines.push(format!(
+        "Reconstructed kill chain \"{}\" ({}), spanning hunt(s): {hunts}.",
+        chain.rule_name, chain.rule_id
+    ));
+
+    for (index, (stage, technique_id)) in chain
+        .stages
+        .iter()
+        .zip(chain.technique_ids.iter())
+        .enumerate()
+    {
+        lines.push(format!(
+            "  Stage {}: {stage} (technique {technique_id}).",
+            index + 1
+        ));
+    }
+
+    if chain.hunt_ids.len() > 1 || chain.incident_ids.len() > 1 {
+        lines.push(format!(
+            "This chain spans {} disjoint hunt(s) via {} corroborating causal link(s), \
+             joined from incident(s): {}.",
+            chain.hunt_ids.len(),
+            chain.cross_hunt_bridges.len(),
+            chain.incident_ids.join(", ")
+        ));
+    }
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        KillChainStageRule, KillChainStageTechnique, load_kill_chain_stage_rules,
-        load_kill_chain_stage_rules_from_profile, reconstruct_kill_chains,
+        CrossHuntIncidentAnchor, KillChainStageRule, KillChainStageTechnique,
+        join_cross_hunt_kill_chain, load_kill_chain_stage_rules,
+        load_kill_chain_stage_rules_from_profile, narrate, reconstruct_kill_chains,
     };
     use crate::sequence_detector::KillChainSequenceProfile;
     use crate::sphinx_agent::{
@@ -473,6 +728,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
     use swarm_core::types::Severity;
+    use swarm_spine::ReconstructedKillChain;
 
     fn temp_yaml_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -1030,5 +1286,415 @@ rules:
             reconstructed[0].stages,
             vec!["execution", "defense_evasion", "command_and_control"]
         );
+    }
+
+    /// SC4 / CHAIN-03: two DISJOINT-hunt incidents, each of which reconstructs
+    /// NOTHING on its own (hunt-a alone only ever observed stage 0; hunt-b
+    /// alone only ever observed stages 1-2, so `attack_chain`'s walk from
+    /// index 0 breaks immediately for hunt-b in isolation), joined into ONE
+    /// `ReconstructedKillChain` once a genuine causal edge directly connects
+    /// their own `Engagement` anchors.
+    #[test]
+    fn join_cross_hunt_kill_chain_joins_two_disjoint_hunts_connected_by_a_causal_path() {
+        let rule = rule_fixture();
+        let engagement_a = "engagement:hunt-a";
+        let engagement_b = "engagement:hunt-b";
+
+        let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+        for technique in &rule.attack_chain {
+            snapshot.nodes.push(attack_technique_node(technique));
+        }
+        snapshot.nodes.push(engagement_node(engagement_a));
+        snapshot.nodes.push(engagement_node(engagement_b));
+
+        // hunt-a observed only stage 0 (execution / T1218.007).
+        snapshot
+            .edges
+            .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                edge_id: "semantic:hunt-a:0".to_string(),
+                from_node_id: engagement_a.to_string(),
+                to_node_id: technique_node_id(&rule.attack_chain[0]),
+                relation: SemanticRelation::KillChainStage,
+                kill_chain_stage: rule.attack_chain[0].kill_chain_stage.clone(),
+                first_observed_at_ms: 0,
+                last_observed_at_ms: 0,
+                occurrence_count: 1,
+            }));
+        // hunt-b observed stages 1 and 2 (defense_evasion / T1218.005 and
+        // command_and_control / T1105) -- never stage 0.
+        for technique in &rule.attack_chain[1..] {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                    edge_id: format!("semantic:hunt-b:{}", technique.technique_id),
+                    from_node_id: engagement_b.to_string(),
+                    to_node_id: technique_node_id(technique),
+                    relation: SemanticRelation::KillChainStage,
+                    kill_chain_stage: technique.kill_chain_stage.clone(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+
+        // Confirm neither hunt reconstructs anything on its own before the
+        // bridge is even added -- this is the "not two disjoint incidents"
+        // baseline the join is supposed to improve on.
+        let hunt_a_only = {
+            let mut only_a = KnowledgeGraphSnapshot::new(3_600);
+            only_a
+                .nodes
+                .push(attack_technique_node(&rule.attack_chain[0]));
+            only_a.nodes.push(engagement_node(engagement_a));
+            only_a.edges = snapshot
+                .edges
+                .iter()
+                .filter(|edge| matches!(edge, KnowledgeGraphEdge::Semantic(s) if s.from_node_id == engagement_a))
+                .cloned()
+                .collect();
+            only_a
+        };
+        assert!(
+            reconstruct_kill_chains(&hunt_a_only, std::slice::from_ref(&rule), 4).is_empty(),
+            "hunt-a alone (one observed stage) must not reconstruct a chain"
+        );
+        let hunt_b_only = {
+            let mut only_b = KnowledgeGraphSnapshot::new(3_600);
+            for technique in &rule.attack_chain[1..] {
+                only_b.nodes.push(attack_technique_node(technique));
+            }
+            only_b.nodes.push(engagement_node(engagement_b));
+            only_b.edges = snapshot
+                .edges
+                .iter()
+                .filter(|edge| matches!(edge, KnowledgeGraphEdge::Semantic(s) if s.from_node_id == engagement_b))
+                .cloned()
+                .collect();
+            only_b
+        };
+        assert!(
+            reconstruct_kill_chains(&hunt_b_only, std::slice::from_ref(&rule), 4).is_empty(),
+            "hunt-b alone (missing the rule's declared first stage) must not reconstruct a chain"
+        );
+
+        // Now add the genuine cross-hunt causal link and join.
+        snapshot.edges.push(KnowledgeGraphEdge::Causal(CausalEdge {
+            edge_id: "causal:hunt-a-to-hunt-b".to_string(),
+            from_node_id: engagement_a.to_string(),
+            to_node_id: engagement_b.to_string(),
+            relation: CausalRelation::ProcessParentChild,
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+
+        let incident_a = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-a:1",
+            hunt_ids: &["hunt-a".to_string()],
+            anchor_node_id: engagement_a,
+        };
+        let incident_b = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-b:1",
+            hunt_ids: &["hunt-b".to_string()],
+            anchor_node_id: engagement_b,
+        };
+
+        let joined = join_cross_hunt_kill_chain(
+            &snapshot,
+            std::slice::from_ref(&rule),
+            &incident_a,
+            &incident_b,
+            4,
+            1_700_000_000_000,
+        );
+
+        assert_eq!(
+            joined.len(),
+            1,
+            "the two disjoint hunts must reconstruct into exactly ONE chain, not zero and not two"
+        );
+        let chain = &joined[0];
+        assert_eq!(chain.rule_id, "outlook_mshta_transfer");
+        assert_eq!(
+            chain.stages,
+            vec!["execution", "defense_evasion", "command_and_control"]
+        );
+        assert_eq!(chain.technique_ids, vec!["T1218.007", "T1218.005", "T1105"]);
+        assert_eq!(
+            chain.hunt_ids,
+            vec!["hunt-a".to_string(), "hunt-b".to_string()]
+        );
+        assert_eq!(
+            chain.incident_ids,
+            vec![
+                "incident:hunt-a:1".to_string(),
+                "incident:hunt-b:1".to_string()
+            ]
+        );
+        assert_eq!(chain.cross_hunt_bridges.len(), 1);
+        assert_eq!(
+            chain.cross_hunt_bridges[0].node_ids,
+            vec![engagement_a.to_string(), engagement_b.to_string()]
+        );
+
+        let narrative = narrate(chain);
+        assert!(!narrative.is_empty());
+        assert!(narrative.contains("hunt-a"));
+        assert!(narrative.contains("hunt-b"));
+    }
+
+    /// Security-property pin, mirroring T2's `ThreatPattern` lesson at the
+    /// cross-hunt level: two mutually-disconnected hunts whose ONLY tie is a
+    /// shared `ThreatPattern` node must NOT join into one chain, even though
+    /// a plain `provenance_paths` call WOULD find that 2-hop path (the
+    /// `ThreatPattern`'s degree here is deliberately kept far under
+    /// `PROVENANCE_HUB_DEGREE_CAP`, proving the exclusion is by node KIND,
+    /// not by degree -- the hub-degree cap alone would not have caught this).
+    #[test]
+    fn join_cross_hunt_kill_chain_does_not_bridge_hunts_through_a_shared_threat_pattern() {
+        let rule = rule_fixture();
+        let engagement_a = "engagement:hunt-a";
+        let engagement_b = "engagement:hunt-b";
+        let shared_pattern = "threat_pattern:shared";
+
+        let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+        for technique in &rule.attack_chain {
+            snapshot.nodes.push(attack_technique_node(technique));
+        }
+        snapshot.nodes.push(engagement_node(engagement_a));
+        snapshot.nodes.push(engagement_node(engagement_b));
+        snapshot.nodes.push(threat_pattern_node(shared_pattern));
+
+        snapshot
+            .edges
+            .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                edge_id: "semantic:hunt-a:0".to_string(),
+                from_node_id: engagement_a.to_string(),
+                to_node_id: technique_node_id(&rule.attack_chain[0]),
+                relation: SemanticRelation::KillChainStage,
+                kill_chain_stage: rule.attack_chain[0].kill_chain_stage.clone(),
+                first_observed_at_ms: 0,
+                last_observed_at_ms: 0,
+                occurrence_count: 1,
+            }));
+        for technique in &rule.attack_chain[1..] {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                    edge_id: format!("semantic:hunt-b:{}", technique.technique_id),
+                    from_node_id: engagement_b.to_string(),
+                    to_node_id: technique_node_id(technique),
+                    relation: SemanticRelation::KillChainStage,
+                    kill_chain_stage: technique.kill_chain_stage.clone(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+        // The ONLY thing tying hunt-a and hunt-b together: a shared
+        // ThreatPattern, low-degree (2 edges total), nowhere near the cap.
+        snapshot.edges.push(KnowledgeGraphEdge::Causal(CausalEdge {
+            edge_id: "causal:hunt-a-to-shared-pattern".to_string(),
+            from_node_id: engagement_a.to_string(),
+            to_node_id: shared_pattern.to_string(),
+            relation: CausalRelation::ProcessParentChild,
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+        snapshot.edges.push(KnowledgeGraphEdge::Causal(CausalEdge {
+            edge_id: "causal:shared-pattern-to-hunt-b".to_string(),
+            from_node_id: shared_pattern.to_string(),
+            to_node_id: engagement_b.to_string(),
+            relation: CausalRelation::ProcessParentChild,
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+        let shared_pattern_degree = snapshot
+            .edges
+            .iter()
+            .filter(|edge| match edge {
+                KnowledgeGraphEdge::Causal(causal) => {
+                    causal.from_node_id == shared_pattern || causal.to_node_id == shared_pattern
+                }
+                _ => false,
+            })
+            .count();
+        assert!(
+            shared_pattern_degree <= KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP,
+            "test setup must prove the exclusion is by node KIND, not merely by degree; \
+             got degree {shared_pattern_degree}, which must stay under the cap"
+        );
+
+        let incident_a = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-a:1",
+            hunt_ids: &["hunt-a".to_string()],
+            anchor_node_id: engagement_a,
+        };
+        let incident_b = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-b:1",
+            hunt_ids: &["hunt-b".to_string()],
+            anchor_node_id: engagement_b,
+        };
+
+        // Sanity: a plain, non-hub-aware `provenance_paths` call DOES find
+        // this path -- proving the rejection below comes from the explicit
+        // node-kind check, not from an accidental absence of connectivity.
+        assert!(
+            !snapshot
+                .provenance_paths(engagement_a, engagement_b, 4)
+                .is_empty(),
+            "test setup must have a plain graph-reachable path through the shared pattern"
+        );
+
+        let joined = join_cross_hunt_kill_chain(
+            &snapshot,
+            std::slice::from_ref(&rule),
+            &incident_a,
+            &incident_b,
+            4,
+            1_700_000_000_000,
+        );
+
+        assert!(
+            joined.is_empty(),
+            "a shared ThreatPattern must never bridge two disjoint hunts into a fabricated \
+             cross-hunt chain: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn join_cross_hunt_kill_chain_returns_empty_when_hunt_ids_are_not_disjoint() {
+        let rule = rule_fixture();
+        let engagement_a = "engagement:hunt-shared";
+        let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+        for technique in &rule.attack_chain {
+            snapshot.nodes.push(attack_technique_node(technique));
+        }
+        snapshot.nodes.push(engagement_node(engagement_a));
+
+        let incident_a = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-shared:1",
+            hunt_ids: &["hunt-shared".to_string()],
+            anchor_node_id: engagement_a,
+        };
+        let incident_b = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-shared:2",
+            hunt_ids: &["hunt-shared".to_string()],
+            anchor_node_id: engagement_a,
+        };
+
+        let joined = join_cross_hunt_kill_chain(
+            &snapshot,
+            std::slice::from_ref(&rule),
+            &incident_a,
+            &incident_b,
+            4,
+            1_700_000_000_000,
+        );
+
+        assert!(
+            joined.is_empty(),
+            "two incidents naming the SAME hunt are not a cross-hunt join candidate at all"
+        );
+    }
+
+    /// CHAIN-04: `narrate()` over >= 2 of the REAL `sequences/kill-chain-v1.yaml`
+    /// fixtures, asserting the narrated stage order EXACTLY matches each
+    /// rule's own declared `attack_chain` order, and that the narrative is
+    /// always non-empty.
+    #[test]
+    fn narrate_produces_a_non_empty_stage_by_stage_narrative_matching_each_fixtures_declared_chain()
+    {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let rules_path = repo_root.join("sequences/kill-chain-v1.yaml");
+        let rules = load_kill_chain_stage_rules(&rules_path.display().to_string())
+            .expect("the real sequences/kill-chain-v1.yaml must load");
+
+        for rule_id in ["outlook_mshta_transfer", "remote_service_stager"] {
+            let rule = rules
+                .iter()
+                .find(|rule| rule.rule_id == rule_id)
+                .unwrap_or_else(|| panic!("fixture rule `{rule_id}` must exist in the real file"))
+                .clone();
+            assert!(
+                rule.attack_chain.len() >= 3,
+                "fixture `{rule_id}` must be multi-stage"
+            );
+
+            let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+            for technique in &rule.attack_chain {
+                snapshot.nodes.push(attack_technique_node(technique));
+            }
+            for (index, pair) in rule.attack_chain.windows(2).enumerate() {
+                snapshot.edges.push(KnowledgeGraphEdge::Causal(CausalEdge {
+                    edge_id: format!("causal:{rule_id}:{index}"),
+                    from_node_id: technique_node_id(&pair[0]),
+                    to_node_id: technique_node_id(&pair[1]),
+                    relation: CausalRelation::ProcessParentChild,
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+            }
+
+            let reconstructed = reconstruct_kill_chains(&snapshot, std::slice::from_ref(&rule), 1);
+            assert_eq!(
+                reconstructed.len(),
+                1,
+                "fixture `{rule_id}` must fully reconstruct from its own direct causal chain"
+            );
+            let declared_order = rule
+                .attack_chain
+                .iter()
+                .map(|technique| technique.kill_chain_stage.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                reconstructed[0].stages, declared_order,
+                "reconstruction itself must match the fixture's declared attack_chain order"
+            );
+
+            let chain = ReconstructedKillChain {
+                chain_id: format!("chain:{rule_id}:hunt-narrate"),
+                rule_id: reconstructed[0].rule_id.clone(),
+                rule_name: reconstructed[0].rule_name.clone(),
+                created_at_ms: 1_700_000_000_000,
+                stages: reconstructed[0].stages.clone(),
+                technique_ids: reconstructed[0].technique_ids.clone(),
+                node_ids: reconstructed[0].node_ids.clone(),
+                hops: reconstructed[0]
+                    .hops
+                    .iter()
+                    .cloned()
+                    .map(super::to_reconstructed_chain_hop)
+                    .collect(),
+                hunt_ids: vec!["hunt-narrate".to_string()],
+                incident_ids: Vec::new(),
+                cross_hunt_bridges: Vec::new(),
+            };
+
+            let narrative = narrate(&chain);
+            assert!(
+                !narrative.is_empty(),
+                "narrate() must always produce a non-empty narrative"
+            );
+
+            let narrated_stage_order = narrative
+                .lines()
+                .filter_map(|line| {
+                    let trimmed = line.trim_start();
+                    let rest = trimmed.strip_prefix("Stage ")?;
+                    let (_, rest) = rest.split_once(": ")?;
+                    let (stage, _) = rest.split_once(" (technique ")?;
+                    Some(stage.to_string())
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                narrated_stage_order, declared_order,
+                "fixture `{rule_id}`: narrated stage order must exactly match the declared \
+                 attack_chain order"
+            );
+        }
     }
 }

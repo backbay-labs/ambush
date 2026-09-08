@@ -269,6 +269,62 @@ impl IncidentRecord {
     }
 }
 
+/// One hop of knowledge-graph evidence connecting two consecutive elements
+/// of a [`ReconstructedKillChain`] — a spine-local mirror of
+/// `swarm-runtime::sphinx_agent::ProvenancePath` (the ordered node/edge id
+/// sequence a `KnowledgeGraphSnapshot::provenance_paths` call discovered).
+/// `swarm-spine` is part of the trusted computing base (ADR 0009) and may
+/// never depend on `swarm-runtime` (`tools/check-workspace-layering.sh`), so
+/// this carries only plain ids rather than borrowing swarm-runtime's own
+/// graph-evidence type; `swarm-runtime` converts `ProvenancePath` into this
+/// shape when it persists a chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ReconstructedChainHop {
+    pub node_ids: Vec<String>,
+    pub edge_ids: Vec<String>,
+}
+
+/// A `sequences/kill-chain-v1.yaml` rule's declared kill-chain stage
+/// sequence, reconstructed from durable knowledge-graph evidence
+/// (`swarm-runtime`'s CHAIN-01 `chain_reconstruction` module) and persisted
+/// alongside [`IncidentRecord`] (CHAIN-03).
+///
+/// `stages`/`technique_ids`/`node_ids` are parallel (same length, same
+/// order, the rule's declared prefix that was actually observed and
+/// connected); `hops[i]` is the evidence connecting `node_ids[i]` to
+/// `node_ids[i + 1]`, so `hops.len() == node_ids.len() - 1`.
+///
+/// `hunt_ids`/`incident_ids` name every hunt/incident this chain's evidence
+/// touches. Most chains span exactly one hunt. CHAIN-03: when the
+/// reconstructed evidence connects observations from two or more DISJOINT
+/// `hunt_id`s via a genuine causal path in the graph — never merely via a
+/// shared, globally-merged hub such as a `ThreatPattern` node, which is not
+/// evidence of a real relationship between those hunts — this names every
+/// hunt/incident it spans, and `cross_hunt_bridges` carries the causal-path
+/// evidence that justified joining them (kept separate from `hops`, which
+/// stays the strict per-stage parallel array in both the single- and
+/// multi-hunt case: a bridge connects two INCIDENTS' anchors, not two
+/// consecutive `attack_chain` stages, so folding it into `hops` would break
+/// `hops.len() == node_ids.len() - 1`). Empty for a chain that spans only
+/// one hunt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReconstructedKillChain {
+    pub chain_id: String,
+    pub rule_id: String,
+    pub rule_name: String,
+    pub created_at_ms: i64,
+    pub stages: Vec<String>,
+    pub technique_ids: Vec<String>,
+    pub node_ids: Vec<String>,
+    #[serde(default)]
+    pub hops: Vec<ReconstructedChainHop>,
+    pub hunt_ids: Vec<String>,
+    #[serde(default)]
+    pub incident_ids: Vec<String>,
+    #[serde(default)]
+    pub cross_hunt_bridges: Vec<ReconstructedChainHop>,
+}
+
 /// Loaded incident artifact with its persisted metadata.
 #[derive(Debug, Clone)]
 pub struct IncidentLookup {
@@ -334,6 +390,23 @@ pub trait IncidentStore: Send + Sync {
     fn load_by_hunt_id(&self, hunt_id: &str) -> Result<Option<IncidentLookup>, IncidentStoreError>;
     fn recent(&self, limit: usize) -> Result<Vec<IncidentRecord>, IncidentStoreError>;
     fn health(&self) -> Result<IncidentStoreHealth, IncidentStoreError>;
+
+    /// Persists a [`ReconstructedKillChain`] (CHAIN-03), alongside (not
+    /// instead of) whatever `IncidentRecord`(s) it was reconstructed from.
+    /// Replaces any existing chain with the same `chain_id`, the same
+    /// upsert-by-id shape [`persist`](IncidentStore::persist) uses for
+    /// incidents.
+    fn persist_kill_chain(
+        &self,
+        chain: &ReconstructedKillChain,
+    ) -> Result<ReconstructedKillChain, IncidentStoreError>;
+
+    /// Loads a previously persisted [`ReconstructedKillChain`] by its
+    /// `chain_id`. `Ok(None)` if no chain with that id was ever persisted.
+    fn load_kill_chain_by_id(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<ReconstructedKillChain>, IncidentStoreError>;
 }
 
 /// Configured incident store backend.
@@ -416,12 +489,33 @@ impl IncidentStore for ConfiguredIncidentStore {
             Self::LocalFiles(store) => store.health(),
         }
     }
+
+    fn persist_kill_chain(
+        &self,
+        chain: &ReconstructedKillChain,
+    ) -> Result<ReconstructedKillChain, IncidentStoreError> {
+        match self {
+            Self::Memory(store) => store.persist_kill_chain(chain),
+            Self::LocalFiles(store) => store.persist_kill_chain(chain),
+        }
+    }
+
+    fn load_kill_chain_by_id(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<ReconstructedKillChain>, IncidentStoreError> {
+        match self {
+            Self::Memory(store) => store.load_kill_chain_by_id(chain_id),
+            Self::LocalFiles(store) => store.load_kill_chain_by_id(chain_id),
+        }
+    }
 }
 
 /// In-memory incident store for tests and operator snapshots.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryIncidentStore {
     incidents: Arc<RwLock<Vec<CorrelatedIncident>>>,
+    kill_chains: Arc<RwLock<Vec<ReconstructedKillChain>>>,
 }
 
 impl IncidentStore for MemoryIncidentStore {
@@ -545,6 +639,33 @@ impl IncidentStore for MemoryIncidentStore {
             details: "ephemeral in-process incident store".to_string(),
         })
     }
+
+    fn persist_kill_chain(
+        &self,
+        chain: &ReconstructedKillChain,
+    ) -> Result<ReconstructedKillChain, IncidentStoreError> {
+        let mut guard = self
+            .kill_chains
+            .write()
+            .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        guard.retain(|existing| existing.chain_id != chain.chain_id);
+        guard.push(chain.clone());
+        Ok(chain.clone())
+    }
+
+    fn load_kill_chain_by_id(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<ReconstructedKillChain>, IncidentStoreError> {
+        let guard = self
+            .kill_chains
+            .read()
+            .map_err(|_| IncidentStoreError::PoisonedLock)?;
+        Ok(guard
+            .iter()
+            .find(|chain| chain.chain_id == chain_id)
+            .cloned())
+    }
 }
 
 /// File-backed incident store for restart-safe review artifacts.
@@ -560,11 +681,26 @@ impl FileIncidentStore {
             path: root.clone(),
             source,
         })?;
+        fs::create_dir_all(root.join("kill_chains")).map_err(|source| {
+            IncidentStoreError::Write {
+                path: root.clone(),
+                source,
+            }
+        })?;
         Ok(Self { root })
     }
 
     fn incidents_dir(&self) -> PathBuf {
         self.root.join("incidents")
+    }
+
+    fn kill_chains_dir(&self) -> PathBuf {
+        self.root.join("kill_chains")
+    }
+
+    fn kill_chain_path(&self, chain_id: &str) -> PathBuf {
+        self.kill_chains_dir()
+            .join(format!("{}.json", sanitize_id(chain_id)))
     }
 
     fn index_path(&self) -> PathBuf {
@@ -739,6 +875,41 @@ impl IncidentStore for FileIncidentStore {
             stored_incidents,
             details: format!("incident directory at {}", self.root.display()),
         })
+    }
+
+    fn persist_kill_chain(
+        &self,
+        chain: &ReconstructedKillChain,
+    ) -> Result<ReconstructedKillChain, IncidentStoreError> {
+        fs::create_dir_all(self.kill_chains_dir()).map_err(|source| IncidentStoreError::Write {
+            path: self.root.clone(),
+            source,
+        })?;
+        let path = self.kill_chain_path(&chain.chain_id);
+        let raw =
+            serde_json::to_string_pretty(chain).map_err(|source| IncidentStoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        fs::write(&path, raw).map_err(|source| IncidentStoreError::Write { path, source })?;
+        Ok(chain.clone())
+    }
+
+    fn load_kill_chain_by_id(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<ReconstructedKillChain>, IncidentStoreError> {
+        let path = self.kill_chain_path(chain_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| IncidentStoreError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let chain = serde_json::from_str(&raw)
+            .map_err(|source| IncidentStoreError::Parse { path, source })?;
+        Ok(Some(chain))
     }
 }
 
@@ -917,7 +1088,8 @@ mod tests {
     use super::{
         AnalystFeedbackAuditEntry, ConfiguredIncidentStore, CorrelatedIncident, ExternalReference,
         FileIncidentStore, IncidentEvidenceLink, IncidentGraphDimension, IncidentMemberDecision,
-        IncidentStore, IncidentStoreHealth,
+        IncidentStore, IncidentStoreHealth, MemoryIncidentStore, ReconstructedChainHop,
+        ReconstructedKillChain,
     };
     use swarm_core::config::BundleStoreConfig;
     use swarm_core::pheromone::ThreatClass;
@@ -1116,6 +1288,181 @@ mod tests {
         assert_eq!(
             reloaded.incident.feedback_audit_entries[0].action,
             ProvidenceFeedbackAction::Dismiss
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CHAIN-03: a reconstructed, potentially cross-hunt kill chain,
+    /// persisted alongside (not instead of) `IncidentRecord`.
+    fn sample_kill_chain() -> ReconstructedKillChain {
+        ReconstructedKillChain {
+            chain_id: "chain:outlook_mshta_transfer:hunt-1:hunt-2".to_string(),
+            rule_id: "outlook_mshta_transfer".to_string(),
+            rule_name: "Outlook installer proxy to mshta download chain".to_string(),
+            created_at_ms: 1_700_000_000_900,
+            stages: vec![
+                "execution".to_string(),
+                "defense_evasion".to_string(),
+                "command_and_control".to_string(),
+            ],
+            technique_ids: vec![
+                "T1218.007".to_string(),
+                "T1218.005".to_string(),
+                "T1105".to_string(),
+            ],
+            node_ids: vec![
+                "attack_technique:T1218.007".to_string(),
+                "attack_technique:T1218.005".to_string(),
+                "attack_technique:T1105".to_string(),
+            ],
+            hops: vec![
+                ReconstructedChainHop {
+                    node_ids: vec![
+                        "attack_technique:T1218.007".to_string(),
+                        "engagement:hunt-1".to_string(),
+                        "attack_technique:T1218.005".to_string(),
+                    ],
+                    edge_ids: vec!["semantic:1".to_string(), "semantic:2".to_string()],
+                },
+                ReconstructedChainHop {
+                    node_ids: vec![
+                        "attack_technique:T1218.005".to_string(),
+                        "engagement:hunt-2".to_string(),
+                        "attack_technique:T1105".to_string(),
+                    ],
+                    edge_ids: vec!["semantic:2".to_string(), "semantic:3".to_string()],
+                },
+            ],
+            hunt_ids: vec!["hunt-1".to_string(), "hunt-2".to_string()],
+            incident_ids: vec![
+                "incident:hunt-1:1".to_string(),
+                "incident:hunt-2:1".to_string(),
+            ],
+            cross_hunt_bridges: vec![ReconstructedChainHop {
+                node_ids: vec![
+                    "engagement:hunt-1".to_string(),
+                    "engagement:hunt-2".to_string(),
+                ],
+                edge_ids: vec!["causal:bridge".to_string()],
+            }],
+        }
+    }
+
+    #[test]
+    fn memory_store_persists_and_reloads_a_reconstructed_kill_chain() {
+        let store = MemoryIncidentStore::default();
+        let chain = sample_kill_chain();
+
+        let persisted = store.persist_kill_chain(&chain).unwrap();
+        assert_eq!(persisted, chain);
+
+        let reloaded = store.load_kill_chain_by_id(&chain.chain_id).unwrap();
+        assert_eq!(reloaded, Some(chain));
+
+        assert!(
+            store
+                .load_kill_chain_by_id("chain:does-not-exist")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn memory_store_persist_kill_chain_upserts_by_chain_id() {
+        let store = MemoryIncidentStore::default();
+        let mut chain = sample_kill_chain();
+        store.persist_kill_chain(&chain).unwrap();
+
+        chain.hunt_ids.push("hunt-3".to_string());
+        store.persist_kill_chain(&chain).unwrap();
+
+        let reloaded = store
+            .load_kill_chain_by_id(&chain.chain_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reloaded.hunt_ids,
+            vec![
+                "hunt-1".to_string(),
+                "hunt-2".to_string(),
+                "hunt-3".to_string()
+            ],
+            "persisting again with the same chain_id must replace, not duplicate, the entry"
+        );
+    }
+
+    /// The persist-alongside-`IncidentRecord` shape: both an incident and
+    /// the kill chain it was reconstructed from live in the same
+    /// file-backed store, independently reloadable, and a fresh
+    /// `FileIncidentStore::open` (a new process attaching to the same
+    /// directory) sees both — proving this is durable, not merely
+    /// in-process.
+    #[test]
+    fn file_store_persists_and_reloads_a_reconstructed_kill_chain_alongside_the_incident() {
+        let root = std::env::temp_dir().join("swarm-spine-incidents-kill-chains");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FileIncidentStore::open(&root).unwrap();
+
+        let incident = sample_incident();
+        let incident_record = store.persist(&incident).unwrap();
+
+        let chain = sample_kill_chain();
+        let persisted_chain = store.persist_kill_chain(&chain).unwrap();
+        assert_eq!(persisted_chain, chain);
+
+        // Existing incident persistence is untouched by the new sibling
+        // write.
+        let reloaded_incident = store
+            .load_by_incident_id(&incident_record.incident_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded_incident.incident.incident_id, incident.incident_id);
+
+        // A brand-new store handle over the same directory (simulating a
+        // restart) still finds the persisted chain.
+        let reopened = FileIncidentStore::open(&root).unwrap();
+        let reloaded_chain = reopened
+            .load_kill_chain_by_id(&chain.chain_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded_chain, chain);
+        assert_eq!(
+            reloaded_chain.hunt_ids,
+            vec!["hunt-1".to_string(), "hunt-2".to_string()]
+        );
+
+        assert!(
+            reopened
+                .load_kill_chain_by_id("chain:never-persisted")
+                .unwrap()
+                .is_none()
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configured_store_persists_and_reloads_a_reconstructed_kill_chain() {
+        let chain = sample_kill_chain();
+
+        let memory = ConfiguredIncidentStore::from_config(&BundleStoreConfig::Memory).unwrap();
+        memory.persist_kill_chain(&chain).unwrap();
+        assert_eq!(
+            memory.load_kill_chain_by_id(&chain.chain_id).unwrap(),
+            Some(chain.clone())
+        );
+
+        let root = std::env::temp_dir().join("swarm-spine-configured-kill-chains");
+        let _ = std::fs::remove_dir_all(&root);
+        let local = ConfiguredIncidentStore::from_config(&BundleStoreConfig::LocalFiles {
+            directory: root.display().to_string(),
+        })
+        .unwrap();
+        local.persist_kill_chain(&chain).unwrap();
+        assert_eq!(
+            local.load_kill_chain_by_id(&chain.chain_id).unwrap(),
+            Some(chain)
         );
 
         let _ = std::fs::remove_dir_all(root);
