@@ -34,14 +34,12 @@
 //!    an `AttackTechniqueNode` with that `technique_id` exists anywhere in
 //!    the snapshot (nodes merge by `technique_id`, so there is at most one).
 //!    The first technique with no matching node ends the walk.
-//! 2. For each consecutive pair in that run, call
-//!    [`KnowledgeGraphSnapshot::provenance_paths`] (the Phase 296 traversal —
-//!    the graph's SOLE multi-hop read path; this module never re-walks
-//!    `edges`/`nodes` to build its own adjacency) bounded by `max_hops`. If
-//!    no path connects them — including through a shared `Engagement` hub,
-//!    a causal chain (`ProcessParentChild`/`NetworkFlowOrigin`/...), or a
-//!    temporal co-occurrence edge — the run stops there too: two techniques
-//!    that were each observed but never in the same causal/temporal/semantic
+//! 2. For each consecutive pair in that run, [`stage_connection`] decides
+//!    whether they are connected within `max_hops`. If no path connects
+//!    them — including through a shared `Engagement` hub, a causal chain
+//!    (`ProcessParentChild`/`NetworkFlowOrigin`/...), or a temporal
+//!    co-occurrence edge — the run stops there too: two techniques that
+//!    were each observed but never in the same causal/temporal/semantic
 //!    context are not treated as one kill chain.
 //! 3. The longest such run, if it reaches at least
 //!    [`MIN_RECONSTRUCTED_STAGES`] stages, is returned as a
@@ -54,6 +52,52 @@
 //! reconstruction is the same "prefix of the declared order" shape, read
 //! back out of durable graph evidence instead of a live event window.
 //!
+//! ## The hub-degree cap, and why a naive pairwise walk is not enough
+//!
+//! [`KnowledgeGraphSnapshot::provenance_paths`] is the graph's SOLE
+//! multi-hop read path (this module never re-walks `edges`/`nodes` to build
+//! its own adjacency), and [`stage_connection`] always tries it directly
+//! first: `provenance_paths(stage_i, stage_j, max_hops)`. For a CHAIN-02
+//! sequence match this walks `stage_i -> Engagement -> stage_j` — but the
+//! Engagement is reached at hop > 0 in that call, so Phase 296's hub-degree
+//! cap (`PROVENANCE_HUB_DEGREE_CAP`, 32) applies to it: if that Engagement's
+//! TOTAL degree exceeds the cap it is never expanded through. Critically,
+//! that degree is not just this chain's 3-ish stage edges — every OTHER
+//! edge the Engagement carries counts too, including entity edges to
+//! unrelated entities and one temporal edge per OTHER engagement sharing an
+//! entity in the temporal window (`sphinx_agent.rs`'s `ingest_pheromone`,
+//! ~531-568). A busy Engagement can cross 32 for reasons that have nothing
+//! to do with this specific rule match, and a naive pairwise walk would
+//! then silently return no reconstruction for an already-detected,
+//! legitimate multi-stage chain.
+//!
+//! `provenance_paths`'s cap explicitly EXEMPTS the literal `from` node's own
+//! first expansion (it is the query's own starting point, not a hub the
+//! search wandered into). So when the direct pairwise call fails,
+//! `stage_connection` falls back to querying FROM every KillChainStage
+//! anchor already known to reach either stage (an Engagement or
+//! ThreatPattern node — both emit `Engagement/ThreatPattern -> technique`
+//! KillChainStage edges; see `sphinx_agent.rs`'s generic technique emission
+//! and CHAIN-02's `extract_kill_chain_sequence_match`), found by
+//! [`kill_chain_stage_anchors`] (a plain edge-attribute scan, not a second
+//! traversal): `provenance_paths(anchor, stage_i, max_hops)` and
+//! `provenance_paths(anchor, stage_j, max_hops)`, each with the anchor as
+//! the literal `from` and therefore cap-exempt for its own first expansion.
+//! If both succeed the two paths are spliced (via [`splice_through_anchor`])
+//! into the logical `stage_i -> anchor -> stage_j` path. This is safe
+//! precisely because the anchor is not an arbitrary node the walk happened
+//! to pass through — it is the specific Engagement/ThreatPattern that
+//! ALREADY, independently, fanned a KillChainStage edge out to one of
+//! these two stages, i.e. the observation record that produced the very
+//! evidence being reconstructed, not a foreign hub bridging unrelated
+//! hunts. A rule whose stages happen to span multiple such anchors
+//! connected to each other by causal/temporal edges is still handled by the
+//! direct pairwise call as long as those intermediate anchors individually
+//! stay under the cap; a chain that would need to bridge through more than
+//! one OVER-cap anchor remains a known, narrower residual limitation (see
+//! the regression test `reconstruct_kill_chains_survives_a_high_degree_engagement_hub`
+//! for the case this fallback does cover).
+//!
 //! Read-only: nothing here calls `upsert_node`/`upsert_edge` or otherwise
 //! mutates a `KnowledgeGraphSnapshot`.
 
@@ -61,7 +105,10 @@ use serde::Deserialize;
 use std::fs;
 
 use crate::sequence_detector::KillChainSequenceProfile;
-use crate::sphinx_agent::{KnowledgeGraphNode, KnowledgeGraphSnapshot, ProvenancePath};
+use crate::sphinx_agent::{
+    KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeGraphSnapshot, ProvenancePath,
+    SemanticRelation,
+};
 
 /// A prefix shorter than this (a single observed stage with nothing
 /// connected to it) is not a reconstructed chain — mirrors
@@ -222,11 +269,7 @@ fn reconstruct_rule(
             break;
         };
         if let Some(previous_node_id) = node_ids.last() {
-            let Some(hop) = snapshot
-                .provenance_paths(previous_node_id, &node_id, max_hops)
-                .into_iter()
-                .next()
-            else {
+            let Some(hop) = stage_connection(snapshot, previous_node_id, &node_id, max_hops) else {
                 // Observed, but not connected to the previous stage within
                 // `max_hops`: not the same chain, so the prefix ends here.
                 break;
@@ -277,6 +320,95 @@ fn attack_technique_node_id(
     })
 }
 
+/// Whether `from_node` connects to `to_node` within `max_hops`, returning
+/// the connecting evidence if so. See the module doc's "hub-degree cap"
+/// section for the full rationale; in short: try the direct provenance
+/// path first, and if a busy KillChainStage anchor's degree blocks it,
+/// fall back to querying FROM that anchor (cap-exempt for its own first
+/// expansion) to each side independently.
+fn stage_connection(
+    snapshot: &KnowledgeGraphSnapshot,
+    from_node: &str,
+    to_node: &str,
+    max_hops: usize,
+) -> Option<ProvenancePath> {
+    if let Some(path) = snapshot
+        .provenance_paths(from_node, to_node, max_hops)
+        .into_iter()
+        .next()
+    {
+        return Some(path);
+    }
+
+    for anchor in kill_chain_stage_anchors(snapshot, from_node, to_node) {
+        let anchor_to_from = snapshot
+            .provenance_paths(&anchor, from_node, max_hops)
+            .into_iter()
+            .next();
+        let anchor_to_to = snapshot
+            .provenance_paths(&anchor, to_node, max_hops)
+            .into_iter()
+            .next();
+        if let (Some(anchor_to_from), Some(anchor_to_to)) = (anchor_to_from, anchor_to_to) {
+            return Some(splice_through_anchor(anchor_to_from, anchor_to_to));
+        }
+    }
+
+    None
+}
+
+/// Candidate busy-hub-fallback anchors for the `from_node`/`to_node` pair:
+/// every node that is the `from_node_id` of a `SemanticRelation::KillChainStage`
+/// edge landing on either one — i.e. every Engagement/ThreatPattern node
+/// that has already fanned a KillChainStage edge out to either technique,
+/// and so is a legitimate candidate to re-query from rather than through.
+/// A plain linear scan of the snapshot's public `edges` by attribute, not a
+/// graph walk — the graph's SOLE multi-hop traversal stays
+/// `provenance_paths`.
+fn kill_chain_stage_anchors(
+    snapshot: &KnowledgeGraphSnapshot,
+    from_node: &str,
+    to_node: &str,
+) -> Vec<String> {
+    let mut anchors = snapshot
+        .edges
+        .iter()
+        .filter_map(|edge| match edge {
+            KnowledgeGraphEdge::Semantic(semantic)
+                if semantic.relation == SemanticRelation::KillChainStage
+                    && (semantic.to_node_id == from_node || semantic.to_node_id == to_node) =>
+            {
+                Some(semantic.from_node_id.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    anchors.sort();
+    anchors.dedup();
+    anchors
+}
+
+/// Splices `anchor -> from_node` and `anchor -> to_node` provenance paths
+/// into the logical `from_node -> anchor -> to_node` path: reverses the
+/// first, then appends the second's nodes/edges (skipping its leading
+/// `anchor` node, already the reversed first path's last node, so the
+/// result stays a well-formed [`ProvenancePath`] — `edge_ids.len() ==
+/// node_ids.len() - 1`).
+fn splice_through_anchor(
+    anchor_to_from: ProvenancePath,
+    anchor_to_to: ProvenancePath,
+) -> ProvenancePath {
+    let mut node_ids = anchor_to_from.node_ids;
+    node_ids.reverse();
+    let mut edge_ids = anchor_to_from.edge_ids;
+    edge_ids.reverse();
+
+    node_ids.extend(anchor_to_to.node_ids.into_iter().skip(1));
+    edge_ids.extend(anchor_to_to.edge_ids);
+
+    ProvenancePath { node_ids, edge_ids }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -287,8 +419,9 @@ mod tests {
     use crate::sequence_detector::KillChainSequenceProfile;
     use crate::sphinx_agent::{
         AttackTechniqueNode, CausalEdge, CausalRelation, KnowledgeGraphEdge, KnowledgeGraphNode,
-        KnowledgeGraphSnapshot, SemanticEdge, SemanticRelation,
+        KnowledgeGraphSnapshot, SemanticEdge, SemanticRelation, TemporalEdge,
     };
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -480,6 +613,89 @@ rules:
             chain.hops.len(),
             2,
             "one hop per consecutive stage pair, each two edges through the shared hub"
+        );
+    }
+
+    /// Regression: a busy Engagement hub whose TOTAL degree exceeds
+    /// `PROVENANCE_HUB_DEGREE_CAP` (32) for reasons entirely unrelated to
+    /// this sequence match — here, 40 temporal edges to other engagements,
+    /// exactly the "shares an entity in the temporal window" mechanism
+    /// `sphinx_agent.rs`'s `ingest_pheromone` uses (~531-568) — must not
+    /// silently truncate reconstruction of an already-detected, legitimate
+    /// 3-stage chain. A pairwise `stage_i -> hub -> stage_j` walk would hit
+    /// the hub at hop > 0 and refuse to expand through it (the cap is not
+    /// exempt there), which is exactly why `stage_connection` falls back to
+    /// querying FROM the hub itself once the direct call fails.
+    #[test]
+    fn reconstruct_kill_chains_survives_a_high_degree_engagement_hub() {
+        let rule = rule_fixture();
+        let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+        for technique in &rule.attack_chain {
+            snapshot.nodes.push(attack_technique_node(technique));
+        }
+        let hub = "engagement:evt-busy";
+        for technique in &rule.attack_chain {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                    edge_id: format!(
+                        "semantic:{hub}:{}:sequence:{}",
+                        technique.technique_id, rule.rule_id
+                    ),
+                    from_node_id: hub.to_string(),
+                    to_node_id: technique_node_id(technique),
+                    relation: SemanticRelation::KillChainStage,
+                    kill_chain_stage: technique.kill_chain_stage.clone(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+        // Inflate the hub's degree past the cap with temporal edges to
+        // unrelated OTHER engagements -- nothing to do with this sequence
+        // match, just this Engagement being independently busy.
+        for index in 0..40 {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Temporal(TemporalEdge {
+                    edge_id: format!("temporal:{hub}:other-{index}"),
+                    from_node_id: hub.to_string(),
+                    to_node_id: format!("engagement:other-{index}"),
+                    temporal_window_secs: 3_600,
+                    shared_entity_ids: BTreeSet::new(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+        let hub_degree = snapshot
+            .edges
+            .iter()
+            .filter(|edge| match edge {
+                KnowledgeGraphEdge::Semantic(semantic) => semantic.from_node_id == hub,
+                KnowledgeGraphEdge::Temporal(temporal) => temporal.from_node_id == hub,
+                _ => false,
+            })
+            .count();
+        assert!(
+            hub_degree > KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP,
+            "test setup must actually exceed the hub-degree cap, got degree {hub_degree}"
+        );
+
+        let reconstructed = reconstruct_kill_chains(&snapshot, std::slice::from_ref(&rule), 2);
+
+        assert_eq!(
+            reconstructed.len(),
+            1,
+            "a busy engagement hub must not silently truncate an already-detected chain"
+        );
+        assert_eq!(
+            reconstructed[0].stages,
+            vec!["execution", "defense_evasion", "command_and_control"]
+        );
+        assert_eq!(
+            reconstructed[0].technique_ids,
+            vec!["T1218.007", "T1218.005", "T1105"]
         );
     }
 
