@@ -6,7 +6,7 @@ current_phase: 297
 current_phase_name: Kill-Chain Reconstruction
 current_plan: null
 status: active
-last_updated: "2026-09-08T18:00:00Z"
+last_updated: "2026-09-08T18:30:00Z"
 last_activity: 2026-09-08
 progress:
   total_phases: 4
@@ -31,7 +31,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 **Total Plans in Phase:** Phase 296 closed. (Completed Phase 296 plans: 296-01 tasks 1-4.)
 **Status:** Phase 296 (v1.82 Provenance Graph Substrate) COMPLETE 2026-09-08. v1.82 is 1 of 4 phases done, NOT complete. Phase 297 (Kill-Chain Reconstruction) is the next EXECUTABLE numbered phase — CHAIN-01..04 are concrete and unblocked (dependency Phase 296 met). The producer-wiring caveat above is a real, disclosed limitation carried forward, not resolved by this close. The separate open-agent-protocol milestone (no REQUIREMENTS rows) and the OPTIONAL PR #11/#5 hypothesis-graph fold remain orthogonal to the canonical numbered phases and do NOT block them.
 **Last Activity:** 2026-09-08
-**Last Activity Description:** Phase 296 (Provenance Graph Substrate) closed on `feat/graph-296` (engine commits `0baa0ef45`/`69b1a7bef`/`72c9c2156`/`faa5d9dae`) — the first phase of the v1.82 Provenance Memory And Correlation milestone. Shipped `Process`/`File`/`NetworkFlow` provenance nodes and `FileWrite`/`FileExecute`/`DnsResolution`/`CredentialAccess` causal relations (model-only — see producer-wiring caveat), bounded-hop `provenance_paths` traversal with a hub-degree cap wired into `CorrelationEngine`, a 256-case `prune_stale` property test, a 100k-event soak with a proven ceiling, and a retention-footgun defense-in-depth guard. Each of the three implementation tasks was independently reviewed clean (0 Critical/0 Important; task 1 flagged the producer-wiring gap as Important-for-follow-up, not a blocking defect in scope). Final verification at close: `cargo test -p swarm-runtime --lib sphinx_agent::` 28 passed; `cargo test -p swarm-core --lib config::` 89 passed; `check-workspace-layering.sh`/`check-runtime-panic-contract.sh`/`check-gates-wired.sh` all exit 0. **Next:** Phase 297 (Kill-Chain Reconstruction, v1.82) is executable — CHAIN-01..04 are concrete and the Phase 296 dependency is met. The optional PR #11/#5 hypothesis-graph fold and the open-agent-protocol milestone (no requirements) remain separate, non-blocking open questions.
+**Last Activity Description:** Phase 296 (Provenance Graph Substrate) MERGED to `main` (`a0e7508e4`, --no-ff) and pushed to origin, 2026-09-08 — the first of four v1.82 phases. Shipped Process/File/NetworkFlow provenance nodes + FileWrite/FileExecute/DnsResolution/CredentialAccess causal relations, `provenance_paths` bounded-hop traversal + hub-degree cap (CorrelationEngine wired), a prune_stale proptest + 100k soak ceiling, and the retention footgun closed. Whole-branch review (opus): SHIP, 0 Critical/0 Important. KNOWN CAVEAT (recorded, not overclaimed): the new causal edges need raw pid/resolved-ip no current telemetry event carries, so they do not fire on production traffic until producers are wired — a Phase 297 prerequisite. Next: Phase 297 (Kill-Chain Reconstruction).
 
 **Full goal remains active:** the entire 2026-09-06 gameplan plus canonical engine
 phases 285-313. The user did not defer the approved open-agent-protocol milestone:
