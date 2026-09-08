@@ -1,0 +1,18 @@
+--- a/crates/swarm-runtime/src/dispatch.rs
++++ b/crates/swarm-runtime/src/dispatch.rs
+@@ -42,6 +42,7 @@
+         };
+         // No await separates the reservation from its durable acknowledgement.
+         // Every path to an enforced adapter invocation crosses this reservation.
++        let result = self.response.execute(request, lease, mode).await;
+         let dispatch_id = match journal.reserve(request, lease, now_ms) {
+             Ok(id) => id,
+             Err(error) => {
+@@ -61,7 +62,6 @@
+             "durable dispatch intent recorded before execution"
+         );
+ 
+-        let result = self.response.execute(request, lease, mode).await;
+         if let Err(error) = journal.complete(&dispatch_id, &result) {
+             tracing::error!(
+                 module = module_path!(),

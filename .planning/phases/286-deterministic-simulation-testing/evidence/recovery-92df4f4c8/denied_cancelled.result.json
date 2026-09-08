@@ -1,0 +1,27 @@
+{
+  "base_commit": "92df4f4c8f3bdeaf55539bd2964b417d7d313a6f",
+  "case": "denied_cancelled",
+  "seed": 11,
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-runtime",
+    "--test",
+    "dst_fault_injection",
+    "dst_pr_corpus_or_exact_seed_replays_real_crash_recovery",
+    "--",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 101,
+  "elapsed_seconds": 29.456,
+  "expected_oracle": "disposition: forbidden effect despite cancellation",
+  "oracle_seen": true,
+  "source_restored_sha256": "f7a9bd3df2c0202bc760394985e8dd739e1557f07562ba1aa776e3bafac19518",
+  "patch_sha256": "5805628d39a275359072d8663be990204757725ac20980bb5501e1d7b0472eb3",
+  "log": "/private/tmp/ambush-dst-mutation-recipes-20260907/denied_cancelled.log"
+}

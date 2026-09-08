@@ -1,0 +1,27 @@
+{
+  "base_commit": "92df4f4c8f3bdeaf55539bd2964b417d7d313a6f",
+  "case": "ordering",
+  "seed": 57,
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-runtime",
+    "--test",
+    "dst_fault_injection",
+    "dst_pr_corpus_or_exact_seed_replays_real_crash_recovery",
+    "--",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 101,
+  "elapsed_seconds": 24.309,
+  "expected_oracle": "ordering: effect preceded durable intent",
+  "oracle_seen": true,
+  "source_restored_sha256": "81fa5f1eab29b4b64a1adb9f799bbc02a0312ce3eeb0b3143b8b3ce197524dd6",
+  "patch_sha256": "26afe3d4b87ab323bc406042c43ffbf00f604335a80b003e502f0a89295e2cf2",
+  "log": "/private/tmp/ambush-dst-mutation-recipes-20260907/ordering.log"
+}

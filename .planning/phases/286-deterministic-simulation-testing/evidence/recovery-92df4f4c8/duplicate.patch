@@ -1,0 +1,11 @@
+--- a/crates/swarm-runtime/src/dispatch_journal.rs
++++ b/crates/swarm-runtime/src/dispatch_journal.rs
+@@ -284,7 +284,7 @@
+         let mut state = self.lock()?;
+         // INVARIANT: RuntimeDispatchIdentityConsumedOnce
+         if state.records.contains_key(&dispatch_id) {
+-            return Err(DispatchJournalError::AlreadyReserved { dispatch_id });
++            return Ok(dispatch_id);
+         }
+         if state.records.len() >= self.limits.max_entries {
+             return Err(DispatchJournalError::LimitExceeded("dispatch entry count"));

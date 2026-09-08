@@ -870,6 +870,11 @@ fn run_corpus(count: u64) {
         "{count} seeds exercised only {} behavioral traces",
         schedules.len()
     );
+    println!(
+        "DST corpus: seeds={count} verdict_fault_pairs={} effective_traces={}",
+        matrix.len(),
+        schedules.len()
+    );
 }
 
 #[test]

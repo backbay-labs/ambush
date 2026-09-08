@@ -181,7 +181,7 @@ identified separately if executed. Scope is one host/process recovery model and
 one logical local persistent substrate; distributed JetStream failover and
 cross-node consensus remain outside this phase's harness.
 
-## Replacement acceptance evidence — all pending
+## Replacement acceptance evidence — partial; phase not accepted
 
 The owner of final integration must fill this table only from terminal evidence
 against the final immutable repaired tree. Do not copy the rejected candidate's
@@ -189,15 +189,15 @@ passing claims or mark source inspection as a passed runtime test.
 
 | Obligation | Required evidence | Current status |
 |---|---|---|
-| Exact repaired tree | Commit/tree hash and clean diff boundaries after all source edits | Pending |
-| Durable store | Bounded capacity, fsync/failure, exclusive writer, malformed/torn/conflicting records and immutable reservation tests | Pending |
-| Both runtime paths | Real effects and refusals for direct, audit and human-approved routing, with missing storage and duplicates | Pending |
-| Composition/reload | Configured persistent audit directory, shared store across reload and same-request redelivery | Pending |
-| Internal adapter retry | Ambiguous first effect is never executed a second time by resilience logic | Pending |
-| DST-01 / DST-02 | Real sandbox effects, runtime/gate, persistent substrate reopen and redelivery with named fault schedules | Pending |
-| DST-03 | Effect-before-intent, denied-cancellation and duplicate-redelivery production mutations cause the expected oracle failures | Pending |
-| DST-04 | Exact PR/nightly commands, 64 and >=5,000 seeds, measured effective schedule diversity and terminal exit statuses | Pending |
-| DST-05 | Repeated selected-seed executions reproduce effective schedules and observations | Pending |
+| Exact repaired tree | Commit/tree hash and clean diff boundaries after all source edits | Production/source checkpoint `92df4f4c8`; all three production mutations restored exactly; later edits are evidence documents |
+| Durable store | Bounded capacity, fsync/failure, exclusive writer, malformed/torn/conflicting records and immutable reservation tests | All journal unit tests pass in restored runtime suite; physical power-loss and privileged rollback are outside scope |
+| Both runtime paths | Real effects and refusals for direct, audit and human-approved routing, with missing storage and duplicates | Current unit tests and both new negative integration tests pass; actual current HTTP transport checks remain sandbox-blocked |
+| Composition/reload | Configured persistent audit directory, shared store across reload and same-request redelivery | Eleven new composition tests and first-run replay publication regression passed in current 177-test ingest suite; five unrelated listener setups remain sandbox-blocked |
+| Internal adapter retry | Ambiguous first effect is never executed a second time by resilience logic | Current non-HTTP resilience tests pass; current real HTTP effect/timeout checks blocked at local listener creation |
+| DST-01 / DST-02 | Real sandbox effects, runtime/gate, persistent substrate reopen and redelivery with named fault schedules | Corrected ordinary DST suite passes before and after production mutations, including 64 seeds and full verdict/fault matrix |
+| DST-03 | Effect-before-intent, denied-cancellation and duplicate-redelivery production mutations cause the expected oracle failures | All three actual production mutations rejected with named failures; restored positive suite passes; see retained patches/results/logs |
+| DST-04 | Exact PR/nightly commands, 64 and >=5,000 seeds, measured effective schedule diversity and terminal exit statuses | 64-seed corpus and diversity assertions pass; >=5,000 corpus still pending |
+| DST-05 | Repeated selected-seed executions reproduce effective schedules and observations | Same-seed effective trace/durable-effect test passes; explicit successful environment-variable replay commands still to record |
 | DST-06 | Final MAPPING claims match demonstrated storage/process scope and journal/audit distinctions | Pending |
 | Required regressions | Formatting, affected suites, existing negative tests, Clippy, layering/mapping/routing/gate-wiring and all applicable existing gates | Pending |
 | Independent review | Final-tree review disposition plus fixes and re-review where needed | Pending |
@@ -286,3 +286,88 @@ For each: `SWARM_DST_SEED=<seed> cargo test --locked -j2 -p swarm-runtime
 -- --exact --nocapture --test-threads=1`. Preserve exact source patches, immutable
 base and terminal logs in a disposable checkout, restore the source, and rerun
 positive controls. These recipes are source-reviewed; none has executed yet.
+
+
+### Executed production mutation controls at 92df4f4c8
+
+The ordinary corrected DST baseline passed: four tests (including 64 seeds,
+verdict/fault matrix and deterministic replay), one nightly corpus ignored.
+Both new negative invariant tests passed. The subsequent development-profile
+commit changes no Rust source. Exact retained artifacts:
+[evidence/recovery-92df4f4c8](evidence/recovery-92df4f4c8/README.md).
+
+Each production mutation ran independently in the disposable recovery clone at
+`92df4f4c8f3bdeaf55539bd2964b417d7d313a6f`; exact source bytes were restored
+and the Git diff verified clean between cases. Original checkouts were untouched.
+
+| Production mutation | Seed | Cargo exit | Observed named rejection |
+|---|---:|---:|---|
+| Executor awaited before durable reserve | 57 | 101 | `ordering: effect preceded durable intent`; trace `IntentMissing`, fsynced `Effect`, `Crash` |
+| Existing reservation returns permission | 57 | 101 | `at-most-once: duplicate effect across restart`; second fsynced `Effect` after `Restart` |
+| Direct Deny return removed | 11 | 101 | `disposition: forbidden effect despite cancellation`; denied `Effect` followed by `Crash` before returned result |
+
+The outer runner exited zero only after verifying all three expected nonzero
+Cargo outcomes and exact restoration. A final positive rerun is in progress.
+The large nightly corpus and network-enabled full regressions remain unverified.
+
+### Replay-index finding: corrected provenance
+
+Review correctly identified `FileReplayBundleStore::persist` as an unlocked
+index read/modify/write. Concurrent independent writers can lose index entries.
+Root compared the ORIGINAL rejected candidate `1a5c9003b`, rather than only an
+intermediate recovery snapshot: `control.rs:436-440` already created a separate
+IngestState for first-run from guided config; `guided_first_run_config` at 739
+cloned the config and never changed `audit.bundle_store`. Its `store.rs:404-415`
+has the same unlocked persistence sequence. A concurrent daemon and first-run
+therefore already shared independent writers to that audit index.
+
+This is a preexisting replay-store concurrency finding, not a newly introduced
+first-run regression or dispatch-journal bypass. Restoring discoverable first-run
+bundles retains that existing limitation. The new dispatch journal does not use
+this replay index for reservations or refusal. Any future repair must coordinate
+ALL writers at the store boundary and prove concurrent publication; locking only
+the first-run caller would be insufficient. No concurrency safety for the replay
+index or fix of this existing issue is claimed by Phase 286.
+
+
+### Positive rerun after removing all production mutations
+
+`cargo test --locked -j2 -p swarm-runtime --lib --test dst_fault_injection
+--test negative_runtime_dispatch --test dispatch_integration --no-fail-fast --
+--test-threads=1 --quiet` ran against restored `92df4f4c8` source:
+
+- Runtime unit library: **578 passed / 6 failed**. All six failures are local
+  TCP listener permission errors. The new journal tests, both runtime entry
+  tests, containment-completion preservation and deterministic investigation
+  latch passed.
+- Dispatch integration: **20 passed / 1 failed**. The one failure is the same
+  local TCP listener prohibition in the dispatched-webhook timeout test.
+- Corrected DST suite: **4 passed / 1 nightly ignored**, including the normal
+  64-seed corpus, matrix, replay and oracle controls. This closes the positive
+  restoration control after all three bad production mutations.
+- New negative invariant integration: **2 passed / 0 failed**.
+
+The combined Cargo command exited **101** because two targets contained the
+seven network setup failures. It is not a full regression-suite pass. Exact log:
+[evidence/recovery-92df4f4c8/runtime-restored.log](evidence/recovery-92df4f4c8/runtime-restored.log).
+
+The development hold profile's new signature was independently verified using
+its canonical statement (ASCII keys sorted as `canonical_json_bytes` does),
+Ed25519, exact YAML digest/length/name, expected development public key, key-ID
+hash, and a changed-statement rejection. An initial ad hoc verifier incorrectly
+used declaration order and rejected the signature; inspecting the actual signer
+identified canonical serialization, and the corrected verifier passed. No
+production signature or daemon-startup result is claimed.
+
+
+The subsequent complete ingest library run at restored `92df4f4c8` exited 101:
+**172 passed / 5 failed**. The new first-run publication/reopen regression and all
+11 dispatch-journal composition tests passed. All five remaining failures are
+TCP listener permission errors. See
+[evidence/recovery-92df4f4c8/ingest-final.log](evidence/recovery-92df4f4c8/ingest-final.log).
+
+A subsequent test-only diagnostic prints the exact seed count, verdict/fault
+pair count and effective executed trace count after corpus assertions succeed.
+It changes no oracle, schedule, cancellation, or production logic. Its final
+positive/deep-corpus runs are still required; prior mutation evidence remains
+explicitly bound to the preserved `92df4f4c8` source snapshot.
