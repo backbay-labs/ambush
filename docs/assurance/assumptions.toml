@@ -90,3 +90,32 @@ dependent_invariants = [
     "RuntimeDispatchIntentRequired",
     "RuntimeDispatchIdentityConsumedOnce",
 ]
+
+# Phase 294 (v1.81, SAFEP-03) registers the two remaining trust assumptions
+# named in the design of record. Their dependents are named safety
+# properties (P1-P6, `formal/PROPERTIES.md`), not `docs/assurance/MAPPING.md`
+# invariant `Name`s, so `dependent_invariants` is empty for both -- an
+# honest gap in the same spirit as `ASSUME-JETSTREAM-DURABILITY` above, not
+# an oversight. `dependent_properties` is the parallel list for P1-P6; no
+# gate parses it today (`tools/check-mapping.sh` only reads `MAPPING.md` and
+# the `crates/` markers), but it is the schema's forward-compatible slot for
+# when a properties gate is added.
+[assume.ASSUME-INJECTED-CLOCK]
+owner = "swarm-policy"
+statement = "Every swarm_policy::formal_core entry point receives now_ms as a plain caller-supplied parameter and never reads the OS clock (SystemTime::now, Instant::now, or an internal now_ms()) itself -- the phase 292 functional-core/imperative-shell result. The pure decision core's clock-dependent guarantees (a human-gate hold, a lease's expiry check, a rate-limit window's pruning) describe now_ms as given, not the wall clock the OS actually provides; ASSUME-OS-CLOCK is the separate, narrower assumption that the OS clock itself is not adversarially controlled and advances monotonically enough for the caller who reads it and threads it in as now_ms."
+dependent_invariants = []
+dependent_properties = [
+    "P1",
+    "P2",
+    "P4",
+    "P6",
+]
+
+[assume.ASSUME-GOVERNOR-KEY-CUSTODY]
+owner = "swarm-agents"
+statement = "Exactly one governor key is registered for a governance committee, and custody of that key is not adversarially shared -- the single-governor-key property measured 2026-08-13 (see tools/check-single-governor-key.sh). A contingency-lease receipt's signature check and a governance quorum's vote count are both decided correctly against whatever key set and vote tally they are given; this assumption is what keeps that given input itself trustworthy -- that there is one governor key, held by its rightful owner alone, rather than a wider or adversarially-shared custody set the signature/quorum checks would still evaluate over without complaint."
+dependent_invariants = []
+dependent_properties = [
+    "P3",
+    "P5",
+]
