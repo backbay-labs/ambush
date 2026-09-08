@@ -1,0 +1,90 @@
+   Compiling hyper v1.9.0
+   Compiling prost-derive v0.13.5
+   Compiling hyper-util v0.1.20
+   Compiling zerocopy v0.8.48
+   Compiling num-traits v0.2.19
+   Compiling prost v0.13.5
+   Compiling prost-types v0.13.5
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.3.1
+   Compiling hyper-rustls v0.27.9
+   Compiling rand v0.8.6
+   Compiling prost-build v0.13.5
+   Compiling chrono v0.4.44
+   Compiling reqwest v0.12.28
+   Compiling tonic-build v0.13.1
+   Compiling axum v0.8.9
+   Compiling nkeys v0.4.5
+   Compiling tokio-websockets v0.10.1
+   Compiling swarm-ingest-tetragon v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-tetragon)
+   Compiling nuid v0.5.0
+   Compiling hyper-timeout v0.5.2
+   Compiling either v1.15.0
+   Compiling rayon v1.12.0
+   Compiling async-nats v0.47.0
+   Compiling tonic v0.13.1
+   Compiling swarm-response v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-response)
+   Compiling swarm-spine v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-spine)
+   Compiling swarm-pheromone v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-pheromone)
+   Compiling sysinfo v0.33.1
+   Compiling swarm-ingest-sentinel v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-sentinel)
+   Compiling swarm-ingest-taxii v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-taxii)
+   Compiling swarm-ingest-json v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-json)
+   Compiling swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+   Compiling swarm-perch-wire v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-perch-wire)
+   Compiling swarm-agents v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-agents)
+   Compiling swarm-ingest-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 06s
+     Running unittests src/lib.rs (target/debug/deps/swarm_ingest_runtime-1ce7e3aeee958217)
+
+running 176 tests
+......... 9/176
+bridge_runtime::tests::registry_polls_sentinel_bridge_and_updates_metrics --- FAILED
+................................................................................... 93/176
+ingest::tests::generated_python_client_smoke_tests_live_platform_router --- FAILED
+............ 106/176
+ingest::tests::healthz_includes_providence_component_when_configured --- FAILED
+.................................... 143/176
+ingest::tests::providence_webhook_payload_includes_runtime_context_and_links --- FAILED
+...... 150/176
+ingest::tests::readyz_reports_providence_auth_failure --- FAILED
+.........................
+failures:
+
+---- bridge_runtime::tests::registry_polls_sentinel_bridge_and_updates_metrics stdout ----
+
+thread 'bridge_runtime::tests::registry_polls_sentinel_bridge_and_updates_metrics' (137546999) panicked at crates/swarm-ingest-runtime/src/bridge_runtime.rs:351:63:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- ingest::tests::generated_python_client_smoke_tests_live_platform_router stdout ----
+
+thread 'ingest::tests::generated_python_client_smoke_tests_live_platform_router' (137547173) panicked at crates/swarm-ingest-runtime/src/ingest/tests.rs:2936:71:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- ingest::tests::healthz_includes_providence_component_when_configured stdout ----
+
+thread 'ingest::tests::healthz_includes_providence_component_when_configured' (137547190) panicked at crates/swarm-ingest-runtime/src/ingest/tests.rs:1296:71:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- ingest::tests::providence_webhook_payload_includes_runtime_context_and_links stdout ----
+
+thread 'ingest::tests::providence_webhook_payload_includes_runtime_context_and_links' (137547301) panicked at crates/swarm-ingest-runtime/src/ingest/tests.rs:1277:71:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- ingest::tests::readyz_reports_providence_auth_failure stdout ----
+
+thread 'ingest::tests::readyz_reports_providence_auth_failure' (137547310) panicked at crates/swarm-ingest-runtime/src/ingest/tests.rs:1296:71:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+
+failures:
+    bridge_runtime::tests::registry_polls_sentinel_bridge_and_updates_metrics
+    ingest::tests::generated_python_client_smoke_tests_live_platform_router
+    ingest::tests::healthz_includes_providence_component_when_configured
+    ingest::tests::providence_webhook_payload_includes_runtime_context_and_links
+    ingest::tests::readyz_reports_providence_auth_failure
+
+test result: FAILED. 171 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.95s
+
+error: test failed, to rerun pass `-p swarm-ingest-runtime --lib`

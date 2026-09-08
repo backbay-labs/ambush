@@ -1,0 +1,24 @@
+   Compiling swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+   Compiling swarm-ingest-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-runtime)
+   Compiling swarm-agents v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-agents)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.92s
+     Running tests/dst_fault_injection.rs (target/debug/deps/dst_fault_injection-dc5212cfe305318f)
+
+running 1 test
+test dst_pr_corpus_or_exact_seed_replays_real_crash_recovery ... 
+thread 'dst_pr_corpus_or_exact_seed_replays_real_crash_recovery' (138790776) panicked at crates/swarm-runtime/tests/dst_fault_injection.rs:785:5:
+SWARM_DST_SEED=57 plan=Plan { seed: 57, verdict: Allow, fault: DropAfterEffect, before_gate: 0, before_effect: 3, after_effect: 3, after_return: 2, retries: 3, requests: 1 } named_oracles=["ordering: effect preceded durable intent"] trace=[Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Poll(0) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Poll(1) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Poll(2) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Poll(3) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: EvidenceRead(1) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: IntentMissing }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Effect }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Crash }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'dst_pr_corpus_or_exact_seed_replays_real_crash_recovery' (138790776) panicked at crates/swarm-runtime/tests/dst_fault_injection.rs:490:9:
+SWARM_DST_SEED=57 plan=Plan { seed: 57, verdict: Allow, fault: DropAfterEffect, before_gate: 0, before_effect: 3, after_effect: 3, after_return: 2, retries: 3, requests: 1 }: SWARM_DST_SEED=57 plan=Plan { seed: 57, verdict: Allow, fault: DropAfterEffect, before_gate: 0, before_effect: 3, after_effect: 3, after_return: 2, retries: 3, requests: 1 } named_oracles=["ordering: effect preceded durable intent"] trace=[Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Poll(0) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Poll(1) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Poll(2) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Poll(3) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: EvidenceRead(1) }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: IntentMissing }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Effect }, Trace { id: "dispatch:5ce5fb5e564011f55427175e7e92271a2705447c3a02e2ca3c9b076fed21ade0", event: Crash }]
+FAILED
+
+failures:
+
+failures:
+    dst_pr_corpus_or_exact_seed_replays_real_crash_recovery
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p swarm-runtime --test dst_fault_injection`
