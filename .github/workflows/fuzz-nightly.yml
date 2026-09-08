@@ -1,0 +1,96 @@
+# Phase 287 FUZZ-03. Runs each of the four cargo-fuzz targets under
+# `fuzz/` for a real 600s fuzzing budget, on a schedule and on demand. This
+# is deliberately NOT part of ci.yml's PR lane -- see the 30s smoke step
+# there (FUZZ-04) for the fast, deterministic breakage check that IS
+# required on every PR. This workflow is where an actual fuzzing budget
+# (long enough to find something) lives, same split as dst-nightly.yml for
+# the DST deep corpus.
+#
+# `fuzz/` is cargo-fuzz's OWN standalone Cargo workspace (see the comment at
+# the top of fuzz/Cargo.toml) with its own nightly pin
+# (fuzz/rust-toolchain.toml) -- cargo-fuzz needs nightly for the
+# SanitizerCoverage/ASan instrumentation flags it passes, which are unstable
+# on the root workspace's pinned stable 1.97.1. Installing nightly here does
+# not touch that pin.
+name: Fuzz Nightly
+
+on:
+  schedule:
+    # 41 5 UTC daily -- off the hour boundary per dst-nightly.yml's rationale
+    # (on-the-hour schedules contend for the shared cron pool and are delayed
+    # or dropped), and distinct from dst-nightly.yml's own 06:23 slot so the
+    # two long-running nightly jobs do not contend for the same runner pool
+    # slice.
+    - cron: "41 5 * * *"
+  # Manual trigger so a target can be run on demand (e.g. after touching one
+  # of the four real decoder entry points) without waiting for the cron.
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz-nightly:
+    name: Fuzz ${{ matrix.target }} (600s)
+    runs-on: ubuntu-latest
+    # Four targets x 600s each plus a cold nightly + cargo-fuzz + ASan build;
+    # bounded so a genuinely hung target fails the job instead of running
+    # until GitHub's own 6-hour ceiling.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - ingest_json_decode
+          - ingest_sentinel_decode
+          - ingest_tetragon_decode
+          - ruleset_yaml_parse
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-fuzz-${{ hashFiles('fuzz/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-fuzz-
+
+      # `fuzz/rust-toolchain.toml` pins the exact nightly this installs; kept
+      # in sync by hand (both name the same dated nightly) rather than
+      # derived, the same way ci.yml's stable jobs and the repo root
+      # `rust-toolchain.toml` are two files a maintainer updates together.
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-04-21
+
+      - name: Install cargo-fuzz
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked --version 0.13.1
+
+      - name: Seed fuzz corpora from scenarios/*.yaml and rulesets/*.yaml
+        run: bash tools/seed-fuzz-corpus.sh
+
+      - name: Run ${{ matrix.target }} for 600s
+        working-directory: fuzz
+        run: cargo fuzz run "${{ matrix.target }}" -- -max_total_time=600
+
+      # A crash writes its reproducing input under fuzz/artifacts/<target>/;
+      # `-- -max_total_time=600` makes the run above exit non-zero the
+      # moment libFuzzer finds one, which fails this step before it gets
+      # here to upload it below.
+      - name: Upload crashing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore

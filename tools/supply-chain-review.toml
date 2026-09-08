@@ -1,0 +1,257 @@
+# Supply-chain review ledger (SUPPLY-01, SUPPLY-02).
+#
+# `deny.toml`'s `[advisories].ignore` entries accept ONLY `{ id, reason }` --
+# cargo-deny 0.19.4 rejects any other key with `error[unexpected-keys]`,
+# verified at HEAD by adding a third key to a live entry and re-running
+# `cargo deny check advisories`. So the three fields every ignore and skip
+# entry is required to carry -- a `last-checked` date, a blast-radius note,
+# and a clearing condition -- cannot live inside `deny.toml` itself without
+# breaking cargo-deny's schema. This file is the companion ledger instead.
+#
+# `tools/check-supply-chain.sh` parses this file AND `deny.toml` with the
+# stdlib TOML parser (`tomllib`, not a line regex) and cross-validates them
+# before ever invoking `cargo deny` or `cargo audit`:
+#   - every `[advisories].ignore` id in deny.toml must have a matching
+#     `[advisories_ignore.<id>]` table here (MISSING_LEDGER_ENTRY otherwise);
+#   - every `[[bans.skip]]` crate in deny.toml must have a matching
+#     `[bans_skip."<crate>@<version>"]` table here, keyed by the exact same
+#     string deny.toml uses for its `crate` field (MISSING_LEDGER_ENTRY);
+#   - a ledger table naming an id/crate NOT in deny.toml is an
+#     ORPHAN_LEDGER_ENTRY -- this is the "argv/deny.toml drift" failure mode:
+#     an orphan cannot leak into the derived `cargo audit --ignore` argv,
+#     which is built from deny.toml's ignore list, not from this ledger;
+#   - every matched table must carry `last_checked` (a native TOML local
+#     date -- an unquoted `YYYY-MM-DD` literal, so a malformed calendar date
+#     or a string given by mistake is a hard failure, not silently accepted),
+#     a non-empty `blast_radius`, and a non-empty `clearing_condition`;
+#   - a duplicate `id` inside deny.toml's `ignore` ARRAY is caught directly
+#     (TOML's own duplicate-key rule already makes a duplicate table BELOW
+#     impossible -- `tomllib` raises "Cannot declare ... twice" -- so only
+#     the deny.toml array side needs an explicit check).
+#
+# Keying ledger entries as `[advisories_ignore.<id>]` / `[bans_skip."..."]`
+# tables (not an array of tables) means TOML itself refuses a duplicate
+# ledger entry at parse time -- there is no way to accidentally define the
+# same id/crate twice in this file.
+#
+# Every date below was set or re-confirmed 2026-09-07 while re-verifying
+# codex's `287-CODEX-PREP.md` supply-chain audit at HEAD for Phase 287 Task A
+# (SUPPLY-01/02). Three of the pre-existing rationales it flagged as stale
+# were corrected in `deny.toml` itself at the same time (rustls-pemfile is a
+# DIRECT dependency, not transitive; webpki-roots 0.26.11 re-exports the
+# locked 1.0.7 roots rather than shipping an independent snapshot; instant is
+# reachable via nostr in swarm-perch-bridge, not only via notify) -- see the
+# corrected `reason` strings and comments in `deny.toml` for the detail; this
+# ledger's `blast_radius` / `clearing_condition` fields carry the full
+# account so `deny.toml`'s inline `reason` can stay short.
+
+schema_version = 1
+
+# ============================================================================
+# [advisories].ignore -- RUSTSEC advisories accepted rather than fixed.
+# ============================================================================
+
+[advisories_ignore.RUSTSEC-2024-0384]
+last_checked = 2026-09-07
+blast_radius = """\
+"instant" is an "unmaintained" (informational, not a known vulnerability) \
+advisory. Reachable via TWO independent paths, re-verified against Cargo.lock \
+at HEAD: (1) notify 7.0.0 -> notify-types 1.0.1 -> instant, pulled in by \
+swarm-runtime-http's `notify` file-watch dependency; and (2) nostr 0.44.8 -> \
+instant, pulled in DIRECTLY by swarm-perch-bridge (`nostr = { version = \
+"0.44", ... }` in its Cargo.toml) and again transitively through \
+swarm-perch-bridge's own path dependency on workspace/crates/ambush-ws-client, \
+which also depends on nostr. Both paths use instant only for internal \
+monotonic-clock/Duration bookkeeping (file-watch debounce timers; nostr \
+relay-connection timing) -- no attacker-controlled input is parsed by \
+instant itself, and no public API of ours re-exports its types.\
+"""
+clearing_condition = """\
+Clears when BOTH paths move off instant: notify-types' upstream migration \
+away from instant (tracked via the notify crate's release notes), AND \
+nostr's migration to `web-time`/std Instant (or dropping/pinning an older \
+nostr line that predates the instant dependency), OR when swarm-runtime-http \
+drops the `notify` dependency and swarm-perch-bridge drops/replaces `nostr` \
+and ambush-ws-client's dependency on it.\
+"""
+
+[advisories_ignore.RUSTSEC-2025-0134]
+last_checked = 2026-09-07
+blast_radius = """\
+"rustls-pemfile" is an "unmaintained" (informational, not a known \
+vulnerability) advisory -- the crate's repository is archived and its \
+maintainers recommend migrating to rustls-pki-types' `PemObject` trait. \
+Re-verified at HEAD: rustls-pemfile is a DIRECT dependency of \
+swarm-runtime-http (`Cargo.toml:21`, `rustls-pemfile = "2"`), called \
+directly at `serve.rs:222` (`rustls_pemfile::certs`) and `serve.rs:230` \
+(`rustls_pemfile::private_key`) to parse the operator-supplied TLS \
+certificate/key PEM files at HTTPS-listener startup. This is NOT a \
+transitive dependency of some other rustls-stack crate, and the prior \
+"still used transitively" rationale was stale. Blast radius is confined to \
+server startup parsing local, operator-provided files -- not untrusted \
+network input.\
+"""
+clearing_condition = """\
+Clears when swarm-runtime-http's two call sites in serve.rs migrate to \
+rustls-pki-types' `PemObject` trait (the crate's own documented \
+replacement) and the `rustls-pemfile` dependency is removed from \
+swarm-runtime-http/Cargo.toml.\
+"""
+
+# ============================================================================
+# [[bans.skip]] -- version-pinned duplicate-dependency exceptions.
+# ============================================================================
+
+# --- Transitive on the runtime graph, pinned by an upstream crate's old major ---
+
+[bans_skip."thiserror@1.0.69"]
+last_checked = 2026-09-07
+blast_radius = """\
+Proc-macro-generated Display/Error impls only; pulled in by async-nats 0.47 \
+and x509-parser 0.16 (via asn1-rs 0.6), which still pin the thiserror 1.x \
+line. Purely a duplicate-version graph entry -- thiserror 1.x and 2.x are \
+both actively maintained upstream, so this is not a decaying/abandoned \
+dependency, just two majors coexisting on the graph.\
+"""
+clearing_condition = "Clears when async-nats and asn1-rs/x509-parser both upgrade to thiserror 2.x, or when either dependency is dropped/replaced."
+
+[bans_skip."thiserror-impl@1.0.69"]
+last_checked = 2026-09-07
+blast_radius = "Proc-macro half of the thiserror 1.x line pinned by thiserror@1.0.69 above; always moves with it."
+clearing_condition = "Clears in lock-step with thiserror@1.0.69 above."
+
+[bans_skip."rand@0.8.6"]
+last_checked = 2026-09-07
+blast_radius = """\
+Pulled in by async-nats 0.47's nkeys/nuid/tokio-websockets subtree for \
+connection-id/token randomness inside the NATS client. Not used for our own \
+cryptographic key material -- the ed25519-dalek signing path uses rand_core \
+0.6 directly (see rand_core@0.6.4 below), a deliberate separate pin.\
+"""
+clearing_condition = "Clears when async-nats 0.47's transitive deps (nkeys, nuid, tokio-websockets) move to the rand 0.9 family, or when async-nats is upgraded past 0.47."
+
+[bans_skip."rand_chacha@0.3.1"]
+last_checked = 2026-09-07
+blast_radius = "Backs the rand 0.8 family (rand@0.8.6 above) as its default RNG algorithm; same async-nats 0.47 subtree, same blast radius."
+clearing_condition = "Clears in lock-step with rand@0.8.6 above."
+
+[bans_skip."rand_core@0.6.4"]
+last_checked = 2026-09-07
+blast_radius = """\
+Backs BOTH the rand 0.8 family above (async-nats's transitive use) AND our \
+OWN deliberate pin: ed25519-dalek 2.x requires rand_core 0.6 for its RNG \
+trait bound, and swarm-crypto's signing code intentionally matches that \
+version rather than drifting to a mismatched rand_core. This is a \
+compatibility pin we chose, not decay.\
+"""
+clearing_condition = """\
+Clears only when BOTH sides move together: ed25519-dalek ships a rand_core \
+0.9-compatible major AND async-nats's transitive rand 0.8 users (nkeys, \
+nuid, tokio-websockets) have migrated off rand_core 0.6 too -- moving just \
+one side would still leave two rand_core majors on the graph.\
+"""
+
+[bans_skip."getrandom@0.2.17"]
+last_checked = 2026-09-07
+blast_radius = "Backs rand_core 0.6 above (its OS-entropy source); same blast radius and same two dependents (async-nats transitively, ed25519-dalek's rand_core pin)."
+clearing_condition = "Clears in lock-step with rand_core@0.6.4 above."
+
+[bans_skip."getrandom@0.3.4"]
+last_checked = 2026-09-07
+blast_radius = """\
+Backs the NEWER rand 0.9 family, pulled in by quinn-proto 0.11.16 (QUIC \
+transport) for connection-id/token generation. Independent of the 0.2.x \
+line above -- this is the generation everything else should eventually \
+converge on, not a generation to retire.\
+"""
+clearing_condition = "Clears once every remaining rand 0.8 / rand_core 0.6 / getrandom 0.2 consumer above has migrated to the rand 0.9 / getrandom 0.3 family, collapsing both getrandom majors to one."
+
+# --- SECURITY-REVIEW-ADJACENT: corrected 2026-09-07, see deny.toml comment ---
+
+[bans_skip."webpki-roots@0.26.11"]
+last_checked = 2026-09-07
+blast_radius = """\
+CORRECTED 2026-09-07 -- previously recorded as "SECURITY REVIEW ITEM: second \
+TLS trust-anchor set" describing two independent Mozilla root-program \
+snapshots. Re-verified at HEAD and found stale: webpki-roots 0.26.11 depends \
+on and RE-EXPORTS webpki-roots 1.0.7 (its `src/lib.rs`: "This crate version \
+is a semver trick to webpki-roots v1", followed by `pub use \
+parent::TLS_SERVER_ROOTS;`). There is exactly ONE Mozilla root-program \
+snapshot (1.0.7) on the dependency graph; the NATS client (via async-nats \
+0.47 -> tokio-websockets 0.10 -> webpki-roots 0.26.11) and our own \
+reqwest/rustls stack (webpki-roots 1.0.7 directly) trust the SAME CA set. \
+This is an ordinary duplicate-import entry for `bans` graph hygiene, not a \
+live trust-divergence risk.\
+"""
+clearing_condition = "Clears when async-nats -> tokio-websockets depends on webpki-roots 1.x directly instead of pulling it through the 0.26.x compat shim."
+
+# --- Target-gated: Windows / wasm / UEFI support that does not build on the CI target ---
+
+[bans_skip."windows-core@0.57.0"]
+last_checked = 2026-09-07
+blast_radius = "Target-gated (`cfg(windows)`) Windows-only support code inside a transitive dependency; never compiled or linked on the Linux/macOS targets this project builds or ships for CI and containers -- zero runtime exposure on any shipped target."
+clearing_condition = "Clears when the upstream crate pinning the windows-core 0.57 family upgrades to the current windows-rs major."
+
+[bans_skip."windows-implement@0.57.0"]
+last_checked = 2026-09-07
+blast_radius = "Proc-macro half of the windows-core 0.57 family above; same target-gating, same zero exposure on shipped targets."
+clearing_condition = "Clears in lock-step with windows-core@0.57.0 above."
+
+[bans_skip."windows-interface@0.57.0"]
+last_checked = 2026-09-07
+blast_radius = "Proc-macro half of the windows-core 0.57 family above; same target-gating, same zero exposure on shipped targets."
+clearing_condition = "Clears in lock-step with windows-core@0.57.0 above."
+
+[bans_skip."windows-result@0.1.2"]
+last_checked = 2026-09-07
+blast_radius = "Windows-core 0.57 family's error-result type; same target-gating, same zero exposure on shipped targets."
+clearing_condition = "Clears in lock-step with windows-core@0.57.0 above."
+
+[bans_skip."windows-sys@0.52.0"]
+last_checked = 2026-09-07
+blast_radius = "Target-gated (`cfg(windows)`); an OLDER windows-sys major held by a different transitive dependency than the windows-core 0.57 family above. Never compiled or linked on any target this project builds or ships."
+clearing_condition = "Clears when the upstream crate pinning the windows-sys 0.52 major upgrades to the current windows-sys major."
+
+[bans_skip."wit-bindgen@0.51.0"]
+last_checked = 2026-09-07
+blast_radius = "wasm32-wasi bindings only; not reachable on any target this project builds for CI or ships (x86_64/aarch64 Linux and macOS) -- zero runtime exposure."
+clearing_condition = "Clears when the crate pinning it drops or upgrades its wasm32-wasi bindgen dependency."
+
+[bans_skip."r-efi@5.3.0"]
+last_checked = 2026-09-07
+blast_radius = "UEFI target support only inside a transitive dependency; not reachable on any target this project builds for CI or ships -- zero runtime exposure."
+clearing_condition = "Clears when the crate pinning it drops its UEFI-target support path."
+
+[bans_skip."bitflags@1.3.2"]
+last_checked = 2026-09-07
+blast_radius = "Transitive dependency on the bitflags 1.x line, itself gated behind the same Windows-only subtree as the windows-core 0.57 family above; not reachable on any shipped target."
+clearing_condition = "Clears together with the windows-core 0.57 family above, once the pinning dependency upgrades."
+
+# --- Our own old major, collapsible but blocked; see the large comment above skip = [ ---
+
+[bans_skip."prost@0.13.5"]
+last_checked = 2026-09-07
+blast_radius = """\
+Our own pin: swarm-ingest-tetragon depends on tonic/prost 0.13 while \
+opentelemetry-otlp/-proto 0.31 bring 0.14. This is internal build-time \
+gRPC/codegen surface for the Tetragon ingest client -- the ingest WIRE bytes \
+are decoded through our own protobuf-generated types either way, so this \
+duplicate does not change what untrusted-input decoding path is exercised, \
+only which codegen major produced the decoder.\
+"""
+clearing_condition = "Clears via the tonic/prost 0.14 migration already prototyped and reverted (see the large comment above `skip = [`): blocked on prost-build 0.14 pulling in the Zlib-licensed foldhash crate, which `[licenses] allow` does not cover. Clears when that license-allowlist decision is made (an exception, or an alternate OTel exporter path) and the 0.14 migration is relanded."
+
+[bans_skip."prost-derive@0.13.5"]
+last_checked = 2026-09-07
+blast_radius = "Proc-macro half of prost 0.13 above; same blast radius, same internal build-time surface."
+clearing_condition = "Clears in lock-step with prost@0.13.5 above."
+
+[bans_skip."tonic@0.13.1"]
+last_checked = 2026-09-07
+blast_radius = "Our own pin: swarm-ingest-tetragon depends on tonic 0.13 while opentelemetry-proto 0.31 brings 0.14. Same internal build-time gRPC transport surface as prost@0.13.5 above, same blocker."
+clearing_condition = "Clears in lock-step with prost@0.13.5 above (same tonic/prost 0.14 migration, same Zlib/foldhash blocker)."
+
+[bans_skip."socket2@0.5.10"]
+last_checked = 2026-09-07
+blast_radius = "Held by tonic 0.13's transport stack; low-level socket-options shim, no parsing of untrusted input of its own."
+clearing_condition = "Clears with the tonic/prost 0.14 migration above (tonic 0.14's transport stack pulls a newer socket2)."

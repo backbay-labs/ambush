@@ -1,0 +1,76 @@
+# Phase 287 FUZZ-01. This is cargo-fuzz's OWN standalone workspace: the
+# `[workspace]` table below stops Cargo's ancestor search at this directory
+# so it never merges into the root workspace (which is additionally told to
+# `exclude = ["fuzz"]`, matching the existing `exclude = ["workspace"]`
+# precedent for the same reason). That isolation is what lets this crate use
+# `libfuzzer-sys` and a nightly toolchain (see `rust-toolchain.toml` in this
+# directory) without moving the main workspace off its pinned stable
+# 1.97.1 -- see `.planning/phases/287-fuzz-loom-supply-chain-hardening/
+# 287-01-PLAN.md`, Task B.
+#
+# `corpus-seed` (see `corpus-seed/Cargo.toml`) is a second, separate package
+# in this same workspace: a plain binary that converts `scenarios/*.yaml` and
+# `rulesets/*.yaml` into each target's real wire format for
+# `tools/seed-fuzz-corpus.sh`. It is NOT a `[[bin]]` of this package, so
+# `cargo fuzz build`/`list`/`run` (which enumerate only this package's own
+# `[[bin]]` entries) never see it as a fuzz target.
+[package]
+name = "fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Brings the `Message` trait into scope for `GetEventsResponse::decode` in
+# ingest_tetragon_decode.rs -- the version is unpinned (isolated lockfile) but
+# stays in the 0.13 line to match what swarm-ingest-tetragon itself builds
+# against, so both resolve to the same generated trait impl.
+prost = "0.13"
+
+[dependencies.swarm-ingest-json]
+path = "../crates/swarm-ingest-json"
+
+[dependencies.swarm-ingest-sentinel]
+path = "../crates/swarm-ingest-sentinel"
+
+[dependencies.swarm-ingest-tetragon]
+path = "../crates/swarm-ingest-tetragon"
+
+[dependencies.swarm-runtime]
+path = "../crates/swarm-runtime"
+
+[[bin]]
+name = "ingest_json_decode"
+path = "fuzz_targets/ingest_json_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ingest_sentinel_decode"
+path = "fuzz_targets/ingest_sentinel_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ingest_tetragon_decode"
+path = "fuzz_targets/ingest_tetragon_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ruleset_yaml_parse"
+path = "fuzz_targets/ruleset_yaml_parse.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = [".", "corpus-seed"]
+resolver = "2"

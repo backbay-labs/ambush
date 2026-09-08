@@ -1,0 +1,83 @@
+# LOOM-03 nightly: exhaustive-within-bound concurrency models of the two
+# concurrent write paths the engine actually has.
+#
+#   * swarm-pheromone/tests/loom_concurrent_write.rs -- deposit vs. decay-eviction
+#     over the local-journal split-persistence seam (the seam the LOOM-01
+#     production repair fixed).
+#   * swarm-policy/tests/loom_concurrent_decision.rs -- one held runtime
+#     generation per decision/lease, and the last-slot atomic prune/check/
+#     increment.
+#
+# PREEMPTION BUDGET (documented, bounded). Each `loom::model::Builder` in those
+# harnesses sets `preemption_bound = Some(2)` and leaves `max_permutations` and
+# `max_duration` UNSET: those optional caps can stop exploration "successfully"
+# and manufacture a false pass, so the ONLY bound on the search is the preemption
+# budget, and the ONLY wall-clock bound is this job's `timeout-minutes` (below) --
+# a run that would exceed it fails the job rather than passing early. Loom is a
+# `cfg(loom)`-gated dev-dependency; it is compiled only here, under
+# `RUSTFLAGS="--cfg loom"`, and never enters the shipped dependency graph.
+#
+# Scheduled + manual only: this is OUT of the fast PR lane.
+name: Loom Nightly
+
+on:
+  schedule:
+    # 05:41 UTC daily. Off the hour boundary per GitHub's guidance -- on-the-hour
+    # schedules contend for the shared cron pool and are delayed or dropped.
+    - cron: "41 5 * * *"
+  # Manual trigger so the models can be run on demand (e.g. before a change to
+  # the substrate persistence path or the ingest reload/ArcSwap seam).
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/ci
+  # The single build/run flag that activates the Loom models and pulls in the
+  # cfg(loom)-gated dev-dependency for this job only.
+  RUSTFLAGS: "--cfg loom"
+
+jobs:
+  loom-nightly:
+    name: Loom concurrency models (bounded_abstract_model)
+    runs-on: ubuntu-latest
+    # The wall-clock failing bound for the bounded search. Neither harness sets
+    # max_permutations/max_duration, so if a model's exploration ever grows past
+    # this, the job fails loudly here instead of passing early.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-loom-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-loom-${{ runner.os }}-
+            cargo-home-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # The pheromone model needs none of the nats/JetStream stack, so
+      # --no-default-features keeps the cfg(loom) rebuild small. --test-threads=1
+      # runs the model deterministically; a bound violation names its assertion.
+      - name: Loom model — pheromone concurrent write (deposit vs. GC)
+        run: >
+          cargo test --locked -p swarm-pheromone
+          --test loom_concurrent_write --no-default-features
+          -- --test-threads=1
+
+      - name: Loom model — policy concurrent decision (reload generation + last slot)
+        run: >
+          cargo test --locked -p swarm-policy
+          --test loom_concurrent_decision
+          -- --test-threads=1

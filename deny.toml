@@ -5,9 +5,21 @@ all-features = false
 [advisories]
 db-path = "$CARGO_HOME/advisory-dbs"
 db-urls = ["https://github.com/rustsec/advisory-db"]
+# Each entry below is a bare `{ id, reason }` -- cargo-deny 0.19.4 rejects any
+# OTHER key in this table (`error[unexpected-keys], expected: ["id",
+# "reason"]`, verified at HEAD), so the required last-checked date,
+# blast-radius note, and clearing condition for EVERY entry live in the
+# companion ledger `tools/supply-chain-review.toml`, keyed
+# `[advisories_ignore.<id>]`. `tools/check-supply-chain.sh` cross-validates
+# the two files before invoking `cargo deny` / `cargo audit`: an id here with
+# no ledger table, a ledger table missing a required field, or a ledger
+# table naming an id NOT in this list are all gate failures, and the
+# `cargo audit --ignore` argv is DERIVED from this list (not hand-copied) so
+# the two cannot drift. `reason` below stays a short pointer; the ledger
+# carries the detail.
 ignore = [
-  { id = "RUSTSEC-2024-0384", reason = "notify v7 still pulls instant transitively and there is no safe replacement available in the current major line" },
-  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is still used transitively by the shipped rustls stack and the upstream replacement requires a coordinated dependency migration" },
+  { id = "RUSTSEC-2024-0384", reason = "instant (unmaintained, informational) is reachable via notify -> notify-types (swarm-runtime-http) AND via nostr (swarm-perch-bridge) -- corrected 2026-09-07, was previously described as reachable only through notify; see tools/supply-chain-review.toml" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile (unmaintained, informational) is a DIRECT dependency of swarm-runtime-http (Cargo.toml, called from serve.rs) -- corrected 2026-09-07, was previously described as only transitive; see tools/supply-chain-review.toml" },
 ]
 
 [licenses]
@@ -43,7 +55,11 @@ highlight = "all"
 # that pins the old major so it can be retired when that dependency moves.
 #
 # Reviewed 2026-08-11 (phase 280 / GATEFIX-04). Re-review whenever any named
-# pinning dependency is upgraded.
+# pinning dependency is upgraded. Per-entry dated review (last-checked date,
+# blast-radius note, clearing condition) for every skip below lives in the
+# companion ledger `tools/supply-chain-review.toml`, keyed
+# `[bans_skip."<crate>@<version>"]`, cross-validated by
+# `tools/check-supply-chain.sh` the same way as the advisories ignores above.
 #
 # THIS GATE HAS TWO MEASURED LIMITATIONS, NOT ONE. Both are recorded here so the
 # duplicate coverage is not read as complete.
@@ -79,8 +95,10 @@ highlight = "all"
 #   z3 0.20 -> (build) z3-sys 0.11 -> zip 8.6 -> {hmac 0.13, pbkdf2 0.13, sha1 0.11}
 #   -> digest 0.11 / crypto-common 0.2 / block-buffer 0.12 / const-oid 0.10,
 # against the digest 0.10 generation the rest of the workspace uses via sha2 0.10 /
-# ed25519-dalek 2.x. The 19 skips below all still match under all-features (zero
+# ed25519-dalek 2.x. The 20 skips below all still match under all-features (zero
 # `unmatched-skip` warnings), so this is purely additional, uncovered surface.
+# (Corrected 2026-09-07: this comment previously said "19"; the list below has
+# always had 20 entries -- re-counted at HEAD.)
 #
 # WHY IT IS NOT CLOSED HERE BY WIDENING THE GRAPH. `all-features = true` also
 # fails the LICENSE check on the same z3 build subgraph, for two crates that are
@@ -121,14 +139,20 @@ skip = [
   { crate = "getrandom@0.2.17", reason = "backs rand_core 0.6 above" },
   { crate = "getrandom@0.3.4", reason = "backs the rand 0.9 family pulled in by quinn-proto 0.11.16" },
 
-  # SECURITY REVIEW ITEM -- escalated rather than silently skipped.
-  # Two independent sets of TLS trust anchors are on the graph: webpki-roots 1.0.7
-  # (our reqwest/rustls stack) and 0.26.11 (async-nats 0.47 -> tokio-websockets
-  # 0.10). Trust roots are not an ordinary duplicate: the two crates ship different
-  # snapshots of the Mozilla root program, so the NATS client and the HTTP client
-  # can disagree about which CAs are trusted. Accepted for now only because
-  # collapsing it requires an async-nats upgrade. This is a standing action item.
-  { crate = "webpki-roots@0.26.11", reason = "SECURITY REVIEW ITEM: second TLS trust-anchor set, pinned by async-nats 0.47 -> tokio-websockets 0.10; collapse when async-nats moves to webpki-roots 1.x" },
+  # CORRECTED 2026-09-07 -- this entry previously read as a "SECURITY REVIEW
+  # ITEM" describing two INDEPENDENT TLS trust-root snapshots on the graph.
+  # Re-verified at HEAD: it is stale. webpki-roots 0.26.11's own Cargo.lock
+  # dependency is webpki-roots 1.0.7, and 0.26.11's `src/lib.rs` says so
+  # directly -- "This crate version is a semver trick to webpki-roots v1" --
+  # then does `pub use parent::TLS_SERVER_ROOTS;`, i.e. it RE-EXPORTS 1.0.7's
+  # roots rather than shipping its own snapshot. There is exactly ONE Mozilla
+  # root-program snapshot (1.0.7) on the graph; the NATS and HTTP clients
+  # cannot disagree about trusted CAs. This is an ordinary duplicate-import
+  # entry for graph hygiene, not a live trust-divergence risk -- still worth
+  # collapsing when async-nats -> tokio-websockets depends on webpki-roots 1.x
+  # directly instead of pulling it through the 0.26.x compat shim. See
+  # tools/supply-chain-review.toml for the dated review.
+  { crate = "webpki-roots@0.26.11", reason = "compat shim that re-exports webpki-roots 1.0.7 (a semver-trick release, not an independent trust-root snapshot -- corrected 2026-09-07), pinned by async-nats 0.47 -> tokio-websockets 0.10; see tools/supply-chain-review.toml" },
 
   # --- Target-gated: Windows / wasm / UEFI support that does not build on the CI target ---
   { crate = "windows-core@0.57.0", reason = "target-gated; older windows-* stack held by a transitive dependency" },

@@ -223,6 +223,19 @@ async fn scrape_metrics(
     parse_prometheus_text(&body)
 }
 
+/// Exercises the real Prometheus text-exposition decoder on arbitrary bytes.
+///
+/// `fuzz/fuzz_targets/ingest_sentinel_decode.rs` (phase 287 FUZZ-01) calls
+/// this instead of [`parse_prometheus_text`] directly because `ScrapedMetrics`
+/// is a crate-private representation: exposing it would leak a private type
+/// through a public function signature (denied by this workspace's
+/// `-D warnings` clippy gate). This wrapper calls the exact same production
+/// parser and only erases the success type; it introduces no new parsing
+/// behaviour.
+pub fn parse_prometheus_text_for_fuzz(body: &str) -> Result<(), String> {
+    parse_prometheus_text(body).map(|_| ())
+}
+
 fn parse_prometheus_text(body: &str) -> Result<ScrapedMetrics, String> {
     let mut samples = Vec::new();
     let mut node_name = None;

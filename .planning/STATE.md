@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.79
-milestone_name: Assurance Foundation
-current_phase: 287
-current_phase_name: Deterministic Simulation Testing
+milestone: v1.81
+milestone_name: Machine-Checked Decision Core
+current_phase: 292
+current_phase_name: Pure Decision Core Extraction
 current_plan: null
 status: active
 last_updated: "2026-09-08T02:09:10Z"
 last_activity: 2026-09-07
 progress:
   total_phases: 4
-  completed_phases: 2
-  percent: 50
+  completed_phases: 4
+  percent: 100
 ---
 
 # State
@@ -25,11 +25,11 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 ## Current Position
 
-**Current Phase:** Phase 286 (Deterministic Simulation Testing) COMPLETE — ACCEPTED 2026-09-08 (merge `954c5cd02`). Codex rejected candidate `1a5c9003b` (a test-only DST harness that documented the missing dispatch->receipt journal as a boundary) and REPAIRED the engine with a durable, fsynced, single-writer dispatch-intent journal: both `authorize_and_execute` paths reserve intent before any effect (fail-closed without a journal), a consumed identity never re-executes across crash/reopen/reload, enforced retries disabled. Codex could not run network regressions (sandbox denied TCP) or publish; I ran the full regression here (all suites pass), reviewed it (6-dimension adversarial, 0 blockers/0 majors), fixed two findings, and merged. Next: Phase 287 (fuzz/loom/supply-chain).
-**Total Phases:** 4 in the active v1.79 milestone (284–287); the recorded completions are 284 and 285. These counts describe this milestone, not the full requested roadmap.
-**Current Plan:** none (286-02 accepted; 287 not yet planned)
-**Total Plans in Phase:** 2 (286-01 superseded/rejected; 286-02 ACCEPTED 2026-09-08)
-**Status:** Implementing and verifying the repair; all six DST requirements reopened
+**Current Phase:** Phase 287 (Fuzz, Loom, And Supply-Chain Hardening) COMPLETE 2026-09-08 — **the v1.79 Assurance Foundation milestone (284-287) is now COMPLETE**. 287 shipped as three parallel task-reviewed tracks: a cargo-fuzz workspace over the real telemetry-parse boundary (nightly-isolated, corpus-converted, 4 real decoders); Loom concurrency models over the pheromone + policy paths (bounded_abstract_model, cfg(loom)-gated) that ALSO REPAIRED a real preexisting split-persistence race in the pheromone substrate; and a dated, drift-proof deny-by-default supply-chain gate. Whole-branch review + merge to main pending. Next per the 2026-09-06 gameplan: two items need the USER's design input first (codex flagged my earlier open-agent-protocol deferral as an assistant ruling, not a user instruction; provenance-grade memory 296-299 needs the user's call on folding the held PR #11/#5 hypothesis graph + depends on v1.81). Next UNBLOCKED numbered work: v1.81 (292 pure decision core, 293 Kani, 294 named safety properties + partition-lease model).
+**Total Phases:** 4 in the v1.79 milestone (284–287), ALL COMPLETE 2026-09-08. These counts describe this milestone, not the full requested roadmap (285–313).
+**Current Plan:** none — v1.79 complete; the next numbered phase (292) is not yet planned.
+**Total Plans in Phase:** Phase 292 not yet planned. (Completed v1.79 plans: 285-01; 286-01 rejected / 286-02 accepted; 287-01.)
+**Status:** v1.79 Assurance Foundation COMPLETE (284–287). Next: v1.81 (292–294), after the user's open-agent/provenance reconciliation.
 **Last Activity:** 2026-09-07
 **Last Activity Description:** Recovered exact interrupted Claude transcript and preserved `feat/dst-286` at `1a5c9003b`; rejected the candidate's assurance claims and began isolated production+journal+DST repair on `codex/dst-286-recovery` in `/private/tmp/ambush-dst-286-recovery-20260907`. See `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md` and `286-02-PLAN.md`.
 
@@ -47,9 +47,10 @@ open-agent-protocol milestone: that was an earlier assistant ruling. Provenance
 memory 296–299 still requires its roadmap prerequisites and a source-grounded
 integration decision for the prior graph proposal; resolve its current PR identity against the approved gameplan before proceeding. Packaging follows the full requested work.
 
-**Progress accounting:** v1.79 has two recorded completed phases out of four
-(50% by phase count), with Phase 286 reopened and Phase 287 not started. This is
-not a completion percentage for the full roadmap or evidence of overall acceptance.
+**Progress accounting:** v1.79 has all four phases complete (284–287; Phase 286
+accepted 2026-09-08 via the durable dispatch-intent journal, Phase 287 complete
+2026-09-08). This is the v1.79 milestone only, not a completion percentage for the
+full requested roadmap (285–313).
 
 
 ## Memory
@@ -89,6 +90,7 @@ not a completion percentage for the full roadmap or evidence of overall acceptan
 - v1.79 phase 285 (Assumption Registry And Invariant Mapping) COMPLETE 2026-09-07 — the assurance floor that makes "fail-closed" auditable instead of asserted. `docs/assurance/assumptions.toml` (5c7800644): 8 named assumptions (OS-CLOCK/JETSTREAM-DURABILITY/KEYSTORE-ATOMICITY/ED25519/SHA256/CANONICAL-JSON/NETWORK-TRANSPORT/SUBPROCESS-ISOLATION), each owner + dependent invariants. `docs/assurance/MAPPING.md` (5c7800644): 15 fail-closed invariant rows across swarm-policy (3) / swarm-runtime (5) / swarm-spine (4) / swarm-response (3), each → exact `crate::module::function` + assumption ID (all 15 paths independently resolved). 15 `// INVARIANT:` markers + `tools/check-mapping.sh` three-way sync gate (c4470c860, wired into ci.yml). `docs/assurance/negative-registry.toml` + 15 `crates/*/tests/negative_*.rs` (723466010): each calls the REAL enforcing fn on a denied input and a local BROKEN variant that permits the identical input — proving the positive suite is not vacuous — plus `tools/check-negative-registry.sh` (self-planted counterexamples, wired). ONE honest deviation (`SpineEnvelopeCanonicalizationRequired`): a non-finite `f64` is unreachable through the public serde_json 1.0.149 API (verified against source both directions), so that test falsifies the guard logic on a bare `f64` and asserts the unreachability so a future serde_json upgrade fails loudly; flagged `status="deviation"` in the registry. Executed as a sequential SDD pipeline (T1→T2→T3→T4); task reviews clean — T1 approved (0C/0I/2 cosmetic), T2 self-verified under an external load spike, T3 approved with 0 findings (reviewer re-derived non-vacuity of all 15 tests and the deviation against serde_json source).
 - CORRECTION 2026-09-07: Phase 286 is REOPENED; candidate `1a5c9003b` and the 286-01 closure are rejected. Its reverse-subset receipt oracle, cancellation disposition blind spot, absent same-request recovery, four repeated schedules and empty in-memory reopen do not establish DST-01..06. Preserve the original Git objects, follow `286-02-PLAN.md`, and fill `286-REVIEW.md` only with exact repaired-tree evidence. Local repaired DST, three actual production mutations and restored positive controls now pass; network-enabled regressions and final acceptance remain pending. The prior open-agent/provenance user-deferral claim was an assistant ruling, not a user instruction.
 - ACCEPTANCE 2026-09-08: Phase 286 (286-02 durable dispatch-intent journal) ACCEPTED + merged to main `954c5cd02`. The network-enabled regression codex could not run (TCP denied) passes here: swarm-runtime lib 585, dispatch 21, DST 4 + 5000 nightly, ingest 177, response+http 0 fail; 6 gates + fmt + clippy clean; 6-dimension adversarial review 0 blockers/0 majors; 2 findings fixed (transient journal-poison a70d5f191, SIEM retry scope f289573ea). The rejected candidate `feat/dst-286`/`1a5c9003b` is retired. NOTE codex's flag: the open-agent/provenance deferral was an assistant ruling — reconcile with the user before those phases.
+- v1.79 phase 287 (Fuzz, Loom, And Supply-Chain Hardening) COMPLETE 2026-09-08 — FINAL v1.79 phase; v1.79 Assurance Foundation (284-287) DONE. 3 parallel task-reviewed tracks (all 0C/0I): SUPPLY (ea852a9b3) 22 deny.toml entries dated/justified in companion tools/supply-chain-review.toml (cargo-deny rejects extra in-file keys), check-supply-chain.sh drift-proof (derives cargo-audit --ignore from deny.toml) + non-vacuous. FUZZ (fd9b46946) fuzz/ nightly-isolated cargo-fuzz workspace, 4 targets on REAL decoders, seed-fuzz-corpus.sh wire-format conversion, fuzz-nightly 600s + ci.yml 30s smoke (macOS ASan deadlock local-only; CI ubuntu fine). LOOM (5a0791ecc) loom_concurrent_write + loom_concurrent_decision (cfg(loom) dev-dep, preemption 2, pheromone needs --no-default-features re tokio::net cfg(not(loom))) + loom-nightly + MAPPING bounded_abstract_model; ALSO FIXED a real preexisting pheromone deposit/GC split-persistence race (deposit holds deposits.write() across journal append + memory push) + falsifiable regression + controller backstop green. Whole-branch review + merge pending. FOLLOW-UP: same split-persistence pattern in threat_intel/expired_threat_intel (append-only=safe now).
 - v1.80 phase 290 (Bidirectional Co-Evolution And Convergence) COMPLETE 2026-09-07: closes the red/blue loop against REAL detector runs. `GenomeRedSwarm` (31afa036d) materializes a budgeted plan into telemetry and implements the async `RedSwarmAdapter`; `plan_weighted` (1988f5899) biases operator technique selection by `AttackPatternDb` success rate (`plan`==`plan_weighted(None)`==288 char-for-char); `run_generation` (ef278cc8e, Cover-exclusion fix 29734daae) runs the enabled `DetectionConfig.strategies` detectors over the corpus, attributes catch per technique (excluding benign Cover events), and reuses 289's `AttackScorer` for `red_fitness`; `RedSwarmCampaign::run` (c59d8f44e, doc fix 0c8ceeff1) loops — red biases, blue greedily enables the strategies that catch what evaded (monotonic => non-decreasing catch rate), bounded stop (`max_generations`|`plateau`|`full_coverage`); `swarmctl red-swarm campaign` (fa4455429) persists byte-identical reports under `data/red-swarm/campaigns/` (only `generated_at_ms` varies). The heavy `mutation/` harness is deliberately unused (its `now_ms` breaks SC4). Gen 0 plans an all-neutral-weight snapshot through the weighted arm (deterministic, not byte-identical to `plan()`).
 - v1.80 phase 291 (CI Arms Race Gate And Structural Isolation) COMPLETE 2026-09-07 — LAST red-swarm phase; v1.80 milestone DONE. `tools/check-red-swarm-no-execution-authority.sh` (236812e28, ARMSCI-02) + `red_swarm::isolation_gate` Rust companion (ARMSCI-03) scan the red lane for `execute_response`/`ResponseAdapter`/`PolicyDecision::Authorize`/`live_response`, both plant-a-counterexample non-vacuous, excluding only the fixture by FULL path (fix 206571055); `tools/check-red-swarm-arms-race.sh` (a290a0425, ARMSCI-01/05) runs a bounded `swarmctl red-swarm campaign`, reads `final_blue_catch_rate` from the report FILE, fails below the checked-in 0.75 (real 0.7778), `timeout`-guarded; `evolution status --json` gains a `red_swarm_campaign` object (a2966d905/b9cc8e2c9, ARMSCI-04), fresh from disk, null when absent/malformed, one canonical `CAMPAIGNS_DIR`. Both gates wired into `ci.yml`; gate in `tools/` not `scripts/` (req slip). Whole-branch review pending; executed with parallel worktrees (a load-180 over-parallelism spike was cleared mid-flight — see [[ambush-parallelism-load-limits]]).
 

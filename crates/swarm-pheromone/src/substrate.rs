@@ -986,11 +986,21 @@ impl PheromoneSubstrate for LocalJournalPheromoneSubstrate {
         validate_deposit_signature(&deposit)?;
         self.admission_control
             .validate_deposit_admission(&deposit)?;
-        append_jsonl_line(&self.journal_path, &deposit)?;
+        // Acquire the in-memory vector lock BEFORE appending to the journal so
+        // that the disk append and the in-memory push are one critical section.
+        // `gc_evaporated` rewrites the journal from the in-memory vector while
+        // holding this same lock; without this ordering a GC could take the lock
+        // between this append and the push below and rewrite the journal from a
+        // vector that does not yet contain this deposit, silently dropping the
+        // freshly appended entry from disk so it is lost on the next reopen. The
+        // journal is still written before this method returns and before the
+        // in-memory push, so crash-recovery durability (disk is the source of
+        // truth on reopen) is preserved; only the critical-section boundary moves.
         let mut guard = self
             .deposits
             .write()
             .map_err(|_| SubstrateError::PoisonedLock)?;
+        append_jsonl_line(&self.journal_path, &deposit)?;
         guard.push(deposit);
         Ok(())
     }

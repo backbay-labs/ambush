@@ -1113,7 +1113,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 - [x] **Phase 284: Fixture Determinism And Suite Health** - Regenerate the 161 schema-drifted fixtures, isolate tests from the live repo tree, and stop test runs mutating the working directory. (FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04)
 - [x] **Phase 285: Assumption Registry And Invariant Mapping** - Build the invariant-to-function-to-assumption map with grep enforcement and a negative-falsifiability registry proving no row is vacuous. (MAPPING-01, FALSIFY-02)
 - [x] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
-- [ ] **Phase 287: Fuzz, Loom, And Supply-Chain Hardening** - Adversarial coverage for the untrusted parse boundaries and concurrent write paths, plus dated and justified dependency policy. (FUZZ-01, LOOM-01, SUPPLY-01)
+- [x] **Phase 287: Fuzz, Loom, And Supply-Chain Hardening** - Adversarial coverage for the untrusted parse boundaries and concurrent write paths, plus dated and justified dependency policy. (FUZZ-01, LOOM-01, SUPPLY-01)
 
 ### Phase 284: Fixture Determinism And Suite Health
 
@@ -1172,13 +1172,13 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** Give the untrusted telemetry-parse boundary and the concurrent write paths executable adversarial coverage, and bring dependency policy to a dated, justified, deny-by-default shape.
 **Requirements:** FUZZ-01, FUZZ-02, FUZZ-03, FUZZ-04, LOOM-01, LOOM-02, LOOM-03, LOOM-04, SUPPLY-01, SUPPLY-02
 **Depends on:** Phase 286
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-08) — the final v1.79 phase; parallel tracks (supply/fuzz/loom), each task-reviewed.
+**Plans:** 287-01-PLAN.md
 **Success Criteria**:
-1. Four cargo-fuzz targets call real parse entry points, seeded from existing fixtures, with a 30s smoke pass on every PR and a 600s nightly run that uploads any crashing input.
-2. Loom harnesses over the pheromone and policy concurrent paths pass nightly with a documented preemption budget, labeled `bounded_abstract_model` in MAPPING.md.
-3. Every `deny.toml` ignore entry carries a date, blast-radius note, and clearing condition, enforced by `tools/check-supply-chain.sh`.
-4. The `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift apart.
+1. Four cargo-fuzz targets call real parse entry points, seeded from existing fixtures, with a 30s smoke pass on every PR and a 600s nightly run that uploads any crashing input. — met: fd9b46946, `fuzz/` nightly-isolated workspace; targets call `JsonRecordSource::from_str`, `parse_prometheus_text_for_fuzz`, `GetEventsResponse::decode`+`map_process_exec`, `parse_config_unresolved`; `tools/seed-fuzz-corpus.sh` converts scenarios/rulesets fixtures into each target's real wire format; `fuzz-nightly.yml` (600s/target, crash upload) + `ci.yml` 30s smoke.
+2. Loom harnesses over the pheromone and policy concurrent paths pass nightly with a documented preemption budget, labeled `bounded_abstract_model` in MAPPING.md. — met: 5a0791ecc, `loom_concurrent_write` + `loom_concurrent_decision` (cfg(loom)-gated dev-dep, never in the shipped graph; preemption bound 2; the pheromone harness runs `--no-default-features` since tokio's `net` is `cfg(not(loom))`), `loom-nightly.yml`, MAPPING `bounded_abstract_model` labels. This track ALSO REPAIRED a real preexisting split-persistence race in the pheromone substrate (deposit now holds the deposits lock across the journal append + memory push) with a falsifiable concurrent-reopen regression.
+3. Every `deny.toml` ignore entry carries a date, blast-radius note, and clearing condition, enforced by `tools/check-supply-chain.sh`. — met: ea852a9b3, all 22 ignore/skip entries carry the three fields in a companion `tools/supply-chain-review.toml` (cargo-deny 0.19.4 hard-rejects extra keys inside `[advisories].ignore`, so the ledger is the only schema-compatible carrier); the gate fails on any missing/malformed field, dup ID, or drift, and is non-vacuous.
+4. The `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift apart. — met: ea852a9b3, the gate DERIVES the `cargo audit --ignore` argv from the validated deny.toml/ledger entries (no hand-copied list), so add/remove of an advisory changes the argv by exactly one.
 ### v1.80 Red Swarm
 
 **Goal:** Land an adversary as a first-class, deterministic, catalog-bounded in-tree lane so detectors are scored against something that adapts generation over generation, with fitness measured on the existing evasion-coverage infrastructure and a bounded arms race running in CI.
@@ -1904,7 +1904,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 | 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |
 | 285. Assumption Registry And Invariant Mapping | v1.79 | 1/1 | Complete | 285-01 |
 | 286. Deterministic Simulation Testing | v1.79 | Complete | ACCEPTED 2026-09-08 (journal repair); 286-01 rejected | 286-02 |
-| 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 0/TBD | Not started | - |
+| 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 1/1 | Complete | 287-01 |
 | 288. Red Operator Genome And Target Graph | v1.80 | 1/1 | Complete | 288-01 |
 | 289. Attack Scoring, Stealth Budget And Pattern Memory | v1.80 | 1/1 | Complete | 289-01 |
 | 290. Bidirectional Co-Evolution And Convergence | v1.80 | 1/1 | Complete | 290-01 |
