@@ -6,7 +6,7 @@ current_phase: 296
 current_phase_name: Provenance Graph Substrate
 current_plan: null
 status: active
-last_updated: "2026-09-08T16:00:00Z"
+last_updated: "2026-09-08T16:30:00Z"
 last_activity: 2026-09-08
 progress:
   total_phases: 4
@@ -31,7 +31,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 **Total Plans in Phase:** v1.81 fully closed. (Completed v1.81 plans: 292-01 tasks 1-4, 293-01 tasks 1-5, 294-01 tasks 1-4.)
 **Status:** v1.81 Machine-Checked Decision Core COMPLETE 2026-09-08 (292, 293, 294 all done). BLOCKED, not merely "not yet planned": the next roadmap-numbered work (Phase 296) and the separate open-agent-protocol milestone both require the user's design input before either proceeds — see the reconciliation paragraph above and below.
 **Last Activity:** 2026-09-08
-**Last Activity Description:** Phase 294 (Named Safety Properties And Partition-Lease Model) ledger closed 2026-09-08 on branch `feat/safep-294` (implementation through `2c19b8d3f`, this close on top of it): named safety properties P1-P6, two trust assumptions, the partition-contingency-lease Apalache model, 3 negative-falsifiability variants, and a gated CI job — SAFEP-01..05 Satisfied. This closes the v1.81 Machine-Checked Decision Core milestone (292-294) end to end; the branch has not yet been merged to `main`. Next: the user's reconciliation on Phase 296 / open-agent-protocol direction, not another numbered phase close.
+**Last Activity Description:** Phase 294 (Named Safety Properties And Partition-Lease Model) MERGED to `main` (`9d26224db`, --no-ff) and pushed to origin, 2026-09-08 — completing the v1.81 Machine-Checked Decision Core milestone (292/293/294) end to end. Shipped named safety properties P1-P6, two trust assumptions, the partition-contingency-lease Apalache model (4 invariants check clean) + 3 negative-falsifiability variants (each violates + names its runtime test) + a gated CI job; whole-branch review (opus): SHIP, 0 Critical/0 Important. **BLOCKED next:** the roadmap's next executable work (Phase 296 provenance memory, v1.82) and the open-agent-protocol milestone both need the USER's design input before either can proceed — v1.81 completing is the point to reconcile direction with the user, not to guess a path.
 
 **Full goal remains active:** the entire 2026-09-06 gameplan plus canonical engine
 phases 285-313. The user did not defer the approved open-agent-protocol milestone:
