@@ -1,3 +1,4 @@
+use crate::formal_core::{self, RateLimitOutcome};
 use crate::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
 };
@@ -32,25 +33,6 @@ impl StaticApprovalGate {
             max_actions_per_scope_per_minute: config.max_actions_per_scope_per_minute,
             scope_windows: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    fn destructive_action(request: &ActionRequest) -> bool {
-        // Kept in step with `destructive_action_kinds()` by a test.
-        matches!(
-            request.action,
-            ResponseAction::BlockEgress { .. }
-                | ResponseAction::IsolateHost { .. }
-                | ResponseAction::RevokeCredential { .. }
-                | ResponseAction::SinkholeDns { .. }
-                | ResponseAction::TerminateUserSession { .. }
-                | ResponseAction::InjectFirewallRule { .. }
-                | ResponseAction::QuarantineFile { .. }
-                | ResponseAction::KillProcess { .. }
-                | ResponseAction::SuspendProcess { .. }
-                | ResponseAction::DisableUserAccount { .. }
-                | ResponseAction::ForcePasswordReset { .. }
-                | ResponseAction::RemoveScheduledTask { .. }
-        )
     }
 
     // INVARIANT: PolicyMalformedRequestRejected
@@ -198,16 +180,12 @@ impl StaticApprovalGate {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn prune_window(window: &mut VecDeque<i64>, now_ms: i64) {
-        while window
-            .front()
-            .is_some_and(|timestamp| *timestamp <= now_ms.saturating_sub(60_000))
-        {
-            window.pop_front();
-        }
-    }
-
-    // INVARIANT: PolicyScopeRateLimitDeniesBurst
+    /// Decide whether `request`'s scope still has budget at `context.now_ms`,
+    /// delegating the prune-then-check-then-record decision to the pure
+    /// [`formal_core::evaluate_rate_limit`]. The `Mutex` stays here at the
+    /// edge: the window is read out from under the lock, handed to the pure
+    /// core by value, and the returned window written back in its place
+    /// before the lock is released.
     fn scope_rate_limit_decision(
         &self,
         request: &ActionRequest,
@@ -216,18 +194,22 @@ impl StaticApprovalGate {
         let scope = Self::scope_bucket(request);
         let mut windows = self.lock_windows();
         let window = windows.entry(scope.clone()).or_default();
-        Self::prune_window(window, context.now_ms);
-        if window.len() >= self.max_actions_per_scope_per_minute {
-            return Some(PolicyDecision::deny_with_rule(
+        let (outcome, updated) = formal_core::evaluate_rate_limit(
+            std::mem::take(window),
+            context.now_ms,
+            self.max_actions_per_scope_per_minute,
+        );
+        *window = updated;
+        match outcome {
+            RateLimitOutcome::Denied => Some(PolicyDecision::deny_with_rule(
                 "static.scope_rate_limit",
                 format!(
                     "scope `{scope}` exceeded {} actions per minute",
                     self.max_actions_per_scope_per_minute
                 ),
-            ));
+            )),
+            RateLimitOutcome::Allowed => None,
         }
-        window.push_back(context.now_ms);
-        None
     }
 }
 
@@ -274,32 +256,26 @@ impl ApprovalGate for StaticApprovalGate {
     ) -> Result<PolicyDecision, ApprovalError> {
         self.validate_request(request)?;
 
-        if Self::destructive_action(request) && request.severity == Severity::Low {
-            return Ok(PolicyDecision::deny_with_rule(
-                "static.minimum_severity",
-                "destructive actions require at least medium severity",
-            ));
-        }
-
-        if matches!(request.action, ResponseAction::DeployDecoy { .. })
-            && request.severity == Severity::Low
+        // The severity floor and the human gate are decided by the pure
+        // decision core (`formal_core`, phase 292 SC1); the order here --
+        // floor denials, then the scope rate limit, then the human-gate hold,
+        // then the default allow -- is behaviour and is preserved exactly.
+        if let Some(decision) =
+            formal_core::severity_floor_denial(&request.action, request.severity)
         {
-            return Ok(PolicyDecision::deny_with_rule(
-                "static.deploy_decoy_min_severity",
-                "deploy_decoy requires at least medium severity",
-            ));
+            return Ok(decision);
         }
 
         if let Some(decision) = self.scope_rate_limit_decision(request, context) {
             return Ok(decision);
         }
 
-        // INVARIANT: PolicyHumanGateOnDestructiveAction
-        if Self::destructive_action(request) && request.severity >= self.human_gate_severity {
-            return Ok(PolicyDecision::require_human_with_rule(
-                "static.human_gate",
-                "authorized but held for human approval",
-            ));
+        if let Some(decision) = formal_core::human_gate_decision(
+            &request.action,
+            request.severity,
+            self.human_gate_severity,
+        ) {
+            return Ok(decision);
         }
 
         Ok(PolicyDecision::allow_with_rule(

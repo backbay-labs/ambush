@@ -906,11 +906,13 @@ final review closure under `286-02-PLAN.md`.
 
 #### Pure Decision Core Extraction
 
-- [ ] **DCORE-01**: `crates/swarm-policy/src/formal_core.rs` holds the approval and rate-limit logic as pure total functions taking window state and `now_ms: i64` explicitly, returning updated state instead of mutating `Arc<Mutex<HashMap<..>>>` in place.
-- [ ] **DCORE-02**: The partition and governance predicates (`GovernancePolicy::can_act`, `ContingencyLease::verify`/`can_redeem`/`redeem`, `governance_quorum_threshold`) are ported into `formal_core.rs` with no `Mutex`, no `fs`, and no direct clock; the internal `now_ms()` call at `tom_agent.rs:508` becomes an explicit parameter.
-- [ ] **DCORE-03**: `cargo tree -p swarm-policy` contains no `axum`, `hyper`, `tokio-rustls`, `reqwest`, `opentelemetry*`, `clap`, or `x509-parser`.
-- [ ] **DCORE-04**: `docs/adr/ADR-0002-decision-core-boundary.md` plus `scripts/check-decision-core-boundary.sh` enforce the forbidden-dependency list in CI.
-- [ ] **DCORE-05**: Every pre-existing `static_gate`, `configurable_gate`, and `tom_agent` governance test passes unchanged against the new call paths.
+- [x] **DCORE-01** (eb64f7c85): `crates/swarm-policy/src/formal_core.rs` holds the approval and rate-limit logic as pure total functions taking window state and `now_ms: i64` explicitly, returning updated state instead of mutating `Arc<Mutex<HashMap<..>>>` in place.
+- [x] **DCORE-02** (f5cb3d8df): The partition and governance predicates (`GovernancePolicy::can_act`, `ContingencyLease::verify`/`can_redeem`/`redeem`, `governance_quorum_threshold`) are ported into `formal_core.rs` with no `Mutex`, no `fs`, and no direct clock; the internal `now_ms()` call at `tom_agent.rs:508` becomes an explicit parameter.
+- [x] **DCORE-03** (49121d577): `cargo tree -p swarm-policy` contains no `axum`, `hyper`, `tokio-rustls`, `reqwest`, `opentelemetry*`, `clap`, or `x509-parser`.
+- [x] **DCORE-04** (49121d577): `docs/adr/ADR-0002-decision-core-boundary.md` plus `scripts/check-decision-core-boundary.sh` enforce the forbidden-dependency list in CI.
+  Delivered as `docs/decisions/0012-decision-core-boundary.md` plus `tools/check-decision-core-boundary.sh` — path-slip recorded per Design-of-record ruling (repo convention: ADRs live in `docs/decisions/NNNN-…`, gates live in `tools/check-*.sh` so `check-gates-wired.sh` sees them; same ruling as phases 283/285/291).
+- [x] **DCORE-05** (eb64f7c85, f5cb3d8df): Every pre-existing `static_gate`, `configurable_gate`, and `tom_agent` governance test passes unchanged against the new call paths.
+  Verified after every task and RE-VERIFIED on the final tree at Phase 292's close (2026-09-08): `cargo test -p swarm-policy` — 39 passed, 0 failed; `cargo test -p swarm-agents` — 17 lib + 7 governance (`governance_single_key.rs`) passed, 0 failed.
 
 #### Kani Bounded Model Checking
 
@@ -1530,11 +1532,11 @@ final review closure under `286-02-PLAN.md`.
 | ARMSCI-03 | Phase 291 | Satisfied |
 | ARMSCI-04 | Phase 291 | Satisfied |
 | ARMSCI-05 | Phase 291 | Satisfied |
-| DCORE-01 | Phase 292 | Pending |
-| DCORE-02 | Phase 292 | Pending |
-| DCORE-03 | Phase 292 | Pending |
-| DCORE-04 | Phase 292 | Pending |
-| DCORE-05 | Phase 292 | Pending |
+| DCORE-01 | Phase 292 | Satisfied 2026-09-08 — eb64f7c85 |
+| DCORE-02 | Phase 292 | Satisfied 2026-09-08 — f5cb3d8df |
+| DCORE-03 | Phase 292 | Satisfied 2026-09-08 — 49121d577 |
+| DCORE-04 | Phase 292 | Satisfied 2026-09-08 — 49121d577; path-slip recorded per Design-of-record ruling (repo convention), delivered as `docs/decisions/0012-decision-core-boundary.md` + `tools/check-decision-core-boundary.sh` |
+| DCORE-05 | Phase 292 | Satisfied 2026-09-08 — eb64f7c85, f5cb3d8df; re-verified on the final tree at phase close |
 | KANI-01 | Phase 293 | Pending |
 | KANI-02 | Phase 293 | Pending |
 | KANI-03 | Phase 293 | Pending |
@@ -1694,7 +1696,7 @@ final review closure under `286-02-PLAN.md`.
 - v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
 - v1.79 COMPLETE 2026-09-08: 29 requirements across phases 284-287 all Satisfied (Phase 286 accepted via the durable dispatch-intent journal; Phase 287 fuzz/loom/supply complete) (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
-- v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
+- v1.81 in progress: 15 requirements across phases 292-294 (DCORE-01-05 Satisfied 2026-09-08 as Phase 292) (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
 - v1.83 queued: 14 requirements across phases 301-303 (VRF-01-05 -> Phase 301; REVOKE-01-05 -> Phase 302; DISTGOV-01-04 -> Phase 303)
 - v1.84 queued: 12 requirements across phases 305-307 (IFC-01-04 -> Phase 305; HERD-01-04 -> Phase 306; DECOY-01-04 -> Phase 307)

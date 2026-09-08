@@ -13,6 +13,10 @@
 //! - The deterministic authorization decision itself: [`static_gate`] and
 //!   [`configurable_gate`], including the fail-closed path for malformed,
 //!   expired or under-evidenced requests.
+//! - The pure, IO-free rate-limit decision core the two gates share:
+//!   [`formal_core`]. No `Mutex`, `fs`, clock read, or network call in its
+//!   bodies -- `now_ms` is always a caller-supplied parameter, so it is the
+//!   proof surface for future Kani harnesses (phase 293).
 //! - Who may act during a partition: the [`governance::GovernanceAuthority`]
 //!   trait the dispatcher authorizes through.
 //!
@@ -36,6 +40,7 @@
 //! which runs in CI and carries a fixture proving it fails when they are broken.
 
 pub mod configurable_gate;
+pub mod formal_core;
 pub mod governance;
 pub mod static_gate;
 

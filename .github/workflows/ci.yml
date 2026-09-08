@@ -272,6 +272,30 @@ jobs:
       - name: Check the trusted-computing-base layering boundary
         run: bash tools/check-workspace-layering.sh
 
+      # DCORE-03/04. Phase 292 carved swarm-policy's rate-limit and governance
+      # predicates into a pure, clock-injected decision core
+      # (crates/swarm-policy/src/formal_core.rs) as the machine-checkable proof
+      # surface for phases 293 (Kani) and 294 (named safety properties). This
+      # keeps that surface clean of the same shape of dependency ADR 0009
+      # already bans from the TCB, plus opentelemetry* and x509-parser: a
+      # transport, telemetry client or CLI parser reaching swarm-policy -- even
+      # transitively, even only through a crate it legitimately depends on --
+      # drags network IO and non-determinism into exactly the region a proof
+      # engine must reason about. Enforce-only today; swarm-policy is already
+      # clean of all seven (ADR 0012).
+      #
+      # Same reasoning as the TCB gate above for living in this job: it reads
+      # `cargo metadata`, which resolves without compiling, and this job
+      # already installs the toolchain. It is not a manifest grep -- it walks
+      # the RESOLVED normal graph, which is what catches a forbidden crate
+      # arriving through a dependency swarm-policy already declares, and
+      # proves its own scan can both pass and catch a planted violation
+      # (direct, smuggled two hops behind swarm-core, and an opentelemetry*
+      # family member) on every invocation before trusting it to judge the
+      # real graph.
+      - name: Check the decision-core dependency boundary
+        run: bash tools/check-decision-core-boundary.sh
+
       # The Perch wire contract lives in three places with no codegen between
       # them: the JSON Schemas under docs/plans/ambush-ui/build/schemas/, the
       # Rust wire crate, and the desktop's zod module under workspace/. The two

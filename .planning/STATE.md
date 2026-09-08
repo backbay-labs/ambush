@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.81
 milestone_name: Machine-Checked Decision Core
-current_phase: 292
-current_phase_name: Pure Decision Core Extraction
+current_phase: 293
+current_phase_name: Kani Bounded Model Checking
 current_plan: null
 status: active
-last_updated: "2026-09-08T02:09:10Z"
-last_activity: 2026-09-07
+last_updated: "2026-09-08T03:00:00Z"
+last_activity: 2026-09-08
 progress:
-  total_phases: 4
-  completed_phases: 4
-  percent: 100
+  total_phases: 3
+  completed_phases: 1
+  percent: 33
 ---
 
 # State
@@ -21,36 +21,29 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** Phase 286 ACCEPTED 2026-09-08 (durable dispatch-intent journal repair `286-02`, merge `954c5cd02`) after the full network-enabled regression passed here + independent review. Next: Phase 287 (fuzz, loom, supply-chain).
+**Current focus:** Phase 292 (Pure Decision Core Extraction) COMPLETE 2026-09-08 — the pure, clock-injected decision core (`crates/swarm-policy/src/formal_core.rs`) is the proof surface phases 293 (Kani) and 294 (named safety properties) build on. Next: Phase 293 (Kani Bounded Model Checking).
 
 ## Current Position
 
-**Current Phase:** Phase 287 (Fuzz, Loom, And Supply-Chain Hardening) COMPLETE 2026-09-08 — **the v1.79 Assurance Foundation milestone (284-287) is now COMPLETE**. 287 shipped as three parallel task-reviewed tracks: a cargo-fuzz workspace over the real telemetry-parse boundary (nightly-isolated, corpus-converted, 4 real decoders); Loom concurrency models over the pheromone + policy paths (bounded_abstract_model, cfg(loom)-gated) that ALSO REPAIRED a real preexisting split-persistence race in the pheromone substrate; and a dated, drift-proof deny-by-default supply-chain gate. Whole-branch review + merge to main pending. Next per the 2026-09-06 gameplan: two items need the USER's design input first (codex flagged my earlier open-agent-protocol deferral as an assistant ruling, not a user instruction; provenance-grade memory 296-299 needs the user's call on folding the held PR #11/#5 hypothesis graph + depends on v1.81). Next UNBLOCKED numbered work: v1.81 (292 pure decision core, 293 Kani, 294 named safety properties + partition-lease model).
-**Total Phases:** 4 in the v1.79 milestone (284–287), ALL COMPLETE 2026-09-08. These counts describe this milestone, not the full requested roadmap (285–313).
-**Current Plan:** none — v1.79 complete; the next numbered phase (292) is not yet planned.
-**Total Plans in Phase:** Phase 292 not yet planned. (Completed v1.79 plans: 285-01; 286-01 rejected / 286-02 accepted; 287-01.)
-**Status:** v1.79 Assurance Foundation COMPLETE (284–287). Next: v1.81 (292–294), after the user's open-agent/provenance reconciliation.
-**Last Activity:** 2026-09-07
-**Last Activity Description:** Recovered exact interrupted Claude transcript and preserved `feat/dst-286` at `1a5c9003b`; rejected the candidate's assurance claims and began isolated production+journal+DST repair on `codex/dst-286-recovery` in `/private/tmp/ambush-dst-286-recovery-20260907`. See `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md` and `286-02-PLAN.md`.
-
-The repair requires a durable authorization intent before an effect and an honest
-completion record after an observed outcome. The journal is unsigned and
-OS-protected; signed audit remains separate. Ambiguous/unresolved attempts never
-permit automatic redispatch. Both production runtime entry sites, composition
-and reload must uphold the same immutable reservation.
+**Current Phase:** Phase 292 (Pure Decision Core Extraction) COMPLETE 2026-09-08 — **the first phase of the v1.81 Machine-Checked Decision Core milestone**. Executed as a sequential 4-task pipeline (T1 rate-limit core -> T2 governance predicates -> T3 boundary ADR+gate -> T4 this close), each task reviewed clean (0 Critical/0 Important). `crates/swarm-policy/src/formal_core.rs` now holds the approval/rate-limit decision (DCORE-01, `eb64f7c85`) and the governance predicates — `ContingencyLease::{verify,can_redeem,redeem}` (as `lease_can_redeem`/`lease_redeem`/`validate_lease_terms`), `governance_quorum_threshold` (DCORE-02, `f5cb3d8df`) — as pure, total, clock-injected functions: no `Mutex`, `fs`, clock, or network in any `formal_core` body. The `Arc<Mutex<..>>` rate-limit windows stay at the edge in `static_gate.rs`/`configurable_gate.rs`; `GovernancePolicy::can_act` is now a one-line clock-reading wrapper over the pure, clock-free `can_act_at(action, now_ms)` (the `now_ms()` read that used to happen inside `tom_agent.rs:508` is threaded down as an explicit parameter to `formal_core::lease_can_redeem`) — no verdict change for any input. `tools/check-decision-core-boundary.sh` + ADR `docs/decisions/0012-decision-core-boundary.md` (DCORE-03/04, `49121d577`) enforce in CI that `swarm-policy`'s resolved dependency graph never reaches `axum`/`hyper`/`tokio-rustls`/`reqwest`/`opentelemetry*`/`clap`/`x509-parser` (already clean; enforce-only, self-tested against synthetic clean/planted graphs). DCORE-04's paths are a recorded path-slip — repo convention, same ruling as phases 283/285/291 — see `292-01-SUMMARY.md`. DCORE-05 verified after every task and RE-VERIFIED on the final tree in this closing task: `cargo test -p swarm-policy` (39 passing) + `cargo test -p swarm-agents` (17 lib + 7 governance) unchanged, plus all five `tools/check-*.sh` gates touching this crate green. Next UNBLOCKED numbered work: **293 (Kani Bounded Model Checking)**, then **294 (Named Safety Properties And Partition-Lease Model)**. Unchanged from the v1.79 close, two items still need the USER's design input before they can be picked up: codex flagged the earlier open-agent-protocol deferral as an assistant ruling, not a user instruction; provenance-grade memory (phases 296-299) needs the user's call on folding the held PR #11/#5 hypothesis graph, and depends on v1.81 completing first.
+**Total Phases:** 3 in the v1.81 milestone (292-294) per ROADMAP.md's v1.81 section (295 is an orphan row superseded by phase 322, not part of this count); 1 complete (292, 2026-09-08). 293 (Kani) and 294 (named safety properties + partition-lease model) are NOT started. These counts describe this milestone, not the full requested roadmap (285-313).
+**Current Plan:** none — 292 complete (`292-01-PLAN.md`, 4 tasks); the next numbered phase (293) is not yet planned.
+**Total Plans in Phase:** Phase 293 not yet planned. (Completed v1.81 plans: 292-01, tasks 1-4.)
+**Status:** v1.81 Phase 292 (Pure Decision Core Extraction) COMPLETE 2026-09-08. Next: Phase 293 (Kani), then 294 — independently of the user's open-agent/provenance reconciliation, which blocks only 296-299, not 293/294.
+**Last Activity:** 2026-09-08
+**Last Activity Description:** Closed Phase 292 in the planning ledger (Task 4 of 4): DCORE-01..05 marked `[x]`/Satisfied in REQUIREMENTS.md with commits (`eb64f7c85`, `f5cb3d8df`, `49121d577`) and the DCORE-04 path-slip recorded; the v1.81 milestone checklist, phase block and roll-up updated in ROADMAP.md (293/294 left Not started); this STATE.md frontmatter and body reconciled so neither contradicts the other or REQUIREMENTS/ROADMAP; `.planning/phases/292-pure-decision-core-extraction/292-01-SUMMARY.md` added. DCORE-05 final verification re-run on the closing tree: `cargo test -p swarm-policy` (39 passing) + `cargo test -p swarm-agents` (17 lib + 7 governance) pass unchanged; `check-decision-core-boundary.sh`, `check-mapping.sh`, `check-negative-registry.sh`, `check-gates-wired.sh`, `check-workspace-layering.sh` all exit 0. `git diff --stat` for this commit touches only `.planning/`.
 
 **Full goal remains active:** the entire 2026-09-06 gameplan plus canonical engine
-phases 285–313. Phase 287 remains downstream of accepted Phase 286, followed by
-the remaining roadmap. Phases 288–291 are recorded as previously landed; they
-are not re-audited by this recovery record. The user did not defer the approved
-open-agent-protocol milestone: that was an earlier assistant ruling. Provenance
-memory 296–299 still requires its roadmap prerequisites and a source-grounded
-integration decision for the prior graph proposal; resolve its current PR identity against the approved gameplan before proceeding. Packaging follows the full requested work.
+phases 285-313. The user did not defer the approved open-agent-protocol milestone:
+that was an earlier assistant ruling. Provenance memory 296-299 still requires its
+roadmap prerequisites (v1.81 complete) and a source-grounded integration decision
+for the prior graph proposal; resolve its current PR identity against the approved
+gameplan before proceeding. Packaging follows the full requested work.
 
-**Progress accounting:** v1.79 has all four phases complete (284–287; Phase 286
-accepted 2026-09-08 via the durable dispatch-intent journal, Phase 287 complete
-2026-09-08). This is the v1.79 milestone only, not a completion percentage for the
-full requested roadmap (285–313).
+**Progress accounting:** v1.81 has 1 of 3 phases complete (292, 2026-09-08; 293 and
+294 not started). v1.79 (284-287) and v1.80 (288-291) are both previously recorded
+complete. This is the v1.81 milestone only, not a completion percentage for the
+full requested roadmap (285-313).
 
 
 ## Memory
@@ -92,7 +85,8 @@ full requested roadmap (285–313).
 - ACCEPTANCE 2026-09-08: Phase 286 (286-02 durable dispatch-intent journal) ACCEPTED + merged to main `954c5cd02`. The network-enabled regression codex could not run (TCP denied) passes here: swarm-runtime lib 585, dispatch 21, DST 4 + 5000 nightly, ingest 177, response+http 0 fail; 6 gates + fmt + clippy clean; 6-dimension adversarial review 0 blockers/0 majors; 2 findings fixed (transient journal-poison a70d5f191, SIEM retry scope f289573ea). The rejected candidate `feat/dst-286`/`1a5c9003b` is retired. NOTE codex's flag: the open-agent/provenance deferral was an assistant ruling — reconcile with the user before those phases.
 - v1.79 phase 287 (Fuzz, Loom, And Supply-Chain Hardening) COMPLETE 2026-09-08 — FINAL v1.79 phase; v1.79 Assurance Foundation (284-287) DONE. 3 parallel task-reviewed tracks (all 0C/0I): SUPPLY (ea852a9b3) 22 deny.toml entries dated/justified in companion tools/supply-chain-review.toml (cargo-deny rejects extra in-file keys), check-supply-chain.sh drift-proof (derives cargo-audit --ignore from deny.toml) + non-vacuous. FUZZ (fd9b46946) fuzz/ nightly-isolated cargo-fuzz workspace, 4 targets on REAL decoders, seed-fuzz-corpus.sh wire-format conversion, fuzz-nightly 600s + ci.yml 30s smoke (macOS ASan deadlock local-only; CI ubuntu fine). LOOM (5a0791ecc) loom_concurrent_write + loom_concurrent_decision (cfg(loom) dev-dep, preemption 2, pheromone needs --no-default-features re tokio::net cfg(not(loom))) + loom-nightly + MAPPING bounded_abstract_model; ALSO FIXED a real preexisting pheromone deposit/GC split-persistence race (deposit holds deposits.write() across journal append + memory push) + falsifiable regression + controller backstop green. Whole-branch review + merge pending. FOLLOW-UP: same split-persistence pattern in threat_intel/expired_threat_intel (append-only=safe now).
 - v1.80 phase 290 (Bidirectional Co-Evolution And Convergence) COMPLETE 2026-09-07: closes the red/blue loop against REAL detector runs. `GenomeRedSwarm` (31afa036d) materializes a budgeted plan into telemetry and implements the async `RedSwarmAdapter`; `plan_weighted` (1988f5899) biases operator technique selection by `AttackPatternDb` success rate (`plan`==`plan_weighted(None)`==288 char-for-char); `run_generation` (ef278cc8e, Cover-exclusion fix 29734daae) runs the enabled `DetectionConfig.strategies` detectors over the corpus, attributes catch per technique (excluding benign Cover events), and reuses 289's `AttackScorer` for `red_fitness`; `RedSwarmCampaign::run` (c59d8f44e, doc fix 0c8ceeff1) loops — red biases, blue greedily enables the strategies that catch what evaded (monotonic => non-decreasing catch rate), bounded stop (`max_generations`|`plateau`|`full_coverage`); `swarmctl red-swarm campaign` (fa4455429) persists byte-identical reports under `data/red-swarm/campaigns/` (only `generated_at_ms` varies). The heavy `mutation/` harness is deliberately unused (its `now_ms` breaks SC4). Gen 0 plans an all-neutral-weight snapshot through the weighted arm (deterministic, not byte-identical to `plan()`).
-- v1.80 phase 291 (CI Arms Race Gate And Structural Isolation) COMPLETE 2026-09-07 — LAST red-swarm phase; v1.80 milestone DONE. `tools/check-red-swarm-no-execution-authority.sh` (236812e28, ARMSCI-02) + `red_swarm::isolation_gate` Rust companion (ARMSCI-03) scan the red lane for `execute_response`/`ResponseAdapter`/`PolicyDecision::Authorize`/`live_response`, both plant-a-counterexample non-vacuous, excluding only the fixture by FULL path (fix 206571055); `tools/check-red-swarm-arms-race.sh` (a290a0425, ARMSCI-01/05) runs a bounded `swarmctl red-swarm campaign`, reads `final_blue_catch_rate` from the report FILE, fails below the checked-in 0.75 (real 0.7778), `timeout`-guarded; `evolution status --json` gains a `red_swarm_campaign` object (a2966d905/b9cc8e2c9, ARMSCI-04), fresh from disk, null when absent/malformed, one canonical `CAMPAIGNS_DIR`. Both gates wired into `ci.yml`; gate in `tools/` not `scripts/` (req slip). Whole-branch review pending; executed with parallel worktrees (a load-180 over-parallelism spike was cleared mid-flight — see [[ambush-parallelism-load-limits]]).
+- v1.80 phase 291 (CI Arms Race Gate And Structural Isolation) COMPLETE 2026-09-07 — LAST red-swarm phase; v1.80 milestone DONE. `tools/check-red-swarm-no-execution-authority.sh` (236812e28, ARMSCI-02) + `red_swarm::isolation_gate` Rust companion (ARMSCI-03) scan the red lane for `execute_response`/`ResponseAdapter`/`PolicyDecision::Authorize`/`live_response`, both plant-a-counterexample non-vacuous, excluding only the fixture by FULL path (fix 206571055); `tools/check-red-swarm-arms-race.sh` (a290a0425, ARMSCI-01/05) runs a bounded `swarmctl red-swarm campaign`, reads `final_blue_catch_rate` from the report FILE, fails below the checked-in 0.75 (real 0.7778), `timeout`-guarded; `evolution status --json` gains a `red_swarm_campaign` object (a2966d905/b9cc8e2c9, ARMSCI-04), fresh from disk, null when absent/malformed, one canonical `CAMPAIGNS_DIR`. Both gates wired into `ci.yml`; gate in `tools/` not `scripts/` (req slip). Whole-branch review SHIP (0 Critical/0 Important); executed with parallel worktrees (a load-180 over-parallelism spike was cleared mid-flight — see [[ambush-parallelism-load-limits]]).
+- v1.81 phase 292 (Pure Decision Core Extraction) COMPLETE 2026-09-08 — first phase of the Machine-Checked Decision Core milestone, the prerequisite for Kani (293) and named safety properties (294). Sequential 4-task pipeline, each task reviewed clean (0C/0I). `formal_core.rs` (crates/swarm-policy/src/) holds the rate-limit decision (DCORE-01, eb64f7c85) and the governance predicates ported down from swarm-agents (DCORE-02, f5cb3d8df) as pure, total, clock-injected functions — `now_ms` is always a parameter, no Mutex/fs/clock/network in any formal_core body; the Mutex stays at the edge in static_gate.rs/configurable_gate.rs. ACCEPTED functional-core/imperative-shell deviation: `GovernancePolicy::can_act` (public signature many call sites and the DCORE-05-pinned tests depend on) is kept as a one-line clock-reading wrapper that reads `now_ms()` once and calls the new private `can_act_at(action, now_ms)`, which is the actual pure, clock-free decision and the real proof surface for phase 293 — this is correct under DCORE-02's own text ("the clock is caller-supplied at every entry into formal_core") because `can_act_at` supplies the clock explicitly to every `formal_core` call it makes, and the one remaining OS-clock read is confined to a single-line boundary, exactly like the gates' Mutex-at-the-edge pattern. `tools/check-decision-core-boundary.sh` + ADR `docs/decisions/0012-decision-core-boundary.md` (DCORE-03/04, 49121d577) enforce the forbidden-dependency list in CI (already clean; enforce-only), non-vacuous (self-tested against synthetic clean/planted graphs including a two-hop smuggled-behind-swarm-core case and an `opentelemetry*`-prefix case). DCORE-04 path-slip recorded per Design-of-record ruling, same as phases 283/285/291 (`docs/adr/ADR-0002-...` -> `docs/decisions/0012-...`; `scripts/...` -> `tools/...`). DCORE-05 verified after every task and re-verified on the closing tree: `cargo test -p swarm-policy` (39 passing) + `cargo test -p swarm-agents` (17 lib + 7 governance) unchanged; `check-decision-core-boundary.sh`/`check-mapping.sh`/`check-negative-registry.sh`/`check-gates-wired.sh`/`check-workspace-layering.sh` all exit 0. Whole-branch review SHIP (0 Critical/0 Important); `git diff --stat` for the closing commit touches only `.planning/`.
 
 ## Issues
 

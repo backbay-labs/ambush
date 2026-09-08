@@ -1,3 +1,4 @@
+use crate::formal_core::{self, RateLimitOutcome};
 use crate::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
 };
@@ -73,15 +74,14 @@ impl ConfigurableApprovalGate {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn prune_window(window: &mut VecDeque<i64>, now_ms: i64) {
-        while window
-            .front()
-            .is_some_and(|timestamp| *timestamp <= now_ms.saturating_sub(60_000))
-        {
-            window.pop_front();
-        }
-    }
-
+    /// Decide whether `request.requested_by` still has budget under `rule`
+    /// at `now_ms`, delegating the prune-then-check-then-record decision to
+    /// the pure [`formal_core::evaluate_rate_limit`] -- the same core
+    /// `StaticApprovalGate::scope_rate_limit_decision` uses, keyed here by
+    /// agent instead of by scope. The `Mutex` stays at the edge: the window
+    /// is read out from under the lock, handed to the pure core by value,
+    /// and the returned window written back in its place before the lock is
+    /// released.
     fn agent_limit_exceeded(
         &self,
         rule: &PolicyRuleConfig,
@@ -92,12 +92,10 @@ impl ConfigurableApprovalGate {
         let key = Self::agent_window_key(rule, request);
         let mut windows = self.lock_windows();
         let window = windows.entry(key).or_default();
-        Self::prune_window(window, now_ms);
-        if window.len() >= limit {
-            return true;
-        }
-        window.push_back(now_ms);
-        false
+        let (outcome, updated) =
+            formal_core::evaluate_rate_limit(std::mem::take(window), now_ms, limit);
+        *window = updated;
+        matches!(outcome, RateLimitOutcome::Denied)
     }
 
     fn allow_reason(rule: &PolicyRuleConfig) -> String {
