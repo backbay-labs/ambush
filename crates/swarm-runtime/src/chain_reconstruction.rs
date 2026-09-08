@@ -506,9 +506,10 @@ pub struct CrossHuntIncidentAnchor<'a> {
 /// rather than by classification alone — two hunts genuinely touching the
 /// same host or process IS itself real, hunt-specific evidence, not a
 /// classification coincidence, so those are deliberately NOT excluded here.
-/// [`causal_bridge`] still requires an actual `Causal` edge on top of this
-/// check, so a shared `Entity` alone (no `Causal` edge) still does not
-/// qualify as a bridge either — see
+/// [`causal_bridge`] reaches such a concrete node only via a `Causal`-only
+/// walk ([`KnowledgeGraphSnapshot::causal_provenance_paths`]), so a shared
+/// `Entity` tied to the two hunts by non-causal edges alone is never even on
+/// the bridge path — see
 /// `join_cross_hunt_kill_chain_does_not_bridge_hunts_that_share_an_entity_without_a_causal_edge`.
 fn is_globally_merged_classification_node(
     snapshot: &KnowledgeGraphSnapshot,
@@ -544,23 +545,6 @@ fn path_is_free_of_globally_merged_classification_nodes(
         .any(|node_id| is_globally_merged_classification_node(snapshot, node_id))
 }
 
-/// True if any edge `path` crosses is a genuine
-/// `KnowledgeGraphEdge::Causal` edge (`ProcessParentChild`/
-/// `NetworkFlowOrigin`/`FileWrite`/`FileExecute`/`DnsResolution`/
-/// `CredentialAccess`) — CHAIN-03's own wording is "connected by a CAUSAL
-/// path", not merely "connected by some path". A path built entirely from
-/// `Semantic`/`Temporal`/`Entity` edges is real graph connectivity but is
-/// not itself causal evidence that two hunts are related — see
-/// `join_cross_hunt_kill_chain_does_not_bridge_hunts_that_share_an_entity_without_a_causal_edge`,
-/// where two hunts share only an `Entity` (host) node and no `Causal` edge.
-fn path_contains_a_causal_edge(snapshot: &KnowledgeGraphSnapshot, path: &ProvenancePath) -> bool {
-    path.edge_ids.iter().any(|edge_id| {
-        snapshot.edges.iter().any(
-            |edge| matches!(edge, KnowledgeGraphEdge::Causal(causal) if causal.edge_id == *edge_id),
-        )
-    })
-}
-
 fn hunts_are_disjoint(hunt_ids_a: &[String], hunt_ids_b: &[String]) -> bool {
     !hunt_ids_a
         .iter()
@@ -575,25 +559,45 @@ fn to_reconstructed_chain_hop(path: ProvenancePath) -> ReconstructedChainHop {
 }
 
 /// A bounded-hop connection between `from` and `to` that qualifies as a
-/// genuine cross-hunt CAUSAL bridge (CHAIN-03's own wording). Tries
-/// `KnowledgeGraphSnapshot::provenance_paths` (the graph's sole traversal
-/// API) directly, then accepts the result only if BOTH hold:
-/// 1. it is free of every globally-merged classification node, per
-///    [`path_is_free_of_globally_merged_classification_nodes`] — never a
-///    fabricated bridge through a shared `ThreatPattern`/`AttackTechnique`;
-/// 2. it actually crosses a genuine `Causal` edge, per
-///    [`path_contains_a_causal_edge`] — never a bridge built from
-///    `Semantic`/`Temporal`/`Entity` connectivity alone, which is real graph
-///    structure but not causal evidence of a relationship between the two
-///    hunts.
+/// genuine cross-hunt CAUSAL bridge (CHAIN-03's own wording, "connected by a
+/// causal path").
 ///
-/// `provenance_paths` returns at most one path (its BFS returns as soon as
-/// it reaches `to`), so there is no "try a different path" fallback here:
-/// if the one path it finds fails either check, this reports no connection
-/// at all, the same fail-closed choice [`stage_connection`]'s callers
-/// already make for "not the same chain" -- a false negative (missing a
-/// genuine but longer alternate path) is preferable to a false positive
-/// (trusting a fabricated bridge).
+/// **Traversal is `Causal`-only.** This walks
+/// [`KnowledgeGraphSnapshot::causal_provenance_paths`], NOT the all-edge
+/// `provenance_paths`, so every edge on the returned path is a genuine
+/// `Causal` edge by construction. This is the structural fix for the
+/// cross-hunt fabricated-bridging class: an all-edge path plus a post-hoc
+/// "does SOME edge on it happen to be causal?" check was position-blind — a
+/// causal edge entirely INTERNAL to one hunt's own subgraph satisfied it
+/// while the actual cross-hunt hop was made of non-causal
+/// `Entity`/`Semantic`/`Temporal` connectivity (mere co-reference of a
+/// shared host, not a causal relationship). Under a causal-only walk a
+/// shared waypoint is reachable ONLY if BOTH hunts genuinely causally
+/// interacted with it, so that whole class cannot arise. See
+/// `join_cross_hunt_kill_chain_does_not_bridge_through_an_intra_hunt_causal_edge_and_a_shared_entity`
+/// for the pinned regression (verified to fail before this fix, in the same
+/// session, before being fixed).
+///
+/// **The classification-node exclusion still applies.** A globally-merged
+/// classification node (`ThreatPattern`/`AttackTechnique`) does not model a
+/// concrete causal actor and must never be a bridge waypoint even if some
+/// producer were to attach `Causal` edges to it, so the causal-only path is
+/// still rejected when it routes through one, per
+/// [`path_is_free_of_globally_merged_classification_nodes`] — see
+/// `join_cross_hunt_kill_chain_does_not_bridge_hunts_through_a_shared_threat_pattern`.
+/// A shared CONCRETE node (`Entity`/`Process`/`File`/`NetworkFlow`) reached
+/// by genuine causal edges on both sides IS a real causal relationship and
+/// is accepted, bounded by the causal-only hub-degree cap for popular
+/// infrastructure — see
+/// `join_cross_hunt_kill_chain_joins_two_disjoint_hunts_through_a_shared_causal_process`.
+///
+/// `causal_provenance_paths` returns at most one path (its BFS returns as
+/// soon as it reaches `to`), so there is no "try a different path" fallback
+/// here: if the one path it finds routes through a classification node, this
+/// reports no connection at all, the same fail-closed choice
+/// [`stage_connection`]'s callers already make for "not the same chain" -- a
+/// false negative (missing a genuine but longer alternate path) is
+/// preferable to a false positive (trusting a fabricated bridge).
 fn causal_bridge(
     snapshot: &KnowledgeGraphSnapshot,
     from: &str,
@@ -601,12 +605,10 @@ fn causal_bridge(
     max_hops: usize,
 ) -> Option<ProvenancePath> {
     let path = snapshot
-        .provenance_paths(from, to, max_hops)
+        .causal_provenance_paths(from, to, max_hops)
         .into_iter()
         .next()?;
-    if path_is_free_of_globally_merged_classification_nodes(snapshot, &path)
-        && path_contains_a_causal_edge(snapshot, &path)
-    {
+    if path_is_free_of_globally_merged_classification_nodes(snapshot, &path) {
         Some(path)
     } else {
         None
@@ -779,8 +781,8 @@ mod tests {
     use crate::sequence_detector::KillChainSequenceProfile;
     use crate::sphinx_agent::{
         AttackTechniqueNode, CausalEdge, CausalRelation, EngagementNode, EntityEdge, EntityKind,
-        EntityNode, KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeGraphSnapshot, SemanticEdge,
-        SemanticRelation, TemporalEdge, ThreatPatternNode,
+        EntityNode, KnowledgeGraphEdge, KnowledgeGraphNode, KnowledgeGraphSnapshot, ProcessNode,
+        SemanticEdge, SemanticRelation, TemporalEdge, ThreatPatternNode,
     };
     use std::collections::BTreeSet;
     use std::fs;
@@ -884,6 +886,36 @@ mod tests {
             latest_severity: Severity::High,
             attack_technique_ids: BTreeSet::new(),
             kill_chain_stages: BTreeSet::new(),
+        })
+    }
+
+    /// A concrete `ProcessNode` for `node_id` -- a CONCRETE-IDENTITY node
+    /// (keyed by an actual process, not a classification key), so it is NOT a
+    /// globally-merged classification node and MAY legitimately be a
+    /// cross-hunt causal bridge waypoint when both hunts causally touch it.
+    fn process_node(node_id: &str) -> KnowledgeGraphNode {
+        KnowledgeGraphNode::Process(ProcessNode {
+            node_id: node_id.to_string(),
+            process_key: node_id.to_string(),
+            pid: None,
+            host_id: None,
+            executable_path: None,
+            command_line: None,
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            observation_count: 2,
+        })
+    }
+
+    /// A concrete host `EntityNode` for `node_id`.
+    fn host_entity_node(node_id: &str) -> KnowledgeGraphNode {
+        KnowledgeGraphNode::Entity(EntityNode {
+            node_id: node_id.to_string(),
+            entity_kind: EntityKind::Host,
+            value: node_id.to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            observation_count: 2,
         })
     }
 
@@ -1831,6 +1863,275 @@ rules:
             joined.is_empty(),
             "a shared Entity with no Causal edge between the two hunts' subgraphs is not causal \
              evidence of a relationship, and must not join them: {joined:?}"
+        );
+    }
+
+    /// **Fix round 2, CRITICAL (re-review PoC, pinned).** A causal edge that
+    /// is entirely INTERNAL to one hunt's own subgraph must never vouch for a
+    /// cross-hunt hop that is itself non-causal. hunt-a observes only stage 0
+    /// and hunt-b only stages 1-2 (exactly SC4's "each hunt alone
+    /// reconstructs nothing" baseline). Their ONLY connection: hunt-a has a
+    /// `Causal` edge to its OWN process node (a fact purely about hunt-a),
+    /// and that process shares a host `Entity` with hunt-b via plain,
+    /// non-causal `Entity` edges. A flat "does some edge on the path happen
+    /// to be causal?" check accepted this (the intra-hunt causal edge is on
+    /// the path); the `Causal`-only walk does not, because the shared host is
+    /// unreachable without crossing a non-causal edge. Verified to fail
+    /// before the causal-only fix and pass after, in the same session.
+    #[test]
+    fn join_cross_hunt_kill_chain_does_not_bridge_through_an_intra_hunt_causal_edge_and_a_shared_entity()
+     {
+        let rule = rule_fixture();
+        let engagement_a = "engagement:hunt-a";
+        let engagement_b = "engagement:hunt-b";
+        let hunt_a_process = "process:hunt-a-only";
+        let shared_host = "entity:host:shared";
+
+        let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+        for technique in &rule.attack_chain {
+            snapshot.nodes.push(attack_technique_node(technique));
+        }
+        snapshot.nodes.push(engagement_node(engagement_a));
+        snapshot.nodes.push(engagement_node(engagement_b));
+        snapshot.nodes.push(process_node(hunt_a_process));
+        snapshot.nodes.push(host_entity_node(shared_host));
+
+        // hunt-a observed only stage 0; hunt-b only stages 1 and 2 -- neither
+        // reconstructs the rule's chain alone.
+        snapshot
+            .edges
+            .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                edge_id: "semantic:hunt-a:0".to_string(),
+                from_node_id: engagement_a.to_string(),
+                to_node_id: technique_node_id(&rule.attack_chain[0]),
+                relation: SemanticRelation::KillChainStage,
+                kill_chain_stage: rule.attack_chain[0].kill_chain_stage.clone(),
+                first_observed_at_ms: 0,
+                last_observed_at_ms: 0,
+                occurrence_count: 1,
+            }));
+        for technique in &rule.attack_chain[1..] {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                    edge_id: format!("semantic:hunt-b:{}", technique.technique_id),
+                    from_node_id: engagement_b.to_string(),
+                    to_node_id: technique_node_id(technique),
+                    relation: SemanticRelation::KillChainStage,
+                    kill_chain_stage: technique.kill_chain_stage.clone(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+        // The lone causal edge is INTERNAL to hunt-a: its own engagement
+        // caused its own process. It says nothing about hunt-b.
+        snapshot.edges.push(KnowledgeGraphEdge::Causal(CausalEdge {
+            edge_id: "causal:hunt-a-to-its-own-process".to_string(),
+            from_node_id: engagement_a.to_string(),
+            to_node_id: hunt_a_process.to_string(),
+            relation: CausalRelation::ProcessParentChild,
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+        // The actual cross-hunt hop is non-causal: a shared host reached by
+        // plain Entity edges on both sides.
+        snapshot.edges.push(KnowledgeGraphEdge::Entity(EntityEdge {
+            edge_id: "entity:process-to-shared-host".to_string(),
+            from_node_id: hunt_a_process.to_string(),
+            to_node_id: shared_host.to_string(),
+            role: "host".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+        snapshot.edges.push(KnowledgeGraphEdge::Entity(EntityEdge {
+            edge_id: "entity:shared-host-to-hunt-b".to_string(),
+            from_node_id: shared_host.to_string(),
+            to_node_id: engagement_b.to_string(),
+            role: "host".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+
+        let incident_a = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-a:1",
+            hunt_ids: &["hunt-a".to_string()],
+            anchor_node_id: engagement_a,
+        };
+        let incident_b = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-b:1",
+            hunt_ids: &["hunt-b".to_string()],
+            anchor_node_id: engagement_b,
+        };
+
+        // The two anchors ARE plainly graph-reachable over the all-edge
+        // walk ...
+        assert!(
+            !snapshot
+                .provenance_paths(engagement_a, engagement_b, 4)
+                .is_empty(),
+            "test setup must have a plain (all-edge) graph-reachable path"
+        );
+        // ... but NOT over the causal-only subgraph: the only causal edge is
+        // internal to hunt-a; the cross-hunt hop is made of Entity edges.
+        assert!(
+            snapshot
+                .causal_provenance_paths(engagement_a, engagement_b, 4)
+                .is_empty(),
+            "there must be NO all-causal path between the two hunts"
+        );
+
+        let joined = join_cross_hunt_kill_chain(
+            &snapshot,
+            std::slice::from_ref(&rule),
+            &incident_a,
+            &incident_b,
+            4,
+            1_700_000_000_000,
+        );
+
+        assert!(
+            joined.is_empty(),
+            "an intra-hunt-a-only causal edge plus a non-causal shared-host hop must never \
+             fabricate a cross-hunt kill chain: {joined:?}"
+        );
+    }
+
+    /// The deliberate CONCRETE-node counterpart to
+    /// `join_cross_hunt_kill_chain_does_not_bridge_hunts_through_a_shared_threat_pattern`:
+    /// the SAME two-causal-edges-through-one-shared-node shape, but the
+    /// shared node is a concrete `Process` (both hunts genuinely causally
+    /// touched the same process), not a globally-merged classification node.
+    /// This IS a real causal relationship -- "connected by a causal path"
+    /// per CHAIN-03 -- so it MUST join, proving the causal-only walk is not
+    /// over-strict and that the UNDIRECTED walk preserves the
+    /// shared-causal-actor (fork/pivot) signal a directed-only walk would
+    /// silently drop.
+    #[test]
+    fn join_cross_hunt_kill_chain_joins_two_disjoint_hunts_through_a_shared_causal_process() {
+        let rule = rule_fixture();
+        let engagement_a = "engagement:hunt-a";
+        let engagement_b = "engagement:hunt-b";
+        let shared_process = "process:shared";
+
+        let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+        for technique in &rule.attack_chain {
+            snapshot.nodes.push(attack_technique_node(technique));
+        }
+        snapshot.nodes.push(engagement_node(engagement_a));
+        snapshot.nodes.push(engagement_node(engagement_b));
+        snapshot.nodes.push(process_node(shared_process));
+
+        // hunt-a observed only stage 0; hunt-b only stages 1 and 2.
+        snapshot
+            .edges
+            .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                edge_id: "semantic:hunt-a:0".to_string(),
+                from_node_id: engagement_a.to_string(),
+                to_node_id: technique_node_id(&rule.attack_chain[0]),
+                relation: SemanticRelation::KillChainStage,
+                kill_chain_stage: rule.attack_chain[0].kill_chain_stage.clone(),
+                first_observed_at_ms: 0,
+                last_observed_at_ms: 0,
+                occurrence_count: 1,
+            }));
+        for technique in &rule.attack_chain[1..] {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                    edge_id: format!("semantic:hunt-b:{}", technique.technique_id),
+                    from_node_id: engagement_b.to_string(),
+                    to_node_id: technique_node_id(technique),
+                    relation: SemanticRelation::KillChainStage,
+                    kill_chain_stage: technique.kill_chain_stage.clone(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+        // Both hunts causally touched the SAME concrete process -- a genuine
+        // shared causal actor. Both edges point INTO the shared process (the
+        // fork/pivot shape), which only an UNDIRECTED causal walk joins.
+        snapshot.edges.push(KnowledgeGraphEdge::Causal(CausalEdge {
+            edge_id: "causal:hunt-a-to-shared-process".to_string(),
+            from_node_id: engagement_a.to_string(),
+            to_node_id: shared_process.to_string(),
+            relation: CausalRelation::ProcessParentChild,
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+        snapshot.edges.push(KnowledgeGraphEdge::Causal(CausalEdge {
+            edge_id: "causal:hunt-b-to-shared-process".to_string(),
+            from_node_id: engagement_b.to_string(),
+            to_node_id: shared_process.to_string(),
+            relation: CausalRelation::ProcessParentChild,
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+        let shared_process_causal_degree = snapshot
+            .edges
+            .iter()
+            .filter(|edge| match edge {
+                KnowledgeGraphEdge::Causal(causal) => {
+                    causal.from_node_id == shared_process || causal.to_node_id == shared_process
+                }
+                _ => false,
+            })
+            .count();
+        assert!(
+            shared_process_causal_degree <= KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP,
+            "the shared process must be low-degree (a genuine shared actor, not a popular hub); \
+             got causal degree {shared_process_causal_degree}"
+        );
+
+        let incident_a = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-a:1",
+            hunt_ids: &["hunt-a".to_string()],
+            anchor_node_id: engagement_a,
+        };
+        let incident_b = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-b:1",
+            hunt_ids: &["hunt-b".to_string()],
+            anchor_node_id: engagement_b,
+        };
+
+        let joined = join_cross_hunt_kill_chain(
+            &snapshot,
+            std::slice::from_ref(&rule),
+            &incident_a,
+            &incident_b,
+            4,
+            1_700_000_000_000,
+        );
+
+        assert_eq!(
+            joined.len(),
+            1,
+            "two hunts sharing a genuine causal path through one concrete process must \
+             reconstruct into exactly ONE chain: {joined:?}"
+        );
+        let chain = &joined[0];
+        assert_eq!(
+            chain.stages,
+            vec!["execution", "defense_evasion", "command_and_control"]
+        );
+        assert_eq!(
+            chain.hunt_ids,
+            vec!["hunt-a".to_string(), "hunt-b".to_string()]
+        );
+        assert_eq!(chain.cross_hunt_bridges.len(), 1);
+        assert_eq!(
+            chain.cross_hunt_bridges[0].node_ids,
+            vec![
+                engagement_a.to_string(),
+                shared_process.to_string(),
+                engagement_b.to_string()
+            ]
         );
     }
 

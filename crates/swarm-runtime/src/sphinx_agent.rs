@@ -1523,16 +1523,29 @@ impl KnowledgeGraphSnapshot {
     }
 
     /// Builds, in one `O(edges)` pass, the undirected adjacency list and
-    /// total-degree map that back `provenance_paths`. Every edge variant is
+    /// total-degree map that back the bounded-hop traversals, over ONLY the
+    /// edges for which `edge_allowed` returns true. Every edge variant is
     /// read uniformly through `KnowledgeGraphEdge::endpoints()`. This is the
     /// only place `edges` is walked to build a neighbor structure — the
-    /// shared private helper `provenance_paths` (the graph's SOLE traversal
-    /// API) relies on, so a second hand-rolled edge walk should never be
-    /// needed elsewhere in this file.
-    fn neighbor_index(&self) -> (ProvenanceAdjacency<'_>, ProvenanceDegree<'_>) {
+    /// shared private helper `bounded_paths_where` (which every public
+    /// traversal on this type routes through) relies on, so a second
+    /// hand-rolled edge walk should never be needed elsewhere in this file.
+    ///
+    /// `degree` is accumulated over the SAME filtered subgraph, so the
+    /// hub-degree cap [`Self::bounded_paths_where`] applies scopes to
+    /// whichever edge-kind subgraph is being walked (all edges for
+    /// [`Self::provenance_paths`], `Causal`-only for
+    /// [`Self::causal_provenance_paths`]) rather than to the whole graph.
+    fn neighbor_index_where(
+        &self,
+        edge_allowed: impl Fn(&KnowledgeGraphEdge) -> bool,
+    ) -> (ProvenanceAdjacency<'_>, ProvenanceDegree<'_>) {
         let mut adjacency: ProvenanceAdjacency<'_> = HashMap::new();
         let mut degree: ProvenanceDegree<'_> = HashMap::new();
         for edge in &self.edges {
+            if !edge_allowed(edge) {
+                continue;
+            }
             let (from, to) = edge.endpoints();
             let edge_id = edge.edge_id();
             adjacency.entry(from).or_default().push((to, edge_id));
@@ -1543,12 +1556,14 @@ impl KnowledgeGraphSnapshot {
         (adjacency, degree)
     }
 
-    /// Bounded-hop traversal over `edges`, returning the shortest path (as a
-    /// single-element `Vec`, or empty if none exists) from `from` to `to`
-    /// using at most `max_hops` edges. This is the graph's SOLE traversal
-    /// read path: every other multi-hop / neighbor-expanding read in this
-    /// file routes through this method (or its private `neighbor_index`
-    /// helper) rather than hand-rolling a second edge walk. (`matching_contributions`
+    /// Bounded-hop traversal over ALL `edges`, returning the shortest path
+    /// (as a single-element `Vec`, or empty if none exists) from `from` to
+    /// `to` using at most `max_hops` edges. A thin wrapper over the graph's
+    /// SOLE traversal engine, [`Self::bounded_paths_where`]: every
+    /// multi-hop / neighbor-expanding read in this file routes through that
+    /// one BFS (this method with an all-edges filter,
+    /// [`Self::causal_provenance_paths`] with a `Causal`-only filter),
+    /// rather than hand-rolling a second edge walk. (`matching_contributions`
     /// stays a direct, single-hop field lookup over `engagements()` — it
     /// never expands edges, so it is not a second traversal implementation.)
     ///
@@ -1579,6 +1594,60 @@ impl KnowledgeGraphSnapshot {
     /// wandered into — but every node discovered thereafter is capped, so a
     /// hub can never be used as a waypoint.
     pub fn provenance_paths(&self, from: &str, to: &str, max_hops: usize) -> Vec<ProvenancePath> {
+        self.bounded_paths_where(from, to, max_hops, |_| true)
+    }
+
+    /// Bounded-hop traversal restricted to `KnowledgeGraphEdge::Causal`
+    /// edges only — the shortest path from `from` to `to` that crosses
+    /// NOTHING but genuine causal edges (`ProcessParentChild`/
+    /// `NetworkFlowOrigin`/`FileWrite`/`FileExecute`/`DnsResolution`/
+    /// `CredentialAccess`), or empty if no such all-causal path exists
+    /// within `max_hops`.
+    ///
+    /// **Why this exists — the GRAPH-03 cross-hunt-bridge primitive.**
+    /// CHAIN-03's wording is "incidents ... connected by a CAUSAL path".
+    /// A causal path is not "some path that happens to include a causal edge
+    /// somewhere on it" — that flat, position-blind reading let a causal edge
+    /// entirely INTERNAL to one hunt's own subgraph vouch for a cross-hunt
+    /// hop that was actually made of `Entity`/`Semantic`/`Temporal`
+    /// connectivity (co-reference of a shared host, not a causal
+    /// relationship). By building the adjacency over the `Causal`-only
+    /// subgraph, a shared waypoint node is reachable here ONLY if BOTH sides
+    /// genuinely causally interacted with it; mere co-reference through a
+    /// non-causal edge cannot reach it at all. This closes the cross-hunt
+    /// fabricated-bridging class by construction rather than by post-hoc
+    /// path inspection. Directedness and the hub-degree cap behave exactly
+    /// as documented on [`Self::provenance_paths`] (the cap over the
+    /// causal-only degree — see [`Self::neighbor_index_where`]).
+    pub fn causal_provenance_paths(
+        &self,
+        from: &str,
+        to: &str,
+        max_hops: usize,
+    ) -> Vec<ProvenancePath> {
+        self.bounded_paths_where(from, to, max_hops, |edge| {
+            matches!(edge, KnowledgeGraphEdge::Causal(_))
+        })
+    }
+
+    /// The graph's SOLE bounded-hop BFS, shared by every public traversal on
+    /// this type. `edge_allowed` selects which edge-kind subgraph to walk
+    /// (all edges for [`Self::provenance_paths`], `Causal`-only for
+    /// [`Self::causal_provenance_paths`]); the walk itself — undirected,
+    /// shortest-path, hub-degree-capped — is identical regardless. Keeping a
+    /// single BFS implementation is a deliberate invariant: adding a new
+    /// scoped traversal means passing a new filter here, never hand-rolling
+    /// a second edge walk. See [`Self::provenance_paths`] for the full
+    /// directedness and hub-degree-cap contract; the cap is applied against
+    /// the `degree` map, which [`Self::neighbor_index_where`] accumulates
+    /// over the SAME filtered subgraph.
+    fn bounded_paths_where(
+        &self,
+        from: &str,
+        to: &str,
+        max_hops: usize,
+        edge_allowed: impl Fn(&KnowledgeGraphEdge) -> bool,
+    ) -> Vec<ProvenancePath> {
         if from == to {
             return vec![ProvenancePath {
                 node_ids: vec![from.to_string()],
@@ -1586,7 +1655,7 @@ impl KnowledgeGraphSnapshot {
             }];
         }
 
-        let (adjacency, degree) = self.neighbor_index();
+        let (adjacency, degree) = self.neighbor_index_where(edge_allowed);
         let empty_neighbors: Vec<(&str, &str)> = Vec::new();
 
         let mut parents: HashMap<&str, (&str, &str)> = HashMap::new();
