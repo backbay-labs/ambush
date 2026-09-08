@@ -138,3 +138,46 @@ abstract model proves a concurrency argument, not a fail-closed source invariant
   all composition fields swap atomically — plus a supplemental last-slot atomic
   prune/check/increment under one mutex (`configurable_gate.rs:85`,
   `agent_limit_exceeded`).
+
+## Named safety properties (phase 294, v1.81)
+
+SAFEP-01/02 name six safety properties, P1–P6, over the decision core Phase
+292 extracted (`swarm_policy::formal_core`) and Phase 293 proved with Kani
+(`crates/swarm-policy/src/kani_public_harnesses.rs`). Full statements, exact
+Rust symbols, and the harness(es) that check each property are in
+`formal/PROPERTIES.md`; this section is the pointer from this table into
+that document, plus the traceability link back to this table's own
+registered invariants where one already exists.
+
+Like the Loom rows immediately above, these are named **as properties of
+the decision core**, not as new rows in the invariant table above: the
+table's `Name` column is the input to `tools/check-mapping.sh`, which
+requires every row's `Name` to resolve to a real source `Path` AND to carry
+a `// INVARIANT: <Name>` marker at that path (checks B and C in that
+script's header), and `tools/check-negative-registry.sh` in turn requires
+every such `Name` to have its own `[negative.<Name>]` falsifiability entry.
+Three of P1–P6 (P3, P4, P5) name symbols — `ContingencyLease::verify`,
+`lease_redeem`, `governance_quorum_threshold` — that carry no existing
+`// INVARIANT:` marker and no existing negative-registry entry; adding them
+as literal table rows would force six brand-new markers and six brand-new
+`negative_*` tests into this phase's scope, which is Phase 294 Task 3's
+negative-falsifiability work (TLA+-level, SAFEP-05), not Task 1's. P1–P6 are
+therefore recorded here as a distinct, named list that cites the same
+symbols and harnesses `formal/PROPERTIES.md` names, and cross-references
+this table's `Name`s only where one genuinely already exists — never a new,
+unbacked one.
+
+| Property | Statement (see `formal/PROPERTIES.md` for the full text) | Rust symbol(s) | Kani harness(es) | Existing MAPPING.md `Name`(s) |
+|---|---|---|---|---|
+| P1 | Fail-closed evaluation: malformed input is rejected before any decision logic runs; every well-formed request reaches a total `Allow`/`RequireHuman`/`Deny` decision. | `swarm_policy::static_gate::StaticApprovalGate::{validate_request,evaluate}`, `swarm_policy::formal_core::{severity_floor_denial,human_gate_decision}` | `kani_severity_floor_low_is_sound_for_every_action`, `kani_human_gate_holds_destructive_at_or_above_gate` | `PolicyMalformedRequestRejected`, `PolicyHumanGateOnDestructiveAction` |
+| P2 | Severity-gate soundness: `destructive_action` classifies exactly the twelve containment-class variants, and the severity floor / human gate deny or hold consistently with that classification. | `swarm_policy::formal_core::{destructive_action,severity_floor_denial,human_gate_decision}` | `kani_destructive_action_classifies_every_variant`, `kani_severity_floor_low_is_sound_for_every_action`, `kani_human_gate_holds_destructive_at_or_above_gate` | `PolicyHumanGateOnDestructiveAction` (partial — the severity-floor/classification half is Kani-only, no existing row) |
+| P3 | Partition-override receipt integrity: an invalid signature, a non-`Approve` decision, or a proposal-hash mismatch each independently fail a contingency lease closed. | `swarm_agents::tom_agent::ContingencyLease::verify`, `swarm_policy::formal_core::validate_lease_terms` | `kani_model_only_{invalid_signature,non_approve_decision,hash_mismatch}_always_denies`, `kani_model_only_validate_lease_terms_rejects_malformed` | none (new symbol, above `swarm-policy`; TLA+ `OverrideRequiresReceipt`, Task 2) |
+| P4 | Blast-radius conservation: a lease redemption records a new scope only while the redeemed-scope count is strictly below its `blast_radius_cap`; denial mutates nothing. | `swarm_policy::formal_core::{lease_redeem,lease_can_redeem}` | `kani_model_only_blast_radius_conservation`, `kani_model_only_expired_lease_always_denies` | none (new symbol; TLA+ `BlastRadiusNeverExceeded`, Task 2) |
+| P5 | Quorum-transition soundness: the governance quorum threshold is `0` for an empty committee, otherwise exactly `2*max_faulty+1`, monotonic and saturating. | `swarm_policy::formal_core::governance_quorum_threshold` | `kani_governance_quorum_threshold_is_2f_plus_1`, `kani_governance_quorum_threshold_is_monotonic_and_saturating` | none (new symbol; TLA+ quorum/transition invariant, Task 2) |
+| P6 | Rate-limit boundedness: an action is allowed only below the pruned trailing-60s budget; denial never records; every retained timestamp is fresh. | `swarm_policy::formal_core::evaluate_rate_limit` | `kani_rate_limit_allowed_stays_within_limit`, `kani_rate_limit_denied_means_budget_full`, `kani_rate_limit_retains_only_fresh_timestamps` | `PolicyScopeRateLimitDeniesBurst` |
+
+`ASSUME-INJECTED-CLOCK` (dependents P1, P2, P4, P6) and
+`ASSUME-GOVERNOR-KEY-CUSTODY` (dependents P3, P5) — registered in
+`docs/assurance/assumptions.toml` by this same task, SAFEP-03 — are the two
+trust assumptions P1–P6 lean on that are not already covered by an existing
+`assume.*` block's `dependent_invariants`.

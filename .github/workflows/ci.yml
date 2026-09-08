@@ -1163,3 +1163,36 @@ jobs:
 
       - name: Prove the swarm-policy decision-core harnesses (KANI-05)
         run: bash scripts/run-kani-swarm-policy.sh
+
+  # SAFEP-04/05 (SC3): model-check the partition-contingency-lease TLA+ spec and
+  # prove its negative-falsifiability registry with Apalache. A dedicated job
+  # because it installs the JVM + Apalache (used by no other lane). Engine
+  # path-gated. The run/check scripts are runners, not tools/check-*.sh gates, so
+  # check-gates-wired.sh does not scan them; they are wired here directly.
+  apalache:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Java (Apalache runs on the JVM)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Apalache 0.50.1
+        run: |
+          curl -fsSL https://github.com/apalache-mc/apalache/releases/download/v0.50.1/apalache.tgz -o apalache.tgz
+          tar -xzf apalache.tgz
+          echo "$PWD/apalache/bin" >> "$GITHUB_PATH"
+
+      - name: Model-check the partition-lease spec clean (SAFEP-04)
+        run: bash scripts/run-apalache-partition.sh
+
+      - name: Prove the negative-falsifiability registry (SAFEP-05)
+        run: bash scripts/check-apalache-negatives.sh
