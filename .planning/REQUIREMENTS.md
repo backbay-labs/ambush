@@ -848,12 +848,12 @@ production-mutation and restored-corpus evidence is now recorded under
 `286-REVIEW.md`; all six remain unaccepted pending network-enabled regression and
 final review closure under `286-02-PLAN.md`.
 
-- [ ] **DST-01**: `crates/swarm-runtime/tests/dst_fault_injection.rs` drives the real `SwarmRuntime::authorize_and_execute` (`crates/swarm-runtime/src/lib.rs:753`), a real approval gate, and the real pheromone substrate, with no mocks.
-- [ ] **DST-02**: Seeded fault injection covers dropping the future mid-poll before dispatch, dropping it after dispatch but before receipt persistence, and closing/reopening the substrate between policy-allow and receipt-persist.
-- [ ] **DST-03**: Three oracles assert receipt-before-action ordering, exact disposition against the deterministic policy verdict, and no double-dispatch per request.
-- [ ] **DST-04**: A 64-seed corpus runs on every PR; a >=5,000-seed corpus runs in `.github/workflows/dst-nightly.yml`.
-- [ ] **DST-05**: `SWARM_DST_SEED=<n>` replays one episode's exact fault plan for one-command reproduction.
-- [ ] **DST-06**: `docs/assurance/MAPPING.md` gains a harness section stating the evidence boundary: single-process, single-substrate-instance, not distributed JetStream failover.
+- [x] **DST-01** (954c5cd02): `crates/swarm-runtime/tests/dst_fault_injection.rs` drives the real `SwarmRuntime::authorize_and_execute` (`crates/swarm-runtime/src/lib.rs:753`), a real approval gate, and the real pheromone substrate, with no mocks.
+- [x] **DST-02** (954c5cd02): Seeded fault injection covers dropping the future mid-poll before dispatch, dropping it after dispatch but before receipt persistence, and closing/reopening the substrate between policy-allow and receipt-persist.
+- [x] **DST-03** (954c5cd02): Three oracles assert receipt-before-action ordering, exact disposition against the deterministic policy verdict, and no double-dispatch per request.
+- [x] **DST-04** (954c5cd02): A 64-seed corpus runs on every PR; a >=5,000-seed corpus runs in `.github/workflows/dst-nightly.yml`.
+- [x] **DST-05** (954c5cd02): `SWARM_DST_SEED=<n>` replays one episode's exact fault plan for one-command reproduction.
+- [x] **DST-06** (954c5cd02): `docs/assurance/MAPPING.md` gains a harness section stating the evidence boundary: single-process, single-substrate-instance, not distributed JetStream failover.
 
 #### Fuzz And Loom Coverage
 
@@ -1497,12 +1497,12 @@ final review closure under `286-02-PLAN.md`.
 | FALSIFY-02 | Phase 285 | Satisfied |
 | FALSIFY-03 | Phase 285 | Satisfied |
 | FALSIFY-04 | Phase 285 | Satisfied |
-| DST-01 | Phase 286 | Reopened — repaired local evidence recorded; full acceptance pending |
-| DST-02 | Phase 286 | Reopened — repaired local evidence recorded; full acceptance pending |
-| DST-03 | Phase 286 | Reopened — repaired local evidence recorded; full acceptance pending |
-| DST-04 | Phase 286 | Reopened — repaired local evidence recorded; full acceptance pending |
-| DST-05 | Phase 286 | Reopened — repaired local evidence recorded; full acceptance pending |
-| DST-06 | Phase 286 | Reopened — repaired local evidence recorded; full acceptance pending |
+| DST-01 | Phase 286 | Satisfied |
+| DST-02 | Phase 286 | Satisfied |
+| DST-03 | Phase 286 | Satisfied |
+| DST-04 | Phase 286 | Satisfied |
+| DST-05 | Phase 286 | Satisfied |
+| DST-06 | Phase 286 | Satisfied |
 | FUZZ-01 | Phase 287 | Pending |
 | FUZZ-02 | Phase 287 | Pending |
 | FUZZ-03 | Phase 287 | Pending |

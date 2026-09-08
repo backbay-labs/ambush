@@ -1112,7 +1112,7 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 
 - [x] **Phase 284: Fixture Determinism And Suite Health** - Regenerate the 161 schema-drifted fixtures, isolate tests from the live repo tree, and stop test runs mutating the working directory. (FIXTURE-01, FIXTURE-02, FIXTURE-03, FIXTURE-04)
 - [x] **Phase 285: Assumption Registry And Invariant Mapping** - Build the invariant-to-function-to-assumption map with grep enforcement and a negative-falsifiability registry proving no row is vacuous. (MAPPING-01, FALSIFY-02)
-- [ ] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
+- [x] **Phase 286: Deterministic Simulation Testing** - Seeded fault injection over the real runtime, gate, and substrate proving receipt-before-action, exact disposition, and no double-dispatch. (DST-01, DST-03)
 - [ ] **Phase 287: Fuzz, Loom, And Supply-Chain Hardening** - Adversarial coverage for the untrusted parse boundaries and concurrent write paths, plus dated and justified dependency policy. (FUZZ-01, LOOM-01, SUPPLY-01)
 
 ### Phase 284: Fixture Determinism And Suite Health
@@ -1146,20 +1146,26 @@ ZGATE-03's shape changed on contact with the code, and the change is recorded he
 **Goal:** Prove durable authorization-before-effect ordering and no-double-dispatch under adversarial scheduling, cancellation and crash/recovery. A pre-effect dispatch intent records authorization; a completion receipt records an observed post-effect outcome.
 **Requirements:** DST-01, DST-02, DST-03, DST-04, DST-05, DST-06
 **Depends on:** Phase 285
-**Status:** IN PROGRESS / REOPENED (2026-09-07); candidate `1a5c9003b` rejected; repaired local corpus/mutation evidence recorded, final acceptance pending.
-**Plans:** `286-01-PLAN.md` (superseded/rejected), `286-02-PLAN.md` (active repair).
+**Status:** Complete — ACCEPTED 2026-09-08 (merge `954c5cd02`). Candidate `1a5c9003b` (test-only DST harness) rejected; the durable dispatch-intent journal repair (`286-02`) accepted after the full network-enabled regression (blocked in the authoring sandbox) passed here + independent 6-dimension adversarial review (0 blockers/0 majors) + two review fixes.
+**Plans:** `286-01-PLAN.md` (superseded/rejected), `286-02-PLAN.md` (accepted repair).
 **Review:** `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md`.
 **Success Criteria**:
-1. The harness drives real runtime, gate, sandbox effect and persistent substrate paths. Both production runtime authorization entry sites require the same durable intent journal, and composition/reload preserve reservations. **Local unit/composition and DST evidence recorded; full regression acceptance pending.**
-2. Inject future-drop before dispatch, future-drop after effect but before completion publication, and persistent-substrate close/reopen between policy allowance and publication. Reopen the same storage and redeliver the same immutable request; unresolved outcomes must never dispatch again. **Open.**
+1. The harness drives real runtime, gate, sandbox effect and persistent substrate paths. Both production runtime authorization entry sites require the same durable intent journal, and composition/reload preserve reservations. **MET: both `authorize_and_execute` paths reserve via `dispatch_once` before any effect (fail-closed without a journal); swarm-runtime lib 585/0 incl. journal unit/composition + `both_execution_entry_points_refuse_live_actions_without_a_dispatch_journal`.**
+2. Inject future-drop before dispatch, future-drop after effect but before completion publication, and persistent-substrate close/reopen between policy allowance and publication. Reopen the same storage and redeliver the same immutable request; unresolved outcomes must never dispatch again. **MET: the DST reopens the real journal + substrate and redelivers; a consumed identity never re-dispatches (`completed_success_and_failure_never_reauthorize`); dispatch_integration 21/0, dst_fault_injection 4/0.**
 3. Run 64 seeds on every PR and >=5,000 nightly, with measured effective schedule diversity and failing-seed diagnostics. Independently observe effects and persisted intent: forbidden effects must fail even without a returned outcome, and no request may effect twice across recovery. Production mutation controls must falsify each safety oracle. **Three actual production mutations rejected; restored positive run passed. Final 64 seeds produced 53 yielded event traces; 5,000 nightly seeds passed with 897 yielded event traces/all 18 pairs (including polling variation).**
-4. `SWARM_DST_SEED=<n>` reproduces the exact fault schedule. MAPPING states what the final evidence covers: one host/process recovery model and one logical persistent substrate; signed audit remains distinct from the unsigned local journal. **Explicit seed-57 replay matched; boundary documented. Phase acceptance remains open.**
+4. `SWARM_DST_SEED=<n>` reproduces the exact fault schedule. MAPPING states what the final evidence covers: one host/process recovery model and one logical persistent substrate; signed audit remains distinct from the unsigned local journal. **MET: seed replay matches; MAPPING boundary section documents single-host/single-store + unsigned-local-journal-vs-signed-audit. Phase ACCEPTED.**
 
-The prior green corpus is not acceptance evidence: its reverse-subset receipt
-oracle accepted unrecorded effects, dropped denied episodes could hide effects,
-there was no same-request crash/retry, only four effective schedules, and reopen
-created an empty in-memory store. Full requirements and existing gates remain
-required; neither Phase 286 nor the full roadmap is complete.
+The rejected candidate's green corpus was NOT acceptance evidence (reverse-subset
+receipt oracle accepted unrecorded effects, dropped denied episodes, no same-request
+crash/retry, only four schedules, empty-store reopen). The ACCEPTED repair (286-02)
+closes each with a real durable dispatch-intent journal, real crash/reopen/redelivery,
+and mutation-falsified oracles (three production mutations each rejected, positives
+restored). The full network-enabled regression — which the authoring sandbox could
+not run (TCP listeners denied) — passes here: swarm-runtime lib 585, dispatch 21,
+DST 4 + 5000-seed nightly, ingest 177, response + runtime-http 0 failures; all 6
+static assurance gates + fmt + clippy -D warnings clean. Independent 6-dimension
+adversarial review: 0 blockers / 0 majors; two confirmed findings fixed (transient-read
+journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-09-08.
 
 ### Phase 287: Fuzz, Loom, And Supply-Chain Hardening
 
@@ -1897,7 +1903,7 @@ required; neither Phase 286 nor the full roadmap is complete.
 | 283. TCB Boundary And Layering Enforcement | v1.78 | 0/TBD | Not started | - |
 | 284. Fixture Determinism And Suite Health | v1.79 | 4/4 | Complete | 2026-08-11 |
 | 285. Assumption Registry And Invariant Mapping | v1.79 | 1/1 | Complete | 285-01 |
-| 286. Deterministic Simulation Testing | v1.79 | 0/2 accepted | In progress / reopened; 286-01 rejected | 286-02 |
+| 286. Deterministic Simulation Testing | v1.79 | Complete | ACCEPTED 2026-09-08 (journal repair); 286-01 rejected | 286-02 |
 | 287. Fuzz, Loom, And Supply-Chain Hardening | v1.79 | 0/TBD | Not started | - |
 | 288. Red Operator Genome And Target Graph | v1.80 | 1/1 | Complete | 288-01 |
 | 289. Attack Scoring, Stealth Budget And Pattern Memory | v1.80 | 1/1 | Complete | 289-01 |
