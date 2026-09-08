@@ -1,0 +1,12 @@
+   Compiling swarm-ingest-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 04s
+     Running unittests src/lib.rs (target/debug/deps/swarm_ingest_runtime-1ce7e3aeee958217)
+
+running 4 tests
+test control::tests::first_run_completes_detection_approval_and_proof ... ok
+test control::tests::first_run_publishes_replay_for_same_config_lookup_beside_live_daemon ... ok
+test control::tests::first_run_reports_blocked_when_readiness_fails ... ok
+test control::tests::guided_first_run_config_human_gates_destructive_actions_and_keeps_denials ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 173 filtered out; finished in 0.55s
+

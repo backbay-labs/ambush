@@ -1413,6 +1413,9 @@ pub struct IngestState {
     platform_api_auth: Arc<ArcSwap<crate::ingest::platform_api::PlatformApiAuthState>>,
     platform_api_rate_limiter: HttpRateLimiter,
     request_runtime: Arc<ArcSwap<IngestRequestRuntime>>,
+    /// Serialize config snapshots and publication so the first durable mode
+    /// transition cannot race another reload onto a different dispatch history.
+    reload_lock: Arc<Mutex<()>>,
     detector: Arc<ArcSwap<CompositeDetector>>,
     detector_status: Arc<ArcSwap<DetectorRuntimeStatus>>,
     config_path: Arc<PathBuf>,
@@ -1440,11 +1443,28 @@ pub struct IngestState {
 }
 
 impl IngestState {
-    fn build_runtime(config: SwarmConfig) -> Result<IngestBuiltRuntime, IngestBuildError> {
+    fn build_runtime(
+        config: SwarmConfig,
+        previous: Option<&IngestRuntimeStack>,
+    ) -> Result<IngestBuiltRuntime, IngestBuildError> {
+        let dispatch_journal = previous
+            .and_then(|stack| stack.service.runtime.dispatch_journal())
+            .cloned();
+        if dispatch_journal.is_some()
+            && previous.is_some_and(|stack| {
+                stack.service.config.audit.bundle_store != config.audit.bundle_store
+            })
+        {
+            return Err(ServiceError::Runtime(RuntimeError::DispatchRefused {
+                reason: "cannot change durable audit storage during runtime reload".to_string(),
+            })
+            .into());
+        }
         let detector = Arc::new(build_composite_detector(&config.detection)?);
-        let stack = Arc::new(ConfiguredRuntimeStack::from_config(
+        let stack = Arc::new(ConfiguredRuntimeStack::from_config_with_dispatch_journal(
             config,
             SummaryInvestigator,
+            dispatch_journal,
         )?);
         let request_runtime = stack.service.shared_runtime();
         Ok((stack, request_runtime, detector))
@@ -1485,7 +1505,7 @@ impl IngestState {
             .transpose()?
             .map(Arc::new);
         let strategy = strategy_status_label(&resolved);
-        let (stack, request_runtime, detector) = Self::build_runtime(resolved)?;
+        let (stack, request_runtime, detector) = Self::build_runtime(resolved, None)?;
         let detector_status = Arc::new(ArcSwap::from(Arc::new(DetectorRuntimeStatus::loaded(
             strategy,
         ))));
@@ -1501,6 +1521,7 @@ impl IngestState {
                 template.platform_api.rate_limit.clone(),
             ),
             request_runtime: Arc::new(ArcSwap::from(request_runtime)),
+            reload_lock: Arc::new(Mutex::new(())),
             detector: Arc::new(ArcSwap::from(detector)),
             detector_status,
             config_path: Arc::new(config_path),
@@ -1550,6 +1571,11 @@ impl IngestState {
     }
 
     pub fn reload(&self, config: SwarmConfig) -> Result<(), IngestBuildError> {
+        let _reload_guard = self.reload_lock.lock().map_err(|_| {
+            ServiceError::Runtime(RuntimeError::DispatchRefused {
+                reason: "runtime reload lock is poisoned".to_string(),
+            })
+        })?;
         let strategy = strategy_status_label(&config);
         let platform_rate_limit = config.platform_api.rate_limit.clone();
         let new_platform_auth = crate::ingest::platform_api::PlatformApiAuthState::from_config(
@@ -1565,7 +1591,8 @@ impl IngestState {
             })
             .transpose()?
             .map(Arc::new);
-        match Self::build_runtime(config) {
+        let current_stack = self.stack.load_full();
+        match Self::build_runtime(config, Some(current_stack.as_ref())) {
             Ok((stack, request_runtime, detector)) => {
                 // Reload is not atomic across the ArcSwap stores. Storing auth and
                 // rate-limit thresholds first prioritizes revocation: a request

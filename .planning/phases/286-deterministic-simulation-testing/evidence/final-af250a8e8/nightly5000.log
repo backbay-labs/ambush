@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/dst_fault_injection.rs (target/debug/deps/dst_fault_injection-dc5212cfe305318f)
+
+running 1 test
+test dst_nightly_deep_corpus_replays_real_crash_recovery ... DST corpus: seeds=5000 verdict_fault_pairs=18 effective_traces=897
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 693.20s
+

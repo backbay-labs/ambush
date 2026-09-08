@@ -1,0 +1,24 @@
+{
+  "base_commit": "af250a8e883695f92cdbf9f21f3175ff1f1e5d19",
+  "crate": "swarm-response",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-response",
+    "--test",
+    "negative_response_crowdstrike_rtr_base_url_required",
+    "--test",
+    "negative_response_http_edr_endpoint_required",
+    "--test",
+    "negative_response_sandbox_requires_scoped_lease",
+    "--",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 6.703,
+  "registered_count": 3,
+  "missing_named_passes": []
+}

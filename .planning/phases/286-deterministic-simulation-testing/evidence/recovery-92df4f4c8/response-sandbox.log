@@ -1,0 +1,219 @@
+   Compiling swarm-response v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-response)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.44s
+     Running unittests src/lib.rs (target/debug/deps/swarm_response-000991c6513541fc)
+
+running 71 tests
+.................. 18/71
+crowdstrike_rtr::tests::dispatching_executor_writes_dead_letter_on_final_rtr_failure --- FAILED
+crowdstrike_rtr::tests::isolate_host_fetches_token_and_calls_isolation_endpoint --- FAILED
+crowdstrike_rtr::tests::kill_process_creates_session_and_executes_command --- FAILED
+crowdstrike_rtr::tests::quarantine_file_creates_session_and_executes_command --- FAILED
+crowdstrike_rtr::tests::timeout_surfaces_timeout_receipt --- FAILED
+...... 29/71
+dispatch::tests::http_edr_config_dispatches_expanded_scan_action_payload --- FAILED
+dispatch::tests::http_edr_config_dispatches_to_http_adapter --- FAILED
+. 32/71
+dispatch::tests::webhook_config_dispatches_to_webhook_adapter --- FAILED
+http_edr::rollback_tests::a_refused_inverse_is_recorded_as_failed_not_as_reversed --- FAILED
+http_edr::rollback_tests::an_irreversible_containment_issues_no_request_and_stays_contained --- FAILED
+http_edr::rollback_tests::dry_run_rollback_issues_no_request_and_claims_no_reversal --- FAILED
+http_edr::rollback_tests::rollback_issues_the_concrete_inverse_and_the_target_is_no_longer_contained --- FAILED
+. 38/71
+http_edr::tests::enforced_mode_posts_authorized_json_payload --- FAILED
+http_edr::tests::timeout_returns_timeout_status --- FAILED
+notification::tests::quiet_hours_dead_letter_the_aggregate_instead_of_sending_it --- FAILED
+notification::tests::router_dedups_matching_findings_into_one_notification --- FAILED
+notification::tests::router_signs_notifications_with_hmac_header --- FAILED
+notification::tests::router_uses_channel_specific_payload_builder_when_present --- FAILED
+notification::tests::router_writes_and_replays_rate_limited_notifications --- FAILED
+notification::tests::scheduled_flush_delivers_without_an_explicit_drain --- FAILED
+... 49/71
+resilience::tests::http_effect_then_server_failure_is_not_retried --- FAILED
+resilience::tests::http_effect_then_timeout_is_not_retried --- FAILED
+........ 59/71
+siem::tests::forwarder_wraps_finding_for_runtime_delivery --- FAILED
+siem::tests::splunk_adapter_posts_canonical_payload --- FAILED
+. 62/71
+splunk_hec::tests::splunk_hec_executes_batched_findings_in_one_request --- FAILED
+splunk_hec::tests::splunk_hec_posts_cim_aligned_payload --- FAILED
+..... 69/71
+webhook::tests::webhook_non_success_status_returns_failed_receipt --- FAILED
+webhook::tests::webhook_posts_slack_compatible_payload --- FAILED
+
+failures:
+
+---- crowdstrike_rtr::tests::dispatching_executor_writes_dead_letter_on_final_rtr_failure stdout ----
+
+thread 'crowdstrike_rtr::tests::dispatching_executor_writes_dead_letter_on_final_rtr_failure' (137508274) panicked at crates/swarm-response/src/crowdstrike_rtr.rs:715:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- crowdstrike_rtr::tests::isolate_host_fetches_token_and_calls_isolation_endpoint stdout ----
+
+thread 'crowdstrike_rtr::tests::isolate_host_fetches_token_and_calls_isolation_endpoint' (137508275) panicked at crates/swarm-response/src/crowdstrike_rtr.rs:715:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- crowdstrike_rtr::tests::kill_process_creates_session_and_executes_command stdout ----
+
+thread 'crowdstrike_rtr::tests::kill_process_creates_session_and_executes_command' (137508277) panicked at crates/swarm-response/src/crowdstrike_rtr.rs:715:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- crowdstrike_rtr::tests::quarantine_file_creates_session_and_executes_command stdout ----
+
+thread 'crowdstrike_rtr::tests::quarantine_file_creates_session_and_executes_command' (137508278) panicked at crates/swarm-response/src/crowdstrike_rtr.rs:715:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- crowdstrike_rtr::tests::timeout_surfaces_timeout_receipt stdout ----
+
+thread 'crowdstrike_rtr::tests::timeout_surfaces_timeout_receipt' (137508279) panicked at crates/swarm-response/src/crowdstrike_rtr.rs:715:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- dispatch::tests::http_edr_config_dispatches_expanded_scan_action_payload stdout ----
+
+thread 'dispatch::tests::http_edr_config_dispatches_expanded_scan_action_payload' (137508325) panicked at crates/swarm-response/src/dispatch.rs:216:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- dispatch::tests::http_edr_config_dispatches_to_http_adapter stdout ----
+
+thread 'dispatch::tests::http_edr_config_dispatches_to_http_adapter' (137508326) panicked at crates/swarm-response/src/dispatch.rs:216:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- dispatch::tests::webhook_config_dispatches_to_webhook_adapter stdout ----
+
+thread 'dispatch::tests::webhook_config_dispatches_to_webhook_adapter' (137508328) panicked at crates/swarm-response/src/dispatch.rs:216:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- http_edr::rollback_tests::a_refused_inverse_is_recorded_as_failed_not_as_reversed stdout ----
+
+thread 'http_edr::rollback_tests::a_refused_inverse_is_recorded_as_failed_not_as_reversed' (137508329) panicked at crates/swarm-response/src/http_edr.rs:769:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- http_edr::rollback_tests::an_irreversible_containment_issues_no_request_and_stays_contained stdout ----
+
+thread 'http_edr::rollback_tests::an_irreversible_containment_issues_no_request_and_stays_contained' (137508330) panicked at crates/swarm-response/src/http_edr.rs:769:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- http_edr::rollback_tests::dry_run_rollback_issues_no_request_and_claims_no_reversal stdout ----
+
+thread 'http_edr::rollback_tests::dry_run_rollback_issues_no_request_and_claims_no_reversal' (137508331) panicked at crates/swarm-response/src/http_edr.rs:769:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- http_edr::rollback_tests::rollback_issues_the_concrete_inverse_and_the_target_is_no_longer_contained stdout ----
+
+thread 'http_edr::rollback_tests::rollback_issues_the_concrete_inverse_and_the_target_is_no_longer_contained' (137508332) panicked at crates/swarm-response/src/http_edr.rs:769:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- http_edr::tests::enforced_mode_posts_authorized_json_payload stdout ----
+
+thread 'http_edr::tests::enforced_mode_posts_authorized_json_payload' (137508334) panicked at crates/swarm-response/src/http_edr.rs:569:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- http_edr::tests::timeout_returns_timeout_status stdout ----
+
+thread 'http_edr::tests::timeout_returns_timeout_status' (137508335) panicked at crates/swarm-response/src/http_edr.rs:569:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- notification::tests::quiet_hours_dead_letter_the_aggregate_instead_of_sending_it stdout ----
+
+thread 'notification::tests::quiet_hours_dead_letter_the_aggregate_instead_of_sending_it' (137508336) panicked at crates/swarm-response/src/notification.rs:643:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- notification::tests::router_dedups_matching_findings_into_one_notification stdout ----
+
+thread 'notification::tests::router_dedups_matching_findings_into_one_notification' (137508337) panicked at crates/swarm-response/src/notification.rs:643:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- notification::tests::router_signs_notifications_with_hmac_header stdout ----
+
+thread 'notification::tests::router_signs_notifications_with_hmac_header' (137508338) panicked at crates/swarm-response/src/notification.rs:643:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- notification::tests::router_uses_channel_specific_payload_builder_when_present stdout ----
+
+thread 'notification::tests::router_uses_channel_specific_payload_builder_when_present' (137508339) panicked at crates/swarm-response/src/notification.rs:643:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- notification::tests::router_writes_and_replays_rate_limited_notifications stdout ----
+
+thread 'notification::tests::router_writes_and_replays_rate_limited_notifications' (137508340) panicked at crates/swarm-response/src/notification.rs:643:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- notification::tests::scheduled_flush_delivers_without_an_explicit_drain stdout ----
+
+thread 'notification::tests::scheduled_flush_delivers_without_an_explicit_drain' (137508341) panicked at crates/swarm-response/src/notification.rs:643:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- resilience::tests::http_effect_then_server_failure_is_not_retried stdout ----
+
+thread 'resilience::tests::http_effect_then_server_failure_is_not_retried' (137508346) panicked at crates/swarm-response/src/resilience.rs:411:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- resilience::tests::http_effect_then_timeout_is_not_retried stdout ----
+
+thread 'resilience::tests::http_effect_then_timeout_is_not_retried' (137508347) panicked at crates/swarm-response/src/resilience.rs:411:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- siem::tests::forwarder_wraps_finding_for_runtime_delivery stdout ----
+
+thread 'siem::tests::forwarder_wraps_finding_for_runtime_delivery' (137508356) panicked at crates/swarm-response/src/siem.rs:574:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- siem::tests::splunk_adapter_posts_canonical_payload stdout ----
+
+thread 'siem::tests::splunk_adapter_posts_canonical_payload' (137508357) panicked at crates/swarm-response/src/siem.rs:574:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- splunk_hec::tests::splunk_hec_executes_batched_findings_in_one_request stdout ----
+
+thread 'splunk_hec::tests::splunk_hec_executes_batched_findings_in_one_request' (137508359) panicked at crates/swarm-response/src/splunk_hec.rs:461:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- splunk_hec::tests::splunk_hec_posts_cim_aligned_payload stdout ----
+
+thread 'splunk_hec::tests::splunk_hec_posts_cim_aligned_payload' (137508360) panicked at crates/swarm-response/src/splunk_hec.rs:461:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- webhook::tests::webhook_non_success_status_returns_failed_receipt stdout ----
+
+thread 'webhook::tests::webhook_non_success_status_returns_failed_receipt' (137508366) panicked at crates/swarm-response/src/webhook.rs:344:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- webhook::tests::webhook_posts_slack_compatible_payload stdout ----
+
+thread 'webhook::tests::webhook_posts_slack_compatible_payload' (137508367) panicked at crates/swarm-response/src/webhook.rs:344:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+
+failures:
+    crowdstrike_rtr::tests::dispatching_executor_writes_dead_letter_on_final_rtr_failure
+    crowdstrike_rtr::tests::isolate_host_fetches_token_and_calls_isolation_endpoint
+    crowdstrike_rtr::tests::kill_process_creates_session_and_executes_command
+    crowdstrike_rtr::tests::quarantine_file_creates_session_and_executes_command
+    crowdstrike_rtr::tests::timeout_surfaces_timeout_receipt
+    dispatch::tests::http_edr_config_dispatches_expanded_scan_action_payload
+    dispatch::tests::http_edr_config_dispatches_to_http_adapter
+    dispatch::tests::webhook_config_dispatches_to_webhook_adapter
+    http_edr::rollback_tests::a_refused_inverse_is_recorded_as_failed_not_as_reversed
+    http_edr::rollback_tests::an_irreversible_containment_issues_no_request_and_stays_contained
+    http_edr::rollback_tests::dry_run_rollback_issues_no_request_and_claims_no_reversal
+    http_edr::rollback_tests::rollback_issues_the_concrete_inverse_and_the_target_is_no_longer_contained
+    http_edr::tests::enforced_mode_posts_authorized_json_payload
+    http_edr::tests::timeout_returns_timeout_status
+    notification::tests::quiet_hours_dead_letter_the_aggregate_instead_of_sending_it
+    notification::tests::router_dedups_matching_findings_into_one_notification
+    notification::tests::router_signs_notifications_with_hmac_header
+    notification::tests::router_uses_channel_specific_payload_builder_when_present
+    notification::tests::router_writes_and_replays_rate_limited_notifications
+    notification::tests::scheduled_flush_delivers_without_an_explicit_drain
+    resilience::tests::http_effect_then_server_failure_is_not_retried
+    resilience::tests::http_effect_then_timeout_is_not_retried
+    siem::tests::forwarder_wraps_finding_for_runtime_delivery
+    siem::tests::splunk_adapter_posts_canonical_payload
+    splunk_hec::tests::splunk_hec_executes_batched_findings_in_one_request
+    splunk_hec::tests::splunk_hec_posts_cim_aligned_payload
+    webhook::tests::webhook_non_success_status_returns_failed_receipt
+    webhook::tests::webhook_posts_slack_compatible_payload
+
+test result: FAILED. 43 passed; 28 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+error: test failed, to rerun pass `-p swarm-response --lib`

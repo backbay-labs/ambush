@@ -1,0 +1,27 @@
+{
+  "base_commit": "92df4f4c8f3bdeaf55539bd2964b417d7d313a6f",
+  "case": "duplicate",
+  "seed": 57,
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-runtime",
+    "--test",
+    "dst_fault_injection",
+    "dst_pr_corpus_or_exact_seed_replays_real_crash_recovery",
+    "--",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 101,
+  "elapsed_seconds": 17.627,
+  "expected_oracle": "at-most-once: duplicate effect across restart",
+  "oracle_seen": true,
+  "source_restored_sha256": "a876985a0c6204c05148b976d08799ff24e5c3fdc111a33ad058e46ae7c0a07a",
+  "patch_sha256": "56cefa323e132b67bf0dfeb501c6afdd5feb8dafa7df0bae378fcbfe5dc070a1",
+  "log": "/private/tmp/ambush-dst-mutation-recipes-20260907/duplicate.log"
+}

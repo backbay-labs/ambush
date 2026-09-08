@@ -1,13 +1,14 @@
 # The invariant map
 
-Phase 285 (v1.79 assurance floor). Each row below is one fail-closed
-invariant found by reading `swarm-policy`, `swarm-runtime`, `swarm-response`,
-and `swarm-spine` for the source points where malformed, weak, unauthorized,
-or unverified input is **denied** rather than defaulted open. `Path` is the
-exact `crate::module::function` that enforces the invariant, verified to
-exist at HEAD (see `.superpowers/sdd/285-01-PLAN/task-1-report.md` for the
-grep proving each one). `Assumption` is the `docs/assurance/assumptions.toml`
-ID the invariant rests on.
+Phase 285 established this v1.79 assurance map; the Phase 286 repair adds
+two dispatch-boundary invariants. Each row identifies an enforcing source point
+in `swarm-policy`, `swarm-runtime`, `swarm-response` or `swarm-spine` where a
+malformed, weak, unauthorized or unverified operation is **denied**.
+`Path` is the exact `crate::module::function` resolved against the current source
+tree by `tools/check-mapping.sh`. `Assumption` names the environmental or
+primitive contract in `docs/assurance/assumptions.toml` that enforcement rests on.
+Mapping synchronization is not proof that the new runtime tests passed or that
+Phase 286 is accepted; its pending evidence is tracked in the DST section below.
 
 Phase 285 Task 2 adds a `// INVARIANT: <Name>` comment at each `Source` call
 site and a gate that keeps this table, those markers, and the real paths in
@@ -23,6 +24,8 @@ the line number — is the authoritative, drift-proof locator (grep the
 | `PolicyHumanGateOnDestructiveAction` | swarm-policy | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `crates/swarm-policy/src/static_gate.rs:268,295-300` | `ASSUME-OS-CLOCK` | Unconditional automatic execution of a destructive action (`block_egress`, `isolate_host`, `kill_process`, ...) at or above the configured human-gate severity -- returns `RequireHuman` rather than `Allow`. |
 | `PolicyScopeRateLimitDeniesBurst` | swarm-policy | `swarm_policy::static_gate::StaticApprovalGate::evaluate` | `crates/swarm-policy/src/static_gate.rs:209-229,291-293` | `ASSUME-OS-CLOCK` | An action whose target scope has already issued `max_actions_per_scope_per_minute` actions within the trailing 60 seconds of wall-clock time. |
 | `RuntimeRequireHumanBlocksLiveExecution` | swarm-runtime | `swarm_runtime::SwarmRuntime::authorize_and_execute` | `crates/swarm-runtime/src/lib.rs:972,993-995` | `ASSUME-OS-CLOCK` | Executing a request whose policy verdict is `RequireHuman` while the runtime is running in `RuntimeMode::LiveResponse` -- no destructive action auto-executes live without a human-approved path. |
+| `RuntimeDispatchIntentRequired` | swarm-runtime | `swarm_runtime::dispatch::SwarmRuntime::dispatch_once` | `crates/swarm-runtime/src/dispatch.rs:35` | `ASSUME-DISPATCH-DURABILITY` | An enforced adapter invocation without a configured durable dispatch journal and successfully persisted authorization intent; dry-run does not consume live dispatch permission. |
+| `RuntimeDispatchIdentityConsumedOnce` | swarm-runtime | `swarm_runtime::dispatch_journal::DispatchJournal::reserve` | `crates/swarm-runtime/src/dispatch_journal.rs:285` | `ASSUME-DISPATCH-DURABILITY` | Reusing an already reserved requester/action/hunt identity, regardless of completion or changed request content; no reservation is evicted to permit retransmission. |
 | `RuntimeLeaseMustBeActive` | swarm-runtime | `swarm_runtime::ensure_active_lease` | `crates/swarm-runtime/src/lib.rs:1416-1426` | `ASSUME-OS-CLOCK` | Executing a response through a `CapabilityLease` whose `expires_at_ms` has already passed. |
 | `RuntimeContinuityProofSignatureInvalid` | swarm-runtime | `swarm_runtime::agent_identity::verify_continuity_proof` | `crates/swarm-runtime/src/agent_identity.rs:544-589` | `ASSUME-ED25519` | An agent-identity rotation continuity proof whose signature does not verify against the claimed previous ed25519 public key, or whose key/signature hex is malformed or mis-sized. |
 | `RuntimeIdentityDerivedIdMismatch` | swarm-runtime | `swarm_runtime::agent_identity::FileAgentIdentityRegistry::admit_persisted_identity` | `crates/swarm-runtime/src/agent_identity.rs:337-354` | `ASSUME-ED25519` | Admitting a persisted agent identity whose claimed `AgentId` does not equal the ID derived from its own ed25519 signing key's public key. |
@@ -35,5 +38,69 @@ the line number — is the authoritative, drift-proof locator (grep the
 | `ResponseHttpEdrEndpointRequired` | swarm-response | `swarm_response::http_edr::HttpEdrAdapter::new` | `crates/swarm-response/src/http_edr.rs:23-28` | `ASSUME-NETWORK-TRANSPORT` | Constructing (and thereby ever dispatching through) an HTTP EDR adapter whose configured endpoint URL is empty or whitespace-only. |
 | `ResponseCrowdStrikeRtrBaseUrlRequired` | swarm-response | `swarm_response::crowdstrike_rtr::CrowdStrikeRtrAdapter::new` | `crates/swarm-response/src/crowdstrike_rtr.rs:35-40` | `ASSUME-NETWORK-TRANSPORT` | Constructing a CrowdStrike RTR adapter whose configured `base_url` is empty or whitespace-only. |
 
-15 rows: 3 `swarm-policy`, 5 `swarm-runtime`, 4 `swarm-spine`, 3
+17 rows: 3 `swarm-policy`, 7 `swarm-runtime`, 4 `swarm-spine`, 3
 `swarm-response`.
+
+## Deterministic-simulation harness (DST, phase 286)
+
+**Status: repaired local evidence recorded; full acceptance pending, 2026-09-07.** Candidate
+`1a5c9003b` was rejected; its green seed counts do not prove the phase's safety
+properties. See `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md`
+and `286-02-PLAN.md` for the evidence and replacement acceptance contract.
+
+The former harness checked that persisted receipt identities appeared among
+observed dispatches. That reverse subset accepts an effect with no durable prior
+record. Its dropped-episode disposition check could miss forbidden effects, its
+at-most-once check omitted restart/redelivery, its seeds collapsed to four
+effective schedules, and its reopen operation swapped in an empty in-memory
+substrate. Those are missing proof obligations, not accepted evidence boundaries.
+
+**Required production ordering.** Both `SwarmRuntime::authorize_and_execute` and
+`audit_authorize_and_execute_instrumented_internal` must durably reserve the
+immutable request identity and authorization intent before a live effect. The
+runtime's audit wrappers route through the latter entry. Completion receipts
+record observed post-effect outcomes. An authorization intent does not claim
+completion, and an unresolved result never permits automatic redispatch.
+Production composition must bind a bounded, fsynced, exclusive-writer journal to
+the configured audit directory and preserve the store across runtime reload.
+Corruption, conflicting identity reuse, unavailable storage and exhausted capacity
+must close dispatch. Internal effectful retries must not bypass the reservation.
+Current journal and dispatch-specific runtime unit tests and eleven composition
+regressions pass.
+The whole phase remains unaccepted because required network-enabled regressions
+still need terminal evidence. All 17 registered negative tests and full workspace
+Clippy pass; scoped final source review passed with the stated evidence limits.
+
+**Three required oracles.** Every observed effect must have a matching durable
+prior intent; the deterministic policy's forbidden outcomes must produce no
+effects even if the caller's future is dropped; and each immutable request
+identity must produce at most one effect over crash/reopen/redelivery histories.
+Completion receipts must describe only observed outcomes. A crash can leave an
+unresolved durable intent, which is reported as uncertainty rather than falsely
+reported completion. The journal is unsigned and OS-protected; existing signed
+audit artifacts remain separate and require their own verification.
+
+**Harness and controls required for acceptance.** The replacement must drive real
+runtime and gate entry points, a real sandbox effect adapter and a persistent
+local-journal pheromone substrate. It must reopen the same storage, redeliver
+requests, vary effective fault schedules, report the failing seed and support
+`SWARM_DST_SEED=<n>` replay. The ordinary PR lane must run 64 seeds and
+`.github/workflows/dst-nightly.yml` must run at least 5,000; distinct seed labels
+alone do not establish distinct schedules. Production-source mutation controls
+must make the normal harness reject effect-before-intent, duplicate dispatch and
+forbidden effects after cancellation. Three independent production mutations at
+`92df4f4c8` were rejected by their named safety oracles, and the restored positive
+DST suite passed. At `af250a8e8`, the 64-seed suite passed with 53 yielded event
+traces and 16 verdict/fault pairs; two explicit seed-57 replays matched exactly.
+The 5,000-seed nightly run passed with 897 yielded event traces and all 18 pairs.
+These trace counts include polling variation, not just crash/effect ordering;
+requests run sequentially with one shared verdict per seed. Retained commands,
+patches, source hashes and terminal logs are under the phase review evidence directory. These facts
+do not claim full phase acceptance or passing network-enabled regressions.
+
+**Evidence boundary.** The intended scope is single-host/process recovery over
+one logical local persistent substrate, including closing and reopening that
+same storage. Cancellation by future drop is not itself evidence of child-process
+termination. Distributed JetStream failover, cross-node consensus, external
+adapter exactly-once semantics, privileged filesystem tampering and durability
+beyond the OS/filesystem fsync contract are not established by this harness.

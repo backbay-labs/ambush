@@ -1,0 +1,24 @@
+{
+  "base_commit": "af250a8e883695f92cdbf9f21f3175ff1f1e5d19",
+  "crate": "swarm-policy",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-policy",
+    "--test",
+    "negative_policy_human_gate_on_destructive_action",
+    "--test",
+    "negative_policy_malformed_request_rejected",
+    "--test",
+    "negative_policy_scope_rate_limit_denies_burst",
+    "--",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 87.387,
+  "registered_count": 3,
+  "missing_named_passes": []
+}

@@ -1,0 +1,55 @@
+# DST-04 nightly corpus: seeded schedules over the real runtime, persisted
+# authorization intent, real local-journal substrate and restart/redelivery.
+# An intent precedes the external effect; completion is a separate later fact.
+# The ordinary test lane runs 64 seeds. This job exercises 5,000 varied seeds.
+# Every oracle failure names a seed for SWARM_DST_SEED=<n> replay.
+name: DST Nightly
+
+on:
+  schedule:
+    # 06:23 UTC daily. Off the hour boundary per GitHub's guidance -- on-the-hour
+    # schedules contend for the shared cron pool and are delayed or dropped.
+    - cron: "23 6 * * *"
+  # Manual trigger so the deep corpus can be run on demand (e.g. before a risky
+  # change to the runtime's dispatch/receipt path) without waiting for the cron.
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/ci
+
+jobs:
+  dst-nightly:
+    name: DST deep corpus (>= 5000 seeds)
+    runs-on: ubuntu-latest
+    # Bound the cold build and durable filesystem fault/recovery corpus.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # `--ignored` selects the `#[ignore]`d deep-corpus test (the only ignored
+      # test in this binary); `--test-threads=1` matches ci.yml's swarm-runtime
+      # lane (its tests are not proven parallel-safe) and the harness is a
+      # single-threaded deterministic executor regardless. A violation fails the
+      # step loudly, naming the seed for one-command reproduction.
+      - name: Run the DST deep corpus (>= 5000 seeds)
+        run: cargo test --locked -p swarm-runtime --test dst_fault_injection -- --ignored --test-threads=1

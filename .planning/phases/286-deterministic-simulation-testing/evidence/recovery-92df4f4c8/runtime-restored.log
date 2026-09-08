@@ -1,0 +1,100 @@
+   Compiling swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+   Compiling swarm-ingest-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-runtime)
+   Compiling swarm-agents v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-agents)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 33s
+     Running unittests src/lib.rs (target/debug/deps/swarm_runtime-586e180d149d6a28)
+
+running 584 tests
+....................................................................................... 87/584
+....................................................................................... 174/584
+....................................................................................... 261/584
+....................................................................................... 348/584
+............ 360/584
+providence::tests::adapter_retries_and_dead_letters_failures --- FAILED
+providence::tests::sync_creates_updates_and_resolves_incidents --- FAILED
+providence::tests::sync_skips_incidents_with_review_required_reconciliation --- FAILED
+....................................................................................... 450/584
+............................................................................. 527/584
+service::tests::runtime::process_event_completes_the_siem_forward_before_its_runtime_shuts_down --- FAILED
+.. 530/584
+service::tests::runtime::process_event_forwards_enriched_findings_to_siem --- FAILED
+.................................................... 583/584
+threat_intel_runtime::tests::feed_registry_polls_and_updates_substrate_health --- FAILED
+
+failures:
+
+---- providence::tests::adapter_retries_and_dead_letters_failures stdout ----
+
+thread 'providence::tests::adapter_retries_and_dead_letters_failures' (138821693) panicked at crates/swarm-runtime/src/providence.rs:1407:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- providence::tests::sync_creates_updates_and_resolves_incidents stdout ----
+
+thread 'providence::tests::sync_creates_updates_and_resolves_incidents' (138821696) panicked at crates/swarm-runtime/src/providence.rs:1407:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- providence::tests::sync_skips_incidents_with_review_required_reconciliation stdout ----
+
+thread 'providence::tests::sync_skips_incidents_with_review_required_reconciliation' (138821699) panicked at crates/swarm-runtime/src/providence.rs:1407:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- service::tests::runtime::process_event_completes_the_siem_forward_before_its_runtime_shuts_down stdout ----
+
+thread 'service::tests::runtime::process_event_completes_the_siem_forward_before_its_runtime_shuts_down' (138822488) panicked at crates/swarm-runtime/src/service/tests_support.rs:313:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- service::tests::runtime::process_event_forwards_enriched_findings_to_siem stdout ----
+
+thread 'service::tests::runtime::process_event_forwards_enriched_findings_to_siem' (138822510) panicked at crates/swarm-runtime/src/service/tests_support.rs:313:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+---- threat_intel_runtime::tests::feed_registry_polls_and_updates_substrate_health stdout ----
+
+thread 'threat_intel_runtime::tests::feed_registry_polls_and_updates_substrate_health' (138822772) panicked at crates/swarm-runtime/src/threat_intel_runtime.rs:407:75:
+called `Result::unwrap()` on an `Err` value: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+
+failures:
+    providence::tests::adapter_retries_and_dead_letters_failures
+    providence::tests::sync_creates_updates_and_resolves_incidents
+    providence::tests::sync_skips_incidents_with_review_required_reconciliation
+    service::tests::runtime::process_event_completes_the_siem_forward_before_its_runtime_shuts_down
+    service::tests::runtime::process_event_forwards_enriched_findings_to_siem
+    threat_intel_runtime::tests::feed_registry_polls_and_updates_substrate_health
+
+test result: FAILED. 578 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.99s
+
+error: test failed, to rerun pass `-p swarm-runtime --lib`
+     Running tests/dispatch_integration.rs (target/debug/deps/dispatch_integration-f8a52ee11f93cc93)
+
+running 21 tests
+................... 19/21
+timeout_from_dispatched_webhook_records_failure --- FAILED
+.
+failures:
+
+---- timeout_from_dispatched_webhook_records_failure stdout ----
+Error: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }
+
+
+failures:
+    timeout_from_dispatched_webhook_records_failure
+
+test result: FAILED. 20 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.64s
+
+error: test failed, to rerun pass `-p swarm-runtime --test dispatch_integration`
+     Running tests/dst_fault_injection.rs (target/debug/deps/dst_fault_injection-dc5212cfe305318f)
+
+running 5 tests
+.i...
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 14.59s
+
+     Running tests/negative_runtime_dispatch.rs (target/debug/deps/negative_runtime_dispatch-04d1507f966f1899)
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+error: 2 targets failed:
+    `-p swarm-runtime --lib`
+    `-p swarm-runtime --test dispatch_integration`

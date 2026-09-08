@@ -33,6 +33,7 @@ impl HttpEdrAdapter {
         let client = Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))
             .redirect(Policy::none())
+            .retry(reqwest::retry::never())
             .build()
             .map_err(|error| {
                 ResponseError::unavailable(
@@ -340,6 +341,7 @@ impl HttpEdrRollbackExecutor {
         let client = Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))
             .redirect(Policy::none())
+            .retry(reqwest::retry::never())
             .build()
             .map_err(|error| {
                 ResponseError::unavailable(

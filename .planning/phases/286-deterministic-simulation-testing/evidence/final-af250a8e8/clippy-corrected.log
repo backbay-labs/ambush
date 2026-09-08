@@ -1,0 +1,9 @@
+    Checking swarm-ingest-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-runtime)
+    Checking swarm-perch-bridge v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-perch-bridge)
+    Checking swarm-evolution v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-evolution)
+    Checking swarm-runtime-workbench v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime-workbench)
+    Checking swarm-runtime-http v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime-http)
+    Checking swarm-cli v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-cli)
+    Checking swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+    Checking swarm-agents v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-agents)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 35s

@@ -1,0 +1,26 @@
+{
+  "base_commit": "af250a8e883695f92cdbf9f21f3175ff1f1e5d19",
+  "crate": "swarm-spine",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-spine",
+    "--test",
+    "negative_spine_chain_link_integrity_violation",
+    "--test",
+    "negative_spine_envelope_canonicalization_required",
+    "--test",
+    "negative_spine_envelope_hash_mismatch_rejected",
+    "--test",
+    "negative_spine_envelope_issuer_must_be_ed25519_key",
+    "--",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 17.084,
+  "registered_count": 4,
+  "missing_named_passes": []
+}

@@ -1,0 +1,21 @@
+{
+  "base_commit": "af250a8e883695f92cdbf9f21f3175ff1f1e5d19",
+  "run": "pr64",
+  "seed": null,
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-runtime",
+    "--test",
+    "dst_fault_injection",
+    "--",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 21.236,
+  "log": "/private/tmp/ambush-dst-final-af250a8e8/pr64.log"
+}

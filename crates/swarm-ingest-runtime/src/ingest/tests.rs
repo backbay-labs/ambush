@@ -722,8 +722,7 @@ fn test_ingest_state() -> IngestState {
 /// `execution` and the sandbox response adapter, so a granted hold actually
 /// reaches the executor instead of being skipped by the mode.
 pub(crate) fn test_ingest_state_live_response() -> IngestState {
-    let mut config = test_config("suspicious_process_tree");
-    config.runtime.mode = RuntimeMode::LiveResponse;
+    let mut config = live_response_config("suspicious_process_tree");
     config.runtime.require_durable_live_response = false;
     config.response_adapter = ResponseAdapterConfig::Sandbox;
     config.policy.rules = vec![PolicyRuleConfig {
@@ -833,6 +832,13 @@ fn degraded_ingest_state() -> IngestState {
 fn live_response_config(strategy: &str) -> SwarmConfig {
     let mut config = test_config(strategy);
     config.runtime.mode = RuntimeMode::LiveResponse;
+    // Each independently constructed live runtime owns its journal's file lock.
+    config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+        directory: temp_path("live-response-audit")
+            .with_extension("dir")
+            .display()
+            .to_string(),
+    };
     config
 }
 
@@ -1190,10 +1196,9 @@ fn demo_ingest_state() -> IngestState {
 }
 
 fn live_demo_ingest_state() -> (IngestState, DefaultApprovalHarness) {
-    let mut config = test_config("suspicious_process_tree");
+    let mut config = live_response_config("suspicious_process_tree");
     let operator_vote_signer = Ed25519Signer::from_secret_material("demo-operator-vote-key");
     config.runtime.demo_mode = true;
-    config.runtime.mode = RuntimeMode::LiveResponse;
     config.policy.human_gate_severity = Severity::Low;
     config.investigation.enabled = true;
     config.correlation.enabled = true;
@@ -5977,8 +5982,7 @@ async fn startupz_reports_unsupported_schema_version() {
 
 #[tokio::test]
 async fn readyz_requires_startup_attestation_for_live_response_mode() {
-    let mut config = test_config("suspicious_process_tree");
-    config.runtime.mode = RuntimeMode::LiveResponse;
+    let config = live_response_config("suspicious_process_tree");
     let state = IngestState::from_config(temp_path("attestation-readyz"), config)
         .unwrap()
         .with_startup_attestation(failed_startup_attestation_report());
@@ -6014,8 +6018,7 @@ async fn readyz_requires_startup_attestation_for_live_response_mode() {
 
 #[tokio::test]
 async fn readyz_requires_anti_tamper_when_live_response_fail_closed() {
-    let mut config = test_config("suspicious_process_tree");
-    config.runtime.mode = RuntimeMode::LiveResponse;
+    let mut config = live_response_config("suspicious_process_tree");
     config.runtime.anti_tamper.fail_closed_live_response = true;
     let state = IngestState::from_config(temp_path("anti-tamper-readyz"), config)
         .unwrap()
@@ -6565,3 +6568,5 @@ fn the_hold_store_is_absent_until_it_is_attached_and_the_router_carries_it() {
     // And the router the dispatcher would take now carries the capture.
     let _router = state.current_request_response_router();
 }
+
+include!("dispatch_journal_tests.rs");

@@ -81,3 +81,12 @@ statement = "A response adapter's execution surface is bounded to the scope name
 dependent_invariants = [
     "ResponseSandboxRequiresScopedLease",
 ]
+
+# Phase 286 adds local dispatch durability to the original Phase 285 registry.
+[assume.ASSUME-DISPATCH-DURABILITY]
+owner = "swarm-runtime"
+statement = "The trusted local OS/filesystem honors successful file and directory fsync acknowledgements and exclusive writer locks across process failure, and the configured dispatch state directory retains its stable identity and contents across restart and reload. The directory is protected from hostile modification, replacement, deletion and rollback by its owner. The journal is unsigned local state: this assumes neither signed provenance nor distributed consensus, and it does not establish anti-rollback protection or exactly-once behavior in an external adapter."
+dependent_invariants = [
+    "RuntimeDispatchIntentRequired",
+    "RuntimeDispatchIdentityConsumedOnce",
+]

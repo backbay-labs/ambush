@@ -2,18 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.79
 milestone_name: Assurance Foundation
-current_phase: 285
-current_phase_name: Assumption Registry And Invariant Mapping
-current_plan: null
+current_phase: 286
+current_phase_name: Deterministic Simulation Testing
+current_plan: "286-02"
 status: active
-last_updated: "2026-08-14T00:00:00Z"
-last_activity: 2026-08-14
+last_updated: "2026-09-08T02:09:10Z"
+last_activity: 2026-09-07
 progress:
   total_phases: 4
-  completed_phases: 4
-  total_plans: 0
-  completed_plans: 0
-  percent: 100
+  completed_phases: 2
+  percent: 50
 ---
 
 # State
@@ -23,19 +21,36 @@ progress:
 See: `.planning/PROJECT.md` (updated 2026-04-13)
 
 **Core value:** Detect real threats quickly enough to take safe action before the window to respond closes.
-**Current focus:** `v1.78 Runtime Decomposition And TCB Boundary` — green the verification gates, eliminate `core.inc`, split `swarm-runtime`, and enforce a TCB boundary. Phase 284 (test isolation) is pulled forward from v1.79 as a hard prerequisite for parallel work.
+**Current focus:** Repair Phase 286 after rejecting candidate `1a5c9003b`: durable production dispatch reservations, real persistent recovery and falsifiable deterministic-simulation oracles. Active plan: `286-02`.
 
 ## Current Position
 
-**Current Phase:** Phase 285 (Assumption Registry And Invariant Mapping — the v1.79 assurance floor) COMPLETE 2026-09-07 (plan 285-01): `docs/assurance/{assumptions.toml,MAPPING.md,negative-registry.toml}`, 15 fail-closed invariants each mapped to its enforcing `crate::module::function` + the assumption beneath it, `// INVARIANT:` source markers, and two CI gates — `tools/check-mapping.sh` (marker↔row↔path sync) and `tools/check-negative-registry.sh` (a broken-variant test per invariant proving no row is vacuous). The v1.80 "Red Swarm" milestone (288–291) completed 2026-09-07 ahead of it per the 2026-09-06 gameplan override (`docs/plans/ambush-ui/integration/21-GAMEPLAN.md` Phase 2). Next per that gameplan's Phase 2 order: the open-agent-protocol milestone (needs user design intent), then provenance-grade memory (296–299), then the rest of assurance (286–287, 292–294), quorum (301–303), herd immunity (305–307), the detection commons (308–311), federation (312–313). The goal is roadmap phases 285–313 complete.
-**Total Phases:** 4 (280-283), plus 320-322 in v1.78.1, plus 288-291 in v1.80 (ALL COMPLETE)
-**Current Plan:** None started yet
-**Total Plans in Phase:** TBD
-**Status:** Ready to plan the next milestone
+**Current Phase:** Phase 286 (Deterministic Simulation Testing) IN PROGRESS / REOPENED 2026-09-07. Candidate `1a5c9003b` incorrectly closed the phase; the interrupted whole-branch review delivered no verdict. The recovery review blocks acceptance on reversed receipt ordering, forbidden effects hidden by cancellation, missing request redelivery, four effective schedules, and empty-store replacement presented as reopen. The repaired local corpus, production mutation controls, registered negative tests and full Clippy pass; network-enabled regression evidence remains open.
+**Total Phases:** 4 in the active v1.79 milestone (284–287); the recorded completions are 284 and 285. These counts describe this milestone, not the full requested roadmap.
+**Current Plan:** 286-02 — Durable Dispatch And Honest Simulation
+**Total Plans in Phase:** 2 (286-01 superseded/rejected; 286-02 active; neither accepted)
+**Status:** Implementing and verifying the repair; all six DST requirements reopened
 **Last Activity:** 2026-09-07
-**Last Activity Description:** Closed phase 291 (ARMSCI-01..05) — the LAST red-swarm phase — completing the v1.80 milestone. Implementing commits: 236812e28 (+206571055) the structural-isolation gate + Rust companion (ARMSCI-02/03), a290a0425 the executed CI arms-race gate + wall-clock guard (ARMSCI-01/05), a2966d905 (+b9cc8e2c9) the `red_swarm_campaign` object in `evolution status --json` (ARMSCI-04). Both new gates wired into `ci.yml`; the isolation gate lives in `tools/` (not `scripts/` as the req text slips). The engine now runs a complete offline red/blue arms race — deterministic adversary, real-detector scoring, bounded co-evolution — that is CI-gated against regression and structurally barred from response authority.
+**Last Activity Description:** Recovered exact interrupted Claude transcript and preserved `feat/dst-286` at `1a5c9003b`; rejected the candidate's assurance claims and began isolated production+journal+DST repair on `codex/dst-286-recovery` in `/private/tmp/ambush-dst-286-recovery-20260907`. See `.planning/phases/286-deterministic-simulation-testing/286-REVIEW.md` and `286-02-PLAN.md`.
 
-Progress: v1.78 phases 280/281/282/283 COMPLETE. v1.78.1: phase 320 complete (QRT-01..04), phase 322 complete (ZGATE-01..05, ZGATE-03 restated to the consuming code and ZGATE-04 partial), phase 321 PARTIAL — BFT-01/02/05 done, BFT-03 single-key done with substrate exchange deferred, BFT-04 transport seam only, both deliberately not pre-empting v1.83's VRF-02.
+The repair requires a durable authorization intent before an effect and an honest
+completion record after an observed outcome. The journal is unsigned and
+OS-protected; signed audit remains separate. Ambiguous/unresolved attempts never
+permit automatic redispatch. Both production runtime entry sites, composition
+and reload must uphold the same immutable reservation.
+
+**Full goal remains active:** the entire 2026-09-06 gameplan plus canonical engine
+phases 285–313. Phase 287 remains downstream of accepted Phase 286, followed by
+the remaining roadmap. Phases 288–291 are recorded as previously landed; they
+are not re-audited by this recovery record. The user did not defer the approved
+open-agent-protocol milestone: that was an earlier assistant ruling. Provenance
+memory 296–299 still requires its roadmap prerequisites and a source-grounded
+integration decision for the prior graph proposal; resolve its current PR identity against the approved gameplan before proceeding. Packaging follows the full requested work.
+
+**Progress accounting:** v1.79 has two recorded completed phases out of four
+(50% by phase count), with Phase 286 reopened and Phase 287 not started. This is
+not a completion percentage for the full roadmap or evidence of overall acceptance.
+
 
 ## Memory
 
@@ -72,6 +87,7 @@ Progress: v1.78 phases 280/281/282/283 COMPLETE. v1.78.1: phase 320 complete (QR
 - v1.80 phase 288 (Red Operator Genome And Target Graph) COMPLETE 2026-09-07, run ahead of v1.79 per the 2026-09-06 gameplan override: `TargetGraph` (a86e7a533) built from the evasion catalog plus every suite scenario's declared techniques; a deterministic `RedGenomeRng` (eab31fa9d, xoshiro256** seeded through SplitMix64, no OS-entropy or wall-clock path); the genome, six operator roles behind a shared `RedOperator` trait, and a pure `RedGenome::plan` (096cd6136), fixed in 069cfe573 so `OpsecOperator` draws cover from a benign-control scenario (`graph.benign_scenarios()`) rather than the quietest adversarial one; and `swarmctl red-swarm plan` (67ce8b23f) printing the `determinism` object and refusing to default `--virtual-clock-start-ms` to now. ONE RECORDED DEVIATION from OPFOR-01's literal text: `RedOperator::propose_steps` takes an extra `so_far: &[GeneStep]` argument so the Evasion, Chain, and Opsec roles can amend the plan proposed before them.
 - v1.80 phase 289 (Attack Scoring, Stealth Budget And Pattern Memory) COMPLETE 2026-09-07: `AttackScorer` (a08c010bb) scores a plan against an `EvasionCoverageSnapshot` — `evasion_rate = 1 -` mean per-technique max-over-detectors catch, `red_fitness = evasion_rate * stealth`, uncovered techniques catch 0.0; `StealthBudget` (ad6e48416) tail-truncates by events/hosts/technique-repeats and binds `host_slot` first-seen so the host cap bites, `stealth = emitted/proposed` in `(0.0,1.0]`, the 288 planner untouched; `AttackPatternDb` (c1a170539) is append-only JSONL with `technique_success_rate` (unrecorded→1.0, always-detected→0.0) and `RedSwarmError::MalformedPatternRecord`; `swarmctl red-swarm score --json` (fb719d259) scores the BUDGETED plan and prints the four top-level fitness fields. Scoring is a self-play estimate against a static snapshot; real detector runs + binding `technique_success_rate` into the operators are Phase 290. Executed with parallel SDD worktrees (Tasks 2/3 concurrent, Task 4 concurrent with Task 3's review).
 - v1.79 phase 285 (Assumption Registry And Invariant Mapping) COMPLETE 2026-09-07 — the assurance floor that makes "fail-closed" auditable instead of asserted. `docs/assurance/assumptions.toml` (5c7800644): 8 named assumptions (OS-CLOCK/JETSTREAM-DURABILITY/KEYSTORE-ATOMICITY/ED25519/SHA256/CANONICAL-JSON/NETWORK-TRANSPORT/SUBPROCESS-ISOLATION), each owner + dependent invariants. `docs/assurance/MAPPING.md` (5c7800644): 15 fail-closed invariant rows across swarm-policy (3) / swarm-runtime (5) / swarm-spine (4) / swarm-response (3), each → exact `crate::module::function` + assumption ID (all 15 paths independently resolved). 15 `// INVARIANT:` markers + `tools/check-mapping.sh` three-way sync gate (c4470c860, wired into ci.yml). `docs/assurance/negative-registry.toml` + 15 `crates/*/tests/negative_*.rs` (723466010): each calls the REAL enforcing fn on a denied input and a local BROKEN variant that permits the identical input — proving the positive suite is not vacuous — plus `tools/check-negative-registry.sh` (self-planted counterexamples, wired). ONE honest deviation (`SpineEnvelopeCanonicalizationRequired`): a non-finite `f64` is unreachable through the public serde_json 1.0.149 API (verified against source both directions), so that test falsifies the guard logic on a bare `f64` and asserts the unreachability so a future serde_json upgrade fails loudly; flagged `status="deviation"` in the registry. Executed as a sequential SDD pipeline (T1→T2→T3→T4); task reviews clean — T1 approved (0C/0I/2 cosmetic), T2 self-verified under an external load spike, T3 approved with 0 findings (reviewer re-derived non-vacuity of all 15 tests and the deviation against serde_json source).
+- CORRECTION 2026-09-07: Phase 286 is REOPENED; candidate `1a5c9003b` and the 286-01 closure are rejected. Its reverse-subset receipt oracle, cancellation disposition blind spot, absent same-request recovery, four repeated schedules and empty in-memory reopen do not establish DST-01..06. Preserve the original Git objects, follow `286-02-PLAN.md`, and fill `286-REVIEW.md` only with exact repaired-tree evidence. Local repaired DST, three actual production mutations and restored positive controls now pass; network-enabled regressions and final acceptance remain pending. The prior open-agent/provenance user-deferral claim was an assistant ruling, not a user instruction.
 - v1.80 phase 290 (Bidirectional Co-Evolution And Convergence) COMPLETE 2026-09-07: closes the red/blue loop against REAL detector runs. `GenomeRedSwarm` (31afa036d) materializes a budgeted plan into telemetry and implements the async `RedSwarmAdapter`; `plan_weighted` (1988f5899) biases operator technique selection by `AttackPatternDb` success rate (`plan`==`plan_weighted(None)`==288 char-for-char); `run_generation` (ef278cc8e, Cover-exclusion fix 29734daae) runs the enabled `DetectionConfig.strategies` detectors over the corpus, attributes catch per technique (excluding benign Cover events), and reuses 289's `AttackScorer` for `red_fitness`; `RedSwarmCampaign::run` (c59d8f44e, doc fix 0c8ceeff1) loops — red biases, blue greedily enables the strategies that catch what evaded (monotonic => non-decreasing catch rate), bounded stop (`max_generations`|`plateau`|`full_coverage`); `swarmctl red-swarm campaign` (fa4455429) persists byte-identical reports under `data/red-swarm/campaigns/` (only `generated_at_ms` varies). The heavy `mutation/` harness is deliberately unused (its `now_ms` breaks SC4). Gen 0 plans an all-neutral-weight snapshot through the weighted arm (deterministic, not byte-identical to `plan()`).
 - v1.80 phase 291 (CI Arms Race Gate And Structural Isolation) COMPLETE 2026-09-07 — LAST red-swarm phase; v1.80 milestone DONE. `tools/check-red-swarm-no-execution-authority.sh` (236812e28, ARMSCI-02) + `red_swarm::isolation_gate` Rust companion (ARMSCI-03) scan the red lane for `execute_response`/`ResponseAdapter`/`PolicyDecision::Authorize`/`live_response`, both plant-a-counterexample non-vacuous, excluding only the fixture by FULL path (fix 206571055); `tools/check-red-swarm-arms-race.sh` (a290a0425, ARMSCI-01/05) runs a bounded `swarmctl red-swarm campaign`, reads `final_blue_catch_rate` from the report FILE, fails below the checked-in 0.75 (real 0.7778), `timeout`-guarded; `evolution status --json` gains a `red_swarm_campaign` object (a2966d905/b9cc8e2c9, ARMSCI-04), fresh from disk, null when absent/malformed, one canonical `CAMPAIGNS_DIR`. Both gates wired into `ci.yml`; gate in `tools/` not `scripts/` (req slip). Whole-branch review pending; executed with parallel worktrees (a load-180 over-parallelism spike was cleared mid-flight — see [[ambush-parallelism-load-limits]]).
 
@@ -136,3 +152,26 @@ Progress: v1.78 phases 280/281/282/283 COMPLETE. v1.78.1: phase 320 complete (QR
 ## Next Command
 
 Phase 322 (Promotion Solver Gate) is COMPLETE as of 2026-08-13: ZGATE-01/02/04 landed in 99733a0, ZGATE-03/05 and the task #23 posture decision closed after it. The remaining open v1.78.1 work is Phase 321's BFT-03/04/05 and Phase 320's QRT-04 (blocked on the split-brain governance design decision, task #24). Phase 320 is 3/4 and Phase 283 (TCB Boundary) is complete. Implementation-ready plans for 320, 321 and task #15 were produced 2026-08-13 and each was independently critiqued; they carry measured file:line and name the requirement text that is factually wrong about the code.
+
+
+## Phase 286 recovery validation checkpoint, 2026-09-07
+
+Source checkpoint `af250a8e883695f92cdbf9f21f3175ff1f1e5d19` in the isolated
+recovery clone. Exact evidence and prior immutable source bindings are retained
+in `phases/286-deterministic-simulation-testing/286-REVIEW.md`.
+
+- Three real production mutations rejected: effect before intent, duplicate after
+  restart, and denied effect before cancellation. Exact source restored; positive
+  DST and both negative invariant tests passed afterward.
+- Final 64-seed corpus: 53 yielded event traces / 16 verdict-fault pairs. Explicit
+  selected-seed replay matched exactly. 5,000 nightly seeds passed with 897 yielded event traces and all 18 pairs. Trace counts include polling variation.
+- Current runtime library 578 passed / 6 TCP listener permission failures;
+  dispatch integration 20/1; response library 43/28; ingest library 172/5.
+  All reported failures are restricted-environment local TCP listener creation.
+  The new first-run replay regression and all journal composition tests pass.
+- All 17 registered negative test functions and full workspace/all-targets Clippy
+  pass. Scoped source/evidence review passed at af250a8e8; its only later Rust
+  delta is the Clippy-required first-run ok_or simplification.
+- Full network-enabled regressions and phase acceptance remain open. The HTTP
+  approval test also failed at local TCP listener creation before exercising its
+  fixture. Original main engine source is unchanged.

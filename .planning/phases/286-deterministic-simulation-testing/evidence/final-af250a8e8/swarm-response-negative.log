@@ -1,0 +1,23 @@
+   Compiling swarm-response v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-response)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.03s
+     Running tests/negative_response_crowdstrike_rtr_base_url_required.rs (target/debug/deps/negative_response_crowdstrike_rtr_base_url_required-b33cd929cdb2a058)
+
+running 1 test
+test negative_response_crowdstrike_rtr_base_url_required ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_response_http_edr_endpoint_required.rs (target/debug/deps/negative_response_http_edr_endpoint_required-5372cf244bcc0e2a)
+
+running 1 test
+test negative_response_http_edr_endpoint_required ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_response_sandbox_requires_scoped_lease.rs (target/debug/deps/negative_response_sandbox_requires_scoped_lease-043342c80cc3b759)
+
+running 1 test
+test negative_response_sandbox_requires_scoped_lease ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

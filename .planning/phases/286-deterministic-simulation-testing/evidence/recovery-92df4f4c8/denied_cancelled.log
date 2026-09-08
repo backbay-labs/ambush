@@ -1,0 +1,24 @@
+   Compiling swarm-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-runtime)
+   Compiling swarm-agents v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-agents)
+   Compiling swarm-ingest-runtime v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-ingest-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.30s
+     Running tests/dst_fault_injection.rs (target/debug/deps/dst_fault_injection-dc5212cfe305318f)
+
+running 1 test
+test dst_pr_corpus_or_exact_seed_replays_real_crash_recovery ... 
+thread 'dst_pr_corpus_or_exact_seed_replays_real_crash_recovery' (138797119) panicked at crates/swarm-runtime/tests/dst_fault_injection.rs:785:5:
+SWARM_DST_SEED=11 plan=Plan { seed: 11, verdict: Deny, fault: DropAfterEffect, before_gate: 1, before_effect: 1, after_effect: 3, after_return: 1, retries: 2, requests: 2 } named_oracles=["disposition: forbidden effect despite cancellation"] trace=[Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Poll(0) }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Poll(1) }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Poll(2) }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: EvidenceRead(1) }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: IntentObserved }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Effect }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Crash }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'dst_pr_corpus_or_exact_seed_replays_real_crash_recovery' (138797119) panicked at crates/swarm-runtime/tests/dst_fault_injection.rs:490:9:
+SWARM_DST_SEED=11 plan=Plan { seed: 11, verdict: Deny, fault: DropAfterEffect, before_gate: 1, before_effect: 1, after_effect: 3, after_return: 1, retries: 2, requests: 2 }: SWARM_DST_SEED=11 plan=Plan { seed: 11, verdict: Deny, fault: DropAfterEffect, before_gate: 1, before_effect: 1, after_effect: 3, after_return: 1, retries: 2, requests: 2 } named_oracles=["disposition: forbidden effect despite cancellation"] trace=[Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Poll(0) }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Poll(1) }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Poll(2) }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: EvidenceRead(1) }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: IntentObserved }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Effect }, Trace { id: "dispatch:e47949b097f0ae76e78e3472fd11fa022991524b61ca43c8df95584868981f77", event: Crash }]
+FAILED
+
+failures:
+
+failures:
+    dst_pr_corpus_or_exact_seed_replays_real_crash_recovery
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p swarm-runtime --test dst_fault_injection`

@@ -40,7 +40,7 @@ use swarm_runtime::service::{
 };
 use swarm_spine::{
     CorrelatedIncident, IncidentRecord, InvestigationBundle, InvestigationBundleRecord,
-    ReplayBundle, ReplayBundleRecord, ReplayPreview,
+    ReplayBundle, ReplayBundleRecord, ReplayBundleStore, ReplayPreview,
 };
 use swarm_whisker::{CompositeDetector, DetectionStrategy};
 
@@ -314,7 +314,7 @@ impl DefaultControlPlane {
         config: swarm_core::config::SwarmConfig,
     ) -> Result<Self, ControlError> {
         let detector = build_composite_detector(&config.detection)?;
-        let stack = ConfiguredRuntimeStack::from_config(config, SummaryInvestigator)?;
+        let stack = ConfiguredRuntimeStack::for_operator_view(config, SummaryInvestigator)?;
 
         Ok(Self {
             config_path: config_path.into(),
@@ -433,11 +433,24 @@ impl DefaultControlPlane {
             &options.paths.approval_set_results_dir,
             &options.paths.approval_ledger_results_dir,
         )?;
-        let config =
+        let mut config =
             guided_first_run_config(&self.stack.service.config, &options.voter_signing_key_env)?;
+        // The walkthrough uses enforced sandbox execution, so it still requires
+        // durable dispatch state. Give this run its own artifact root rather
+        // than contending with the production daemon's writer or audit history.
+        config.audit.bundle_store = swarm_core::config::BundleStoreConfig::LocalFiles {
+            directory: options
+                .paths
+                .approval_receipt_pack_results_dir
+                .join(".first-run-audit")
+                .join(uuid::Uuid::new_v4().to_string())
+                .display()
+                .to_string(),
+        };
         let state = IngestState::from_config(self.config_path.clone(), config)
             .map_err(|error| ControlError::IngestBuild(Box::new(error)))?
             .with_approval_harness(harness);
+        let walkthrough_replay_store = state.current_replay_store();
         let walkthrough = run_first_run_wizard(
             state,
             FirstRunWizardRequest {
@@ -449,6 +462,27 @@ impl DefaultControlPlane {
             },
         )
         .await?;
+
+        // Dispatch consumption stays isolated in the sandbox journal, while
+        // completed walkthrough evidence remains discoverable through the same
+        // operator configuration. The source store belongs to this run alone.
+        // Do not report completion if evidence cannot be published.
+        for record in walkthrough_replay_store
+            .recent(usize::MAX)
+            .map_err(ServiceError::from)?
+        {
+            let replay = walkthrough_replay_store
+                .load_by_bundle_id(&record.bundle_id)
+                .map_err(ServiceError::from)?
+                .ok_or(ControlError::NotFound {
+                    entity: "first-run replay bundle",
+                    lookup: record.bundle_id,
+                })?;
+            self.stack
+                .replay_store
+                .persist(&replay.bundle)
+                .map_err(ServiceError::from)?;
+        }
 
         Ok(ControlEnvelope::new(
             ControlDataOrigin::GuidedFirstRun,
@@ -1948,9 +1982,28 @@ mod tests {
         }
     }
 
+    fn control_plane_with_dispatch_fixture() -> DefaultControlPlane {
+        let mut config = control_config();
+        config.audit.bundle_store = swarm_core::config::BundleStoreConfig::LocalFiles {
+            directory: std::env::temp_dir()
+                .join(format!("swarm-control-dispatch-{}", uuid::Uuid::new_v4()))
+                .display()
+                .to_string(),
+        };
+        let mut plane = DefaultControlPlane::from_config("inline", config.clone()).unwrap();
+        // These tests produce the records they subsequently inspect. Production
+        // operator views intentionally cannot issue enforced response actions.
+        plane.stack = swarm_runtime::service::ConfiguredRuntimeStack::from_config(
+            config,
+            swarm_runtime::investigation::SummaryInvestigator,
+        )
+        .unwrap();
+        plane
+    }
+
     #[tokio::test]
     async fn status_output_uses_live_runtime_origin() {
-        let plane = DefaultControlPlane::from_config("inline", control_config()).unwrap();
+        let plane = control_plane_with_dispatch_fixture();
         let signing_key = test_signing_key();
         let agent_id = test_agent_id();
 
@@ -2188,7 +2241,7 @@ mod tests {
 
     #[tokio::test]
     async fn lookup_outputs_resolve_stable_ids_and_persisted_origin() {
-        let plane = DefaultControlPlane::from_config("inline", control_config()).unwrap();
+        let plane = control_plane_with_dispatch_fixture();
         let signing_key = test_signing_key();
         let agent_id = test_agent_id();
 
@@ -2387,6 +2440,92 @@ mod tests {
         assert!(json.contains("\"kind\":\"first_run\""));
         assert!(json.contains("\"schema_version\":1"));
         assert!(json.contains("\"status\":\"completed\""));
+    }
+
+    #[tokio::test]
+    async fn first_run_publishes_replay_for_same_config_lookup_beside_live_daemon() {
+        unsafe {
+            std::env::set_var("SWARM_FIRST_RUN_TEST_VOTER_KEY", "first-run-vote-key");
+            std::env::set_var(
+                "SWARM_FIRST_RUN_TEST_EVIDENCE_KEY",
+                "first-run-evidence-key",
+            );
+        }
+        let temp_dir = unique_temp_dir("first-run-durable-lookup");
+        let audit_root = temp_dir.join("operator-audit");
+        let mut config = control_config();
+        config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+            directory: audit_root.display().to_string(),
+        };
+        let daemon = swarm_runtime::service::ConfiguredRuntimeStack::from_config(
+            config.clone(),
+            swarm_runtime::investigation::SummaryInvestigator,
+        )
+        .unwrap();
+        let daemon_journal = daemon.service.runtime.dispatch_journal().unwrap();
+        let journal_before = fs::read(daemon_journal.journal_path()).unwrap();
+        let plane = DefaultControlPlane::from_config("inline", config.clone()).unwrap();
+        let options = first_run_options(&temp_dir);
+        let sandbox_root = options
+            .paths
+            .approval_receipt_pack_results_dir
+            .join(".first-run-audit");
+        let report = plane.first_run(options).await.unwrap();
+        assert_eq!(report.data.status, FirstRunStatus::Completed);
+        let immediate = plane
+            .replay_lookup(ReplayLookupSelector::HuntId("evt-first-run-1"))
+            .unwrap();
+        assert_eq!(immediate.data.bundle.event.event_id, "evt-first-run-1");
+        assert!(
+            audit_root
+                .join(&immediate.data.record.bundle_path)
+                .is_file()
+        );
+        drop(plane);
+
+        // A newly constructed operator client using the unchanged config must
+        // see the published replay while the production journal is still held.
+        let reopened = DefaultControlPlane::from_config("inline", config).unwrap();
+        let replay = reopened
+            .replay_lookup(ReplayLookupSelector::HuntId("evt-first-run-1"))
+            .unwrap();
+        assert_eq!(
+            replay.data.record.bundle_id,
+            immediate.data.record.bundle_id
+        );
+        assert_eq!(replay.origin, ControlDataOrigin::PersistedRuntimeArtifact);
+        assert_eq!(
+            fs::read(daemon_journal.journal_path()).unwrap(),
+            journal_before
+        );
+
+        // Publishing a replay must not copy its consumed dispatch permission
+        // into the daemon. That permission remains in the private sandbox store.
+        let sandbox_runs: Vec<_> = fs::read_dir(sandbox_root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(sandbox_runs.len(), 1);
+        let sandbox_journal = swarm_runtime::dispatch_journal::DispatchJournal::open(
+            sandbox_runs[0].join(".dispatch-journal"),
+        )
+        .unwrap();
+        let dispatch_id = swarm_runtime::dispatch_journal::DispatchJournal::request_id(
+            &replay.data.bundle.action_request,
+        )
+        .unwrap();
+        assert!(
+            sandbox_journal
+                .lookup_persisted(&dispatch_id)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            daemon_journal
+                .lookup_persisted(&dispatch_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// `guided_first_run_config` declares "this run pauses at a human gate" by

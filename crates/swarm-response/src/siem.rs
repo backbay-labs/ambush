@@ -348,9 +348,13 @@ impl SiemFindingForwarder {
             dead_letter_path,
             max_dead_letter_bytes,
         ));
+        // SIEM finding-forwarding is duplicate-safe telemetry: re-delivering a
+        // finding is harmless, so transient failures are legitimately retried.
+        // This is unlike the effectful dispatch adapters, which use
+        // `ResilientExecutor::new` to guarantee a single invocation.
         let inner = if let Some(adapter) = SplunkHecAdapter::new(&config) {
             ForwarderInner::Splunk {
-                executor: Arc::new(ResilientExecutor::new(
+                executor: Arc::new(ResilientExecutor::with_retries(
                     adapter.clone(),
                     "siem_forward",
                     retry,
@@ -361,7 +365,7 @@ impl SiemFindingForwarder {
             }
         } else {
             let adapter = SiemForwardAdapter::new(config);
-            ForwarderInner::Generic(Arc::new(ResilientExecutor::new(
+            ForwarderInner::Generic(Arc::new(ResilientExecutor::with_retries(
                 adapter,
                 "siem_forward",
                 retry,
@@ -663,6 +667,65 @@ mod tests {
         assert_eq!(receipt.status, ResponseStatus::Executed);
         let payload = state.payload.lock().await.clone().unwrap();
         assert_eq!(payload["event"]["finding_id"], "finding-1");
+
+        let _ = shutdown_tx.send(());
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn forwarder_retries_transient_siem_failure_until_it_succeeds() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // SIEM finding forwarding is duplicate-safe telemetry, so a transient
+        // failure is legitimately retried. This endpoint fails the first delivery
+        // with 503, then accepts the redelivery: the forwarder must reach a
+        // successful receipt, and the finding must be delivered exactly twice.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&hits);
+        let app = Router::new().route(
+            "/",
+            post(move || {
+                let hits = Arc::clone(&server_hits);
+                async move {
+                    if hits.fetch_add(1, Ordering::SeqCst) == 0 {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        StatusCode::OK
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            let server = axum::serve(listener, app).with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            });
+            let _ = server.await;
+        });
+
+        // ElkBulk drives the Generic forwarder (SplunkHecAdapter::new returns None
+        // for non-Splunk configs), which surfaces the 503 as a retryable failure.
+        let forwarder = SiemFindingForwarder::new(SiemForwardConfig::ElkBulk {
+            endpoint,
+            auth_token: None,
+            index: "swarm".to_string(),
+            timeout_ms: 500,
+            retry: RetryConfig {
+                max_retries: 3,
+                initial_backoff_ms: 1,
+                backoff_multiplier: 1.0,
+            },
+            circuit_breaker: CircuitBreakerConfig {
+                threshold: 5,
+                cooldown_ms: 1000,
+            },
+            dead_letter_path: "./siem-dead-letter.jsonl".to_string(),
+        });
+
+        let receipt = forwarder.forward_finding(&sample_finding()).await.unwrap();
+        assert_eq!(receipt.status, ResponseStatus::Executed);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
 
         let _ = shutdown_tx.send(());
         handle.abort();

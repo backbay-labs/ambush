@@ -1,0 +1,46 @@
+   Compiling serde v1.0.228
+   Compiling tracing v0.1.44
+   Compiling hyper v1.9.0
+   Compiling ed25519 v2.2.3
+   Compiling ed25519-dalek v2.2.0
+   Compiling swarm-crypto v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-crypto)
+   Compiling tower v0.5.3
+   Compiling hyper-util v0.1.20
+   Compiling swarm-core v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-core)
+   Compiling tower-http v0.6.10
+   Compiling hyper-rustls v0.27.9
+   Compiling serde_urlencoded v0.7.1
+   Compiling reqwest v0.12.28
+   Compiling swarm-whisker v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-whisker)
+   Compiling swarm-policy v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-policy)
+   Compiling swarm-response v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-response)
+   Compiling swarm-spine v0.1.0 (/private/tmp/ambush-dst-286-recovery-20260907/crates/swarm-spine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.20s
+     Running tests/negative_spine_chain_link_integrity_violation.rs (target/debug/deps/negative_spine_chain_link_integrity_violation-5d44147be56fbf8d)
+
+running 1 test
+test negative_spine_chain_link_integrity_violation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_spine_envelope_canonicalization_required.rs (target/debug/deps/negative_spine_envelope_canonicalization_required-69f5e8b40edf9e3e)
+
+running 1 test
+test negative_spine_envelope_canonicalization_required ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_spine_envelope_hash_mismatch_rejected.rs (target/debug/deps/negative_spine_envelope_hash_mismatch_rejected-c484f40f1e16a977)
+
+running 1 test
+test negative_spine_envelope_hash_mismatch_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/negative_spine_envelope_issuer_must_be_ed25519_key.rs (target/debug/deps/negative_spine_envelope_issuer_must_be_ed25519_key-6d218cfd5dd4456e)
+
+running 1 test
+test negative_spine_envelope_issuer_must_be_ed25519_key ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

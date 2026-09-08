@@ -563,7 +563,8 @@
                 RuntimeMode::LiveResponse,
                 StaticApprovalGate::default(),
                 TimeoutExecutor,
-            ),
+            )
+            .with_dispatch_journal(service_dispatch_journal()),
         )
         .with_prometheus(CriticalPathMetrics::new());
         let detector = SuspiciousProcessTreeDetector::default();

@@ -1,0 +1,18 @@
+{
+  "base_commit": "af250a8e883695f92cdbf9f21f3175ff1f1e5d19",
+  "source_delta": "control.rs first-run .ok_or_else closure changed to .ok_or; no other Rust changes",
+  "command": [
+    "cargo",
+    "clippy",
+    "--locked",
+    "-j2",
+    "--workspace",
+    "--all-targets",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "CARGO_INCREMENTAL": "0",
+  "exit_code": 0,
+  "terminal_session": 85482
+}

@@ -1,0 +1,23 @@
+{
+  "base_commit": "af250a8e883695f92cdbf9f21f3175ff1f1e5d19",
+  "run": "seed11",
+  "seed": "11",
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-j2",
+    "-p",
+    "swarm-runtime",
+    "--test",
+    "dst_fault_injection",
+    "dst_pr_corpus_or_exact_seed_replays_real_crash_recovery",
+    "--",
+    "--exact",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 0.849,
+  "log": "/private/tmp/ambush-dst-final-af250a8e8/seed11.log"
+}

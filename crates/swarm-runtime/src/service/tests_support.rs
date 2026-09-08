@@ -135,6 +135,12 @@
         }
     }
 
+    fn service_dispatch_journal() -> std::sync::Arc<crate::dispatch_journal::DispatchJournal> {
+        let path = std::env::temp_dir()
+            .join(format!("swarm-service-dispatch-{}", uuid::Uuid::new_v4()));
+        std::sync::Arc::new(crate::dispatch_journal::DispatchJournal::open(path).unwrap())
+    }
+
     fn runtime_service() -> RuntimeService<StaticApprovalGate, SandboxExecutor> {
         RuntimeService::new(
             service_config(
@@ -146,7 +152,8 @@
                 RuntimeMode::LiveResponse,
                 StaticApprovalGate::default(),
                 SandboxExecutor,
-            ),
+            )
+            .with_dispatch_journal(service_dispatch_journal()),
         )
     }
 
