@@ -1,3 +1,4 @@
+use crate::formal_core::{self, RateLimitOutcome};
 use crate::{
     ActionRequest, ApprovalContext, ApprovalError, ApprovalGate, CapabilityLease, PolicyDecision,
 };
@@ -198,16 +199,12 @@ impl StaticApprovalGate {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn prune_window(window: &mut VecDeque<i64>, now_ms: i64) {
-        while window
-            .front()
-            .is_some_and(|timestamp| *timestamp <= now_ms.saturating_sub(60_000))
-        {
-            window.pop_front();
-        }
-    }
-
-    // INVARIANT: PolicyScopeRateLimitDeniesBurst
+    /// Decide whether `request`'s scope still has budget at `context.now_ms`,
+    /// delegating the prune-then-check-then-record decision to the pure
+    /// [`formal_core::evaluate_rate_limit`]. The `Mutex` stays here at the
+    /// edge: the window is read out from under the lock, handed to the pure
+    /// core by value, and the returned window written back in its place
+    /// before the lock is released.
     fn scope_rate_limit_decision(
         &self,
         request: &ActionRequest,
@@ -216,18 +213,22 @@ impl StaticApprovalGate {
         let scope = Self::scope_bucket(request);
         let mut windows = self.lock_windows();
         let window = windows.entry(scope.clone()).or_default();
-        Self::prune_window(window, context.now_ms);
-        if window.len() >= self.max_actions_per_scope_per_minute {
-            return Some(PolicyDecision::deny_with_rule(
+        let (outcome, updated) = formal_core::evaluate_rate_limit(
+            std::mem::take(window),
+            context.now_ms,
+            self.max_actions_per_scope_per_minute,
+        );
+        *window = updated;
+        match outcome {
+            RateLimitOutcome::Denied => Some(PolicyDecision::deny_with_rule(
                 "static.scope_rate_limit",
                 format!(
                     "scope `{scope}` exceeded {} actions per minute",
                     self.max_actions_per_scope_per_minute
                 ),
-            ));
+            )),
+            RateLimitOutcome::Allowed => None,
         }
-        window.push_back(context.now_ms);
-        None
     }
 }
 

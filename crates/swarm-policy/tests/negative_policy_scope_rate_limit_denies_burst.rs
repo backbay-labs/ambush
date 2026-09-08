@@ -1,12 +1,14 @@
 //! FALSIFY-02 negative-falsifiability test for
 //! `PolicyScopeRateLimitDeniesBurst` (docs/assurance/MAPPING.md).
 //!
-//! `scope_rate_limit_decision` (crates/swarm-policy/src/static_gate.rs:211-231)
-//! denies an action once its target scope has already issued
+//! `scope_rate_limit_decision` (crates/swarm-policy/src/static_gate.rs) reads
+//! the scope's window under its `Mutex` and delegates the actual
+//! prune-then-check-then-record decision to the pure
+//! `formal_core::evaluate_rate_limit` (crates/swarm-policy/src/formal_core.rs),
+//! which denies an action once its target scope has already issued
 //! `max_actions_per_scope_per_minute` actions inside the trailing 60 seconds
-//! of wall-clock time. The function itself is private; `evaluate`
-//! (static_gate.rs:291-293) calls it and is the `pub` entry point this test
-//! reaches it through -- the same path
+//! of wall-clock time. Both functions are private/internal; `evaluate` is the
+//! `pub` entry point this test reaches them through -- the same path
 //! `scope_rate_limit_denies_burst_for_same_scope` in static_gate.rs's own
 //! `#[cfg(test)]` module already uses for positive coverage.
 
@@ -26,11 +28,11 @@ fn sample_context_at(now_ms: i64) -> ApprovalContext {
     }
 }
 
-/// A deliberately broken re-implementation of `scope_rate_limit_decision`'s
-/// budget check (crates/swarm-policy/src/static_gate.rs:220-227) with the
-/// `window.len() >= max_actions_per_scope_per_minute` comparison removed: a
-/// scope may burst without limit no matter how many actions it already
-/// issued inside the trailing window.
+/// A deliberately broken re-implementation of `formal_core::evaluate_rate_limit`'s
+/// budget check (crates/swarm-policy/src/formal_core.rs) with the
+/// `window.len() >= limit` comparison removed: a scope may burst without
+/// limit no matter how many actions it already issued inside the trailing
+/// window.
 fn broken_scope_rate_limit_permits(
     _window_len_before_this_action: usize,
     _max_per_minute: usize,
