@@ -120,6 +120,7 @@ pub mod alert_tuning;
 pub mod approval;
 pub mod calico_agent; // SPLIT-03: pinned by `mutation::EvolutionDetectorGenome::strategy`, ADR 0007
 pub mod canary;
+pub mod chain_reconstruction;
 pub mod config;
 pub mod containment;
 pub mod correlation;

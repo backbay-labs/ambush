@@ -73,8 +73,8 @@ pub use incident::{
     FalsePositiveDetectorSummary, FalsePositiveHostSummary, FalsePositiveMeasurement,
     FalsePositiveMeasurementReport, FileIncidentStore, IncidentEvidenceLink,
     IncidentGraphDimension, IncidentLookup, IncidentMemberDecision, IncidentRecord, IncidentStore,
-    IncidentStoreError, IncidentStoreHealth, MemoryIncidentStore,
-    summarize_false_positive_measurements,
+    IncidentStoreError, IncidentStoreHealth, MemoryIncidentStore, ReconstructedChainHop,
+    ReconstructedKillChain, summarize_false_positive_measurements,
 };
 pub use investigation::{
     ConfiguredInvestigationBundleStore, FileInvestigationBundleStore, InvestigationBundle,
