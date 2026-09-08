@@ -1250,7 +1250,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** Extract an IO-free decision core from the policy gate and the governance predicates, bind it to Kani bounded model checking and named safety properties, model the partition-contingency-lease state machine in TLA+, and make the existing Z3 lane actually gate promotion.
 **Executable phases:** 292-294
 
-- [ ] **Phase 292: Pure Decision Core Extraction** - Carve out total, clock-injected, lock-free decision functions, enforced by a dependency-boundary script. (DCORE-01, DCORE-02)
+- [x] **Phase 292: Pure Decision Core Extraction** - Carve out total, clock-injected, lock-free decision functions, enforced by a dependency-boundary script. (DCORE-01, DCORE-02)
 - [ ] **Phase 293: Kani Bounded Model Checking** - Bounded-check fail-closed evaluation, severity gating, rate-limit bounds, and lease integrity. (KANI-01, KANI-03)
 - [ ] **Phase 294: Named Safety Properties And Partition-Lease Model** - Name P1-P6, map them, and model-check the highest-risk concurrent protocol with negative falsifiability. (SAFEP-01, SAFEP-04)
 
@@ -1259,13 +1259,13 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** Chio's proof apparatus exists only because an IO-free decision surface exists. `can_act` currently reads the OS clock internally and the gates hold state in a mutex. This phase is the prerequisite for everything after it.
 **Requirements:** DCORE-01, DCORE-02, DCORE-03, DCORE-04, DCORE-05
 **Depends on:** v1.80 milestone complete
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-08)
+**Plans:** 292-01-PLAN.md
 **Success Criteria**:
-1. `crates/swarm-policy/src/formal_core.rs` holds the approval, severity, rate-limit, and lease predicates as pure functions with no mutex, filesystem, clock, or network call in their bodies.
-2. `GovernancePolicy::can_act` no longer calls `now_ms()` internally; the clock is caller-supplied at every entry into `formal_core`.
-3. `cargo tree -p swarm-policy` contains no transport, telemetry, or CLI crate, enforced by `scripts/check-decision-core-boundary.sh` in CI.
-4. Every pre-existing gate and governance test passes unchanged against the new call paths.
+1. `crates/swarm-policy/src/formal_core.rs` holds the approval, severity, rate-limit, and lease predicates as pure functions with no mutex, filesystem, clock, or network call in their bodies. — met: eb64f7c85 (rate-limit core, DCORE-01), f5cb3d8df (governance predicates, DCORE-02): `formal_core` bodies contain no `Mutex`/`fs`/clock/network calls (grep + read).
+2. `GovernancePolicy::can_act` no longer calls `now_ms()` internally; the clock is caller-supplied at every entry into `formal_core`. — met: f5cb3d8df: `can_act` is now a one-line clock-reading wrapper over `can_act_at(action, now_ms)`; the `now_ms()` call that used to sit at `tom_agent.rs:508` is now an explicit parameter threaded to `formal_core::lease_can_redeem`.
+3. `cargo tree -p swarm-policy` contains no transport, telemetry, or CLI crate, enforced by `tools/check-decision-core-boundary.sh` in CI (path-slip recorded per Design-of-record ruling, repo convention — same as phases 283/285/291; the requirement text names `scripts/check-decision-core-boundary.sh`). — met: 49121d577: `cargo metadata`-based scan of the resolved NORMAL graph, self-tested against synthetic clean/planted graphs (direct, two-hop smuggled, and `opentelemetry*`-prefix plants) before trusting the real scan; wired into `ci.yml`.
+4. Every pre-existing gate and governance test passes unchanged against the new call paths. — met: verified after every task (eb64f7c85, f5cb3d8df) and RE-VERIFIED on the final tree at phase close (DCORE-05 final): `cargo test -p swarm-policy` (31 passing) + `cargo test -p swarm-agents` (17 lib + 7 governance) all pass unchanged; `check-decision-core-boundary.sh`, `check-mapping.sh`, `check-negative-registry.sh`, `check-gates-wired.sh`, `check-workspace-layering.sh` all exit 0.
 
 ### Phase 293: Kani Bounded Model Checking
 
@@ -1909,7 +1909,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 | 289. Attack Scoring, Stealth Budget And Pattern Memory | v1.80 | 1/1 | Complete | 289-01 |
 | 290. Bidirectional Co-Evolution And Convergence | v1.80 | 1/1 | Complete | 290-01 |
 | 291. CI Arms Race Gate And Structural Isolation | v1.80 | 1/1 | Complete | 291-01 |
-| 292. Pure Decision Core Extraction | v1.81 | 0/TBD | Not started | - |
+| 292. Pure Decision Core Extraction | v1.81 | 1/1 | Complete | 292-01 |
 | 293. Kani Bounded Model Checking | v1.81 | 0/TBD | Not started | - |
 | 294. Named Safety Properties And Partition-Lease Model | v1.81 | 0/TBD | Not started | - |
 | 295. Z3-Backed Promotion Gate | v1.81 | - | Superseded by 322 | - |
