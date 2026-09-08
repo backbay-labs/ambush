@@ -828,6 +828,26 @@ where
         Ok(engine.correlate_hunt(investigations, incidents, hunt_id)?)
     }
 
+    /// Graph-aware correlation: passes `graph` through to
+    /// [`CorrelationEngine::correlate_hunt_with_graph`]. `Some(graph)` runs the
+    /// graph-native cross-hunt decision (XHUNT-01); `None` runs the degraded
+    /// string-overlap fallback (memory off / no snapshot). Kept distinct from
+    /// [`Self::correlate_hunt`] so existing no-graph callers are unaffected.
+    pub fn correlate_hunt_with_graph<Investigations, Incidents>(
+        &self,
+        engine: &CorrelationEngine,
+        investigations: &Investigations,
+        incidents: &Incidents,
+        hunt_id: &str,
+        graph: Option<&crate::sphinx_agent::KnowledgeGraphSnapshot>,
+    ) -> Result<Option<CorrelationOutcome>, ServiceError>
+    where
+        Investigations: InvestigationBundleStore,
+        Incidents: IncidentStore,
+    {
+        Ok(engine.correlate_hunt_with_graph(investigations, incidents, hunt_id, graph)?)
+    }
+
     pub fn load_incident_by_hunt_id<Store>(
         &self,
         store: &Store,

@@ -10,7 +10,10 @@
 use serde::Serialize;
 use swarm_core::pheromone::ThreatClass;
 use swarm_core::types::Severity;
-use swarm_spine::{IncidentGraphDimension, IncidentLookup, IncidentMemberDecision, IncidentStore};
+use swarm_spine::{
+    IncidentGraphDimension, IncidentLookup, IncidentMemberDecision, IncidentStore,
+    ReconstructedChainHop,
+};
 
 use super::PerchOpsError;
 use super::mint::PERCH_CASE_INCIDENT_PREFIX;
@@ -23,6 +26,10 @@ pub struct PerchIncidentEvidenceLink {
     pub explanation: String,
     pub shared_values: Vec<String>,
     pub weight: usize,
+    /// The knowledge-graph evidence hop this link was derived from (Phase
+    /// 298 XHUNT-02), when the correlation that produced it recorded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_path: Option<ReconstructedChainHop>,
 }
 
 /// One member decision — included or rejected — as the figure draws it.
@@ -93,6 +100,7 @@ fn member_view(member: &IncidentMemberDecision, lookup: &IncidentLookup) -> Perc
                 explanation: link.explanation.clone(),
                 shared_values: link.shared_values.clone(),
                 weight: link.weight,
+                graph_path: link.graph_path.clone(),
             })
             .collect(),
     }

@@ -788,3 +788,355 @@
         drop(stack);
         std::fs::remove_dir_all(audit_directory).unwrap();
     }
+
+    /// XHUNT-03: the optional correlation + memory lanes must never gate the
+    /// critical path. This drives the SAME two telemetry events through two
+    /// otherwise-identical stacks -- one with `correlation.enabled = true`
+    /// AND `memory.enabled = true` (and this arm genuinely EXERCISES both: a
+    /// real `SphinxAgent` tick persists a knowledge-graph snapshot built from
+    /// the arm's own pheromone deposits, and `correlate_hunt_with_persisted_graph`
+    /// then runs the graph-native cross-hunt decision against that snapshot --
+    /// confirmed below by asserting a `graph_path` was recorded on the
+    /// resulting incident, i.e. the Phase 298 graph-native path ran, not the
+    /// pre-298 string-overlap fallback), the other with both `false` -- and
+    /// asserts the policy/response decision captured from `process_event`
+    /// (captured BEFORE the enabled arm's correlation/memory exercise runs)
+    /// is identical between the two arms.
+    ///
+    /// `SwarmRuntime::authorize_and_execute` (`crates/swarm-runtime/src/lib.rs`)
+    /// has zero references to correlation/sphinx/memory; this test pins that
+    /// structural decoupling against regression, and does so for a
+    /// configuration where the optional lanes actually run rather than one
+    /// where they are simply unreachable.
+    #[tokio::test]
+    async fn optional_correlation_and_memory_lanes_never_perturb_policy_decision() {
+        use crate::sphinx_agent::{FileKnowledgeGraphStore, SphinxAgent};
+        use swarm_core::agent::{SwarmAgent, SwarmEnvironment};
+        use swarm_pheromone::ConfiguredPheromoneSubstrate;
+
+        /// The decision-relevant projection of one handled event's audit
+        /// trail: the policy verdict/rule/reason and the lease terms that
+        /// gated execution, plus the response's disposition (kind, status,
+        /// action, mode). Deliberately excludes bookkeeping identifiers that
+        /// are incidental to the decision itself (`trail_id`, `bundle_id`,
+        /// `receipt_id`) even though, in this fixture, they are ALSO fully
+        /// deterministic (formatted from `hunt_id` plus the fixed `now_ms`
+        /// used by both arms, never random or wall-clock derived) -- the
+        /// assertion below is about the decision, not about ids that happen
+        /// to match too.
+        #[derive(Debug, PartialEq)]
+        struct DecisionSnapshot {
+            verdict: PolicyVerdict,
+            rule_name: String,
+            reason: String,
+            lease: Option<(String, String, Option<String>, i64)>,
+            response_kind: &'static str,
+            response_status: Option<ResponseStatus>,
+            response_action: Option<String>,
+            response_mode: Option<ExecutionMode>,
+            response_disposition: Option<String>,
+        }
+
+        fn decision_snapshot(audit: &swarm_spine::AuditTrail) -> DecisionSnapshot {
+            let (response_kind, response_status, response_action, response_mode, response_disposition) =
+                match &audit.response {
+                    AuditResponseRecord::Success(receipt) => (
+                        "success",
+                        Some(receipt.status),
+                        Some(receipt.action.clone()),
+                        Some(receipt.mode),
+                        None,
+                    ),
+                    AuditResponseRecord::Failure(failure) => (
+                        "failure",
+                        None,
+                        Some(failure.action.clone()),
+                        Some(failure.mode),
+                        Some(failure.message.clone()),
+                    ),
+                    AuditResponseRecord::Skipped { reason } => {
+                        ("skipped", None, None, None, Some(reason.clone()))
+                    }
+                    AuditResponseRecord::GuardRejected { guard_name, reason } => (
+                        "guard_rejected",
+                        None,
+                        None,
+                        None,
+                        Some(format!("{guard_name}: {reason}")),
+                    ),
+                };
+            DecisionSnapshot {
+                verdict: audit.policy.verdict,
+                rule_name: audit.policy.rule_name.clone(),
+                reason: audit.policy.reason.clone(),
+                lease: audit.policy.lease.as_ref().map(|lease| {
+                    (
+                        lease.capability_id.clone(),
+                        lease.action.clone(),
+                        lease.scope.clone(),
+                        lease.expires_at_ms,
+                    )
+                }),
+                response_kind,
+                response_status,
+                response_action,
+                response_mode,
+                response_disposition,
+            }
+        }
+
+        fn build_config(
+            audit_dir: &std::path::Path,
+            memory_dir: &std::path::Path,
+            lanes_enabled: bool,
+        ) -> SwarmConfig {
+            let mut config = service_config(
+                RuntimeMode::LiveResponse,
+                PheromoneBackendConfig::InMemory,
+                false,
+            );
+            config.audit.bundle_store = BundleStoreConfig::LocalFiles {
+                directory: audit_dir.display().to_string(),
+            };
+            config.investigation = InvestigationConfig {
+                enabled: true,
+                worker_count: 1,
+                max_pending_jobs: 4,
+                time_budget_ms: 250,
+                bundle_store: BundleStoreConfig::Memory,
+                ..InvestigationConfig::default()
+            };
+            config.correlation = CorrelationConfig {
+                enabled: lanes_enabled,
+                time_window_ms: 10_000,
+                min_shared_keys: 1,
+                candidate_limit: 16,
+                incident_store: BundleStoreConfig::Memory,
+            };
+            config.memory = swarm_core::config::MemoryConfig {
+                enabled: lanes_enabled,
+                knowledge_graph_results_dir: memory_dir.display().to_string(),
+                ..swarm_core::config::MemoryConfig::default()
+            };
+            config
+        }
+
+        async fn drive_two_events(
+            stack: &ConfiguredRuntimeStack<StaticApprovalGate, SandboxExecutor, SlowInvestigator>,
+            detector: &SuspiciousProcessTreeDetector,
+            agent_id: &AgentId,
+        ) -> (
+            swarm_spine::AuditTrail,
+            swarm_spine::AuditTrail,
+            Vec<swarm_core::pheromone::PheromoneDeposit>,
+        ) {
+            let first = stack
+                .process_event(
+                    detector,
+                    &suspicious_event("evt-xhunt-1", "powershell.exe -enc AAA="),
+                    EventExecutionContext {
+                        agent_id,
+                        approval: &approval_context(1_700_000_100_000, "xhunt-corr-1"),
+                        signing_key: &test_signing_key(),
+                    },
+                    |_finding| {
+                        Some(swarm_core::types::ResponseAction::DeployDecoy {
+                            decoy_type: "honeypot".to_string(),
+                            target_zone: "dmz".to_string(),
+                        })
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let second = stack
+                .process_event(
+                    detector,
+                    &suspicious_event("evt-xhunt-2", "powershell.exe -enc BBB="),
+                    EventExecutionContext {
+                        agent_id,
+                        approval: &approval_context(1_700_000_100_500, "xhunt-corr-2"),
+                        signing_key: &test_signing_key(),
+                    },
+                    |_finding| {
+                        Some(swarm_core::types::ResponseAction::DeployDecoy {
+                            decoy_type: "honeypot".to_string(),
+                            target_zone: "dmz".to_string(),
+                        })
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+
+            let mut deposits = first.replay.bundle.deposits.clone();
+            deposits.extend(second.replay.bundle.deposits.clone());
+
+            (
+                first.replay.bundle.audit.clone(),
+                second.replay.bundle.audit.clone(),
+                deposits,
+            )
+        }
+
+        let agent_id = test_agent_id();
+        let detector = SuspiciousProcessTreeDetector::default();
+
+        // Arm A: correlation + memory ENABLED, and genuinely exercised below.
+        let audit_dir_enabled = std::env::temp_dir().join(format!(
+            "swarm-runtime-xhunt03-audit-enabled-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let memory_dir = std::env::temp_dir().join(format!(
+            "swarm-runtime-xhunt03-memory-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let config_enabled = build_config(&audit_dir_enabled, &memory_dir, true);
+        let stack_enabled = ConfiguredRuntimeStack::from_components(
+            config_enabled.clone(),
+            StaticApprovalGate::default(),
+            SandboxExecutor,
+            SlowInvestigator { delay_ms: 50 },
+        )
+        .unwrap();
+        let (audit_enabled_1, audit_enabled_2, deposits_enabled) =
+            drive_two_events(&stack_enabled, &detector, &agent_id).await;
+
+        // Arm B: correlation + memory DISABLED.
+        let audit_dir_disabled = std::env::temp_dir().join(format!(
+            "swarm-runtime-xhunt03-audit-disabled-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let unused_memory_dir = std::env::temp_dir().join(format!(
+            "swarm-runtime-xhunt03-memory-unused-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let config_disabled = build_config(&audit_dir_disabled, &unused_memory_dir, false);
+        let stack_disabled = ConfiguredRuntimeStack::from_components(
+            config_disabled,
+            StaticApprovalGate::default(),
+            SandboxExecutor,
+            SlowInvestigator { delay_ms: 50 },
+        )
+        .unwrap();
+        let (audit_disabled_1, audit_disabled_2, _deposits_disabled) =
+            drive_two_events(&stack_disabled, &detector, &agent_id).await;
+
+        // The policy/response decision must be identical whether or not the
+        // optional lanes are enabled -- this is the core XHUNT-03 assertion.
+        let snapshot_enabled_1 = decision_snapshot(&audit_enabled_1);
+        let snapshot_disabled_1 = decision_snapshot(&audit_disabled_1);
+        let snapshot_enabled_2 = decision_snapshot(&audit_enabled_2);
+        let snapshot_disabled_2 = decision_snapshot(&audit_disabled_2);
+        assert_eq!(
+            snapshot_enabled_1, snapshot_disabled_1,
+            "event 1's policy/response decision must not depend on correlation/memory config"
+        );
+        assert_eq!(
+            snapshot_enabled_2, snapshot_disabled_2,
+            "event 2's policy/response decision must not depend on correlation/memory config"
+        );
+        // Both arms allowed the DeployDecoy response and actually executed
+        // it, so the equality above is not vacuously comparing two denials.
+        assert_eq!(snapshot_enabled_1.verdict, PolicyVerdict::Allow);
+        assert_eq!(snapshot_enabled_1.response_kind, "success");
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // Disabled arm: the disabled lanes must be a clean no-op, not merely
+        // unreachable from the critical path.
+        assert!(
+            stack_disabled
+                .correlate_hunt("evt-xhunt-1")
+                .unwrap()
+                .is_none(),
+            "correlation.enabled = false must produce no incident"
+        );
+        assert!(
+            stack_disabled
+                .correlate_hunt_with_persisted_graph(
+                    &unused_memory_dir.join("config-placeholder.yaml"),
+                    None,
+                    "evt-xhunt-1",
+                )
+                .unwrap()
+                .is_none(),
+            "memory.enabled = false must skip the graph-correlation lane entirely"
+        );
+
+        // Now GENUINELY exercise the enabled arm's correlation + memory
+        // lanes -- AFTER the decision comparison above -- proving they ran
+        // without perturbing the already-final decision, per this module's
+        // decoupling ruling (XHUNT-03).
+        //
+        // Run a real Sphinx memory tick over the enabled arm's own deposits,
+        // persisting a typed knowledge-graph snapshot to `memory_dir`. This
+        // is the actual memory lane, not a stand-in for it.
+        let sphinx_signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let sphinx_substrate =
+            ConfiguredPheromoneSubstrate::from_config(&config_enabled.pheromone).unwrap();
+        let mut sphinx_agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "xhunt03-test"),
+            sphinx_signing_key,
+            memory_dir.join("config-placeholder.yaml"),
+            config_enabled.clone(),
+            sphinx_substrate,
+        )
+        .unwrap();
+        sphinx_agent
+            .tick(&SwarmEnvironment {
+                pheromones: deposits_enabled,
+                mode: SwarmMode::Alert,
+                mode_transition_at: Some(1_700_000_100),
+                now: 1_700_000_101,
+                peer_findings: Vec::new(),
+                agent_health: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let persisted_snapshot = FileKnowledgeGraphStore::open(&memory_dir)
+            .unwrap()
+            .load_snapshot()
+            .unwrap()
+            .expect("sphinx tick should have persisted a knowledge-graph snapshot");
+        assert!(
+            !persisted_snapshot.nodes.is_empty(),
+            "the memory lane should have genuinely built graph state"
+        );
+
+        // Run the real graph-native cross-hunt correlation decision against
+        // that persisted snapshot -- the actual correlation lane.
+        let outcome = stack_enabled
+            .correlate_hunt_with_persisted_graph(
+                &memory_dir.join("config-placeholder.yaml"),
+                None,
+                "evt-xhunt-1",
+            )
+            .unwrap()
+            .expect("correlation should assemble an incident from the persisted graph");
+        assert_eq!(
+            outcome.incident.included_members.len(),
+            2,
+            "both engagements should bridge via the shared host-1 entity node"
+        );
+        let bridged_member = outcome
+            .incident
+            .included_members
+            .iter()
+            .find(|member| !member.evidence_links.is_empty())
+            .expect("the non-seed member should carry graph evidence links");
+        assert!(
+            bridged_member
+                .evidence_links
+                .iter()
+                .any(|link| link.graph_path.is_some()),
+            "a populated graph_path proves the Phase 298 graph-native decision path ran, \
+             not the pre-298 string-overlap fallback -- i.e. memory was genuinely exercised"
+        );
+
+        drop(stack_enabled);
+        drop(stack_disabled);
+        std::fs::remove_dir_all(audit_dir_enabled).unwrap();
+        std::fs::remove_dir_all(audit_dir_disabled).unwrap();
+        std::fs::remove_dir_all(memory_dir).unwrap();
+    }

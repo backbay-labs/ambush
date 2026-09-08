@@ -515,10 +515,11 @@ fn is_globally_merged_classification_node(
     snapshot: &KnowledgeGraphSnapshot,
     node_id: &str,
 ) -> bool {
-    snapshot.nodes.iter().any(|node| {
-        matches!(node, KnowledgeGraphNode::ThreatPattern(pattern) if pattern.node_id == node_id)
-            || matches!(node, KnowledgeGraphNode::AttackTechnique(technique) if technique.node_id == node_id)
-    })
+    // Single source of truth for the node-KIND rule lives on
+    // `KnowledgeGraphNode::is_globally_merged_classification` (via the snapshot
+    // helper), shared with cross-hunt correlation (XHUNT-01) so the two
+    // consumers cannot drift.
+    snapshot.is_globally_merged_classification_node(node_id)
 }
 
 /// Whether `path` touches NO globally-merged classification node anywhere

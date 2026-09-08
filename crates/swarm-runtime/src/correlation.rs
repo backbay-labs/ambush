@@ -1,12 +1,27 @@
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::sphinx_agent::{KnowledgeGraphSnapshot, ProvenancePath};
+use crate::sphinx_agent::{
+    KnowledgeGraphEdge, KnowledgeGraphSnapshot, KnowledgeGraphStoreError, ProvenancePath,
+    engagement_node_id,
+};
 use swarm_core::config::CorrelationConfig;
 use swarm_spine::{
     CorrelatedIncident, IncidentEvidenceLink, IncidentGraphDimension, IncidentLookup,
     IncidentMemberDecision, IncidentRecord, IncidentStore, IncidentStoreError, InvestigationBundle,
-    InvestigationBundleStore, InvestigationStatus, InvestigationStoreError,
+    InvestigationBundleStore, InvestigationStatus, InvestigationStoreError, ReconstructedChainHop,
 };
+
+/// Bounded hop budget for cross-hunt graph correlation. The canonical
+/// cross-hunt bridge is `engagement -> shared Entity -> engagement` (two
+/// hops); a genuine causal chain (`engagement -> process -> ... ->
+/// engagement`) runs a little longer. This stays deliberately small: the
+/// wider the budget, the more of the graph a single correlation can stitch
+/// together, so the bound is a scope limit that works together with the
+/// knowledge graph's hub-degree cap (never expand *through* a popular node)
+/// and the causal-only gate to keep two genuinely unrelated hunts from being
+/// bridged. See [`KnowledgeGraphSnapshot::provenance_paths`].
+const GRAPH_CORRELATION_MAX_HOPS: usize = 4;
 
 /// Errors raised while assembling or loading incidents.
 #[derive(Debug, thiserror::Error)]
@@ -16,6 +31,9 @@ pub enum CorrelationError {
 
     #[error(transparent)]
     IncidentStore(#[from] IncidentStoreError),
+
+    #[error(transparent)]
+    KnowledgeGraphStore(#[from] KnowledgeGraphStoreError),
 }
 
 /// Persisted outcome of one incident-assembly run.
@@ -64,12 +82,57 @@ impl CorrelationEngine {
         self.correlate_hunt_at(investigations, incidents, hunt_id, now_ms())
     }
 
+    /// No-graph entry point. Delegates to [`Self::correlate_hunt_with_graph_at`]
+    /// with `graph = None`, i.e. the degraded string-overlap fallback used when
+    /// memory is disabled or no knowledge-graph snapshot exists. Cross-hunt
+    /// graph-native correlation (XHUNT-01) requires the `Some(graph)` path.
     pub fn correlate_hunt_at<Investigations, Incidents>(
         &self,
         investigations: &Investigations,
         incidents: &Incidents,
         hunt_id: &str,
         created_at_ms: i64,
+    ) -> Result<Option<CorrelationOutcome>, CorrelationError>
+    where
+        Investigations: InvestigationBundleStore,
+        Incidents: IncidentStore,
+    {
+        self.correlate_hunt_with_graph_at(investigations, incidents, hunt_id, created_at_ms, None)
+    }
+
+    /// Graph-aware wall-clock wrapper around [`Self::correlate_hunt_with_graph_at`].
+    pub fn correlate_hunt_with_graph<Investigations, Incidents>(
+        &self,
+        investigations: &Investigations,
+        incidents: &Incidents,
+        hunt_id: &str,
+        graph: Option<&KnowledgeGraphSnapshot>,
+    ) -> Result<Option<CorrelationOutcome>, CorrelationError>
+    where
+        Investigations: InvestigationBundleStore,
+        Incidents: IncidentStore,
+    {
+        self.correlate_hunt_with_graph_at(investigations, incidents, hunt_id, now_ms(), graph)
+    }
+
+    /// Assemble and persist one correlated incident seeded from `hunt_id`.
+    ///
+    /// Candidate ENUMERATION is unchanged (`recent(candidate_limit)`, a scope
+    /// bound). The INCLUSION decision and every graph dimension are, when a
+    /// snapshot is supplied, 100% decided by real knowledge-graph edges
+    /// (XHUNT-01): see [`Self::assemble_incident_from_graph_at`]. When `graph`
+    /// is `None` (memory off / no snapshot) correlation degrades to the
+    /// pre-Phase-298 string-overlap fallback
+    /// ([`Self::legacy_string_overlap_fallback_at`]); that path is the ONLY
+    /// place string overlap still participates, and every link it emits carries
+    /// `graph_path: None`.
+    pub fn correlate_hunt_with_graph_at<Investigations, Incidents>(
+        &self,
+        investigations: &Investigations,
+        incidents: &Incidents,
+        hunt_id: &str,
+        created_at_ms: i64,
+        graph: Option<&KnowledgeGraphSnapshot>,
     ) -> Result<Option<CorrelationOutcome>, CorrelationError>
     where
         Investigations: InvestigationBundleStore,
@@ -92,7 +155,19 @@ impl CorrelationEngine {
             candidates.push(lookup.bundle);
         }
 
-        let incident = self.assemble_incident_at(&seed_lookup.bundle, &candidates, created_at_ms);
+        let incident = match graph {
+            Some(graph) => self.assemble_incident_from_graph_at(
+                &seed_lookup.bundle,
+                &candidates,
+                created_at_ms,
+                graph,
+            ),
+            None => self.legacy_string_overlap_fallback_at(
+                &seed_lookup.bundle,
+                &candidates,
+                created_at_ms,
+            ),
+        };
         let record = incidents.persist(&incident)?;
         Ok(Some(CorrelationOutcome { record, incident }))
     }
@@ -131,6 +206,187 @@ impl CorrelationEngine {
         Incidents: IncidentStore,
     {
         Ok(incidents.load_by_hunt_id(hunt_id)?)
+    }
+
+    /// The pre-Phase-298 string-overlap correlation, retained ONLY as the
+    /// degraded fallback for the memory-disabled configuration (`graph` is
+    /// `None`: no [`KnowledgeGraphSnapshot`] was persisted, so there is no
+    /// graph to decide against). This path derives its dimensions from
+    /// correlation-key / receipt / summary string overlap, NOT from real graph
+    /// edges, and every evidence link it produces carries `graph_path: None`
+    /// (there is no path to record). It is NOT a co-equal decision path:
+    /// whenever memory is enabled and a snapshot exists,
+    /// [`Self::assemble_incident_from_graph_at`] decides instead (XHUNT-01).
+    /// Kept unchanged so the memory-off offline-replay, operator-stack, and
+    /// incident-persistence behaviour (and their tests) are preserved.
+    fn legacy_string_overlap_fallback_at(
+        &self,
+        seed: &InvestigationBundle,
+        candidates: &[InvestigationBundle],
+        created_at_ms: i64,
+    ) -> CorrelatedIncident {
+        self.assemble_incident_at(seed, candidates, created_at_ms)
+    }
+
+    /// Graph-native cross-hunt correlation (Phase 298 XHUNT-01): every
+    /// dimension AND the inclusion decision come from REAL knowledge-graph
+    /// edges, never string overlap.
+    ///
+    /// For each enumerated candidate we resolve both the seed and the
+    /// candidate [`InvestigationBundle`] to their Engagement graph anchors
+    /// (a hunt splits into two disjoint Engagement nodes — one keyed by
+    /// `event_id`, one by `hunt_id`) and ask the graph whether any
+    /// `(seed_anchor, cand_anchor)` pair is connected within
+    /// [`GRAPH_CORRELATION_MAX_HOPS`] hops, subject to the hub-degree cap. A
+    /// candidate is included iff at least one graph dimension links it; each
+    /// contributing dimension becomes exactly one [`IncidentEvidenceLink`]
+    /// carrying the justifying `graph_path`. Structural / temporal pre-gates
+    /// (an investigation that never completed, or one outside the correlation
+    /// window) still reject before the graph is consulted — neither is string
+    /// overlap.
+    ///
+    /// GRAPH-03 (the Phase 297 cross-hunt-fabrication ruling) is honored by
+    /// construction: the `Causal` dimension is emitted for an anchor pair ONLY
+    /// when a causal-ONLY path exists (`causal_provenance_paths` non-empty),
+    /// never because a causal edge merely sits on the all-edge path; and the
+    /// hub-degree cap (enforced inside the traversal, not here) is not
+    /// defeated, so a shared high-degree node cannot bridge two unrelated
+    /// hunts.
+    fn assemble_incident_from_graph_at(
+        &self,
+        seed: &InvestigationBundle,
+        candidates: &[InvestigationBundle],
+        created_at_ms: i64,
+        graph: &KnowledgeGraphSnapshot,
+    ) -> CorrelatedIncident {
+        let edge_index = build_edge_index(graph);
+        let seed_anchors = engagement_anchors(seed);
+
+        let mut included = vec![IncidentMemberDecision {
+            investigation_id: seed.investigation_id.clone(),
+            hunt_id: seed.hunt_id.clone(),
+            finding_id: seed.finding_id.clone(),
+            reason: "seed investigation".to_string(),
+            shared_keys: seed.correlation_keys.clone(),
+            evidence_links: Vec::new(),
+            confidence_score: 1.0,
+        }];
+        let mut rejected = Vec::new();
+        let mut related_receipt_ids = seed.related_receipt_ids.clone();
+        let mut correlation_keys = seed.correlation_keys.clone();
+        let mut window_start_ms = seed.queued_at_ms;
+        let mut window_end_ms = seed.last_updated_ms();
+        let mut graph_dimensions = Vec::new();
+        // Seeded at the seed member's own confidence (1.0); the final score is
+        // the mean confidence across all included members.
+        let mut confidence_total = 1.0_f64;
+
+        for candidate in candidates {
+            if candidate.investigation_id == seed.investigation_id {
+                continue;
+            }
+
+            let time_delta_ms = (candidate.last_updated_ms() - seed.last_updated_ms()).abs();
+
+            if candidate.status != InvestigationStatus::Completed {
+                rejected.push(rejected_member(
+                    candidate,
+                    "investigation not completed".to_string(),
+                ));
+                continue;
+            }
+            if time_delta_ms > self.config.time_window_ms {
+                rejected.push(rejected_member(
+                    candidate,
+                    "outside correlation time window".to_string(),
+                ));
+                continue;
+            }
+
+            let cand_anchors = engagement_anchors(candidate);
+            let evidence_links =
+                graph_evidence_links(graph, &edge_index, &seed_anchors, &cand_anchors);
+
+            if evidence_links.is_empty() {
+                rejected.push(rejected_member(
+                    candidate,
+                    format!(
+                        "no knowledge-graph path links this candidate to the seed within {GRAPH_CORRELATION_MAX_HOPS} hops"
+                    ),
+                ));
+                continue;
+            }
+
+            window_start_ms = window_start_ms.min(candidate.queued_at_ms);
+            window_end_ms = window_end_ms.max(candidate.last_updated_ms());
+
+            let mut member_shared_values = Vec::new();
+            for link in &evidence_links {
+                for value in &link.shared_values {
+                    if !member_shared_values.contains(value) {
+                        member_shared_values.push(value.clone());
+                    }
+                }
+            }
+            for value in &member_shared_values {
+                if !correlation_keys.iter().any(|existing| existing == value) {
+                    correlation_keys.push(value.clone());
+                }
+            }
+            let new_receipt_ids = candidate
+                .related_receipt_ids
+                .iter()
+                .filter(|id| !related_receipt_ids.iter().any(|existing| existing == *id))
+                .cloned()
+                .collect::<Vec<_>>();
+            related_receipt_ids.extend(new_receipt_ids);
+            for link in &evidence_links {
+                if !graph_dimensions.contains(&link.dimension) {
+                    graph_dimensions.push(link.dimension.clone());
+                }
+            }
+            let confidence_score = graph_confidence(&evidence_links);
+            confidence_total += confidence_score;
+            let reason = graph_included_reason(&evidence_links);
+            included.push(IncidentMemberDecision {
+                investigation_id: candidate.investigation_id.clone(),
+                hunt_id: candidate.hunt_id.clone(),
+                finding_id: candidate.finding_id.clone(),
+                reason,
+                shared_keys: member_shared_values,
+                evidence_links,
+                confidence_score,
+            });
+        }
+
+        graph_dimensions.sort();
+        graph_dimensions.dedup();
+        let confidence_score = (confidence_total / included.len() as f64).clamp(0.0, 1.0);
+        let summary = summarize_incident(seed, &included, &correlation_keys, &graph_dimensions);
+
+        CorrelatedIncident {
+            incident_id: format!("incident:{}:{created_at_ms}", seed.hunt_id),
+            summary,
+            created_at_ms,
+            window_start_ms,
+            window_end_ms,
+            correlation_keys,
+            related_receipt_ids,
+            included_members: included,
+            rejected_members: rejected,
+            graph_dimensions,
+            confidence_score,
+            trigger_event_id: Some(seed.event_id.clone()),
+            trigger_finding_id: Some(seed.finding_id.clone()),
+            trigger_strategy_id: Some(seed.strategy_id.clone()),
+            threat_class: Some(seed.threat_class.clone()),
+            severity: Some(seed.severity),
+            external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
+            feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
+        }
     }
 
     fn assemble_incident_at(
@@ -259,6 +515,186 @@ impl CorrelationEngine {
     }
 }
 
+/// Resolve an [`InvestigationBundle`] to its knowledge-graph Engagement
+/// anchors. In production a single hunt splits into TWO disjoint Engagement
+/// nodes — `engagement:{sanitize(event_id)}` (detection findings) and
+/// `engagement:{sanitize(hunt_id)}` (the Stalker post-investigation deposit),
+/// joined only via a shared Entity/Causal node — so we resolve BOTH, the exact
+/// same way Sphinx builds them ([`engagement_node_id`], the shared source of
+/// truth), and let the caller test connectivity through either anchor.
+fn engagement_anchors(bundle: &InvestigationBundle) -> Vec<String> {
+    let mut anchors = vec![engagement_node_id(&bundle.event_id)];
+    let hunt_anchor = engagement_node_id(&bundle.hunt_id);
+    if !anchors.contains(&hunt_anchor) {
+        anchors.push(hunt_anchor);
+    }
+    anchors
+}
+
+/// One-pass `edge_id -> IncidentGraphDimension` lookup over a snapshot's
+/// edges, so a path's `edge_ids` can be classified into their dimensions
+/// without re-scanning `graph.edges` per edge.
+fn build_edge_index(graph: &KnowledgeGraphSnapshot) -> HashMap<&str, IncidentGraphDimension> {
+    graph.edges.iter().map(edge_id_and_dimension).collect()
+}
+
+/// The `IncidentGraphDimension` an edge kind maps to — the edge variant IS the
+/// dimension (Temporal/Causal/Entity/Semantic).
+fn edge_id_and_dimension(edge: &KnowledgeGraphEdge) -> (&str, IncidentGraphDimension) {
+    match edge {
+        KnowledgeGraphEdge::Temporal(edge) => {
+            (edge.edge_id.as_str(), IncidentGraphDimension::Temporal)
+        }
+        KnowledgeGraphEdge::Causal(edge) => (edge.edge_id.as_str(), IncidentGraphDimension::Causal),
+        KnowledgeGraphEdge::Entity(edge) => (edge.edge_id.as_str(), IncidentGraphDimension::Entity),
+        KnowledgeGraphEdge::Semantic(edge) => {
+            (edge.edge_id.as_str(), IncidentGraphDimension::Semantic)
+        }
+    }
+}
+
+/// Derive the graph evidence links between a seed's anchors and a candidate's
+/// anchors, one per contributing dimension (first justifying path wins, for
+/// determinism).
+///
+/// NON-causal dimensions (Entity / Semantic / Temporal) come from the edge
+/// kinds actually present on the all-edge shortest path
+/// ([`KnowledgeGraphSnapshot::provenance_paths`]). The `Causal` dimension is
+/// emitted ONLY when a causal-ONLY path exists between the same anchor pair
+/// ([`KnowledgeGraphSnapshot::causal_provenance_paths`] non-empty) — NEVER
+/// because a causal edge merely happens to sit on the all-edge path. This is
+/// the Phase 297 GRAPH-03 ruling made structural: a causal edge internal to
+/// one hunt must not vouch for a non-causal cross-hop. The hub-degree cap
+/// lives inside those traversals; we never re-walk `graph.edges` to defeat it.
+fn graph_evidence_links(
+    graph: &KnowledgeGraphSnapshot,
+    edge_index: &HashMap<&str, IncidentGraphDimension>,
+    seed_anchors: &[String],
+    cand_anchors: &[String],
+) -> Vec<IncidentEvidenceLink> {
+    let mut links: Vec<IncidentEvidenceLink> = Vec::new();
+    let mut seen_dimensions: Vec<IncidentGraphDimension> = Vec::new();
+
+    for seed_anchor in seed_anchors {
+        for cand_anchor in cand_anchors {
+            // All-edge path for the Entity/Semantic/Temporal dimensions, but
+            // NEVER expanding through a globally-merged classification node
+            // (`ThreatPattern`/`AttackTechnique`). Two unrelated hunts that
+            // merely share one MITRE technique are joined in the graph only
+            // through such a node; the hub-degree cap does not catch a
+            // low-degree one, so this excludes them as waypoints by kind. The
+            // `Causal` dimension below stays on `causal_provenance_paths`,
+            // which cannot route through a classification node anyway (those
+            // carry only `Semantic` edges).
+            for path in graph.provenance_paths_excluding_classification_nodes(
+                seed_anchor,
+                cand_anchor,
+                GRAPH_CORRELATION_MAX_HOPS,
+            ) {
+                for dimension in [
+                    IncidentGraphDimension::Entity,
+                    IncidentGraphDimension::Semantic,
+                    IncidentGraphDimension::Temporal,
+                ] {
+                    if seen_dimensions.contains(&dimension) {
+                        continue;
+                    }
+                    let weight = path
+                        .edge_ids
+                        .iter()
+                        .filter(|edge_id| edge_index.get(edge_id.as_str()) == Some(&dimension))
+                        .count();
+                    if weight > 0 {
+                        seen_dimensions.push(dimension.clone());
+                        links.push(evidence_link_from_path(dimension, &path, weight));
+                    }
+                }
+            }
+
+            if !seen_dimensions.contains(&IncidentGraphDimension::Causal) {
+                for path in graph.causal_provenance_paths(
+                    seed_anchor,
+                    cand_anchor,
+                    GRAPH_CORRELATION_MAX_HOPS,
+                ) {
+                    // A causal-only path crosses nothing but causal edges, so
+                    // every edge on it counts toward the causal weight.
+                    let weight = path.edge_ids.len();
+                    if weight > 0 {
+                        seen_dimensions.push(IncidentGraphDimension::Causal);
+                        links.push(evidence_link_from_path(
+                            IncidentGraphDimension::Causal,
+                            &path,
+                            weight,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Stable, dimension-ordered output regardless of anchor iteration order.
+    links.sort_by(|left, right| left.dimension.cmp(&right.dimension));
+    links
+}
+
+/// Build one evidence link from a discovered provenance path, recording the
+/// path itself as the link's `graph_path` (SC2: every link created FROM graph
+/// traversal carries its justifying hop).
+fn evidence_link_from_path(
+    dimension: IncidentGraphDimension,
+    path: &ProvenancePath,
+    weight: usize,
+) -> IncidentEvidenceLink {
+    let label = dimension_label(&dimension);
+    IncidentEvidenceLink {
+        explanation: format!(
+            "shared {label} provenance across {} ({weight} {label} edge(s))",
+            path.node_ids.join(" -> ")
+        ),
+        dimension,
+        shared_values: path.node_ids.clone(),
+        weight,
+        graph_path: Some(ReconstructedChainHop {
+            node_ids: path.node_ids.clone(),
+            edge_ids: path.edge_ids.clone(),
+        }),
+    }
+}
+
+fn graph_confidence(links: &[IncidentEvidenceLink]) -> f64 {
+    if links.is_empty() {
+        0.0
+    } else {
+        (0.35 + links.len() as f64 * 0.2).min(0.99)
+    }
+}
+
+fn graph_included_reason(links: &[IncidentEvidenceLink]) -> String {
+    let dimensions = links
+        .iter()
+        .map(|link| dimension_label(&link.dimension))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("linked by knowledge-graph provenance across [{dimensions}]")
+}
+
+fn rejected_member(candidate: &InvestigationBundle, reason: String) -> IncidentMemberDecision {
+    IncidentMemberDecision {
+        investigation_id: candidate.investigation_id.clone(),
+        hunt_id: candidate.hunt_id.clone(),
+        finding_id: candidate.finding_id.clone(),
+        reason,
+        shared_keys: Vec::new(),
+        evidence_links: Vec::new(),
+        confidence_score: 0.0,
+    }
+}
+
+fn dimension_label(dimension: &IncidentGraphDimension) -> String {
+    format!("{dimension:?}").to_ascii_lowercase()
+}
+
 fn shared_keys(seed: &InvestigationBundle, candidate: &InvestigationBundle) -> Vec<String> {
     let mut shared = seed
         .correlation_keys
@@ -300,6 +736,7 @@ fn weighted_score(
             ),
             shared_values: entity_keys.clone(),
             weight: entity_keys.len(),
+            graph_path: None,
         });
     }
 
@@ -318,6 +755,7 @@ fn weighted_score(
             ),
             shared_values: causal_values.clone(),
             weight: causal_values.len(),
+            graph_path: None,
         });
     }
 
@@ -331,6 +769,7 @@ fn weighted_score(
             ),
             shared_values: semantic_values.clone(),
             weight: semantic_values.len(),
+            graph_path: None,
         });
     }
 
@@ -343,6 +782,7 @@ fn weighted_score(
             ),
             shared_values: vec![format!("delta_ms:{time_delta_ms}")],
             weight: 1,
+            graph_path: None,
         });
     }
 
@@ -578,8 +1018,11 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::CorrelationEngine;
-    use crate::sphinx_agent::{EntityEdge, KnowledgeGraphEdge, KnowledgeGraphSnapshot};
+    use super::{CorrelationEngine, engagement_node_id};
+    use crate::sphinx_agent::{
+        AttackTechniqueNode, CausalEdge, CausalRelation, EntityEdge, KnowledgeGraphEdge,
+        KnowledgeGraphNode, KnowledgeGraphSnapshot, SemanticEdge, SemanticRelation,
+    };
     use swarm_core::config::{BundleStoreConfig, CorrelationConfig};
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::Severity;
@@ -657,8 +1100,76 @@ mod tests {
         )
     }
 
+    // --- Graph fixtures (Phase 298 XHUNT-01) -------------------------------
+    //
+    // `provenance_paths` walks edges + degree only; nodes need not be present
+    // in `graph.nodes` for traversal, so these fixtures push edges directly.
+    // Anchors are resolved through the SAME `engagement_node_id` helper Sphinx
+    // uses, so a fixture anchor is byte-identical to a real deposited node id.
+
+    fn event_anchor(hunt_id: &str) -> String {
+        engagement_node_id(&format!("evt:{hunt_id}"))
+    }
+
+    fn entity_edge(edge_id: &str, from: &str, to: &str) -> KnowledgeGraphEdge {
+        KnowledgeGraphEdge::Entity(EntityEdge {
+            edge_id: edge_id.to_string(),
+            from_node_id: from.to_string(),
+            to_node_id: to.to_string(),
+            role: "test".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        })
+    }
+
+    fn causal_edge(edge_id: &str, from: &str, to: &str) -> KnowledgeGraphEdge {
+        KnowledgeGraphEdge::Causal(CausalEdge {
+            edge_id: edge_id.to_string(),
+            from_node_id: from.to_string(),
+            to_node_id: to.to_string(),
+            relation: CausalRelation::ProcessParentChild,
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        })
+    }
+
+    fn semantic_edge(edge_id: &str, from: &str, to: &str) -> KnowledgeGraphEdge {
+        KnowledgeGraphEdge::Semantic(SemanticEdge {
+            edge_id: edge_id.to_string(),
+            from_node_id: from.to_string(),
+            to_node_id: to.to_string(),
+            relation: SemanticRelation::KillChainStage,
+            kill_chain_stage: "execution".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        })
+    }
+
+    /// A globally-merged `AttackTechnique` classification node — the kind of
+    /// node two unrelated hunts share when they merely match the same MITRE
+    /// technique. It MUST be present in `graph.nodes` for the
+    /// classification-node exclusion to recognise it.
+    fn attack_technique_node(node_id: &str) -> KnowledgeGraphNode {
+        KnowledgeGraphNode::AttackTechnique(AttackTechniqueNode {
+            node_id: node_id.to_string(),
+            technique_id: "T1059".to_string(),
+            name: "Command and Scripting Interpreter".to_string(),
+            kill_chain_stage: "execution".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            observation_count: 1,
+        })
+    }
+
+    /// Migration of the original inclusion/rejection test onto graph fixtures:
+    /// a candidate is included because a REAL knowledge-graph path links it
+    /// (a shared `Entity(host)` bridge), while the structural / temporal
+    /// pre-gates still reject an incomplete or out-of-window candidate.
     #[test]
-    fn correlate_hunt_includes_matching_candidates_and_rejects_others() {
+    fn correlate_hunt_includes_graph_linked_candidates_and_rejects_others() {
         let investigations = MemoryInvestigationBundleStore::default();
         let incidents = MemoryIncidentStore::default();
         let engine = CorrelationEngine::new(config());
@@ -667,21 +1178,21 @@ mod tests {
             "investigation:hunt-1:1",
             "hunt-1",
             1_700_000_000_000,
-            &["host:host-1", "user:alice", "strategy:summary"],
+            &["host:host-1"],
             InvestigationStatus::Completed,
         );
         let related = default_investigation(
             "investigation:hunt-2:1",
             "hunt-2",
             1_700_000_003_000,
-            &["host:host-1", "user:alice"],
+            &["host:host-1"],
             InvestigationStatus::Completed,
         );
         let incomplete = default_investigation(
             "investigation:hunt-3:1",
             "hunt-3",
             1_700_000_003_500,
-            &["host:host-1", "user:alice"],
+            &["host:host-1"],
             InvestigationStatus::Running,
         );
         let outside_window = default_investigation(
@@ -697,8 +1208,19 @@ mod tests {
         investigations.persist(&incomplete).unwrap();
         investigations.persist(&outside_window).unwrap();
 
+        // hunt-1 <-> hunt-2 share a host Entity node; hunt-3/hunt-4 are NOT
+        // linked in the graph at all (and are pre-gated out anyway).
+        let host = "entity:host:host-1";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph
+            .edges
+            .push(entity_edge("e1", &event_anchor("hunt-1"), host));
+        graph
+            .edges
+            .push(entity_edge("e2", host, &event_anchor("hunt-2")));
+
         let outcome = engine
-            .correlate_hunt(&investigations, &incidents, "hunt-1")
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
             .unwrap()
             .unwrap();
 
@@ -711,6 +1233,29 @@ mod tests {
                 .contains(&swarm_spine::IncidentGraphDimension::Entity)
         );
         assert!(outcome.incident.confidence_score >= 0.5);
+
+        let included = outcome
+            .incident
+            .included_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .unwrap();
+        let link = included
+            .evidence_links
+            .iter()
+            .find(|link| link.dimension == swarm_spine::IncidentGraphDimension::Entity)
+            .unwrap();
+        let hop = link.graph_path.as_ref().unwrap();
+        assert_eq!(
+            hop.node_ids,
+            vec![
+                event_anchor("hunt-1"),
+                host.to_string(),
+                event_anchor("hunt-2")
+            ]
+        );
+        assert_eq!(hop.edge_ids, vec!["e1".to_string(), "e2".to_string()]);
+
         assert!(
             outcome
                 .incident
@@ -736,34 +1281,42 @@ mod tests {
         assert_eq!(loaded.incident.incident_id, outcome.incident.incident_id);
     }
 
+    /// A shared `Entity(host)` node bridging two hunts yields the `Entity`
+    /// dimension, and the resulting link carries the justifying `graph_path`.
     #[test]
-    fn cross_strategy_bonus_allows_one_real_overlap_to_meet_threshold() {
+    fn shared_entity_host_bridges_two_hunts_as_entity_dimension() {
         let investigations = MemoryInvestigationBundleStore::default();
         let incidents = MemoryIncidentStore::default();
-        let engine = CorrelationEngine::new(config_with_min_shared_keys(2));
+        let engine = CorrelationEngine::new(config());
 
-        let seed = investigation(
+        let seed = default_investigation(
             "investigation:hunt-1:1",
             "hunt-1",
             1_700_000_000_000,
-            "summary_investigator",
-            &["host:host-1", "strategy:summary_investigator"],
+            &[],
             InvestigationStatus::Completed,
         );
-        let related = investigation(
+        let related = default_investigation(
             "investigation:hunt-2:1",
             "hunt-2",
             1_700_000_001_000,
-            "dns_exfiltration",
-            &["host:host-1", "strategy:dns_exfiltration"],
+            &[],
             InvestigationStatus::Completed,
         );
-
         investigations.persist(&seed).unwrap();
         investigations.persist(&related).unwrap();
 
+        let host = "entity:host:shared";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph
+            .edges
+            .push(entity_edge("h1", &event_anchor("hunt-1"), host));
+        graph
+            .edges
+            .push(entity_edge("h2", host, &event_anchor("hunt-2")));
+
         let outcome = engine
-            .correlate_hunt(&investigations, &incidents, "hunt-1")
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
             .unwrap()
             .unwrap();
 
@@ -773,114 +1326,479 @@ mod tests {
             .iter()
             .find(|member| member.hunt_id == "hunt-2")
             .unwrap();
+        assert_eq!(included.evidence_links.len(), 1);
+        let link = &included.evidence_links[0];
+        assert_eq!(link.dimension, swarm_spine::IncidentGraphDimension::Entity);
+        assert_eq!(link.weight, 2);
+        assert!(link.graph_path.is_some());
+        assert_eq!(
+            outcome.incident.graph_dimensions,
+            vec![swarm_spine::IncidentGraphDimension::Entity]
+        );
+    }
 
-        assert_eq!(included.shared_keys, vec!["host:host-1".to_string()]);
-        assert!(included.reason.contains("weighted_score="));
-        assert!(included.reason.contains("semantic="));
+    /// A path made ONLY of causal edges yields the `Causal` dimension (and
+    /// nothing else), with its causal-only path recorded as `graph_path`.
+    #[test]
+    fn causal_only_path_yields_causal_dimension() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config());
+
+        let seed = default_investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        let related = default_investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&related).unwrap();
+
+        let process = "process:shared";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph
+            .edges
+            .push(causal_edge("c1", &event_anchor("hunt-1"), process));
+        graph
+            .edges
+            .push(causal_edge("c2", process, &event_anchor("hunt-2")));
+
+        let outcome = engine
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
+            .unwrap()
+            .unwrap();
+
+        let included = outcome
+            .incident
+            .included_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .unwrap();
+        assert_eq!(included.evidence_links.len(), 1);
+        let link = &included.evidence_links[0];
+        assert_eq!(link.dimension, swarm_spine::IncidentGraphDimension::Causal);
+        assert_eq!(link.weight, 2);
+        let hop = link.graph_path.as_ref().unwrap();
+        assert_eq!(hop.edge_ids, vec!["c1".to_string(), "c2".to_string()]);
+        assert_eq!(
+            outcome.incident.graph_dimensions,
+            vec![swarm_spine::IncidentGraphDimension::Causal]
+        );
+    }
+
+    /// GRAPH-03 negative pin: a causal edge that merely SITS on an otherwise
+    /// non-causal (entity) all-edge path must NOT emit the `Causal` dimension —
+    /// only the `Entity` dimension the actual cross-hop is made of. A causal
+    /// edge internal to one hunt cannot vouch for a non-causal cross-hop.
+    #[test]
+    fn causal_edge_on_mixed_path_does_not_emit_causal_dimension() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config());
+
+        let seed = default_investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        let related = default_investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&related).unwrap();
+
+        // hunt-1 --(entity)--> X --(causal)--> hunt-2. The single causal edge is
+        // NOT part of any causal-ONLY path from hunt-1 to hunt-2 (the first hop
+        // is an entity edge), so it must not vouch Causal.
+        let waypoint = "entity:waypoint";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph
+            .edges
+            .push(entity_edge("m1", &event_anchor("hunt-1"), waypoint));
+        graph
+            .edges
+            .push(causal_edge("m2", waypoint, &event_anchor("hunt-2")));
+
+        let outcome = engine
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
+            .unwrap()
+            .unwrap();
+
+        let included = outcome
+            .incident
+            .included_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .unwrap();
         assert!(
             included
                 .evidence_links
                 .iter()
-                .any(|link| link.dimension == swarm_spine::IncidentGraphDimension::Semantic)
+                .any(|link| link.dimension == swarm_spine::IncidentGraphDimension::Entity)
         );
-        assert!(included.confidence_score > 0.5);
-    }
-
-    #[test]
-    fn cross_strategy_bonus_is_rejected_without_real_overlap() {
-        let investigations = MemoryInvestigationBundleStore::default();
-        let incidents = MemoryIncidentStore::default();
-        let engine = CorrelationEngine::new(config_with_min_shared_keys(2));
-
-        let seed = investigation(
-            "investigation:hunt-1:1",
-            "hunt-1",
-            1_700_000_000_000,
-            "summary_investigator",
-            &["host:host-1", "strategy:summary_investigator"],
-            InvestigationStatus::Completed,
-        );
-        let related = investigation(
-            "investigation:hunt-2:1",
-            "hunt-2",
-            1_700_000_001_000,
-            "dns_exfiltration",
-            &["user:bob", "strategy:dns_exfiltration"],
-            InvestigationStatus::Completed,
-        );
-
-        investigations.persist(&seed).unwrap();
-        investigations.persist(&related).unwrap();
-
-        let outcome = engine
-            .correlate_hunt(&investigations, &incidents, "hunt-1")
-            .unwrap()
-            .unwrap();
-
-        let rejected = outcome
-            .incident
-            .rejected_members
-            .iter()
-            .find(|member| member.hunt_id == "hunt-2")
-            .unwrap();
-
-        assert!(rejected.shared_keys.is_empty());
         assert!(
-            rejected
-                .reason
-                .contains("requires at least one entity or causal link")
+            !included
+                .evidence_links
+                .iter()
+                .any(|link| link.dimension == swarm_spine::IncidentGraphDimension::Causal),
+            "a causal edge on a mixed (non-causal) path must not emit the Causal dimension"
         );
-        assert!(rejected.reason.contains("semantic="));
+        assert!(
+            !outcome
+                .incident
+                .graph_dimensions
+                .contains(&swarm_spine::IncidentGraphDimension::Causal)
+        );
     }
 
+    /// GRAPH-03 hub pin at the correlation level: a candidate reachable ONLY
+    /// through an over-degree-cap hub is REJECTED, while a control candidate
+    /// reachable through an ordinary low-degree bridge is INCLUDED (so the
+    /// rejection is the hub cap, not a broken engine).
     #[test]
-    fn same_strategy_strategy_only_overlap_is_rejected() {
+    fn over_cap_hub_does_not_bridge_unrelated_hunts() {
         let investigations = MemoryInvestigationBundleStore::default();
         let incidents = MemoryIncidentStore::default();
-        let engine = CorrelationEngine::new(config_with_min_shared_keys(1));
+        let engine = CorrelationEngine::new(config());
 
-        let seed = investigation(
+        let seed = default_investigation(
             "investigation:hunt-1:1",
             "hunt-1",
             1_700_000_000_000,
-            "summary_investigator",
-            &["host:host-1", "strategy:summary_investigator"],
+            &[],
             InvestigationStatus::Completed,
         );
-        let related = investigation(
+        // hunt-2: reachable only through an over-cap hub -> must be rejected.
+        let hub_candidate = default_investigation(
             "investigation:hunt-2:1",
             "hunt-2",
             1_700_000_001_000,
-            "summary_investigator",
-            &["user:bob", "strategy:summary_investigator"],
+            &[],
             InvestigationStatus::Completed,
         );
-
+        // hunt-3: reachable through an ordinary low-degree bridge -> included.
+        let control = default_investigation(
+            "investigation:hunt-3:1",
+            "hunt-3",
+            1_700_000_001_500,
+            &[],
+            InvestigationStatus::Completed,
+        );
         investigations.persist(&seed).unwrap();
-        investigations.persist(&related).unwrap();
+        investigations.persist(&hub_candidate).unwrap();
+        investigations.persist(&control).unwrap();
+
+        let hub = "entity:popular-host";
+        let low_bridge = "entity:ordinary-host";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        // seed and hunt-2 connect only via the hub.
+        graph
+            .edges
+            .push(entity_edge("hub-seed", &event_anchor("hunt-1"), hub));
+        graph
+            .edges
+            .push(entity_edge("hub-cand", hub, &event_anchor("hunt-2")));
+        // seed and hunt-3 connect via an ordinary low-degree bridge.
+        graph
+            .edges
+            .push(entity_edge("low-seed", &event_anchor("hunt-1"), low_bridge));
+        graph
+            .edges
+            .push(entity_edge("low-cand", low_bridge, &event_anchor("hunt-3")));
+        // Push the hub's degree strictly over PROVENANCE_HUB_DEGREE_CAP with
+        // otherwise-unrelated neighbors, so the search refuses to expand it.
+        for i in 0..(KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP + 2) {
+            graph.edges.push(entity_edge(
+                &format!("hub-noise-{i}"),
+                hub,
+                &format!("entity:noise-{i}"),
+            ));
+        }
 
         let outcome = engine
-            .correlate_hunt(&investigations, &incidents, "hunt-1")
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
             .unwrap()
             .unwrap();
 
+        // Control candidate is included via the ordinary bridge.
+        assert!(
+            outcome
+                .incident
+                .included_members
+                .iter()
+                .any(|member| member.hunt_id == "hunt-3")
+        );
+        // Hub-only candidate is rejected because the hub is never expanded through.
         let rejected = outcome
             .incident
             .rejected_members
             .iter()
             .find(|member| member.hunt_id == "hunt-2")
             .unwrap();
+        assert!(
+            rejected.reason.contains("no knowledge-graph path"),
+            "hub-only candidate should be rejected with a graph-derived reason, got: {}",
+            rejected.reason
+        );
+        assert!(
+            !outcome
+                .incident
+                .included_members
+                .iter()
+                .any(|member| member.hunt_id == "hunt-2")
+        );
+    }
 
+    /// With NO snapshot (`graph = None`) correlation degrades to the legacy
+    /// string-overlap fallback: it still produces an incident (SC1), but EVERY
+    /// evidence link it creates carries `graph_path == None` — nothing was
+    /// derived from graph traversal (SC2 read as: only graph-derived links
+    /// record a path).
+    #[test]
+    fn none_graph_uses_string_overlap_fallback_with_no_graph_path() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config());
+
+        let seed = default_investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            &["host:host-1", "user:alice"],
+            InvestigationStatus::Completed,
+        );
+        let related = default_investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_003_000,
+            &["host:host-1", "user:alice"],
+            InvestigationStatus::Completed,
+        );
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&related).unwrap();
+
+        // `correlate_hunt` (and `correlate_hunt_at`) pass no graph -> fallback.
+        let outcome = engine
+            .correlate_hunt(&investigations, &incidents, "hunt-1")
+            .unwrap()
+            .unwrap();
+
+        // The fallback still correlates via string overlap...
+        assert!(
+            outcome
+                .incident
+                .included_members
+                .iter()
+                .any(|member| member.hunt_id == "hunt-2")
+        );
+        assert!(!outcome.incident.graph_dimensions.is_empty());
+        // ...but records NO graph path on any link, in any member.
+        for member in outcome
+            .incident
+            .included_members
+            .iter()
+            .chain(outcome.incident.rejected_members.iter())
+        {
+            for link in &member.evidence_links {
+                assert!(
+                    link.graph_path.is_none(),
+                    "fallback links must not carry a graph_path"
+                );
+            }
+        }
+    }
+
+    /// Fix round 1 (CRITICAL, PoC regression pin): two GENUINELY UNRELATED
+    /// hunts joined ONLY by a shared LOW-degree `AttackTechnique` classification
+    /// node (via two `Semantic` edges) must NOT be correlated. The technique
+    /// node's degree is 2 — far under the hub cap — so the hub cap never fires;
+    /// the classification-node waypoint exclusion is what prevents the bridge.
+    /// (Before the fix this candidate was INCLUDED with a `Semantic` link.)
+    #[test]
+    fn shared_classification_node_does_not_bridge_unrelated_hunts() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config());
+
+        let seed = default_investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        let unrelated = default_investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&unrelated).unwrap();
+
+        let technique = "attack_technique:t1059";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph.nodes.push(attack_technique_node(technique));
+        graph
+            .edges
+            .push(semantic_edge("s1", &event_anchor("hunt-1"), technique));
+        graph
+            .edges
+            .push(semantic_edge("s2", technique, &event_anchor("hunt-2")));
+
+        let outcome = engine
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            !outcome
+                .incident
+                .included_members
+                .iter()
+                .any(|member| member.hunt_id == "hunt-2"),
+            "a shared low-degree classification node must not bridge unrelated hunts"
+        );
+        assert!(
+            !outcome
+                .incident
+                .graph_dimensions
+                .contains(&swarm_spine::IncidentGraphDimension::Semantic)
+        );
+        let rejected = outcome
+            .incident
+            .rejected_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .unwrap();
+        assert!(rejected.reason.contains("no knowledge-graph path"));
+        // No member anywhere carries a Semantic link fabricated via the
+        // classification node.
+        for member in outcome
+            .incident
+            .included_members
+            .iter()
+            .chain(outcome.incident.rejected_members.iter())
+        {
+            assert!(
+                member
+                    .evidence_links
+                    .iter()
+                    .all(|link| link.dimension != swarm_spine::IncidentGraphDimension::Semantic)
+            );
+        }
+    }
+
+    /// Fix round 1 anti-masking positive: when two hunts share BOTH a MITRE
+    /// technique (classification node) AND a concrete host (`Entity`), the
+    /// classification path must not MASK the real one — the candidate STILL
+    /// correlates via the concrete `Entity` link. Excluding the classification
+    /// node as a waypoint (rather than post-filtering the single shortest path)
+    /// is what lets the tied-length concrete path be found.
+    #[test]
+    fn concrete_entity_link_survives_when_a_classification_path_also_exists() {
+        let investigations = MemoryInvestigationBundleStore::default();
+        let incidents = MemoryIncidentStore::default();
+        let engine = CorrelationEngine::new(config());
+
+        let seed = default_investigation(
+            "investigation:hunt-1:1",
+            "hunt-1",
+            1_700_000_000_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        let related = default_investigation(
+            "investigation:hunt-2:1",
+            "hunt-2",
+            1_700_000_001_000,
+            &[],
+            InvestigationStatus::Completed,
+        );
+        investigations.persist(&seed).unwrap();
+        investigations.persist(&related).unwrap();
+
+        let technique = "attack_technique:t1059";
+        let host = "entity:host:shared";
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph.nodes.push(attack_technique_node(technique));
+        // Classification bridge (must be ignored)...
+        graph
+            .edges
+            .push(semantic_edge("s1", &event_anchor("hunt-1"), technique));
+        graph
+            .edges
+            .push(semantic_edge("s2", technique, &event_anchor("hunt-2")));
+        // ...and a concrete shared-host bridge of the SAME length (must win).
+        graph
+            .edges
+            .push(entity_edge("e1", &event_anchor("hunt-1"), host));
+        graph
+            .edges
+            .push(entity_edge("e2", host, &event_anchor("hunt-2")));
+
+        let outcome = engine
+            .correlate_hunt_with_graph(&investigations, &incidents, "hunt-1", Some(&graph))
+            .unwrap()
+            .unwrap();
+
+        let included = outcome
+            .incident
+            .included_members
+            .iter()
+            .find(|member| member.hunt_id == "hunt-2")
+            .expect("candidate must still correlate via the concrete Entity link");
+        let entity_link = included
+            .evidence_links
+            .iter()
+            .find(|link| link.dimension == swarm_spine::IncidentGraphDimension::Entity)
+            .expect("the concrete host Entity link must be present");
+        let hop = entity_link.graph_path.as_ref().unwrap();
         assert_eq!(
-            rejected.shared_keys,
-            vec!["strategy:summary_investigator".to_string()]
+            hop.node_ids,
+            vec![
+                event_anchor("hunt-1"),
+                host.to_string(),
+                event_anchor("hunt-2")
+            ]
         );
+        // The classification path is excluded, so no Semantic link is emitted.
         assert!(
-            rejected
-                .reason
-                .contains("requires at least one entity or causal link")
+            included
+                .evidence_links
+                .iter()
+                .all(|link| link.dimension != swarm_spine::IncidentGraphDimension::Semantic)
         );
-        assert!(rejected.reason.contains("strategy:summary_investigator"));
+    }
+
+    /// Pin: the anchor id correlation resolves for a bundle is byte-identical
+    /// to the Engagement node id Sphinx emits for the same observation id
+    /// (both go through `engagement_node_id`, the shared source of truth).
+    #[test]
+    fn resolved_engagement_anchor_matches_sphinx_id_format() {
+        assert_eq!(engagement_node_id("evt:hunt-1"), "engagement:evt_hunt_1");
+        assert_eq!(engagement_node_id("hunt-1"), "engagement:hunt_1");
+        // Sanitization collapses runs of non-alphanumerics and trims edges,
+        // exactly as Sphinx's own node-id construction does.
+        assert_eq!(
+            engagement_node_id("EVT::Weird--Id__"),
+            "engagement:evt_weird_id"
+        );
     }
 
     /// GRAPH-03's `CorrelationEngine` coupling: `graph_provenance_link`

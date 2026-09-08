@@ -1301,7 +1301,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 
 - [x] **Phase 296: Provenance Graph Substrate** - Add real causal nodes and edges, bounded-hop path queries with a hub-degree cap, and proven retention bounds. (GRAPH-01, GRAPH-04) — Complete 2026-09-08
 - [x] **Phase 297: Kill-Chain Reconstruction** - Reconstruct multi-stage chains mapped to declared kill-chain stages, with narration. (CHAIN-01, CHAIN-03) — Complete 2026-09-08
-- [ ] **Phase 298: Cross-Hunt Correlation** - Migrate correlation onto graph traversal and make incidents restart-durable. (XHUNT-01, XHUNT-03)
+- [x] **Phase 298: Cross-Hunt Correlation** - Migrate correlation onto graph traversal and make incidents restart-durable. (XHUNT-01, XHUNT-03) — Complete 2026-09-08
 - [ ] **Phase 299: Dependency-Aware Triage** - Path-rarity scoring hitting a measured false-positive reduction target. (TRIAGE-01, TRIAGE-03)
 
 ### Phase 296: Provenance Graph Substrate
@@ -1335,13 +1335,15 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** Retire pairwise heuristics in favour of graph-native traversal, make incidents durable across restarts, and prove the optional lanes never gate detection or response.
 **Requirements:** XHUNT-01, XHUNT-02, XHUNT-03, XHUNT-04
 **Depends on:** Phase 297
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-08, commit range `be91c5572..<merge>`) — the THIRD of four phases of the v1.82 Provenance Memory And Correlation milestone. v1.82 is NOT complete; Phase 299 remains.
+**Plans:** 298-01-PLAN.md
 **Success Criteria**:
-1. Candidate selection uses graph traversal rather than recent-investigation scanning, and all pre-existing correlation tests still pass.
-2. Evidence links carry a graph path for every newly created link, and pre-existing JSON still deserializes.
-3. Disabling correlation and memory together yields policy decisions identical to the enabled case.
-4. Incidents assembled before a simulated restart reload with identical dimensions and evidence.
+1. Candidate selection uses graph traversal rather than recent-investigation scanning, and all pre-existing correlation tests still pass. — met: `af3d259d7`/`552ab2f1b` (XHUNT-01). When a snapshot is present, inclusion + all four dimensions are decided ENTIRELY by graph traversal (`recent()` remains only a scope bound, deciding nothing); string overlap is retained solely as the memory-off degraded fallback (Ruling 1). All pre-existing correlation/persistence/e2e/replay tests pass unchanged; correlation.rs tests 1-4 were migrated to graph fixtures as the intended replacement.
+2. Evidence links carry a graph path for every newly created link, and pre-existing JSON still deserializes. — met: `b8f945bf6` (XHUNT-02) + `af3d259d7`. Every link created from graph traversal carries `graph_path: Some(ReconstructedChainHop)`; pre-`graph_path` JSON deserializes to `None` (back-compat test). (Links created by the memory-off fallback legitimately carry `None` — there is no path to record; see Ruling 1.)
+3. Disabling correlation and memory together yields policy decisions identical to the enabled case. — met: `46e6fc72d` (XHUNT-03). `optional_correlation_and_memory_lanes_never_perturb_policy_decision` drives identical telemetry through both configs and asserts the `process_event` audit decision (verdict/rule/reason, lease terms, response disposition) is identical; the enabled arm genuinely runs both lanes (real `SphinxAgent::tick` + graph-native correlation, proven by a populated `graph_path`); non-vacuity verified empirically by the reviewer.
+4. Incidents assembled before a simulated restart reload with identical dimensions and evidence. — met: `02afa5cd0` (XHUNT-04). `file_store_reloads_graph_dimensions_and_evidence_after_restart` persists a graph-native incident, drops the `FileIncidentStore`, reopens a fresh one at the same root, and asserts full-incident + per-field equality of `graph_dimensions` and every evidence link including `graph_path`.
+
+**CAVEAT (carried from Phase 296/297):** the graph-native correlation is proven end-to-end, but the deep OS-causal edges (FileWrite/FileExecute/DnsResolution/CredentialAccess) still require raw `pid`/`process_key`/resolved-IP that no normalized telemetry event carries, so the `Causal` dimension is sparse on production traffic until that producer-wiring lands. Entity(host)/Semantic/Temporal edges DO fire, so cross-hunt correlation has real structure today. Snapshot load uses the signature-verifying `load_snapshot()` (full Ed25519 + replay verification; only the specific-signer binding is deferred) — threading the Sphinx signer to `load_trusted_snapshot` is the named follow-on; correlation is off the critical path (XHUNT-03), so the blast radius is advisory-only.
 
 ### Phase 299: Dependency-Aware Triage
 
@@ -1916,7 +1918,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 | 295. Z3-Backed Promotion Gate | v1.81 | - | Superseded by 322 | - |
 | 296. Provenance Graph Substrate | v1.82 | 1/1 | Complete | 296-01 |
 | 297. Kill-Chain Reconstruction | v1.82 | 1/1 | Complete | 297-01 |
-| 298. Cross-Hunt Correlation | v1.82 | 0/TBD | Not started | - |
+| 298. Cross-Hunt Correlation | v1.82 | 1/1 | Complete | 298-01 |
 | 299. Dependency-Aware Triage | v1.82 | 0/TBD | Not started | - |
 | 300. BFT Correctness Repair | v1.83 | - | Superseded by 321 | - |
 | 301. VRF Committee Selection | v1.83 | 0/TBD | Not started | - |

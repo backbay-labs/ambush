@@ -755,7 +755,11 @@ pub async fn run_first_run_wizard(
             reason: error.to_string(),
         });
     }
-    if let Ok(Some(outcome)) = stack.correlate_hunt(&pending.request.hunt_id.0) {
+    if let Ok(Some(outcome)) = stack.correlate_hunt_with_persisted_graph(
+        state.config_path.as_ref(),
+        None,
+        &pending.request.hunt_id.0,
+    ) {
         state.update_demo_incident(&pending.run_id, outcome.incident);
     }
 
@@ -1435,7 +1439,11 @@ pub(crate) async fn demo_approval_resume_handler(
         );
     }
 
-    if let Ok(Some(outcome)) = stack.correlate_hunt(&pending.request.hunt_id.0) {
+    if let Ok(Some(outcome)) = stack.correlate_hunt_with_persisted_graph(
+        state.config_path.as_ref(),
+        None,
+        &pending.request.hunt_id.0,
+    ) {
         state.update_demo_incident(&pending.run_id, outcome.incident);
     }
 
