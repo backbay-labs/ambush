@@ -5,6 +5,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Optional, dependency-free feature (KANI-01). It gates the bounded-model-
+# checking harness module in `src/kani_public_harnesses.rs` alongside the
+# `--cfg kani` that `cargo kani` sets: the module is
+# `#[cfg(any(kani, feature = "kani"))]`, so it is absent from the normal build
+# and adds NOTHING to the shipped dependency graph. The `kani::` proof API is
+# supplied by the Kani compiler when `cargo kani` runs, not by a cargo
+# dependency, so this feature list is intentionally empty.
+kani = []
+
 [dependencies]
 swarm-core.workspace = true
 serde.workspace = true
