@@ -1,6 +1,14 @@
 # Rust
 target/
 
+# cargo-fuzz (fuzz/): regenerable, not source. Corpus is rebuilt
+# deterministically by tools/seed-fuzz-corpus.sh from scenarios/*.yaml and
+# rulesets/*.yaml; a fuzzer's own newly-discovered inputs are also written
+# here and are not reviewed source. Crash artifacts from a local run belong
+# in the CI-uploaded artifact, not in the tree.
+fuzz/corpus/
+fuzz/artifacts/
+
 # Python
 __pycache__/
 *.pyc

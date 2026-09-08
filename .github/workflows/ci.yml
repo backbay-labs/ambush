@@ -1031,3 +1031,69 @@ jobs:
 
       - name: Run supply-chain checks
         run: bash tools/check-supply-chain.sh
+
+  # FUZZ-04. A 30s bounded smoke pass per cargo-fuzz target so a broken
+  # harness (a signature change on the real decoder it calls, a corpus
+  # conversion that no longer builds) is caught on the PR that breaks it,
+  # not discovered the next time fuzz-nightly.yml happens to run. This is
+  # deliberately NOT a fuzzing budget -- `-max_total_time=30` bounds it to
+  # deterministic breakage detection -- but a real crash on the seeded
+  # corpus still fails the step, same as fuzz-nightly.yml's 600s runs.
+  #
+  # `fuzz/` is cargo-fuzz's own standalone workspace with its own nightly
+  # pin (see the comment at the top of fuzz/Cargo.toml); installing nightly
+  # in THIS job only does not move the root workspace off its pinned stable
+  # 1.97.1, which every other job here still uses.
+  fuzz-smoke:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-fuzz-${{ hashFiles('fuzz/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-fuzz-
+
+      # Kept in sync by hand with fuzz/rust-toolchain.toml's channel, same as
+      # fuzz-nightly.yml's identical step.
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-04-21
+
+      - name: Install cargo-fuzz
+        run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked --version 0.13.1
+
+      - name: Seed fuzz corpora from scenarios/*.yaml and rulesets/*.yaml
+        run: bash tools/seed-fuzz-corpus.sh
+
+      - name: Smoke ingest_json_decode (30s)
+        working-directory: fuzz
+        run: cargo fuzz run ingest_json_decode -- -max_total_time=30
+
+      - name: Smoke ingest_sentinel_decode (30s)
+        working-directory: fuzz
+        run: cargo fuzz run ingest_sentinel_decode -- -max_total_time=30
+
+      - name: Smoke ingest_tetragon_decode (30s)
+        working-directory: fuzz
+        run: cargo fuzz run ingest_tetragon_decode -- -max_total_time=30
+
+      - name: Smoke ruleset_yaml_parse (30s)
+        working-directory: fuzz
+        run: cargo fuzz run ruleset_yaml_parse -- -max_total_time=30

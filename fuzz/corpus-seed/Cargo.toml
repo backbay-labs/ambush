@@ -1,0 +1,27 @@
+# A plain binary, NOT a fuzz target: `tools/seed-fuzz-corpus.sh` runs this to
+# convert `scenarios/*.yaml` and `rulesets/*.yaml` into each fuzz target's
+# real wire format (a JSON event body, a Prometheus text-exposition sample,
+# an encoded Tetragon protobuf message, or a raw ruleset YAML document) and
+# write the result into that target's `fuzz/corpus/<target>/` directory.
+#
+# It is a SEPARATE package from `fuzz` (see the parent Cargo.toml comment),
+# but a member of the SAME `fuzz/` workspace (declared in
+# `../Cargo.toml`'s `[workspace] members`), so `cargo fuzz build`/`list`/
+# `run` -- which enumerate only the `fuzz` package's own `[[bin]]` entries --
+# never treat it as a fuzz target. It picks up `fuzz/rust-toolchain.toml`
+# (pinning nightly) purely from that shared isolation; the conversion code
+# below is ordinary safe Rust with no nightly-only features.
+[package]
+name = "corpus-seed"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[dependencies]
+serde_json = "1"
+serde_yaml = "0.9"
+prost = "0.13"
+prost-types = "0.13"
+
+[dependencies.swarm-ingest-tetragon]
+path = "../../crates/swarm-ingest-tetragon"

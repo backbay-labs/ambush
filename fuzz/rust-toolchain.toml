@@ -1,0 +1,13 @@
+# cargo-fuzz needs nightly (it instruments builds with `-Z sanitizer=...` and
+# SanitizerCoverage flags that are unstable on stable rustc). This file pins
+# that nightly the same way the repository root pins stable 1.97.1: a dated
+# nightly instead of a floating one so a rebuild six months from now hits the
+# same compiler and the same corpus of nightly-only lint churn, not whatever
+# nightly happens to exist that day. Cargo resolves the nearest
+# rust-toolchain.toml walking up from the current directory, so any `cargo`
+# invocation with a working directory under `fuzz/` (including `cargo fuzz
+# ...` without an explicit `+toolchain`) picks this up automatically; it does
+# not affect the root workspace, which finds its own file first.
+[toolchain]
+channel = "nightly-2026-04-21"
+components = ["rustfmt"]

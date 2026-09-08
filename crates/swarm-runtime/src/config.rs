@@ -541,7 +541,17 @@ pub fn parse_config(
     parse_config_with_base(yaml, source_name.into(), None)
 }
 
-fn parse_config_unresolved(
+/// Parse and structurally validate a runtime config from raw YAML without
+/// resolving `@secret:` references or touching the filesystem.
+///
+/// This is the same no-I/O parse path [`load_config_unresolved`] wraps with a
+/// file read; it is `pub` (rather than staying private to this module) so
+/// `fuzz/fuzz_targets/ruleset_yaml_parse.rs` can call the real ruleset loader
+/// directly on arbitrary bytes without pulling in secret/filesystem
+/// resolution (see phase 287 FUZZ-01, `.planning/phases/
+/// 287-fuzz-loom-supply-chain-hardening/287-01-PLAN.md`). No behaviour
+/// change: same body, wider visibility.
+pub fn parse_config_unresolved(
     yaml: &str,
     source_name: String,
 ) -> Result<SwarmConfig, RuntimeConfigError> {

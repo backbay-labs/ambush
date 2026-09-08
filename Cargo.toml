@@ -26,7 +26,14 @@ members = [
 ]
 # The Ambush workspace (relay, desktop, web, mobile) is a second Cargo workspace
 # under workspace/ with its own toolchain pin; see docs/plans/ambush-ui/integration/00-DECISIONS.md D2.
-exclude = ["workspace"]
+#
+# fuzz/ is cargo-fuzz's own standalone workspace (its Cargo.toml declares its
+# own [workspace], which alone stops Cargo's ancestor search here) plus a
+# nightly toolchain pin, isolated from this workspace's pinned stable 1.97.1
+# so fuzzing dependencies (libfuzzer-sys, nightly sanitizer flags) never
+# reach the main dependency graph. See phase 287 FUZZ-01,
+# .planning/phases/287-fuzz-loom-supply-chain-hardening/287-01-PLAN.md.
+exclude = ["workspace", "fuzz"]
 
 [workspace.package]
 version = "0.1.0"
