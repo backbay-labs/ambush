@@ -1204,6 +1204,202 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// XHUNT-04: a graph-native correlation result — as Phase 298's
+    /// graph-derived cross-hunt correlation produces — carrying
+    /// `graph_dimensions` across more than one dimension and
+    /// `evidence_links` whose `graph_path` mirrors the knowledge-graph
+    /// hop(s) that produced each link. One link's `graph_path` is `None` to
+    /// prove that value survives reload too.
+    fn sample_incident_with_graph_path_evidence() -> CorrelatedIncident {
+        CorrelatedIncident {
+            incident_id: "incident:hunt-graph:1".to_string(),
+            summary: "Cross-hunt causal and entity evidence reconstructed from the graph"
+                .to_string(),
+            created_at_ms: 1_700_000_100_500,
+            window_start_ms: 1_700_000_100_000,
+            window_end_ms: 1_700_000_100_900,
+            correlation_keys: vec!["host:host-9".to_string(), "process:1234".to_string()],
+            related_receipt_ids: vec![
+                "receipt-upstream-9".to_string(),
+                "receipt-response-9".to_string(),
+            ],
+            included_members: vec![
+                IncidentMemberDecision {
+                    investigation_id: "investigation:hunt-9:1".to_string(),
+                    hunt_id: "hunt-9".to_string(),
+                    finding_id: "finding-9".to_string(),
+                    reason: "seed investigation".to_string(),
+                    shared_keys: vec!["host:host-9".to_string()],
+                    evidence_links: Vec::new(),
+                    confidence_score: 1.0,
+                },
+                IncidentMemberDecision {
+                    investigation_id: "investigation:hunt-10:1".to_string(),
+                    hunt_id: "hunt-10".to_string(),
+                    finding_id: "finding-10".to_string(),
+                    reason: "causal chain reconstructed from the knowledge graph".to_string(),
+                    shared_keys: vec!["host:host-9".to_string(), "process:1234".to_string()],
+                    evidence_links: vec![
+                        IncidentEvidenceLink {
+                            dimension: IncidentGraphDimension::Causal,
+                            explanation: "process spawn chain connects the two findings"
+                                .to_string(),
+                            shared_values: vec!["process:1234".to_string()],
+                            weight: 3,
+                            graph_path: Some(ReconstructedChainHop {
+                                node_ids: vec![
+                                    "process:1234".to_string(),
+                                    "event:exec-9".to_string(),
+                                    "process:5678".to_string(),
+                                ],
+                                edge_ids: vec![
+                                    "causal:spawned_by:1".to_string(),
+                                    "causal:spawned_by:2".to_string(),
+                                ],
+                            }),
+                        },
+                        IncidentEvidenceLink {
+                            dimension: IncidentGraphDimension::Semantic,
+                            explanation: "both findings map to the same ATT&CK technique"
+                                .to_string(),
+                            shared_values: vec!["attack_technique:T1055".to_string()],
+                            weight: 1,
+                            graph_path: None,
+                        },
+                    ],
+                    confidence_score: 0.85,
+                },
+            ],
+            rejected_members: vec![IncidentMemberDecision {
+                investigation_id: "investigation:hunt-11:1".to_string(),
+                hunt_id: "hunt-11".to_string(),
+                finding_id: "finding-11".to_string(),
+                reason: "entity overlap only, below confidence threshold".to_string(),
+                shared_keys: vec!["host:host-9".to_string()],
+                evidence_links: vec![IncidentEvidenceLink {
+                    dimension: IncidentGraphDimension::Entity,
+                    explanation: "shared host only".to_string(),
+                    shared_values: vec!["host:host-9".to_string()],
+                    weight: 1,
+                    graph_path: Some(ReconstructedChainHop {
+                        node_ids: vec!["host:host-9".to_string()],
+                        edge_ids: Vec::new(),
+                    }),
+                }],
+                confidence_score: 0.2,
+            }],
+            graph_dimensions: vec![
+                IncidentGraphDimension::Causal,
+                IncidentGraphDimension::Semantic,
+                IncidentGraphDimension::Entity,
+            ],
+            confidence_score: 0.85,
+            trigger_event_id: Some("evt:hunt-9".to_string()),
+            trigger_finding_id: Some("finding-9".to_string()),
+            trigger_strategy_id: Some("summary_investigator".to_string()),
+            threat_class: Some(ThreatClass::Execution),
+            severity: Some(Severity::High),
+            external_references: Vec::new(),
+            providence_reconciliation: None,
+            providence_callback_audit_entries: Vec::new(),
+            feedback_audit_entries: Vec::new(),
+            false_positive_measurements: Vec::new(),
+        }
+    }
+
+    /// XHUNT-04: restart-simulation durability. Persist a graph-native
+    /// incident, drop that `FileIncidentStore` instance (simulating process
+    /// exit), then open a FRESH store at the SAME root (simulating restart)
+    /// and reload the incident. `graph_dimensions` and every member's
+    /// `evidence_links` — `graph_path` (node_ids + edge_ids), `dimension`,
+    /// `explanation`, `shared_values`, `weight` included — must come back
+    /// byte-for-byte identical so a reopened incident is re-explainable
+    /// without recomputation. Asserted via a full `assert_eq!` of the
+    /// reloaded `CorrelatedIncident` against the original: every field is
+    /// covered, not only the graph-shaped ones.
+    #[test]
+    fn file_store_reloads_graph_dimensions_and_evidence_after_restart() {
+        let root = std::env::temp_dir().join("swarm-spine-incidents-restart-graph");
+        let _ = std::fs::remove_dir_all(&root);
+        let incident = sample_incident_with_graph_path_evidence();
+
+        {
+            let store = FileIncidentStore::open(&root).unwrap();
+            let record = store.persist(&incident).unwrap();
+            assert_eq!(record.included_hunt_ids.len(), 2);
+            // Simulate process exit: the store instance is dropped here,
+            // along with anything it might have cached in memory.
+            drop(store);
+        }
+
+        // Simulate restart: open a brand-new store instance at the same
+        // root and reload purely from what was written to disk.
+        let restarted_store = FileIncidentStore::open(&root).unwrap();
+        let reloaded = restarted_store
+            .load_by_incident_id(&incident.incident_id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(reloaded.incident, incident);
+
+        // Spell out the graph-specific fields explicitly too, so a future
+        // change to `CorrelatedIncident`'s `PartialEq` (or a field default
+        // that would make the blanket `assert_eq!` above pass vacuously)
+        // still gets caught here.
+        assert_eq!(
+            reloaded.incident.graph_dimensions,
+            incident.graph_dimensions
+        );
+        for (reloaded_member, original_member) in reloaded
+            .incident
+            .included_members
+            .iter()
+            .zip(incident.included_members.iter())
+        {
+            assert_eq!(
+                reloaded_member.evidence_links,
+                original_member.evidence_links
+            );
+            for (reloaded_link, original_link) in reloaded_member
+                .evidence_links
+                .iter()
+                .zip(original_member.evidence_links.iter())
+            {
+                assert_eq!(reloaded_link.graph_path, original_link.graph_path);
+                assert_eq!(reloaded_link.dimension, original_link.dimension);
+                assert_eq!(reloaded_link.explanation, original_link.explanation);
+                assert_eq!(reloaded_link.shared_values, original_link.shared_values);
+                assert_eq!(reloaded_link.weight, original_link.weight);
+            }
+        }
+
+        // The one link with a populated graph_path round-tripped its hop
+        // contents exactly (not merely Some-ness).
+        let reloaded_causal_link = &reloaded.incident.included_members[1].evidence_links[0];
+        assert_eq!(
+            reloaded_causal_link.graph_path,
+            Some(ReconstructedChainHop {
+                node_ids: vec![
+                    "process:1234".to_string(),
+                    "event:exec-9".to_string(),
+                    "process:5678".to_string(),
+                ],
+                edge_ids: vec![
+                    "causal:spawned_by:1".to_string(),
+                    "causal:spawned_by:2".to_string(),
+                ],
+            })
+        );
+        // The sibling link's `graph_path: None` also survived the round
+        // trip (proving `None` is not merely the default masking a bug).
+        assert_eq!(
+            reloaded.incident.included_members[1].evidence_links[1].graph_path,
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn configured_store_selects_memory_and_local_backends() {
         let memory = ConfiguredIncidentStore::from_config(&BundleStoreConfig::Memory).unwrap();
