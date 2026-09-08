@@ -6,7 +6,7 @@ current_phase: 294
 current_phase_name: Named Safety Properties And Partition-Lease Model
 current_plan: null
 status: active
-last_updated: "2026-09-08T09:30:00Z"
+last_updated: "2026-09-08T10:00:00Z"
 last_activity: 2026-09-08
 progress:
   total_phases: 3
@@ -31,7 +31,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 **Total Plans in Phase:** Phase 294 not yet planned. (Completed v1.81 plans: 292-01 tasks 1-4, 293-01 tasks 1-5.)
 **Status:** v1.81 Phase 293 (Kani Bounded Model Checking) COMPLETE 2026-09-08. Next: Phase 294 (Named Safety Properties And Partition-Lease Model) — independently of the user's open-agent/provenance reconciliation, which blocks only 296-299, not 294.
 **Last Activity:** 2026-09-08
-**Last Activity Description:** Phase 293 (Kani Bounded Model Checking) ledger CLOSED 2026-09-08 (this task) — `.planning/REQUIREMENTS.md`, `.planning/ROADMAP.md`, `.planning/STATE.md`, and `.planning/phases/293-kani-bounded-model-checking/293-01-SUMMARY.md` updated to record KANI-01..05 Satisfied with commit SHAs, the honest 8-REAL/6-MODEL-ONLY split and its Kani-intractability deviation, and Phase 293 Complete on ROADMAP.md with per-SC evidence. Final verification on the closing tree: `cargo test -p swarm-policy --test kani_harness_manifest` — 1 passed (the completeness gate); `cargo test -p swarm-policy` — 7 `test result: ok` blocks, 39 lib + 1 manifest + 3 negative-registry passing, 0 failed; `tools/check-gates-wired.sh` / `tools/check-decision-core-boundary.sh` / `tools/check-workspace-layering.sh` — all exit 0; one spot Kani run (`kani_governance_quorum_threshold_is_2f_plus_1`) — `VERIFICATION:- SUCCESSFUL`. `git diff --stat` for the closing commit touches only `.planning/`. Next: Phase 294 (Named Safety Properties And Partition-Lease Model).
+**Last Activity Description:** Phase 293 (Kani Bounded Model Checking) MERGED to `main` (`fa10d6508`, --no-ff) and pushed to origin, 2026-09-08. Shipped 14 Kani harnesses over `formal_core` (8 REAL — rate-limit x3, severity x2, `governance_quorum_threshold` x2, `destructive_action` — plus 6 MODEL-ONLY for the String/`format!`-heavy lease redemption and the receipt crypto CBMC cannot instrument), the `formal/kani/swarm-policy-harnesses.toml` manifest + a build-failing completeness test, and the `scripts/run-kani-swarm-policy.sh` PR-lane runner + a gated CI job. Whole-branch review (opus): SHIP, 0 Critical/0 Important; all 14 prove VERIFICATION SUCCESSFUL; KANI-01..05 Satisfied. Next: Phase 294 (Named Safety Properties And Partition-Lease Model).
 
 **Full goal remains active:** the entire 2026-09-06 gameplan plus canonical engine
 phases 285-313. The user did not defer the approved open-agent-protocol milestone:
