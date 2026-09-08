@@ -1012,11 +1012,22 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-deny
-        run: command -v cargo-deny >/dev/null || cargo install cargo-deny --locked
+      # Pinned, not `command -v cargo-deny >/dev/null || cargo install ...`:
+      # that pattern skips the install whenever ANY cargo-deny is already on
+      # PATH (e.g. a stale binary restored from the cargo-home cache above,
+      # whose key is keyed on Cargo.lock, not on tool version), so a version
+      # bump here would silently never take effect. `cargo install --version
+      # --locked` is idempotent -- it no-ops when that exact version is
+      # already installed and reinstalls otherwise -- so pinning the version
+      # in the `cargo install` invocation itself is both the version record
+      # and the enforcement. tools/check-supply-chain.sh's own header records
+      # these same two versions as what its measured cargo-deny behaviour
+      # (the unexpected-keys checks) was taken against.
+      - name: Install cargo-deny (pinned)
+        run: cargo install cargo-deny --locked --version 0.19.4
 
-      - name: Install cargo-audit
-        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
+      - name: Install cargo-audit (pinned)
+        run: cargo install cargo-audit --locked --version 0.22.0
 
       - name: Run supply-chain checks
         run: bash tools/check-supply-chain.sh
