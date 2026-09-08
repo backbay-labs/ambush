@@ -604,6 +604,16 @@ fn causal_bridge(
     to: &str,
     max_hops: usize,
 ) -> Option<ProvenancePath> {
+    // Fail closed on a malformed cross-hunt request: two DISJOINT-hunt
+    // incidents can never legitimately resolve to the SAME graph anchor (an
+    // `Engagement` node is per-observation and per-hunt). Refuse the
+    // degenerate zero-edge self-bridge that `causal_provenance_paths`'
+    // `from == to` trivial path would otherwise yield, in keeping with the
+    // engine's fail-closed-on-malformed contract — a self path is never
+    // evidence that two distinct hunts are causally related.
+    if from == to {
+        return None;
+    }
     let path = snapshot
         .causal_provenance_paths(from, to, max_hops)
         .into_iter()
@@ -2132,6 +2142,66 @@ rules:
                 shared_process.to_string(),
                 engagement_b.to_string()
             ]
+        );
+    }
+
+    /// Defense-in-depth (fail-closed-on-malformed): two "disjoint-hunt"
+    /// incidents that resolve to the SAME anchor node are a caller contract
+    /// violation (an `Engagement` node is per-hunt, so it cannot belong to
+    /// two disjoint hunts). The join must refuse the degenerate zero-edge
+    /// self-bridge, never emit a chain labeled as spanning both hunts.
+    #[test]
+    fn join_cross_hunt_kill_chain_refuses_a_self_bridge_when_both_anchors_are_the_same_node() {
+        let rule = rule_fixture();
+        let engagement = "engagement:hunt-a";
+
+        let mut snapshot = KnowledgeGraphSnapshot::new(3_600);
+        for technique in &rule.attack_chain {
+            snapshot.nodes.push(attack_technique_node(technique));
+        }
+        snapshot.nodes.push(engagement_node(engagement));
+        // The one engagement fans all three stages -- so hunt-a alone DOES
+        // reconstruct a chain; only the same-anchor guard stops it being
+        // mislabeled as spanning a second hunt.
+        for technique in &rule.attack_chain {
+            snapshot
+                .edges
+                .push(KnowledgeGraphEdge::Semantic(SemanticEdge {
+                    edge_id: format!("semantic:{}", technique.technique_id),
+                    from_node_id: engagement.to_string(),
+                    to_node_id: technique_node_id(technique),
+                    relation: SemanticRelation::KillChainStage,
+                    kill_chain_stage: technique.kill_chain_stage.clone(),
+                    first_observed_at_ms: 0,
+                    last_observed_at_ms: 0,
+                    occurrence_count: 1,
+                }));
+        }
+
+        let incident_a = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-a:1",
+            hunt_ids: &["hunt-a".to_string()],
+            anchor_node_id: engagement,
+        };
+        let incident_b = CrossHuntIncidentAnchor {
+            incident_id: "incident:hunt-b:1",
+            hunt_ids: &["hunt-b".to_string()],
+            anchor_node_id: engagement,
+        };
+
+        let joined = join_cross_hunt_kill_chain(
+            &snapshot,
+            std::slice::from_ref(&rule),
+            &incident_a,
+            &incident_b,
+            4,
+            1_700_000_000_000,
+        );
+
+        assert!(
+            joined.is_empty(),
+            "a same-anchor self-bridge must fail closed, not emit a chain spanning both \
+             hunts: {joined:?}"
         );
     }
 
