@@ -159,3 +159,7 @@ deploy/helm/*/tests/__snapshot__/
 # a console pins its own by copying perch-hold-dev.yaml here and re-signing it (docs/PERCH-DEV.md).
 rulesets-dev/perch-window-dev.yaml
 rulesets-dev/perch-window-dev.yaml.sig.json
+
+# Apalache model-checker output (SAFEP-04); runs use --out-dir but guard against stray runs
+_apalache-out/
+**/_apalache-out/
