@@ -1121,3 +1121,45 @@ jobs:
       - name: Smoke ruleset_yaml_parse (30s)
         working-directory: fuzz
         run: cargo fuzz run ruleset_yaml_parse -- -max_total_time=30
+
+  # KANI-05: prove the swarm-policy decision-core Kani harnesses. A dedicated job
+  # because it installs the Kani verifier + its bundled CBMC (not needed by any
+  # other lane). Behind the same engine path gate as the other engine jobs so
+  # workspace-only / plan-only changes skip it. `scripts/run-kani-swarm-policy.sh`
+  # is a runner, not a `tools/check-*.sh` gate, so check-gates-wired.sh does not
+  # scan it; it is wired here directly, which is what KANI-05 requires.
+  kani:
+    needs:
+      - changes
+    if: github.event_name == 'push' || needs.changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo home
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+          key: cargo-home-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-home-${{ runner.os }}-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Kani
+        run: |
+          command -v cargo-kani >/dev/null || cargo install --locked kani-verifier --version 0.67.0
+          cargo kani setup
+
+      - name: Prove the swarm-policy decision-core harnesses (KANI-05)
+        run: bash scripts/run-kani-swarm-policy.sh
