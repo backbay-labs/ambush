@@ -95,6 +95,33 @@ fn arbitrary_now_and_limit() -> (i64, usize) {
     (now_ms, limit)
 }
 
+/// Compile-time exhaustiveness guard for the variant coverage below. If
+/// `ResponseAction` gains a variant, this match stops compiling — forcing
+/// `arbitrary_response_action` (its `idx < 15` bound and the arms) and every
+/// harness that claims "over all 15 variants" to be updated to cover it, so a
+/// new action can never silently escape the soundness proofs. Never called; it
+/// exists only for the exhaustiveness check the compiler performs on it.
+#[allow(dead_code)]
+fn assert_response_action_variants_are_modeled(action: &ResponseAction) {
+    match action {
+        ResponseAction::BlockEgress { .. }
+        | ResponseAction::IsolateHost { .. }
+        | ResponseAction::RevokeCredential { .. }
+        | ResponseAction::SinkholeDns { .. }
+        | ResponseAction::TerminateUserSession { .. }
+        | ResponseAction::TriggerEdrScan { .. }
+        | ResponseAction::InjectFirewallRule { .. }
+        | ResponseAction::QuarantineFile { .. }
+        | ResponseAction::KillProcess { .. }
+        | ResponseAction::SuspendProcess { .. }
+        | ResponseAction::DisableUserAccount { .. }
+        | ResponseAction::ForcePasswordReset { .. }
+        | ResponseAction::RemoveScheduledTask { .. }
+        | ResponseAction::DeployDecoy { .. }
+        | ResponseAction::Escalate { .. } => {}
+    }
+}
+
 /// Map a symbolic index onto one representative of every `ResponseAction`
 /// variant: indices 0..=11 are the twelve destructive/containment actions,
 /// 12 `TriggerEdrScan`, 13 `DeployDecoy`, 14 `Escalate` (the three
