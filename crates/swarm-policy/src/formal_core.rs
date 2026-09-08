@@ -36,11 +36,25 @@
 //! `verify`; it calls these functions with the clock supplied explicitly at
 //! the call site, so no verdict changes for any input.
 //!
+//! ## Severity gating predicates (DCORE-05, SC1)
+//!
+//! The same discipline is applied to `static_gate::evaluate`'s three severity
+//! decisions -- the `static.minimum_severity` and
+//! `static.deploy_decoy_min_severity` floors and the `static.human_gate` hold.
+//! Their pure logic is lifted here as [`severity_floor_denial`] and
+//! [`human_gate_decision`], together with the [`destructive_action`] classifier
+//! they both read, so the human gate that carries the
+//! `PolicyHumanGateOnDestructiveAction` invariant now lives on a pure surface
+//! phase 293's Kani harness can prove about directly. `static_gate::evaluate`
+//! calls these in the identical order it applied the inline checks in, so no
+//! verdict changes for any input.
+//!
 //! [`PolicyDecision`]: crate::PolicyDecision
 
+use crate::PolicyDecision;
 use crate::static_gate::scope_for_response_action;
 use std::collections::VecDeque;
-use swarm_core::types::ResponseAction;
+use swarm_core::types::{ResponseAction, Severity};
 
 /// The trailing window a rate-limit budget is measured over, in
 /// milliseconds. Matches the prune threshold `static_gate` and
@@ -269,14 +283,95 @@ pub fn validate_lease_terms(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Severity gating predicates (DCORE-05, SC1)
+// ---------------------------------------------------------------------------
+
+/// Whether `action` is one of the twelve destructive/containment-class response
+/// actions the severity floor and the human gate reason about. Pure, total
+/// classification of the `ResponseAction` variant -- no clock, no lock, no IO.
+///
+/// Moved here from `static_gate` so the human gate that depends on it lives on
+/// a provable surface (phase 293). Kept in step with
+/// [`crate::static_gate::destructive_action_kinds`] by a test.
+pub fn destructive_action(action: &ResponseAction) -> bool {
+    matches!(
+        action,
+        ResponseAction::BlockEgress { .. }
+            | ResponseAction::IsolateHost { .. }
+            | ResponseAction::RevokeCredential { .. }
+            | ResponseAction::SinkholeDns { .. }
+            | ResponseAction::TerminateUserSession { .. }
+            | ResponseAction::InjectFirewallRule { .. }
+            | ResponseAction::QuarantineFile { .. }
+            | ResponseAction::KillProcess { .. }
+            | ResponseAction::SuspendProcess { .. }
+            | ResponseAction::DisableUserAccount { .. }
+            | ResponseAction::ForcePasswordReset { .. }
+            | ResponseAction::RemoveScheduledTask { .. }
+    )
+}
+
+/// The severity-floor denials, in the EXACT order `static_gate::evaluate`
+/// applied them: a destructive action at `Severity::Low` is denied under
+/// `static.minimum_severity` first, and only if that did not fire, a
+/// `DeployDecoy` at `Severity::Low` is denied under
+/// `static.deploy_decoy_min_severity`. Returns `None` when neither floor is
+/// tripped, so evaluation falls through to the rate-limit and human-gate
+/// checks. Pure and total; the observable order and the rule names match the
+/// pre-extraction behaviour byte-for-byte.
+pub fn severity_floor_denial(
+    action: &ResponseAction,
+    severity: Severity,
+) -> Option<PolicyDecision> {
+    if destructive_action(action) && severity == Severity::Low {
+        return Some(PolicyDecision::deny_with_rule(
+            "static.minimum_severity",
+            "destructive actions require at least medium severity",
+        ));
+    }
+
+    if matches!(action, ResponseAction::DeployDecoy { .. }) && severity == Severity::Low {
+        return Some(PolicyDecision::deny_with_rule(
+            "static.deploy_decoy_min_severity",
+            "deploy_decoy requires at least medium severity",
+        ));
+    }
+
+    None
+}
+
+// INVARIANT: PolicyHumanGateOnDestructiveAction
+/// Hold a destructive action at or above `human_gate_severity` for human
+/// approval: returns `RequireHuman` under `static.human_gate` rather than
+/// letting it auto-execute. Returns `None` when the action is not destructive
+/// or its severity is below the gate, so evaluation falls through to the
+/// default allow. Pure and total; the gate severity is a caller-supplied
+/// parameter, never read from configuration or a clock here.
+pub fn human_gate_decision(
+    action: &ResponseAction,
+    severity: Severity,
+    human_gate_severity: Severity,
+) -> Option<PolicyDecision> {
+    if destructive_action(action) && severity >= human_gate_severity {
+        return Some(PolicyDecision::require_human_with_rule(
+            "static.human_gate",
+            "authorized but held for human approval",
+        ));
+    }
+
+    None
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
-        LeaseRedeemOutcome, LeaseTerms, RateLimitOutcome, action_scope_key, evaluate_rate_limit,
-        governance_quorum_threshold, lease_can_redeem, lease_matches_action, lease_redeem,
-        validate_lease_terms,
+        LeaseRedeemOutcome, LeaseTerms, RateLimitOutcome, action_scope_key, destructive_action,
+        evaluate_rate_limit, governance_quorum_threshold, human_gate_decision, lease_can_redeem,
+        lease_matches_action, lease_redeem, severity_floor_denial, validate_lease_terms,
     };
+    use crate::PolicyVerdict;
     use std::collections::VecDeque;
     use swarm_core::types::{ResponseAction, Severity};
 
@@ -496,5 +591,88 @@ mod tests {
             validate_lease_terms(1, 1, 1, 1_000, 1_100, 1_100),
             Err("contingency lease expiry must be after issuance".to_string())
         );
+    }
+
+    #[test]
+    fn destructive_action_classifies_the_twelve_containment_actions() {
+        assert!(destructive_action(&block_egress("10.0.0.1")));
+        assert!(destructive_action(&ResponseAction::IsolateHost {
+            host_id: "h1".to_string(),
+        }));
+        // Neither a decoy nor an escalation is destructive.
+        assert!(!destructive_action(&ResponseAction::DeployDecoy {
+            decoy_type: "honeypot".to_string(),
+            target_zone: "dmz".to_string(),
+        }));
+        assert!(!destructive_action(&ResponseAction::Escalate {
+            summary: "review".to_string(),
+            urgency: Severity::High,
+        }));
+    }
+
+    #[test]
+    fn severity_floor_denies_a_low_severity_destructive_action() {
+        let decision = severity_floor_denial(&block_egress("10.0.0.1"), Severity::Low)
+            .expect("a Low destructive action is denied by the minimum-severity floor");
+        assert_eq!(decision.verdict, PolicyVerdict::Deny);
+        assert_eq!(decision.rule_name, "static.minimum_severity");
+    }
+
+    #[test]
+    fn severity_floor_denies_a_low_severity_deploy_decoy() {
+        // DeployDecoy is not destructive, so it falls through the first floor
+        // to the deploy-decoy-specific one.
+        let decoy = ResponseAction::DeployDecoy {
+            decoy_type: "honeypot".to_string(),
+            target_zone: "dmz".to_string(),
+        };
+        let decision = severity_floor_denial(&decoy, Severity::Low)
+            .expect("a Low deploy_decoy is denied by its own severity floor");
+        assert_eq!(decision.verdict, PolicyVerdict::Deny);
+        assert_eq!(decision.rule_name, "static.deploy_decoy_min_severity");
+    }
+
+    #[test]
+    fn severity_floor_passes_a_medium_destructive_action_through() {
+        assert!(severity_floor_denial(&block_egress("10.0.0.1"), Severity::Medium).is_none());
+    }
+
+    #[test]
+    fn human_gate_holds_a_destructive_action_at_the_boundary() {
+        // Exactly at the gate severity -> held for a human.
+        let at_gate =
+            human_gate_decision(&block_egress("10.0.0.1"), Severity::High, Severity::High)
+                .expect("a destructive action exactly at the gate severity is held");
+        assert_eq!(at_gate.verdict, PolicyVerdict::RequireHuman);
+        assert_eq!(at_gate.rule_name, "static.human_gate");
+
+        // Above the gate severity -> also held.
+        let above = human_gate_decision(
+            &block_egress("10.0.0.1"),
+            Severity::Critical,
+            Severity::High,
+        )
+        .expect("a destructive action above the gate severity is held");
+        assert_eq!(above.verdict, PolicyVerdict::RequireHuman);
+    }
+
+    #[test]
+    fn human_gate_lets_a_destructive_action_just_below_the_boundary_through() {
+        // Just below the gate severity -> not held here.
+        assert!(
+            human_gate_decision(&block_egress("10.0.0.1"), Severity::Medium, Severity::High)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn human_gate_ignores_a_non_destructive_action() {
+        // An escalation at or above the gate severity is never held: only
+        // destructive actions trip the human gate.
+        let escalate = ResponseAction::Escalate {
+            summary: "review".to_string(),
+            urgency: Severity::Critical,
+        };
+        assert!(human_gate_decision(&escalate, Severity::Critical, Severity::High).is_none());
     }
 }

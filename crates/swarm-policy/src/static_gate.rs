@@ -35,25 +35,6 @@ impl StaticApprovalGate {
         }
     }
 
-    fn destructive_action(request: &ActionRequest) -> bool {
-        // Kept in step with `destructive_action_kinds()` by a test.
-        matches!(
-            request.action,
-            ResponseAction::BlockEgress { .. }
-                | ResponseAction::IsolateHost { .. }
-                | ResponseAction::RevokeCredential { .. }
-                | ResponseAction::SinkholeDns { .. }
-                | ResponseAction::TerminateUserSession { .. }
-                | ResponseAction::InjectFirewallRule { .. }
-                | ResponseAction::QuarantineFile { .. }
-                | ResponseAction::KillProcess { .. }
-                | ResponseAction::SuspendProcess { .. }
-                | ResponseAction::DisableUserAccount { .. }
-                | ResponseAction::ForcePasswordReset { .. }
-                | ResponseAction::RemoveScheduledTask { .. }
-        )
-    }
-
     // INVARIANT: PolicyMalformedRequestRejected
     pub(crate) fn validate_request(&self, request: &ActionRequest) -> Result<(), ApprovalError> {
         if request.evidence.is_null() {
@@ -275,32 +256,26 @@ impl ApprovalGate for StaticApprovalGate {
     ) -> Result<PolicyDecision, ApprovalError> {
         self.validate_request(request)?;
 
-        if Self::destructive_action(request) && request.severity == Severity::Low {
-            return Ok(PolicyDecision::deny_with_rule(
-                "static.minimum_severity",
-                "destructive actions require at least medium severity",
-            ));
-        }
-
-        if matches!(request.action, ResponseAction::DeployDecoy { .. })
-            && request.severity == Severity::Low
+        // The severity floor and the human gate are decided by the pure
+        // decision core (`formal_core`, phase 292 SC1); the order here --
+        // floor denials, then the scope rate limit, then the human-gate hold,
+        // then the default allow -- is behaviour and is preserved exactly.
+        if let Some(decision) =
+            formal_core::severity_floor_denial(&request.action, request.severity)
         {
-            return Ok(PolicyDecision::deny_with_rule(
-                "static.deploy_decoy_min_severity",
-                "deploy_decoy requires at least medium severity",
-            ));
+            return Ok(decision);
         }
 
         if let Some(decision) = self.scope_rate_limit_decision(request, context) {
             return Ok(decision);
         }
 
-        // INVARIANT: PolicyHumanGateOnDestructiveAction
-        if Self::destructive_action(request) && request.severity >= self.human_gate_severity {
-            return Ok(PolicyDecision::require_human_with_rule(
-                "static.human_gate",
-                "authorized but held for human approval",
-            ));
+        if let Some(decision) = formal_core::human_gate_decision(
+            &request.action,
+            request.severity,
+            self.human_gate_severity,
+        ) {
+            return Ok(decision);
         }
 
         Ok(PolicyDecision::allow_with_rule(
