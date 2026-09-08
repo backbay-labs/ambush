@@ -960,10 +960,10 @@ final review closure under `286-02-PLAN.md`.
 
 #### Cross-Hunt Correlation
 
-- [ ] **XHUNT-01**: `CorrelationEngine`'s pairwise heuristics are replaced by graph traversal; all four `IncidentGraphDimension` tags come from real graph edges rather than string overlap.
-- [ ] **XHUNT-02**: `IncidentEvidenceLink` gains an optional `graph_path` so a reopened incident is re-explainable without recomputation; pre-existing JSON still deserializes.
-- [ ] **XHUNT-03**: An integration test disables `correlation.enabled` and `memory.enabled` together and asserts identical policy decisions, proving the optional lanes never gate the critical path.
-- [ ] **XHUNT-04**: A restart-simulation test proves incidents reload with identical dimensions and evidence.
+- [x] **XHUNT-01**: `CorrelationEngine`'s pairwise heuristics are replaced by graph traversal; all four `IncidentGraphDimension` tags come from real graph edges rather than string overlap. — Satisfied 2026-09-08 (`af3d259d7` migration, classification-node-bridge fix `552ab2f1b`). When a knowledge-graph snapshot is present the decision is 100% graph-derived (dimensions from real edge kinds on `provenance_paths`; `Causal` gated on `causal_provenance_paths`; classification nodes excluded from bridge waypoints; hub-degree cap preserves GRAPH-03). String overlap is retained ONLY as an explicit, documented degraded fallback for the memory-disabled config (no snapshot) — see the plan's Ruling 1. **CAVEAT:** the deep OS-causal edges (FileWrite/etc.) still require raw `pid`/`process_key` no normalized telemetry event carries, so the `Causal` dimension is sparse on production traffic until that producer-wiring lands.
+- [x] **XHUNT-02**: `IncidentEvidenceLink` gains an optional `graph_path` so a reopened incident is re-explainable without recomputation; pre-existing JSON still deserializes. — Satisfied 2026-09-08 (`b8f945bf6`; spine-local `ReconstructedChainHop`, both serialization mirrors, back-compat test).
+- [x] **XHUNT-03**: An integration test disables `correlation.enabled` and `memory.enabled` together and asserts identical policy decisions, proving the optional lanes never gate the critical path. — Satisfied 2026-09-08 (`46e6fc72d`; the enabled arm genuinely runs both lanes, proven by a populated `graph_path`; non-vacuity verified empirically).
+- [x] **XHUNT-04**: A restart-simulation test proves incidents reload with identical dimensions and evidence. — Satisfied 2026-09-08 (`02afa5cd0`; `FileIncidentStore` persist → drop → reopen → reload, full-incident + per-field equality incl. `graph_path`).
 
 #### Dependency-Aware Triage
 
@@ -1564,10 +1564,10 @@ final review closure under `286-02-PLAN.md`.
 | CHAIN-02 | Phase 297 | Satisfied 2026-09-08 (`b25b40985`) |
 | CHAIN-03 | Phase 297 | Satisfied 2026-09-08 (`b5ac84576`) |
 | CHAIN-04 | Phase 297 | Satisfied 2026-09-08 (`522645969`) |
-| XHUNT-01 | Phase 298 | Pending |
-| XHUNT-02 | Phase 298 | Pending |
-| XHUNT-03 | Phase 298 | Pending |
-| XHUNT-04 | Phase 298 | Pending |
+| XHUNT-01 | Phase 298 | Satisfied 2026-09-08 (`552ab2f1b`) |
+| XHUNT-02 | Phase 298 | Satisfied 2026-09-08 (`b8f945bf6`) |
+| XHUNT-03 | Phase 298 | Satisfied 2026-09-08 (`46e6fc72d`) |
+| XHUNT-04 | Phase 298 | Satisfied 2026-09-08 (`02afa5cd0`) |
 | TRIAGE-01 | Phase 299 | Pending |
 | TRIAGE-02 | Phase 299 | Pending |
 | TRIAGE-03 | Phase 299 | Pending |
@@ -1699,7 +1699,7 @@ final review closure under `286-02-PLAN.md`.
 - v1.79 COMPLETE 2026-09-08: 29 requirements across phases 284-287 all Satisfied (Phase 286 accepted via the durable dispatch-intent journal; Phase 287 fuzz/loom/supply complete) (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
 - v1.81 COMPLETE 2026-09-08: 15 requirements across phases 292-294 all Satisfied (DCORE-01-05 Satisfied 2026-09-08 as Phase 292; KANI-01-05 Satisfied 2026-09-08 as Phase 293; SAFEP-01-05 Satisfied 2026-09-08 as Phase 294) (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
-- v1.82 in progress: 19 requirements across phases 296-299 (GRAPH-01-06 Satisfied 2026-09-08 as Phase 296; CHAIN-01-04 Satisfied 2026-09-08 as Phase 297) (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
+- v1.82 in progress: 19 requirements across phases 296-299 (GRAPH-01-06 Satisfied 2026-09-08 as Phase 296; CHAIN-01-04 Satisfied 2026-09-08 as Phase 297; XHUNT-01-04 Satisfied 2026-09-08 as Phase 298) (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
 - v1.83 queued: 14 requirements across phases 301-303 (VRF-01-05 -> Phase 301; REVOKE-01-05 -> Phase 302; DISTGOV-01-04 -> Phase 303)
 - v1.84 queued: 12 requirements across phases 305-307 (IFC-01-04 -> Phase 305; HERD-01-04 -> Phase 306; DECOY-01-04 -> Phase 307)
 - v1.85 queued: 12 requirements across phases 308-311 (SPEC-01-03 -> Phase 308; CONFORM-01-03 -> Phase 309; SDK-01-03 -> Phase 310; COVDOC-01-03 -> Phase 311)
