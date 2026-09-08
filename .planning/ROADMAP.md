@@ -1249,10 +1249,11 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 
 **Goal:** Extract an IO-free decision core from the policy gate and the governance predicates, bind it to Kani bounded model checking and named safety properties, model the partition-contingency-lease state machine in TLA+, and make the existing Z3 lane actually gate promotion.
 **Executable phases:** 292-294
+**Status:** COMPLETE (2026-09-08). All three executable phases (292 Pure Decision Core Extraction, 293 Kani Bounded Model Checking, 294 Named Safety Properties And Partition-Lease Model) are Complete; DCORE-01-05, KANI-01-05, and SAFEP-01-05 are all Satisfied. (Phase 295, Z3-Backed Promotion Gate, is an orphan roadmap row superseded by phase 322 — ZGATE-01-05 were satisfied there in v1.78.1, ahead of this milestone — and is not part of this milestone's 3-phase count.)
 
 - [x] **Phase 292: Pure Decision Core Extraction** - Carve out total, clock-injected, lock-free decision functions, enforced by a dependency-boundary script. (DCORE-01, DCORE-02)
 - [x] **Phase 293: Kani Bounded Model Checking** - Bounded-check fail-closed evaluation, severity gating, rate-limit bounds, and lease integrity. (KANI-01, KANI-03)
-- [ ] **Phase 294: Named Safety Properties And Partition-Lease Model** - Name P1-P6, map them, and model-check the highest-risk concurrent protocol with negative falsifiability. (SAFEP-01, SAFEP-04)
+- [x] **Phase 294: Named Safety Properties And Partition-Lease Model** - Name P1-P6, map them, and model-check the highest-risk concurrent protocol with negative falsifiability. (SAFEP-01, SAFEP-04)
 
 ### Phase 292: Pure Decision Core Extraction
 
@@ -1285,13 +1286,13 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** State the decision core's guarantees as named, mapped, falsifiable properties, and model-check the partition-contingency-lease protocol, the highest-risk concurrent logic in the system.
 **Requirements:** SAFEP-01, SAFEP-02, SAFEP-03, SAFEP-04, SAFEP-05
 **Depends on:** Phase 293
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-08, commit range `adcae375c..2c19b8d3f`) — the THIRD and FINAL phase of the v1.81 Machine-Checked Decision Core milestone. v1.81 is now COMPLETE.
+**Plans:** 294-01-PLAN.md
 **Success Criteria**:
-1. P1-P6 are each defined with exact symbols and the harnesses that check them, and appear as rows in `docs/assurance/MAPPING.md` with valid existing Rust paths.
-2. `ASSUME-INJECTED-CLOCK` and `ASSUME-GOVERNOR-KEY-CUSTODY` are registered with owners and dependent properties.
-3. Apalache model-checks the lease state machine clean in CI for its named invariants.
-4. At least 3 negative-falsifiability entries produce the expected violation, each naming the runtime regression test pinning the same defect.
+1. P1-P6 are each defined with exact symbols and the harnesses that check them, and appear as rows in `docs/assurance/MAPPING.md` with valid existing Rust paths. — met: `adcae375c`. `formal/PROPERTIES.md` defines P1 (fail-closed evaluation) through P6 (rate-limit boundedness), each naming exact Rust symbols and Kani harnesses, every one verified against the source tree at HEAD. `docs/assurance/MAPPING.md` gains a "Named safety properties" section — a distinct `Property`-headed table after the Loom section, cross-linking P1-P6 to existing `Name` rows where one already exists (P1/P6); `check-mapping.sh` parses only the first table whose header starts with `Name`, so this table stays outside that gate's scope (documented the same way the existing Loom section is), and the gate reports the same 17 rows/17 markers before and after.
+2. `ASSUME-INJECTED-CLOCK` and `ASSUME-GOVERNOR-KEY-CUSTODY` are registered with owners and dependent properties. — met: `adcae375c`. Both registered in `docs/assurance/assumptions.toml` with `owner` and a `dependent_properties` list alongside the existing `dependent_invariants` field (`ASSUME-INJECTED-CLOCK` owner `swarm-policy`, dependents P1/P2/P4/P6; `ASSUME-GOVERNOR-KEY-CUSTODY` owner `swarm-agents`, dependents P3/P5).
+3. Apalache model-checks the lease state machine clean in CI for its named invariants. — met: `1fca04400` (`formal/tla/PartitionContingency.tla` — four partition states, receipt-gated lease issuance, cap-bounded and expiry-denied redemption, reconciliation on heal; named invariants `BlastRadiusNeverExceeded`, `OverrideRequiresReceipt`, `NoRedemptionAfterExpiry`, `NoLeaseWhenHealthy`; `scripts/run-apalache-partition.sh` checks each clean, `NoError` up to length 8) + `2c19b8d3f` (a dedicated engine-gated `apalache` job in `.github/workflows/ci.yml` installs the JVM + Apalache 0.50.1 and runs the script in CI). Re-verified at phase close: `bash scripts/run-apalache-partition.sh` exits 0, all 4 invariants `NoError`.
+4. At least 3 negative-falsifiability entries produce the expected violation, each naming the runtime regression test pinning the same defect. — met: `2c19b8d3f`. Three broken variants under `formal/tla/negative/`, registered in `formal/tla/NEGATIVE.md`: `NoCapGuard` (drops the blast-radius cap guard) VIOLATES `BlastRadiusNeverExceeded`, naming swarm-policy `lease_redeem_fails_closed_on_mismatch_expiry_and_cap`; `NoExpiryGuard` (drops the expiry guard) VIOLATES `NoRedemptionAfterExpiry`, naming swarm-policy `lease_can_redeem_denies_an_expired_lease`; `NoReceiptRequired` (issues a lease without a receipt) VIOLATES `OverrideRequiresReceipt`, naming swarm-agents `keyless_policy_reloaded_into_a_partition_refuses_persisted_leases`. `scripts/check-apalache-negatives.sh` proves the clean model holds AND all three negatives violate (non-vacuous). Re-verified at phase close: exit 0, all three `VIOLATES ... (as required)`.
 
 ### v1.82 Provenance Memory And Correlation
 
@@ -1911,7 +1912,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 | 291. CI Arms Race Gate And Structural Isolation | v1.80 | 1/1 | Complete | 291-01 |
 | 292. Pure Decision Core Extraction | v1.81 | 1/1 | Complete | 292-01 |
 | 293. Kani Bounded Model Checking | v1.81 | 1/1 | Complete | 2026-09-08 |
-| 294. Named Safety Properties And Partition-Lease Model | v1.81 | 0/TBD | Not started | - |
+| 294. Named Safety Properties And Partition-Lease Model | v1.81 | 1/1 | Complete | 294-01 |
 | 295. Z3-Backed Promotion Gate | v1.81 | - | Superseded by 322 | - |
 | 296. Provenance Graph Substrate | v1.82 | 0/TBD | Not started | - |
 | 297. Kill-Chain Reconstruction | v1.82 | 0/TBD | Not started | - |

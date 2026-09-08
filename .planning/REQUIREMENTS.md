@@ -925,11 +925,12 @@ final review closure under `286-02-PLAN.md`.
 
 #### Named Safety Properties And Partition-Lease Model
 
-- [ ] **SAFEP-01**: `formal/PROPERTIES.md` defines P1-P6 (fail-closed evaluation, severity-gate soundness, partition-override receipt integrity, blast-radius conservation, quorum-transition soundness, rate-limit boundedness), each naming exact symbols and checking harnesses.
-- [ ] **SAFEP-02**: P1-P6 gain rows in `docs/assurance/MAPPING.md` following its existing schema.
-- [ ] **SAFEP-03**: `ASSUME-INJECTED-CLOCK` and `ASSUME-GOVERNOR-KEY-CUSTODY` are registered in `assumptions.toml` with owners and dependent properties.
-- [ ] **SAFEP-04**: `formal/tla/PartitionContingency.tla` models the four partition states, lease issuance and redemption with blast-radius cap, and reconciliation on heal, with named invariants.
-- [ ] **SAFEP-05**: At least 3 negative-falsifiability entries produce Apalache violations, each naming the runtime regression test pinning the same defect.
+- [x] **SAFEP-01** (adcae375c): `formal/PROPERTIES.md` defines P1-P6 (fail-closed evaluation, severity-gate soundness, partition-override receipt integrity, blast-radius conservation, quorum-transition soundness, rate-limit boundedness), each naming exact symbols and checking harnesses.
+- [x] **SAFEP-02** (adcae375c): P1-P6 gain rows in `docs/assurance/MAPPING.md` following its existing schema.
+  Delivered as a distinct "Named safety properties" table after the Loom section, documented the same way as the existing Loom section — `check-mapping.sh` only parses the first table whose header starts with `Name`, so the `Property`-headed table it sits in stays outside that gate's scope; verified non-vacuous (gate still reports the same 17 rows/17 markers before and after).
+- [x] **SAFEP-03** (adcae375c): `ASSUME-INJECTED-CLOCK` and `ASSUME-GOVERNOR-KEY-CUSTODY` are registered in `assumptions.toml` with owners and dependent properties.
+- [x] **SAFEP-04** (1fca04400): `formal/tla/PartitionContingency.tla` models the four partition states, lease issuance and redemption with blast-radius cap, and reconciliation on heal, with named invariants.
+- [x] **SAFEP-05** (2c19b8d3f): At least 3 negative-falsifiability entries produce Apalache violations, each naming the runtime regression test pinning the same defect.
 
 #### Z3-Backed Promotion Gate
 
@@ -1543,11 +1544,11 @@ final review closure under `286-02-PLAN.md`.
 | KANI-03 | Phase 293 | Satisfied 2026-09-08 — 86cd1cc41, review fixes 71fbd08e9; MODEL-ONLY deviation on lease blast-radius/expiry/validate_lease_terms (Kani-intractable `String`/`format!` paths), SC1 ≥8-REAL floor met via `governance_quorum_threshold`×2 + `destructive_action`×1 |
 | KANI-04 | Phase 293 | Satisfied 2026-09-08 — de0628490 |
 | KANI-05 | Phase 293 | Satisfied 2026-09-08 — df364bc94 |
-| SAFEP-01 | Phase 294 | Pending |
-| SAFEP-02 | Phase 294 | Pending |
-| SAFEP-03 | Phase 294 | Pending |
-| SAFEP-04 | Phase 294 | Pending |
-| SAFEP-05 | Phase 294 | Pending |
+| SAFEP-01 | Phase 294 | Satisfied 2026-09-08 — adcae375c |
+| SAFEP-02 | Phase 294 | Satisfied 2026-09-08 — adcae375c; distinct `Property` table after the Loom section, outside `check-mapping.sh`'s first-`Name`-table parse, same convention as the Loom section |
+| SAFEP-03 | Phase 294 | Satisfied 2026-09-08 — adcae375c |
+| SAFEP-04 | Phase 294 | Satisfied 2026-09-08 — 1fca04400 |
+| SAFEP-05 | Phase 294 | Satisfied 2026-09-08 — 2c19b8d3f |
 | ZGATE-01 | Phase 322 | Satisfied |
 | ZGATE-02 | Phase 322 | Satisfied |
 | ZGATE-03 | Phase 322 | Satisfied |
@@ -1697,7 +1698,7 @@ final review closure under `286-02-PLAN.md`.
 - v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
 - v1.79 COMPLETE 2026-09-08: 29 requirements across phases 284-287 all Satisfied (Phase 286 accepted via the durable dispatch-intent journal; Phase 287 fuzz/loom/supply complete) (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
-- v1.81 in progress: 15 requirements across phases 292-294 (DCORE-01-05 Satisfied 2026-09-08 as Phase 292; KANI-01-05 Satisfied 2026-09-08 as Phase 293) (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
+- v1.81 COMPLETE 2026-09-08: 15 requirements across phases 292-294 all Satisfied (DCORE-01-05 Satisfied 2026-09-08 as Phase 292; KANI-01-05 Satisfied 2026-09-08 as Phase 293; SAFEP-01-05 Satisfied 2026-09-08 as Phase 294) (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
 - v1.83 queued: 14 requirements across phases 301-303 (VRF-01-05 -> Phase 301; REVOKE-01-05 -> Phase 302; DISTGOV-01-04 -> Phase 303)
 - v1.84 queued: 12 requirements across phases 305-307 (IFC-01-04 -> Phase 305; HERD-01-04 -> Phase 306; DECOY-01-04 -> Phase 307)
