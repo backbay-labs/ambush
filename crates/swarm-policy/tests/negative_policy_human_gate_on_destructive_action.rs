@@ -1,7 +1,7 @@
 //! FALSIFY-02 negative-falsifiability test for
 //! `PolicyHumanGateOnDestructiveAction` (docs/assurance/MAPPING.md).
 //!
-//! `StaticApprovalGate::evaluate` (crates/swarm-policy/src/static_gate.rs:297-303)
+//! `StaticApprovalGate::evaluate` (now `swarm_policy::formal_core::human_gate_decision`, crates/swarm-policy/src/formal_core.rs:344,351, reached through `evaluate`)
 //! holds a destructive action at or above the configured human-gate severity
 //! for human approval (`RequireHuman`) instead of letting it auto-execute.
 //! `evaluate` is `pub` via the `ApprovalGate` trait, so this test calls it
@@ -23,7 +23,7 @@ fn sample_context() -> ApprovalContext {
 }
 
 /// A deliberately broken re-implementation of the human-gate branch inside
-/// `StaticApprovalGate::evaluate` (crates/swarm-policy/src/static_gate.rs:297-303)
+/// `StaticApprovalGate::evaluate` (now `swarm_policy::formal_core::human_gate_decision`, crates/swarm-policy/src/formal_core.rs:344,351, reached through `evaluate`)
 /// with the destructive-action-at-or-above-gate-severity guard removed:
 /// every request that reaches this point is routed straight to allow, never
 /// held for a human.

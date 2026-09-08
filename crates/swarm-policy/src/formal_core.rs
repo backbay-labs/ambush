@@ -611,6 +611,97 @@ mod tests {
     }
 
     #[test]
+    fn destructive_action_agrees_with_destructive_action_kinds() {
+        // `destructive_action`'s doc-comment promises it is kept in step with
+        // `static_gate::destructive_action_kinds` (the published slug list the
+        // operator surface reads). Enforce it: over one representative of EVERY
+        // `ResponseAction` variant, the boolean classifier must agree with
+        // membership in the slug list, and the list must name exactly the
+        // destructive variants -- no missing slug, no dead slug, no drift.
+        let all = [
+            ResponseAction::BlockEgress {
+                target: "10.0.0.1".to_string(),
+            },
+            ResponseAction::IsolateHost {
+                host_id: "h1".to_string(),
+            },
+            ResponseAction::RevokeCredential {
+                credential_id: "c1".to_string(),
+            },
+            ResponseAction::SinkholeDns {
+                domain: "evil.example".to_string(),
+            },
+            ResponseAction::TerminateUserSession {
+                host_id: "h1".to_string(),
+                session_id: "s1".to_string(),
+            },
+            ResponseAction::TriggerEdrScan {
+                host_id: "h1".to_string(),
+                scan_profile: "full".to_string(),
+            },
+            ResponseAction::InjectFirewallRule {
+                host_id: "h1".to_string(),
+                rule_name: "r1".to_string(),
+                direction: "inbound".to_string(),
+                cidr: "10.0.0.0/8".to_string(),
+                port: None,
+            },
+            ResponseAction::QuarantineFile {
+                host_id: "h1".to_string(),
+                file_path: "/tmp/x".to_string(),
+            },
+            ResponseAction::KillProcess {
+                host_id: "h1".to_string(),
+                process_name: "p".to_string(),
+            },
+            ResponseAction::SuspendProcess {
+                host_id: "h1".to_string(),
+                process_name: "p".to_string(),
+            },
+            ResponseAction::DisableUserAccount {
+                user_id: "u1".to_string(),
+            },
+            ResponseAction::ForcePasswordReset {
+                user_id: "u1".to_string(),
+            },
+            ResponseAction::RemoveScheduledTask {
+                host_id: "h1".to_string(),
+                task_name: "t1".to_string(),
+            },
+            ResponseAction::DeployDecoy {
+                decoy_type: "honeypot".to_string(),
+                target_zone: "dmz".to_string(),
+            },
+            ResponseAction::Escalate {
+                summary: "review".to_string(),
+                urgency: Severity::High,
+            },
+        ];
+        let kinds = crate::static_gate::destructive_action_kinds();
+        for action in &all {
+            assert_eq!(
+                destructive_action(action),
+                kinds.contains(&action.kind()),
+                "destructive_action disagrees with destructive_action_kinds for {}",
+                action.kind()
+            );
+        }
+        // The slug list names exactly the destructive variants (count matches),
+        // and every published slug is produced by some destructive variant.
+        assert_eq!(
+            kinds.len(),
+            all.iter().filter(|a| destructive_action(a)).count()
+        );
+        for slug in kinds {
+            assert!(
+                all.iter()
+                    .any(|a| a.kind() == *slug && destructive_action(a)),
+                "destructive_action_kinds names a slug no destructive variant produces: {slug}"
+            );
+        }
+    }
+
+    #[test]
     fn severity_floor_denies_a_low_severity_destructive_action() {
         let decision = severity_floor_denial(&block_egress("10.0.0.1"), Severity::Low)
             .expect("a Low destructive action is denied by the minimum-severity floor");
