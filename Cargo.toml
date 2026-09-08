@@ -143,6 +143,15 @@ proptest = "1"
 unwrap_used = "deny"
 expect_used = "deny"
 
+[workspace.lints.rust]
+# `loom` is a first-class conditional-compilation name for the Loom concurrency
+# models (swarm-pheromone/tests/loom_concurrent_write.rs,
+# swarm-policy/tests/loom_concurrent_decision.rs), which compile only under
+# `RUSTFLAGS="--cfg loom"`. Declaring it keeps the `unexpected_cfgs` lint from
+# firing on the `#[cfg(loom)]` markers during ordinary (non-loom) builds; loom
+# itself remains a `cfg(loom)`-gated dev-dependency, never in the shipped graph.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
 [profile.release]
 panic = "abort"
 overflow-checks = true

@@ -24,5 +24,12 @@ thiserror.workspace = true
 sha2.workspace = true
 hex.workspace = true
 
+# Loom is a `cfg(loom)`-gated dev-dependency ONLY: it is compiled solely under
+# `RUSTFLAGS="--cfg loom"` for the concurrency model in
+# `tests/loom_concurrent_write.rs` and never enters the shipped dependency graph
+# (`cargo tree -p swarm-pheromone` without `--cfg loom` shows no loom).
+[target.'cfg(loom)'.dev-dependencies]
+loom = "0.7.2"
+
 [lints]
 workspace = true

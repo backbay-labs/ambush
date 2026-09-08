@@ -104,3 +104,37 @@ same storage. Cancellation by future drop is not itself evidence of child-proces
 termination. Distributed JetStream failover, cross-node consensus, external
 adapter exactly-once semantics, privileged filesystem tampering and durability
 beyond the OS/filesystem fsync contract are not established by this harness.
+
+## Loom concurrency models (phase 287)
+
+LOOM-01/02 add two Loom harnesses over the engine's concurrent write paths. Loom
+instruments only its own `loom::sync` types, not the production `std::sync`
+locks / `arc_swap::ArcSwap` / `std::fs` these paths use, so each harness is an
+**abstract** model of the seam reconstructed from reviewed Loom state, not an
+instrumented run of the real code. Each is therefore labelled, exactly,
+`scope = "bounded_abstract_model"`, and is bounded by a documented preemption
+budget (`preemption_bound = 2`, `max_permutations`/`max_duration` left unset) run
+by `.github/workflows/loom-nightly.yml`. These are model rows, not enforcement
+call sites, so they are deliberately kept OUT of the invariant table above (whose
+`Path` column `tools/check-mapping.sh` resolves to real source): a bounded
+abstract model proves a concurrency argument, not a fail-closed source invariant.
+
+- `crates/swarm-pheromone/tests/loom_concurrent_write.rs` — `scope = "bounded_abstract_model"`.
+  Models concurrent deposit vs. decay-eviction (`gc_evaporated`) over the
+  local-journal split-persistence seam (`swarm-pheromone/src/substrate.rs`
+  `deposit`/`gc_evaporated` — the in-memory `deposits` vector lock and the JSONL
+  journal). Establishes that holding the deposits lock across both the journal
+  append and the in-memory push (the LOOM-01 repair) keeps a fresh deposit from
+  being dropped by a concurrent journal rewrite. Bound to the production source by
+  the non-Loom `concurrent_reopen_regression` in the same file, which fails iff
+  the repair is reverted.
+- `crates/swarm-policy/tests/loom_concurrent_decision.rs` — `scope = "bounded_abstract_model"`.
+  Models concurrent decision-evaluation vs. ruleset reload. The policy crate has
+  no reload op (`configurable_gate.rs:13,26` rebuild an immutable rule vector in a
+  new gate); the real reload publishes separate `ArcSwap`s non-atomically in
+  `swarm-ingest-runtime` (`ingest/mod.rs` `reload`), and the request path reads
+  ONE held generation via a single `load_full()` (`ingest/mod.rs:146`). The model
+  asserts a decision and its lease share one held runtime generation — NOT that
+  all composition fields swap atomically — plus a supplemental last-slot atomic
+  prune/check/increment under one mutex (`configurable_gate.rs:85`,
+  `agent_limit_exceeded`).
