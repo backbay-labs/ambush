@@ -131,12 +131,14 @@ pub struct IncidentEvidenceLink {
     pub weight: usize,
     /// The knowledge-graph evidence hop this link was derived from (Phase
     /// 298 XHUNT-02), so a reopened incident is re-explainable without
-    /// recomputation. `None` for every link persisted before this field
-    /// existed and for links a later correlation pass has not yet populated
-    /// (`swarm-runtime`'s correlation module does not set this today — a
-    /// later XHUNT task wires it up). Plain ids, same reasoning as
-    /// [`ReconstructedChainHop`]: `swarm-spine` is part of the trusted
-    /// computing base and may never depend on `swarm-runtime`.
+    /// recomputation. Populated with `Some(..)` by graph-native correlation
+    /// (`swarm-runtime`'s `CorrelationEngine::assemble_incident_from_graph_at`
+    /// sets it for every link it derives from a traversal path). `None` for
+    /// every link persisted before this field existed, and for links created
+    /// by the memory-off string-overlap fallback (which has no graph path to
+    /// record). Plain ids, same reasoning as [`ReconstructedChainHop`]:
+    /// `swarm-spine` is part of the trusted computing base and may never
+    /// depend on `swarm-runtime`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_path: Option<ReconstructedChainHop>,
 }

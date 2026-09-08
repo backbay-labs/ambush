@@ -89,9 +89,10 @@ discriminates non-expansion from a post-hoc reject.
 
 ## Verification (final tree)
 
-- `cargo test -p swarm-runtime correlation --lib` → 10 (tests 1-4 migrated to graph fixtures + the
-  shared-classification-no-bridge PoC + the anti-masking positive + test 5 kept).
-- `cargo test -p swarm-runtime --lib` → 629 (chain_reconstruction 20 + sphinx_agent 29 unchanged; the
+- `cargo test -p swarm-runtime correlation --lib` → 11 (tests 1-4 migrated to graph fixtures + the
+  shared-classification-no-bridge PoC + the anti-masking positive + test 5 kept + the XHUNT-03 operator
+  test, whose name also matches the `correlation` filter).
+- `cargo test -p swarm-runtime --lib` → 630 (chain_reconstruction 20 + sphinx_agent 29 unchanged; the
   shared-BFS-core change is behavior-preserving for all non-correlation callers).
 - `cargo test -p swarm-spine` → 40 unit + 4 integration (incl. the XHUNT-04 restart test; back-compat
   + round-trip from XHUNT-02).
