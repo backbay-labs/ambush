@@ -6,7 +6,7 @@ current_phase: 293
 current_phase_name: Kani Bounded Model Checking
 current_plan: null
 status: active
-last_updated: "2026-09-08T03:00:00Z"
+last_updated: "2026-09-08T04:15:00Z"
 last_activity: 2026-09-08
 progress:
   total_phases: 3
@@ -31,7 +31,7 @@ See: `.planning/PROJECT.md` (updated 2026-04-13)
 **Total Plans in Phase:** Phase 293 not yet planned. (Completed v1.81 plans: 292-01, tasks 1-4.)
 **Status:** v1.81 Phase 292 (Pure Decision Core Extraction) COMPLETE 2026-09-08. Next: Phase 293 (Kani), then 294 — independently of the user's open-agent/provenance reconciliation, which blocks only 296-299, not 293/294.
 **Last Activity:** 2026-09-08
-**Last Activity Description:** Closed Phase 292 in the planning ledger (Task 4 of 4): DCORE-01..05 marked `[x]`/Satisfied in REQUIREMENTS.md with commits (`eb64f7c85`, `f5cb3d8df`, `49121d577`) and the DCORE-04 path-slip recorded; the v1.81 milestone checklist, phase block and roll-up updated in ROADMAP.md (293/294 left Not started); this STATE.md frontmatter and body reconciled so neither contradicts the other or REQUIREMENTS/ROADMAP; `.planning/phases/292-pure-decision-core-extraction/292-01-SUMMARY.md` added. DCORE-05 final verification re-run on the closing tree: `cargo test -p swarm-policy` (39 passing) + `cargo test -p swarm-agents` (17 lib + 7 governance) pass unchanged; `check-decision-core-boundary.sh`, `check-mapping.sh`, `check-negative-registry.sh`, `check-gates-wired.sh`, `check-workspace-layering.sh` all exit 0. `git diff --stat` for this commit touches only `.planning/`.
+**Last Activity Description:** Phase 292 (Pure Decision Core Extraction) MERGED to `main` (`e1e22aa07`, --no-ff) and pushed to origin, 2026-09-08. Beyond the planned 4 tasks, a controller-added Task 5 extracted the severity gating (`static.minimum_severity`, `static.deploy_decoy_min_severity`, `static.human_gate`) and the `destructive_action` classifier into `formal_core` (`0f3fa0207`), completing ROADMAP SC1, and relocated the `PolicyHumanGateOnDestructiveAction` phase-285 invariant with it; the amended-commit provenance was fixed by a content-preserving code/docs split, and a `destructive_action`/`destructive_action_kinds` coupling test was added. Two whole-branch reviews (opus) returned SHIP, 0 Critical/0 Important; final tree: `cargo test -p swarm-policy` (39) + `swarm-agents` (17+7) unchanged, all `tools/check-*.sh` gates exit 0. Next: Phase 293 (Kani Bounded Model Checking).
 
 **Full goal remains active:** the entire 2026-09-06 gameplan plus canonical engine
 phases 285-313. The user did not defer the approved open-agent-protocol milestone:
