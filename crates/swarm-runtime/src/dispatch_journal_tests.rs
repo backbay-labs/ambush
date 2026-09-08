@@ -369,6 +369,69 @@ fn in_place_corruption_blocks_the_next_live_reservation() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn transient_read_error_during_validate_refuses_without_poisoning() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TestDirectory::new();
+    let journal = DispatchJournal::open(&dir.0).unwrap();
+    // A prior reservation gives the pre-write integrity re-read a non-trivial
+    // journal to reopen on the next append.
+    let first_id = journal.reserve(&request(), &lease(), 1).unwrap();
+
+    // Make the pre-write re-read (`File::open` inside `validate_files`) fail with
+    // a transient I/O read error without altering a single durable byte: the
+    // metadata checks still see the correct length and inode, only the fresh read
+    // cannot complete. The already-open append descriptor is unaffected.
+    let journal_path = journal.journal_path().to_path_buf();
+    let restore = fs::metadata(&journal_path).unwrap().permissions();
+    fs::set_permissions(&journal_path, fs::Permissions::from_mode(0o000)).unwrap();
+    // Running as root ignores the permission bits, so the fault cannot be induced;
+    // the scenario is then not exercisable here.
+    if File::open(&journal_path).is_ok() {
+        fs::set_permissions(&journal_path, restore).unwrap();
+        return;
+    }
+
+    let mut second = request();
+    second.hunt_id = HuntId("different-hunt".into());
+    // This one reservation is refused fail-closed with the transient read error...
+    assert!(matches!(
+        journal.reserve(&second, &lease(), 2),
+        Err(DispatchJournalError::Io { .. })
+    ));
+    // ...but the writer is NOT poisoned: nothing was written and the in-memory
+    // state is untouched, so live dispatch is not bricked.
+    assert!(!journal.state.lock().unwrap().poisoned);
+
+    // Once the transient condition clears, the very next reservation succeeds and
+    // consumes exactly one durable intent for the previously-refused request.
+    fs::set_permissions(&journal_path, restore).unwrap();
+    let second_id = journal.reserve(&second, &lease(), 3).unwrap();
+    assert_ne!(first_id, second_id);
+    assert_eq!(
+        journal
+            .lookup_persisted(&second_id)
+            .unwrap()
+            .unwrap()
+            .phase(),
+        DispatchPhase::OutcomeUnknown
+    );
+    // The originally reserved permission is intact and still refuses re-reservation.
+    assert!(matches!(
+        journal.reserve(&request(), &lease(), 4),
+        Err(DispatchJournalError::AlreadyReserved { .. })
+    ));
+    // Header plus two intents: exactly three durable lines, no torn write.
+    assert_eq!(
+        fs::read_to_string(journal.journal_path())
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+}
+
 #[test]
 fn deeply_nested_events_are_refused_before_they_make_recovery_impossible() {
     let dir = TestDirectory::new();

@@ -458,11 +458,27 @@ impl DispatchJournal {
         if state.bytes.saturating_add(bytes.len() as u64) > self.limits.max_bytes {
             return Err(DispatchJournalError::LimitExceeded("journal byte count"));
         }
-        // A returned write error cannot establish zero bytes reached disk. Even
-        // a successful append followed by a sync failure must poison the writer.
+        // The pre-write integrity re-read runs before a single byte is written,
+        // so its failure carries no durability uncertainty of its own. Proven
+        // in-place corruption or tamper (`Corrupt`) means the durable history can
+        // no longer be trusted and poisons the writer, as does any other
+        // integrity failure. A merely transient read failure (`Io`) could not
+        // complete the check: nothing was written and the in-memory state is
+        // untouched, so this one dispatch is refused fail-closed WITHOUT
+        // poisoning, and the next reservation re-validates and proceeds once the
+        // transient condition clears.
+        if let Err(error) = self.validate_files(state) {
+            if !matches!(error, DispatchJournalError::Io { .. }) {
+                state.poisoned = true;
+            }
+            return Err(error);
+        }
+        // Past validation, bytes may reach disk. A returned write error cannot
+        // establish zero bytes reached disk. Even a successful append followed by
+        // a sync failure must poison the writer.
         let mut next_hasher = state.hasher.clone();
         next_hasher.update(&bytes);
-        let result = self.validate_files(state).and_then(|()| {
+        let result = (|| {
             state
                 .file
                 .write_all(&bytes)
@@ -483,7 +499,7 @@ impl DispatchJournal {
                     )?,
                 },
             )
-        });
+        })();
         if let Err(error) = result {
             state.poisoned = true;
             return Err(error);
