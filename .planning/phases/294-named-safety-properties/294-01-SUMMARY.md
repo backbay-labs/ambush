@@ -38,7 +38,9 @@ v1.81 Machine-Checked Decision Core milestone (292–294).**
   rejects bare TLA+). It models the four partition states (`Healthy`/`Degraded`/`Partitioned`/`Healing`),
   contingency-lease issuance (partition-only, gated on an approved receipt, with a fresh
   `blast_radius_cap` budget), redemption (cap-bounded and expiry-denied), and reconciliation on heal.
-  Four named safety invariants — the TLA+ statements of P3/P4/P5 — are checked clean:
+  Four named safety invariants — the TLA+ statements of P3 and P4 plus a
+  reconciliation-on-heal property (P5 quorum-transition soundness is Kani-only;
+  the partition-lease model carries no quorum invariant) — are checked clean:
   `BlastRadiusNeverExceeded` (`redeemedCount <= BlastRadiusCap`), `OverrideRequiresReceipt`
   (`leaseActive => leaseHasReceipt`), `NoRedemptionAfterExpiry` (`~redeemedWhileExpired`), and
   `NoLeaseWhenHealthy` (`partitionState = "Healthy" => ~leaseActive`). `scripts/run-apalache-partition.sh`

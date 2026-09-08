@@ -15,8 +15,8 @@ each time.
 
 Each property below states, in plain language, what must always hold; names
 the exact Rust symbol(s) it constrains; names the Kani harness(es) that check
-it; and, where a Phase 294 Task 2 TLA+ invariant will check the same property
-at the state-machine level (P3–P5), names that invariant. Every symbol and
+it; and, where a Phase 294 Task 2 TLA+ invariant checks the same property
+at the state-machine level (P3 and P4), names that invariant. Every symbol and
 harness name in this document was verified to resolve against the source
 tree at HEAD (`grep` each one — see the Task 1 report for the exact
 commands) before this document was written.
@@ -127,7 +127,7 @@ symbol; the named runtime test is what covers the real symbol).**
   half; runtime tests are the `formal_core validate_lease_terms_*` unit tests
   plus `keyless_policy_reloaded_into_a_partition_refuses_persisted_leases`.
 
-**TLA+ invariant (Phase 294 Task 2, not yet written).** `OverrideRequiresReceipt`
+**TLA+ invariant (Phase 294 Task 2).** `OverrideRequiresReceipt`
 in `formal/tla/PartitionContingency.tla` — a lease exists in the model only
 by way of an approved receipt.
 
@@ -161,7 +161,7 @@ state exactly as it was — no partial mutation on the failure path.
 `lease_redeem_fails_closed_on_mismatch_expiry_and_cap`
 (`crates/swarm-policy/src/formal_core.rs`, `#[cfg(test)]` module).
 
-**TLA+ invariant (Phase 294 Task 2, not yet written).** `BlastRadiusNeverExceeded`
+**TLA+ invariant (Phase 294 Task 2).** `BlastRadiusNeverExceeded`
 in `formal/tla/PartitionContingency.tla` — redeemed scopes per lease ≤ its
 `blast_radius_cap`, checked over the full issuance/redemption/reconciliation
 state machine (`lease_redeem` itself is already Kani-proved at the function
@@ -188,13 +188,14 @@ that a coalition smaller than `2f + 1` could satisfy.
 - `kani_governance_quorum_threshold_is_2f_plus_1`.
 - `kani_governance_quorum_threshold_is_monotonic_and_saturating`.
 
-**TLA+ invariant (Phase 294 Task 2, not yet written).** The quorum/transition
-invariant in `formal/tla/PartitionContingency.tla` (exact name set by Task 2's
-design of record) — checks that a modeled governance-quorum state transition
-(e.g. healing back from `Partitioned` to `Healthy`, or approving an override)
-can only complete once at least `governance_quorum_threshold` votes are
-present, over the bounded state machine, not just as a function-level
-arithmetic fact.
+**No TLA+ invariant.** P5 is proved at the function level by Kani
+(`governance_quorum_threshold` plus the two `kani_governance_quorum_threshold_*`
+harnesses). The Phase 294 partition-contingency-lease TLA+ model
+(`formal/tla/PartitionContingency.tla`) models lease issuance, redemption, and
+reconciliation — not governance voting — so it carries no quorum invariant, and
+P5's soundness does not depend on one. Extending the model with a
+governance-quorum state machine is a possible follow-on, not a gap in this
+property's coverage.
 
 ---
 
