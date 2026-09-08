@@ -857,19 +857,19 @@ final review closure under `286-02-PLAN.md`.
 
 #### Fuzz And Loom Coverage
 
-- [ ] **FUZZ-01**: A `fuzz/` cargo-fuzz workspace ships targets for `ingest_json_decode`, `ingest_sentinel_decode`, `ingest_tetragon_decode`, and `ruleset_yaml_parse`, each calling a real parse entry point.
-- [ ] **FUZZ-02**: `tools/seed-fuzz-corpus.sh` seeds each target from `scenarios/*.yaml` and `rulesets/*.yaml`.
-- [ ] **FUZZ-03**: `.github/workflows/fuzz-nightly.yml` runs each target for 600s nightly, failing on crash and uploading the crashing input.
-- [ ] **FUZZ-04**: A 30s smoke pass per target is a required PR step so harness breakage is caught immediately.
-- [ ] **LOOM-01**: `crates/swarm-pheromone/tests/loom_concurrent_write.rs` models concurrent deposit and decay-eviction.
-- [ ] **LOOM-02**: `crates/swarm-policy/tests/loom_concurrent_decision.rs` models concurrent decision evaluation against ruleset reload.
-- [ ] **LOOM-03**: `.github/workflows/loom-nightly.yml` runs both harnesses with a documented bounded preemption budget.
-- [ ] **LOOM-04**: MAPPING.md labels each Loom harness `scope = "bounded_abstract_model"`.
+- [x] **FUZZ-01** (fd9b46946): A `fuzz/` cargo-fuzz workspace ships targets for `ingest_json_decode`, `ingest_sentinel_decode`, `ingest_tetragon_decode`, and `ruleset_yaml_parse`, each calling a real parse entry point.
+- [x] **FUZZ-02** (fd9b46946): `tools/seed-fuzz-corpus.sh` seeds each target from `scenarios/*.yaml` and `rulesets/*.yaml`.
+- [x] **FUZZ-03** (fd9b46946): `.github/workflows/fuzz-nightly.yml` runs each target for 600s nightly, failing on crash and uploading the crashing input.
+- [x] **FUZZ-04** (fd9b46946): A 30s smoke pass per target is a required PR step so harness breakage is caught immediately.
+- [x] **LOOM-01** (5a0791ecc): `crates/swarm-pheromone/tests/loom_concurrent_write.rs` models concurrent deposit and decay-eviction.
+- [x] **LOOM-02** (5a0791ecc): `crates/swarm-policy/tests/loom_concurrent_decision.rs` models concurrent decision evaluation against ruleset reload.
+- [x] **LOOM-03** (5a0791ecc): `.github/workflows/loom-nightly.yml` runs both harnesses with a documented bounded preemption budget.
+- [x] **LOOM-04** (5a0791ecc): MAPPING.md labels each Loom harness `scope = "bounded_abstract_model"`.
 
 #### Supply-Chain Hardening
 
-- [ ] **SUPPLY-01**: Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition.
-- [ ] **SUPPLY-02**: `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, and the `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift.
+- [x] **SUPPLY-01** (ea852a9b3): Every `deny.toml` `[advisories].ignore` entry carries a `last-checked` date, a blast-radius note, and a clearing condition.
+- [x] **SUPPLY-02** (ea852a9b3): `tools/check-supply-chain.sh` fails if any ignore or skip entry is missing a date or justification, and the `cargo audit --ignore` list is deduplicated against `deny.toml` so the two cannot drift.
 
 ### Red Swarm (v1.80)
 
@@ -1503,16 +1503,16 @@ final review closure under `286-02-PLAN.md`.
 | DST-04 | Phase 286 | Satisfied |
 | DST-05 | Phase 286 | Satisfied |
 | DST-06 | Phase 286 | Satisfied |
-| FUZZ-01 | Phase 287 | Pending |
-| FUZZ-02 | Phase 287 | Pending |
-| FUZZ-03 | Phase 287 | Pending |
-| FUZZ-04 | Phase 287 | Pending |
-| LOOM-01 | Phase 287 | Pending |
-| LOOM-02 | Phase 287 | Pending |
-| LOOM-03 | Phase 287 | Pending |
-| LOOM-04 | Phase 287 | Pending |
-| SUPPLY-01 | Phase 287 | Pending |
-| SUPPLY-02 | Phase 287 | Pending |
+| FUZZ-01 | Phase 287 | Satisfied |
+| FUZZ-02 | Phase 287 | Satisfied |
+| FUZZ-03 | Phase 287 | Satisfied |
+| FUZZ-04 | Phase 287 | Satisfied |
+| LOOM-01 | Phase 287 | Satisfied |
+| LOOM-02 | Phase 287 | Satisfied |
+| LOOM-03 | Phase 287 | Satisfied |
+| LOOM-04 | Phase 287 | Satisfied |
+| SUPPLY-01 | Phase 287 | Satisfied |
+| SUPPLY-02 | Phase 287 | Satisfied |
 | OPFOR-01 | Phase 288 | Satisfied — one signature deviation (`propose_steps` takes `so_far`), noted on the trait |
 | OPFOR-02 | Phase 288 | Satisfied |
 | OPFOR-03 | Phase 288 | Satisfied |
@@ -1692,7 +1692,7 @@ final review closure under `286-02-PLAN.md`.
 - v1.77 complete: 9 requirements satisfied across phases 276-279 (EDRINT-01-03 -> Phase 276; SIEMINT-01-03 -> Phase 277; E2EPROOF-01-02 -> Phase 278; E2EPROOF-03 -> Phase 279)
 - v1.78 in progress: 17 requirements across phases 280-283 (GATEFIX-01-04 Satisfied 2026-08-11; TCBOUND-01-04 Satisfied 2026-08-13) (GATEFIX-01-04 -> Phase 280; INCFIX-01-03 -> Phase 281; SPLIT-01-06 -> Phase 282; TCBOUND-01-04 -> Phase 283)
 - v1.78.1 queued: 14 requirements across phases 320-322 (QRT-01-04 -> Phase 320; BFT-01-05 -> Phase 321; ZGATE-01-05 -> Phase 322)
-- v1.79 in progress: 29 requirements across phases 284-287; Phase 286 reopened, DST-01..06 local evidence recorded, acceptance pending (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
+- v1.79 COMPLETE 2026-09-08: 29 requirements across phases 284-287 all Satisfied (Phase 286 accepted via the durable dispatch-intent journal; Phase 287 fuzz/loom/supply complete) (FIXTURE-01-04 -> Phase 284; MAPPING-01-05, FALSIFY-01-04 -> Phase 285; DST-01-06 -> Phase 286; FUZZ-01-04, LOOM-01-04, SUPPLY-01-02 -> Phase 287)
 - v1.80 queued: 17 requirements across phases 288-291 (OPFOR-01-04 -> Phase 288; ATKSCORE-01-04 -> Phase 289; COEVOLVE-01-04 -> Phase 290; ARMSCI-01-05 -> Phase 291)
 - v1.81 queued: 15 requirements across phases 292-294 (DCORE-01-05 -> Phase 292; KANI-01-05 -> Phase 293; SAFEP-01-05 -> Phase 294)
 - v1.82 queued: 19 requirements across phases 296-299 (GRAPH-01-06 -> Phase 296; CHAIN-01-04 -> Phase 297; XHUNT-01-04 -> Phase 298; TRIAGE-01-05 -> Phase 299)
