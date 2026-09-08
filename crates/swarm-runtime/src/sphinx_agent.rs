@@ -8,7 +8,7 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use swarm_core::agent::{
@@ -40,6 +40,11 @@ pub struct SphinxAgent {
     substrate: ConfiguredPheromoneSubstrate,
     pheromone_config: swarm_core::config::PheromoneConfig,
     knowledge_retention_days: u64,
+    /// GRAPH-06 defense-in-depth: recorded so `tick()` can tell a legitimate
+    /// "memory disabled" no-op apart from the footgun (`memory.enabled` true
+    /// with `knowledge_retention_days == 0`) `MemoryConfig::validate()`
+    /// should already have rejected. See `warn_if_retention_footgun_reachable`.
+    memory_enabled: bool,
     role: AgentRole,
     health: AgentHealth,
     store: FileKnowledgeGraphStore,
@@ -119,6 +124,7 @@ impl SphinxAgent {
             substrate,
             pheromone_config: runtime_config.pheromone.clone(),
             knowledge_retention_days: runtime_config.memory.knowledge_retention_days,
+            memory_enabled: runtime_config.memory.enabled,
             role: AgentRole::Sphinx,
             health: AgentHealth::Healthy,
             store,
@@ -224,6 +230,9 @@ impl SphinxAgent {
         let mut process_node_id = None;
         let mut source_ip_node_id = None;
         let mut destination_ip_node_id = None;
+        let mut source_ip_value = None;
+        let mut destination_ip_value = None;
+        let mut credential_subject_node_id = None;
 
         for entity in &entities {
             let node_id = entity_node_id(entity.kind, &entity.value);
@@ -255,8 +264,15 @@ impl SphinxAgent {
             match entity.role.as_str() {
                 "parent_process" => parent_process_node_id = Some(node_id),
                 "process" => process_node_id = Some(node_id),
-                "source_ip" => source_ip_node_id = Some(node_id),
-                "destination_ip" => destination_ip_node_id = Some(node_id),
+                "source_ip" => {
+                    source_ip_node_id = Some(node_id);
+                    source_ip_value = Some(entity.value.clone());
+                }
+                "destination_ip" => {
+                    destination_ip_node_id = Some(node_id);
+                    destination_ip_value = Some(entity.value.clone());
+                }
+                "credential_subject" => credential_subject_node_id = Some(node_id),
                 _ => {}
             }
         }
@@ -307,6 +323,161 @@ impl SphinxAgent {
                     from_node_id: source,
                     to_node_id: destination,
                     relation: CausalRelation::NetworkFlowOrigin,
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    occurrence_count: 1,
+                }));
+        }
+
+        // GRAPH-01/02: raw-telemetry provenance nodes (Process/File/NetworkFlow)
+        // and the causal relations they carry (FileWrite, FileExecute,
+        // DnsResolution, CredentialAccess). These are additive and only fire
+        // when the observation carries the corresponding raw fact — an
+        // observation lacking these fields produces none of this.
+        let raw_process = extract_process_observation(&deposit.indicator);
+        let raw_process_node_id = raw_process.as_ref().map(|process| {
+            let node_id = process_key_node_id(&process.process_key);
+            self.graph
+                .upsert_node(KnowledgeGraphNode::Process(ProcessNode {
+                    node_id: node_id.clone(),
+                    process_key: process.process_key.clone(),
+                    pid: process.pid,
+                    host_id: process.host_id.clone(),
+                    executable_path: process.executable_path.clone(),
+                    command_line: process.command_line.clone(),
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    observation_count: 1,
+                }));
+            node_id
+        });
+
+        let raw_file_event = extract_file_event_observation(&deposit.indicator);
+        let raw_file_node_id = raw_file_event.as_ref().map(|file_event| {
+            let node_id = file_node_id(&file_event.file_path);
+            self.graph.upsert_node(KnowledgeGraphNode::File(FileNode {
+                node_id: node_id.clone(),
+                file_path: file_event.file_path.clone(),
+                host_id: file_event.host_id.clone(),
+                first_observed_at_ms: observed_at_ms,
+                last_observed_at_ms: observed_at_ms,
+                observation_count: 1,
+            }));
+            node_id
+        });
+
+        if let (Some(process_node), Some(file_node)) = (&raw_process_node_id, &raw_file_node_id) {
+            match raw_file_event
+                .as_ref()
+                .and_then(|file_event| file_event.operation.as_deref())
+            {
+                Some("write") => {
+                    self.graph
+                        .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
+                            edge_id: format!(
+                                "causal:{}:{}:file_write",
+                                sanitize_id(process_node),
+                                sanitize_id(file_node)
+                            ),
+                            from_node_id: process_node.clone(),
+                            to_node_id: file_node.clone(),
+                            relation: CausalRelation::FileWrite,
+                            first_observed_at_ms: observed_at_ms,
+                            last_observed_at_ms: observed_at_ms,
+                            occurrence_count: 1,
+                        }));
+                }
+                Some("execute") => {
+                    // Edge direction is File -> Process here, the REVERSE of
+                    // FileWrite's Process -> File above: on execute the file
+                    // (the image) is the cause and the process is the effect
+                    // (the image spawns the process), whereas on write the
+                    // process is the cause and the file the effect.
+                    self.graph
+                        .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
+                            edge_id: format!(
+                                "causal:{}:{}:file_execute",
+                                sanitize_id(file_node),
+                                sanitize_id(process_node)
+                            ),
+                            from_node_id: file_node.clone(),
+                            to_node_id: process_node.clone(),
+                            relation: CausalRelation::FileExecute,
+                            first_observed_at_ms: observed_at_ms,
+                            last_observed_at_ms: observed_at_ms,
+                            occurrence_count: 1,
+                        }));
+                }
+                _ => {}
+            }
+        }
+
+        let source_port = indicator_port(&deposit.indicator, "source_port");
+        let destination_port = indicator_port(&deposit.indicator, "destination_port");
+        let protocol = indicator_str(&deposit.indicator, "protocol");
+        let raw_network_flow_node_id = if let (Some(source_ip), Some(destination_ip)) =
+            (&source_ip_value, &destination_ip_value)
+        {
+            let node_id = network_flow_node_id(
+                source_ip,
+                source_port,
+                destination_ip,
+                destination_port,
+                protocol.as_deref(),
+            );
+            self.graph
+                .upsert_node(KnowledgeGraphNode::NetworkFlow(NetworkFlowNode {
+                    node_id: node_id.clone(),
+                    source_ip: source_ip.clone(),
+                    source_port,
+                    destination_ip: destination_ip.clone(),
+                    destination_port,
+                    protocol: protocol.clone(),
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    observation_count: 1,
+                }));
+            Some(node_id)
+        } else {
+            None
+        };
+
+        let dns_resolution = extract_dns_resolution_observation(&deposit.indicator);
+        if let (Some(dns), Some(process_node), Some(flow_node)) = (
+            &dns_resolution,
+            &raw_process_node_id,
+            &raw_network_flow_node_id,
+        ) && destination_ip_value.as_deref() == Some(dns.resolved_ip.as_str())
+        {
+            self.graph
+                .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
+                    edge_id: format!(
+                        "causal:{}:{}:dns_resolution",
+                        sanitize_id(process_node),
+                        sanitize_id(flow_node)
+                    ),
+                    from_node_id: process_node.clone(),
+                    to_node_id: flow_node.clone(),
+                    relation: CausalRelation::DnsResolution,
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    occurrence_count: 1,
+                }));
+        }
+
+        if let (Some(process_node), Some(credential_node)) =
+            (&raw_process_node_id, &credential_subject_node_id)
+        {
+            self.graph
+                .upsert_edge(KnowledgeGraphEdge::Causal(CausalEdge {
+                    edge_id: format!(
+                        "causal:{}:{}:credential_access",
+                        sanitize_id(process_node),
+                        sanitize_id(credential_node)
+                    ),
+                    from_node_id: process_node.clone(),
+                    to_node_id: credential_node.clone(),
+                    relation: CausalRelation::CredentialAccess,
                     first_observed_at_ms: observed_at_ms,
                     last_observed_at_ms: observed_at_ms,
                     occurrence_count: 1,
@@ -527,6 +698,12 @@ impl SphinxAgent {
         }
     }
 
+    /// GRAPH-03 note: this stays a direct, single-hop read. It iterates
+    /// `engagements()` and, per engagement, does a single field lookup
+    /// (`attack_technique_for_node`/`entity_value_for_node`) against the ids
+    /// already stored on that engagement node — it never walks `edges` or
+    /// expands a node's neighbors, so it is not a second traversal
+    /// implementation alongside `KnowledgeGraphSnapshot::provenance_paths`.
     fn matching_contributions(
         &self,
         query: &SphinxMemoryQuery,
@@ -645,6 +822,38 @@ impl SphinxAgent {
             .map_err(internal_runtime_error)?;
         Ok(())
     }
+
+    /// GRAPH-06 defense-in-depth. `MemoryConfig::validate()` already rejects
+    /// `knowledge_retention_days == 0` whenever `memory.enabled` is true
+    /// (`swarm-core/src/config/state.rs`, tested by
+    /// `memory_requires_positive_retention_days_when_enabled`), so a config
+    /// that went through validation can never reach `tick()` with this
+    /// combination. This closes the gap for a `SwarmConfig` that reached
+    /// `SphinxAgent` WITHOUT going through validation (built and handed to
+    /// `SphinxAgent::new`/`new_with_signing_key` directly): rather than let
+    /// `KnowledgeGraphSnapshot::prune_stale`'s `retention_days == 0` no-op
+    /// run silently forever -- growing the knowledge graph unbounded despite
+    /// memory being "on" -- reaching this combination becomes a loud,
+    /// tested condition. `retention_days == 0` while memory is DISABLED is
+    /// left alone: nobody expects GC from a disabled memory subsystem, so
+    /// that is a legitimate no-op, not the footgun.
+    fn warn_if_retention_footgun_reachable(memory_enabled: bool, knowledge_retention_days: u64) {
+        let footgun_reachable = memory_enabled && knowledge_retention_days == 0;
+        debug_assert!(
+            !footgun_reachable,
+            "knowledge_retention_days == 0 reached SphinxAgent::tick() with memory.enabled; \
+             MemoryConfig::validate() should have rejected this configuration before it ever \
+             reached the runtime"
+        );
+        if footgun_reachable {
+            tracing::warn!(
+                target: "swarm_runtime::sphinx_agent",
+                "knowledge_retention_days is 0 while memory.enabled=true -- prune_stale will \
+                 no-op on every tick and the knowledge graph will grow unbounded; this \
+                 configuration should have been rejected by MemoryConfig::validate()"
+            );
+        }
+    }
 }
 
 #[async_trait]
@@ -718,6 +927,10 @@ impl SwarmAgent for SphinxAgent {
                 changed |= self.link_deception_interaction(&observation_id, deposit, &payload);
             }
         }
+        Self::warn_if_retention_footgun_reachable(
+            self.memory_enabled,
+            self.knowledge_retention_days,
+        );
         changed |= self
             .graph
             .prune_stale(env.now.saturating_mul(1000), self.knowledge_retention_days);
@@ -745,6 +958,9 @@ pub enum KnowledgeNodeKind {
     Entity,
     Engagement,
     DeceptionAsset,
+    Process,
+    File,
+    NetworkFlow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -770,6 +986,10 @@ pub enum EntityKind {
 pub enum CausalRelation {
     ProcessParentChild,
     NetworkFlowOrigin,
+    FileWrite,
+    FileExecute,
+    DnsResolution,
+    CredentialAccess,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -855,6 +1075,58 @@ pub struct DeceptionAssetNode {
     pub last_interaction_at_ms: Option<i64>,
 }
 
+/// Raw-telemetry process node: keyed by a process identity (pid / process-key)
+/// rather than the generic `EntityNode` process-name string. Distinct from
+/// `EngagementNode` (keyed by `observation_id`) and from `EntityNode`
+/// (keyed by a generic `(kind, value)` pair) — this carries the actual
+/// telemetry identifiers needed for fine-grained provenance traversal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessNode {
+    pub node_id: String,
+    pub process_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_line: Option<String>,
+    pub first_observed_at_ms: i64,
+    pub last_observed_at_ms: i64,
+    pub observation_count: usize,
+}
+
+/// Raw-telemetry file node: keyed by a filesystem path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileNode {
+    pub node_id: String,
+    pub file_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+    pub first_observed_at_ms: i64,
+    pub last_observed_at_ms: i64,
+    pub observation_count: usize,
+}
+
+/// Raw-telemetry network-flow node: keyed by the network 5-tuple
+/// (source/destination IP + port, protocol).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetworkFlowNode {
+    pub node_id: String,
+    pub source_ip: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_port: Option<u16>,
+    pub destination_ip: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    pub first_observed_at_ms: i64,
+    pub last_observed_at_ms: i64,
+    pub observation_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TemporalEdge {
     pub edge_id: String,
@@ -909,6 +1181,9 @@ pub enum KnowledgeGraphNode {
     Entity(EntityNode),
     Engagement(EngagementNode),
     DeceptionAsset(DeceptionAssetNode),
+    Process(ProcessNode),
+    File(FileNode),
+    NetworkFlow(NetworkFlowNode),
 }
 
 impl KnowledgeGraphNode {
@@ -919,6 +1194,9 @@ impl KnowledgeGraphNode {
             Self::Entity(node) => &node.node_id,
             Self::Engagement(node) => &node.node_id,
             Self::DeceptionAsset(node) => &node.node_id,
+            Self::Process(node) => &node.node_id,
+            Self::File(node) => &node.node_id,
+            Self::NetworkFlow(node) => &node.node_id,
         }
     }
 
@@ -929,6 +1207,9 @@ impl KnowledgeGraphNode {
             Self::Entity(_) => KnowledgeNodeKind::Entity,
             Self::Engagement(_) => KnowledgeNodeKind::Engagement,
             Self::DeceptionAsset(_) => KnowledgeNodeKind::DeceptionAsset,
+            Self::Process(_) => KnowledgeNodeKind::Process,
+            Self::File(_) => KnowledgeNodeKind::File,
+            Self::NetworkFlow(_) => KnowledgeNodeKind::NetworkFlow,
         }
     }
 
@@ -939,6 +1220,14 @@ impl KnowledgeGraphNode {
             Self::Entity(node) => node.value.clone(),
             Self::Engagement(node) => node.summary.clone(),
             Self::DeceptionAsset(node) => node.playbook_entry.clone(),
+            Self::Process(node) => node
+                .executable_path
+                .clone()
+                .unwrap_or_else(|| node.process_key.clone()),
+            Self::File(node) => node.file_path.clone(),
+            Self::NetworkFlow(node) => {
+                format!("{} -> {}", node.source_ip, node.destination_ip)
+            }
         }
     }
 
@@ -949,6 +1238,9 @@ impl KnowledgeGraphNode {
             Self::Entity(node) => node.last_observed_at_ms,
             Self::Engagement(node) => node.observed_at_ms,
             Self::DeceptionAsset(node) => node.last_observed_at_ms,
+            Self::Process(node) => node.last_observed_at_ms,
+            Self::File(node) => node.last_observed_at_ms,
+            Self::NetworkFlow(node) => node.last_observed_at_ms,
         }
     }
 }
@@ -1000,6 +1292,13 @@ impl KnowledgeGraphEdge {
         }
     }
 
+    /// Uniform `(from_node_id, to_node_id)` accessor covering all four edge
+    /// variants, so graph-traversal code (`KnowledgeGraphSnapshot::provenance_paths`)
+    /// never has to match on the edge kind just to find its endpoints.
+    fn endpoints(&self) -> (&str, &str) {
+        (self.from_node_id(), self.to_node_id())
+    }
+
     fn last_observed_at_ms(&self) -> i64 {
         match self {
             Self::Temporal(edge) => edge.last_observed_at_ms,
@@ -1009,6 +1308,25 @@ impl KnowledgeGraphEdge {
         }
     }
 }
+
+/// A bounded-hop path discovered by [`KnowledgeGraphSnapshot::provenance_paths`]:
+/// the ordered node ids visited (`node_ids[0] == from`, the last entry `==
+/// to`) and the edge ids crossed between each consecutive pair, in
+/// traversal order. `edge_ids.len() == node_ids.len() - 1`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenancePath {
+    pub node_ids: Vec<String>,
+    pub edge_ids: Vec<String>,
+}
+
+/// `node_id -> [(neighbor_node_id, edge_id), ...]`, the undirected adjacency
+/// list built by `KnowledgeGraphSnapshot::neighbor_index` for `provenance_paths`.
+type ProvenanceAdjacency<'a> = HashMap<&'a str, Vec<(&'a str, &'a str)>>;
+
+/// `node_id -> total incident-edge count`, the degree map built by
+/// `KnowledgeGraphSnapshot::neighbor_index` and checked against
+/// `KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP`.
+type ProvenanceDegree<'a> = HashMap<&'a str, usize>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KnowledgeGraphSnapshot {
@@ -1021,6 +1339,12 @@ pub struct KnowledgeGraphSnapshot {
 }
 
 impl KnowledgeGraphSnapshot {
+    /// GRAPH-03 hub-degree cap: a node whose total degree (every edge that
+    /// names it as either endpoint, counted without regard to direction)
+    /// exceeds this is never *expanded through* by `provenance_paths` — see
+    /// that method's doc comment for the full security rationale.
+    pub const PROVENANCE_HUB_DEGREE_CAP: usize = 32;
+
     pub fn new(temporal_window_secs: u64) -> Self {
         Self {
             schema_version: KNOWLEDGE_GRAPH_SCHEMA_VERSION,
@@ -1153,6 +1477,133 @@ impl KnowledgeGraphSnapshot {
             || edge_count_before != self.edges.len()
             || processed_before != self.processed_observation_ids.len()
     }
+
+    /// Builds, in one `O(edges)` pass, the undirected adjacency list and
+    /// total-degree map that back `provenance_paths`. Every edge variant is
+    /// read uniformly through `KnowledgeGraphEdge::endpoints()`. This is the
+    /// only place `edges` is walked to build a neighbor structure — the
+    /// shared private helper `provenance_paths` (the graph's SOLE traversal
+    /// API) relies on, so a second hand-rolled edge walk should never be
+    /// needed elsewhere in this file.
+    fn neighbor_index(&self) -> (ProvenanceAdjacency<'_>, ProvenanceDegree<'_>) {
+        let mut adjacency: ProvenanceAdjacency<'_> = HashMap::new();
+        let mut degree: ProvenanceDegree<'_> = HashMap::new();
+        for edge in &self.edges {
+            let (from, to) = edge.endpoints();
+            let edge_id = edge.edge_id();
+            adjacency.entry(from).or_default().push((to, edge_id));
+            adjacency.entry(to).or_default().push((from, edge_id));
+            *degree.entry(from).or_insert(0) += 1;
+            *degree.entry(to).or_insert(0) += 1;
+        }
+        (adjacency, degree)
+    }
+
+    /// Bounded-hop traversal over `edges`, returning the shortest path (as a
+    /// single-element `Vec`, or empty if none exists) from `from` to `to`
+    /// using at most `max_hops` edges. This is the graph's SOLE traversal
+    /// read path: every other multi-hop / neighbor-expanding read in this
+    /// file routes through this method (or its private `neighbor_index`
+    /// helper) rather than hand-rolling a second edge walk. (`matching_contributions`
+    /// stays a direct, single-hop field lookup over `engagements()` — it
+    /// never expands edges, so it is not a second traversal implementation.)
+    ///
+    /// **Directedness.** Edges are traversed as UNDIRECTED: a path may cross
+    /// any edge in either direction regardless of its recorded
+    /// `from_node_id`/`to_node_id`. `provenance_paths` answers "are these two
+    /// graph nodes connected within N hops" — the question `CorrelationEngine`
+    /// needs to ask when deciding whether two hunts share provenance — not
+    /// "replay this causal chain in recorded order". Each edge's own
+    /// `from_node_id`/`to_node_id` still records its original direction for
+    /// audit fidelity; this traversal simply doesn't require walking it that
+    /// way. (A future consumer that needs directed causal replay should add
+    /// a separate, explicitly-directed method rather than repurpose this
+    /// one.)
+    ///
+    /// **Hub-degree cap — the GRAPH-03 security property.** Before a node
+    /// reached mid-search (i.e. not the initial `from` node) is expanded to
+    /// its own neighbors, its total degree (from `neighbor_index`) is
+    /// checked against `PROVENANCE_HUB_DEGREE_CAP`. A node over the cap is
+    /// never expanded through: it can still be *reached* — as the final
+    /// `to` node of a path, or simply visited — but the search will not step
+    /// onward from it to its other neighbors. This is what stops a shared
+    /// high-degree hub (a popular host, a common egress IP, a widely-cited
+    /// attack technique, ...) from silently bridging two otherwise-unrelated
+    /// hunt subgraphs into one connected provenance chain. The initial
+    /// `from` node is exempt from this check for its own first expansion —
+    /// it is the query's own explicit starting point, not a hub the search
+    /// wandered into — but every node discovered thereafter is capped, so a
+    /// hub can never be used as a waypoint.
+    pub fn provenance_paths(&self, from: &str, to: &str, max_hops: usize) -> Vec<ProvenancePath> {
+        if from == to {
+            return vec![ProvenancePath {
+                node_ids: vec![from.to_string()],
+                edge_ids: Vec::new(),
+            }];
+        }
+
+        let (adjacency, degree) = self.neighbor_index();
+        let empty_neighbors: Vec<(&str, &str)> = Vec::new();
+
+        let mut parents: HashMap<&str, (&str, &str)> = HashMap::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        seen.insert(from);
+        let mut frontier: VecDeque<(&str, usize)> = VecDeque::new();
+        frontier.push_back((from, 0));
+
+        while let Some((node_id, hops)) = frontier.pop_front() {
+            if hops >= max_hops {
+                continue;
+            }
+            if hops > 0
+                && degree.get(node_id).copied().unwrap_or(0) > Self::PROVENANCE_HUB_DEGREE_CAP
+            {
+                // Hub cap: this node was reached mid-search, not supplied as
+                // `from` — refuse to expand through it.
+                continue;
+            }
+            for &(neighbor, edge_id) in adjacency.get(node_id).unwrap_or(&empty_neighbors) {
+                if seen.contains(neighbor) {
+                    continue;
+                }
+                seen.insert(neighbor);
+                parents.insert(neighbor, (node_id, edge_id));
+                if neighbor == to {
+                    return vec![reconstruct_provenance_path(from, to, &parents)];
+                }
+                frontier.push_back((neighbor, hops + 1));
+            }
+        }
+
+        Vec::new()
+    }
+}
+
+/// Walks `parents` backward from `to` to `from` to rebuild the ordered path
+/// discovered by `KnowledgeGraphSnapshot::provenance_paths`'s BFS.
+fn reconstruct_provenance_path(
+    from: &str,
+    to: &str,
+    parents: &HashMap<&str, (&str, &str)>,
+) -> ProvenancePath {
+    let mut node_ids = vec![to.to_string()];
+    let mut edge_ids = Vec::new();
+    let mut current = to;
+    while current != from {
+        // Every node this is called with (via `provenance_paths`) was just
+        // inserted into `parents` along with its whole ancestor chain back
+        // to `from`, so `get` always succeeds here; `else { break }` keeps
+        // this panic-free by construction rather than by an unwrap/expect.
+        let Some(&(parent, edge_id)) = parents.get(current) else {
+            break;
+        };
+        edge_ids.push(edge_id.to_string());
+        node_ids.push(parent.to_string());
+        current = parent;
+    }
+    node_ids.reverse();
+    edge_ids.reverse();
+    ProvenancePath { node_ids, edge_ids }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1463,6 +1914,36 @@ struct EntityObservation {
     value: String,
 }
 
+/// Raw process-identity facts pulled directly off the indicator payload
+/// (pid / process-key), as opposed to the generic process-name `EntityObservation`.
+#[derive(Debug, Clone)]
+struct ProcessObservation {
+    process_key: String,
+    pid: Option<i64>,
+    host_id: Option<String>,
+    executable_path: Option<String>,
+    command_line: Option<String>,
+}
+
+/// Raw file-event facts: a concrete path plus the operation performed on it
+/// (e.g. "write" / "execute"), used to emit `CausalRelation::FileWrite` /
+/// `CausalRelation::FileExecute`.
+#[derive(Debug, Clone)]
+struct FileEventObservation {
+    file_path: String,
+    operation: Option<String>,
+    host_id: Option<String>,
+}
+
+/// A DNS query/answer pair, used to emit `CausalRelation::DnsResolution`
+/// when paired with a raw process and network-flow node. The query name is
+/// required to be present (it is what makes this a DNS fact) but is not
+/// itself needed to build the edge, so only the resolved answer is kept.
+#[derive(Debug, Clone)]
+struct DnsResolutionObservation {
+    resolved_ip: String,
+}
+
 fn merge_node(target: &mut KnowledgeGraphNode, incoming: KnowledgeGraphNode) {
     match (target, incoming) {
         (
@@ -1545,6 +2026,48 @@ fn merge_node(target: &mut KnowledgeGraphNode, incoming: KnowledgeGraphNode) {
                 .last_interaction_at_ms
                 .max(incoming.last_interaction_at_ms);
         }
+        (KnowledgeGraphNode::Process(target), KnowledgeGraphNode::Process(incoming)) => {
+            target.first_observed_at_ms = target
+                .first_observed_at_ms
+                .min(incoming.first_observed_at_ms);
+            target.last_observed_at_ms =
+                target.last_observed_at_ms.max(incoming.last_observed_at_ms);
+            target.observation_count += incoming.observation_count;
+            if incoming.pid.is_some() {
+                target.pid = incoming.pid;
+            }
+            if target.host_id.is_none() {
+                target.host_id = incoming.host_id;
+            }
+            if target.executable_path.is_none() {
+                target.executable_path = incoming.executable_path;
+            }
+            if target.command_line.is_none() {
+                target.command_line = incoming.command_line;
+            }
+        }
+        (KnowledgeGraphNode::File(target), KnowledgeGraphNode::File(incoming)) => {
+            target.first_observed_at_ms = target
+                .first_observed_at_ms
+                .min(incoming.first_observed_at_ms);
+            target.last_observed_at_ms =
+                target.last_observed_at_ms.max(incoming.last_observed_at_ms);
+            target.observation_count += incoming.observation_count;
+            if target.host_id.is_none() {
+                target.host_id = incoming.host_id;
+            }
+        }
+        (KnowledgeGraphNode::NetworkFlow(target), KnowledgeGraphNode::NetworkFlow(incoming)) => {
+            target.first_observed_at_ms = target
+                .first_observed_at_ms
+                .min(incoming.first_observed_at_ms);
+            target.last_observed_at_ms =
+                target.last_observed_at_ms.max(incoming.last_observed_at_ms);
+            target.observation_count += incoming.observation_count;
+            if target.protocol.is_none() {
+                target.protocol = incoming.protocol;
+            }
+        }
         (target, incoming) => *target = incoming,
     }
 }
@@ -1602,6 +2125,7 @@ fn extract_entities(indicator: &Value) -> Vec<EntityObservation> {
         ("destination_ip", EntityKind::IpAddress),
         ("remote_ip", EntityKind::IpAddress),
         ("ip_address", EntityKind::IpAddress),
+        ("credential_subject", EntityKind::User),
     ];
 
     for (field, kind) in candidates {
@@ -1623,6 +2147,64 @@ fn extract_entities(indicator: &Value) -> Vec<EntityObservation> {
         });
     }
     entities
+}
+
+/// Trim+fetch a string field off an indicator payload, treating blank strings
+/// as absent (matches the convention already used by `observation_summary`,
+/// `observation_timestamp_ms`, and `observation_id`).
+fn indicator_str(indicator: &Value, field: &str) -> Option<String> {
+    indicator
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn indicator_port(indicator: &Value, field: &str) -> Option<u16> {
+    indicator
+        .get(field)
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+}
+
+/// Raw process-identity facts (pid / process-key), distinct from the
+/// generic process-name `EntityObservation`. Requires a `pid` or an
+/// explicit `process_key` — without one there is no stable raw identifier
+/// to key a `ProcessNode` on.
+fn extract_process_observation(indicator: &Value) -> Option<ProcessObservation> {
+    let pid = indicator.get("pid").and_then(Value::as_i64);
+    let process_key =
+        indicator_str(indicator, "process_key").or_else(|| pid.map(|pid| format!("pid:{pid}")))?;
+    Some(ProcessObservation {
+        process_key,
+        pid,
+        host_id: indicator_str(indicator, "host_id"),
+        executable_path: indicator_str(indicator, "executable_path"),
+        command_line: indicator_str(indicator, "command_line"),
+    })
+}
+
+/// A concrete file-path fact plus the operation performed on it. Requires
+/// `file_path` — the operation is optional context used to pick between
+/// `CausalRelation::FileWrite` / `CausalRelation::FileExecute`.
+fn extract_file_event_observation(indicator: &Value) -> Option<FileEventObservation> {
+    let file_path = indicator_str(indicator, "file_path")?;
+    Some(FileEventObservation {
+        file_path,
+        operation: indicator_str(indicator, "file_operation"),
+        host_id: indicator_str(indicator, "host_id"),
+    })
+}
+
+/// A DNS query/answer fact. Requires both `dns_query_name` and
+/// `dns_resolved_ip` — a resolution is only a resolution once it has an
+/// answer, and requiring the query name too rules out an observation that
+/// merely happens to carry a bare IP under this field name.
+fn extract_dns_resolution_observation(indicator: &Value) -> Option<DnsResolutionObservation> {
+    indicator_str(indicator, "dns_query_name")?;
+    let resolved_ip = indicator_str(indicator, "dns_resolved_ip")?;
+    Some(DnsResolutionObservation { resolved_ip })
 }
 
 fn extract_attack_techniques(deposit: &PheromoneDeposit) -> Vec<AttackTechniqueObservation> {
@@ -1946,6 +2528,34 @@ fn technique_node_id(technique_id: &str) -> String {
     )
 }
 
+fn process_key_node_id(process_key: &str) -> String {
+    format!("process:{}", sanitize_id(&process_key.to_ascii_lowercase()))
+}
+
+fn file_node_id(file_path: &str) -> String {
+    format!("file:{}", sanitize_id(&file_path.to_ascii_lowercase()))
+}
+
+fn network_flow_node_id(
+    source_ip: &str,
+    source_port: Option<u16>,
+    destination_ip: &str,
+    destination_port: Option<u16>,
+    protocol: Option<&str>,
+) -> String {
+    format!(
+        "network_flow:{}",
+        sanitize_id(&format!(
+            "{}_{}_{}_{}_{}",
+            source_ip.to_ascii_lowercase(),
+            source_port.unwrap_or_default(),
+            destination_ip.to_ascii_lowercase(),
+            destination_port.unwrap_or_default(),
+            protocol.unwrap_or_default().to_ascii_lowercase(),
+        ))
+    )
+}
+
 fn sanitize_id(raw: &str) -> String {
     let mut sanitized = String::with_capacity(raw.len());
     for ch in raw.chars() {
@@ -2124,9 +2734,10 @@ fn signed_memory_query_deposit(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        DeceptionAssetNode, EntityKind, FileKnowledgeGraphStore, KnowledgeEdgeKind,
-        KnowledgeGraphNode, KnowledgeNodeKind, SphinxAgent, parse_memory_query,
-        signed_memory_query_deposit,
+        CausalEdge, CausalRelation, DeceptionAssetNode, EntityEdge, EntityKind, EntityNode,
+        FileKnowledgeGraphStore, KnowledgeEdgeKind, KnowledgeGraphEdge, KnowledgeGraphNode,
+        KnowledgeGraphSnapshot, KnowledgeNodeKind, SphinxAgent, entity_node_id, file_node_id,
+        network_flow_node_id, parse_memory_query, process_key_node_id, signed_memory_query_deposit,
     };
     use crate::AgentTickBoundaryError;
     use crate::calico_agent::{
@@ -2245,6 +2856,41 @@ mod tests {
             threat_class: ThreatClass::Execution,
             severity: Severity::High,
             confidence: 0.97,
+            timestamp,
+            decay_half_life: 3_600.0,
+            agent_id: AgentId::new("whisker", "primary"),
+            agent_identity: String::new(),
+            agent_role: None,
+            signature: Vec::new(),
+            agent_key: Vec::new(),
+        }
+    }
+
+    /// Builds a deposit carrying only `event_id` + `observed_at_ms` plus
+    /// whatever raw-telemetry fields the caller layers in via `extra`. Used
+    /// by the GRAPH-01/02 tests to prove the new node/edge kinds are
+    /// strictly opt-in: an observation without these fields (every existing
+    /// fixture) produces none of the new nodes or relations.
+    fn raw_telemetry_pheromone(
+        event_id: &str,
+        timestamp: i64,
+        extra: serde_json::Value,
+    ) -> PheromoneDeposit {
+        let mut indicator = serde_json::json!({
+            "event_id": event_id,
+            "observed_at_ms": timestamp * 1000,
+        });
+        if let (Some(base), Some(extra_fields)) = (indicator.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra_fields {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+        PheromoneDeposit {
+            schema_version: PheromoneDeposit::current_schema_version(),
+            indicator,
+            threat_class: ThreatClass::Execution,
+            severity: Severity::High,
+            confidence: 0.9,
             timestamp,
             decay_half_life: 3_600.0,
             agent_id: AgentId::new("whisker", "primary"),
@@ -3040,5 +3686,873 @@ mod tests {
         assert!(node_paths.iter().all(|name| !name.contains("stale")));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_persists_raw_provenance_nodes_across_restart() {
+        let root = temp_root("raw-provenance");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let deposit = raw_telemetry_pheromone(
+            "evt-raw-1",
+            1_800_900_000,
+            serde_json::json!({
+                "pid": 4821,
+                "host_id": "host-raw",
+                "executable_path": "/usr/bin/curl",
+                "command_line": "curl https://example.com",
+                "file_path": "/tmp/payload.bin",
+                "file_operation": "write",
+                "source_ip": "10.1.1.5",
+                "destination_ip": "203.0.113.9",
+                "source_port": 51_000,
+                "destination_port": 443,
+                "protocol": "tcp",
+            }),
+        );
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(vec![deposit.clone()], 1_800_900_001))
+            .await
+            .expect("sphinx tick should persist raw provenance nodes");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process = snapshot
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                KnowledgeGraphNode::Process(process) => Some(process.clone()),
+                _ => None,
+            })
+            .expect("process node should persist");
+        assert_eq!(process.pid, Some(4821));
+        assert_eq!(process.process_key, "pid:4821");
+        assert_eq!(process.host_id, Some("host-raw".to_string()));
+        assert_eq!(process.executable_path, Some("/usr/bin/curl".to_string()));
+
+        let file = snapshot
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                KnowledgeGraphNode::File(file) => Some(file.clone()),
+                _ => None,
+            })
+            .expect("file node should persist");
+        assert_eq!(file.file_path, "/tmp/payload.bin");
+
+        let flow = snapshot
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                KnowledgeGraphNode::NetworkFlow(flow) => Some(flow.clone()),
+                _ => None,
+            })
+            .expect("network flow node should persist");
+        assert_eq!(flow.source_ip, "10.1.1.5");
+        assert_eq!(flow.destination_ip, "203.0.113.9");
+        assert_eq!(flow.source_port, Some(51_000));
+        assert_eq!(flow.destination_port, Some(443));
+        assert_eq!(flow.protocol, Some("tcp".to_string()));
+
+        let node_kinds = snapshot
+            .nodes
+            .iter()
+            .map(KnowledgeGraphNode::kind)
+            .collect::<Vec<_>>();
+        assert!(node_kinds.contains(&KnowledgeNodeKind::Process));
+        assert!(node_kinds.contains(&KnowledgeNodeKind::File));
+        assert!(node_kinds.contains(&KnowledgeNodeKind::NetworkFlow));
+
+        let mut restarted = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should restore raw provenance nodes");
+        restarted
+            .tick(&env(vec![deposit], 1_800_900_002))
+            .await
+            .expect("duplicate observation should not fail");
+
+        let restored = store
+            .load_snapshot()
+            .expect("snapshot should reload")
+            .expect("snapshot should still exist");
+        assert_eq!(snapshot.nodes.len(), restored.nodes.len());
+        assert_eq!(snapshot.edges.len(), restored.edges.len());
+        assert_eq!(
+            restored
+                .nodes
+                .iter()
+                .find_map(|node| match node {
+                    KnowledgeGraphNode::Process(process) => Some(process.clone()),
+                    _ => None,
+                })
+                .expect("process node should survive restart"),
+            process
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_file_write_relation_when_observation_carries_a_write() {
+        let root = temp_root("file-write");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-write-1",
+                    1_800_910_000,
+                    serde_json::json!({
+                        "pid": 501,
+                        "file_path": "/tmp/out.dat",
+                        "file_operation": "write",
+                    }),
+                )],
+                1_800_910_001,
+            ))
+            .await
+            .expect("sphinx tick should emit a file-write relation");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process_id = process_key_node_id("pid:501");
+        let file_id = file_node_id("/tmp/out.dat");
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::FileWrite,
+                from_node_id,
+                to_node_id,
+                ..
+            }) if from_node_id == &process_id && to_node_id == &file_id
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_file_execute_relation_when_observation_carries_an_execute() {
+        let root = temp_root("file-execute");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-execute-1",
+                    1_800_920_000,
+                    serde_json::json!({
+                        "pid": 502,
+                        "file_path": "/tmp/payload.exe",
+                        "file_operation": "execute",
+                    }),
+                )],
+                1_800_920_001,
+            ))
+            .await
+            .expect("sphinx tick should emit a file-execute relation");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process_id = process_key_node_id("pid:502");
+        let file_id = file_node_id("/tmp/payload.exe");
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::FileExecute,
+                from_node_id,
+                to_node_id,
+                ..
+            }) if from_node_id == &file_id && to_node_id == &process_id
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_dns_resolution_relation_when_observation_carries_a_resolution() {
+        let root = temp_root("dns-resolution");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-dns-1",
+                    1_800_930_000,
+                    serde_json::json!({
+                        "pid": 601,
+                        "source_ip": "10.1.1.7",
+                        "destination_ip": "93.184.216.34",
+                        "dns_query_name": "example.com",
+                        "dns_resolved_ip": "93.184.216.34",
+                    }),
+                )],
+                1_800_930_001,
+            ))
+            .await
+            .expect("sphinx tick should emit a dns-resolution relation");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process_id = process_key_node_id("pid:601");
+        let flow_id = network_flow_node_id("10.1.1.7", None, "93.184.216.34", None, None);
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::DnsResolution,
+                from_node_id,
+                to_node_id,
+                ..
+            }) if from_node_id == &process_id && to_node_id == &flow_id
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_credential_access_relation_when_observation_carries_the_fact() {
+        let root = temp_root("credential-access");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-cred-1",
+                    1_800_940_000,
+                    serde_json::json!({
+                        "pid": 701,
+                        "credential_subject": "svc-backup",
+                    }),
+                )],
+                1_800_940_001,
+            ))
+            .await
+            .expect("sphinx tick should emit a credential-access relation");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let process_id = process_key_node_id("pid:701");
+        let credential_id = entity_node_id(EntityKind::User, "svc-backup");
+        assert!(snapshot.edges.iter().any(|edge| matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::CredentialAccess,
+                from_node_id,
+                to_node_id,
+                ..
+            }) if from_node_id == &process_id && to_node_id == &credential_id
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn sphinx_agent_emits_no_raw_provenance_nodes_for_observations_without_raw_fields() {
+        let root = temp_root("no-raw-provenance");
+        let mut config = load_config(config_path()).unwrap();
+        configure_memory(&mut config, &root);
+
+        let mut agent = SphinxAgent::new_with_signing_key(
+            AgentId::new("sphinx", "primary"),
+            test_signing_key(),
+            config_path(),
+            config.clone(),
+            substrate(&config),
+        )
+        .expect("sphinx agent should initialize");
+        agent
+            .tick(&env(
+                vec![raw_telemetry_pheromone(
+                    "evt-plain-1",
+                    1_800_950_000,
+                    serde_json::json!({}),
+                )],
+                1_800_950_001,
+            ))
+            .await
+            .expect("sphinx tick should persist graph state");
+
+        let store = FileKnowledgeGraphStore::open(root.join("knowledge-graph")).unwrap();
+        let snapshot = store
+            .load_snapshot()
+            .expect("snapshot should load")
+            .expect("snapshot should exist");
+
+        let node_kinds = snapshot
+            .nodes
+            .iter()
+            .map(KnowledgeGraphNode::kind)
+            .collect::<Vec<_>>();
+        assert!(!node_kinds.contains(&KnowledgeNodeKind::Process));
+        assert!(!node_kinds.contains(&KnowledgeNodeKind::File));
+        assert!(!node_kinds.contains(&KnowledgeNodeKind::NetworkFlow));
+        assert!(snapshot.edges.iter().all(|edge| !matches!(
+            edge,
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                relation: CausalRelation::FileWrite
+                    | CausalRelation::FileExecute
+                    | CausalRelation::DnsResolution
+                    | CausalRelation::CredentialAccess,
+                ..
+            })
+        )));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn provenance_edge(edge_id: &str, from: &str, to: &str) -> KnowledgeGraphEdge {
+        KnowledgeGraphEdge::Entity(EntityEdge {
+            edge_id: edge_id.to_string(),
+            from_node_id: from.to_string(),
+            to_node_id: to.to_string(),
+            role: "test".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        })
+    }
+
+    fn graph_with_edges(edges: Vec<KnowledgeGraphEdge>) -> KnowledgeGraphSnapshot {
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        for edge in edges {
+            graph.upsert_edge(edge);
+        }
+        graph
+    }
+
+    #[test]
+    fn provenance_paths_finds_a_path_within_max_hops() {
+        let graph = graph_with_edges(vec![
+            provenance_edge("e1", "a", "b"),
+            provenance_edge("e2", "b", "c"),
+        ]);
+
+        let paths = graph.provenance_paths("a", "c", 2);
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].node_ids, vec!["a", "b", "c"]);
+        assert_eq!(paths[0].edge_ids, vec!["e1", "e2"]);
+    }
+
+    #[test]
+    fn provenance_paths_does_not_return_a_path_exceeding_max_hops() {
+        let graph = graph_with_edges(vec![
+            provenance_edge("e1", "a", "b"),
+            provenance_edge("e2", "b", "c"),
+        ]);
+
+        assert!(graph.provenance_paths("a", "c", 1).is_empty());
+        // A direct one-hop path is still found at the boundary.
+        assert_eq!(graph.provenance_paths("a", "b", 1).len(), 1);
+    }
+
+    #[test]
+    fn provenance_paths_treats_edges_as_undirected() {
+        // `provenance_edge` records b -> c, but a query from c back to b
+        // should still find it -- provenance_paths is documented to
+        // traverse undirected.
+        let graph = graph_with_edges(vec![provenance_edge("e1", "b", "c")]);
+
+        let paths = graph.provenance_paths("c", "b", 1);
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].node_ids, vec!["c", "b"]);
+        assert_eq!(paths[0].edge_ids, vec!["e1"]);
+    }
+
+    /// The GRAPH-03 security property: a hub node whose degree exceeds
+    /// `PROVENANCE_HUB_DEGREE_CAP` must not be usable as a bridge that
+    /// connects two otherwise-unrelated hunt subgraphs, even though a path
+    /// plainly exists through it if the hub were freely traversable.
+    #[test]
+    fn provenance_paths_hub_degree_cap_prevents_bridging_unrelated_hunt_subgraphs() {
+        let mut edges = vec![
+            // Subgraph A: hunt-a-1 -- hunt-a-2 -- hub
+            provenance_edge("a-edge-1", "hunt-a-1", "hunt-a-2"),
+            provenance_edge("a-edge-2", "hunt-a-2", "hub"),
+            // Subgraph B: hub -- hunt-b-1 -- hunt-b-2
+            provenance_edge("b-edge-1", "hub", "hunt-b-1"),
+            provenance_edge("b-edge-2", "hunt-b-1", "hunt-b-2"),
+        ];
+        // Inflate the hub's degree well past the cap with filler edges, the
+        // way a real shared host or popular egress IP accumulates edges
+        // across many unrelated engagements over time.
+        for i in 0..(KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP + 5) {
+            edges.push(provenance_edge(
+                &format!("filler-edge-{i}"),
+                "hub",
+                &format!("filler-node-{i}"),
+            ));
+        }
+        let graph = graph_with_edges(edges);
+
+        // Sanity check: the hub really is over the cap.
+        let hub_degree = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                let (from, to) = edge.endpoints();
+                from == "hub" || to == "hub"
+            })
+            .count();
+        assert!(hub_degree > KnowledgeGraphSnapshot::PROVENANCE_HUB_DEGREE_CAP);
+
+        // The security property itself: no path bridges the two subgraphs
+        // through the over-cap hub.
+        assert!(
+            graph.provenance_paths("hunt-a-1", "hunt-b-1", 4).is_empty(),
+            "hub-degree cap should have prevented bridging unrelated hunt subgraphs through a shared hub"
+        );
+        assert!(graph.provenance_paths("hunt-a-1", "hunt-b-2", 5).is_empty());
+
+        // A legitimate within-subgraph path is unaffected by the cap.
+        let within_subgraph = graph.provenance_paths("hunt-a-1", "hunt-a-2", 1);
+        assert_eq!(within_subgraph.len(), 1);
+        assert_eq!(within_subgraph[0].node_ids, vec!["hunt-a-1", "hunt-a-2"]);
+
+        // The hub can still be *reached* as an endpoint -- it just cannot
+        // be traversed THROUGH to reach the other subgraph.
+        let to_hub = graph.provenance_paths("hunt-a-1", "hub", 2);
+        assert_eq!(to_hub.len(), 1);
+        assert_eq!(to_hub[0].node_ids, vec!["hunt-a-1", "hunt-a-2", "hub"]);
+    }
+
+    #[test]
+    fn provenance_paths_returns_empty_when_no_path_exists() {
+        let graph = graph_with_edges(vec![
+            provenance_edge("e1", "a", "b"),
+            provenance_edge("e2", "x", "y"),
+        ]);
+
+        assert!(graph.provenance_paths("a", "y", 5).is_empty());
+    }
+
+    #[test]
+    fn provenance_paths_returns_trivial_path_when_from_equals_to() {
+        let graph = graph_with_edges(vec![provenance_edge("e1", "a", "b")]);
+
+        let paths = graph.provenance_paths("a", "a", 0);
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].node_ids, vec!["a"]);
+        assert!(paths[0].edge_ids.is_empty());
+    }
+
+    /// GRAPH-04/05/06: `prune_stale`'s GC bounding + retention-footgun tests.
+    /// A nested module (rather than more top-level `tests` items) so the
+    /// proptest-only imports (`proptest::prelude::*`) stay scoped to the code
+    /// that actually needs them. `use super::*` inherits every helper this
+    /// module's parent (`tests`) already defines -- `env`, `configure_memory`,
+    /// `temp_root`, `config_path`, `substrate`, `test_signing_key`, the
+    /// `KnowledgeGraphSnapshot`/`KnowledgeGraphNode`/... imports, etc.
+    mod graph_gc {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::BTreeSet;
+
+        /// A minimal, generic-shape node for GC testing: `prune_stale` only
+        /// ever inspects a node through the kind-agnostic `node_id()` /
+        /// `last_observed_at_ms()` accessors, so an `EntityNode` exercises
+        /// exactly the same GC code path any other `KnowledgeGraphNode`
+        /// variant would.
+        fn synthetic_entity_node(
+            node_id: impl Into<String>,
+            last_observed_at_ms: i64,
+        ) -> KnowledgeGraphNode {
+            let node_id = node_id.into();
+            KnowledgeGraphNode::Entity(EntityNode {
+                node_id: node_id.clone(),
+                entity_kind: EntityKind::Host,
+                value: node_id,
+                first_observed_at_ms: last_observed_at_ms,
+                last_observed_at_ms,
+                observation_count: 1,
+            })
+        }
+
+        fn synthetic_causal_edge(
+            edge_id: impl Into<String>,
+            from_node_id: impl Into<String>,
+            to_node_id: impl Into<String>,
+            last_observed_at_ms: i64,
+        ) -> KnowledgeGraphEdge {
+            KnowledgeGraphEdge::Causal(CausalEdge {
+                edge_id: edge_id.into(),
+                from_node_id: from_node_id.into(),
+                to_node_id: to_node_id.into(),
+                relation: CausalRelation::ProcessParentChild,
+                first_observed_at_ms: last_observed_at_ms,
+                last_observed_at_ms,
+                occurrence_count: 1,
+            })
+        }
+
+        /// Mirrors `KnowledgeGraphSnapshot::prune_stale`'s own cutoff
+        /// arithmetic, so these tests check the GRAPH-04 in-window-survives
+        /// invariant against the exact cutoff `prune_stale` computes rather
+        /// than an approximation of it.
+        fn retention_cutoff_ms(now_ms: i64, retention_days: u64) -> i64 {
+            let retention_window_ms = retention_days.saturating_mul(86_400_000_u64);
+            now_ms.saturating_sub(retention_window_ms.min(i64::MAX as u64) as i64)
+        }
+
+        #[derive(Debug, Clone)]
+        enum PruneStaleOp {
+            InsertNode {
+                last_observed_offset_ms: i64,
+            },
+            InsertEdge {
+                from_seed: usize,
+                to_seed: usize,
+                last_observed_offset_ms: i64,
+            },
+            AdvanceClock {
+                delta_ms: i64,
+            },
+            Prune,
+        }
+
+        fn prune_stale_op_strategy() -> impl Strategy<Value = PruneStaleOp> {
+            prop_oneof![
+                3 => (-20_000_000i64..=0).prop_map(|last_observed_offset_ms| {
+                    PruneStaleOp::InsertNode { last_observed_offset_ms }
+                }),
+                3 => (0usize..64, 0usize..64, -20_000_000i64..=0).prop_map(
+                    |(from_seed, to_seed, last_observed_offset_ms)| PruneStaleOp::InsertEdge {
+                        from_seed,
+                        to_seed,
+                        last_observed_offset_ms,
+                    }
+                ),
+                2 => (0i64..=(10 * 86_400_000i64))
+                    .prop_map(|delta_ms| PruneStaleOp::AdvanceClock { delta_ms }),
+                2 => Just(PruneStaleOp::Prune),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// GRAPH-04: 256 (>= the required 200) randomized sequences of
+            /// `(insert node, insert edge, advance clock, prune_stale)`,
+            /// asserting after every `prune_stale` call that: (a) no
+            /// surviving edge references a node that was pruned (no
+            /// orphan); (b) no record whose `last_observed_at_ms` is still
+            /// inside the retention window was deleted; (c) an immediate
+            /// second `prune_stale` call with the same `(now_ms,
+            /// retention_days)` changes nothing (idempotent). If this ever
+            /// fails, it is reporting a real `prune_stale` bug, not a test
+            /// artifact -- the oracle sets below are computed from
+            /// `prune_stale`'s own documented cutoff formula and the
+            /// edge-orphan contract it already implements.
+            #[test]
+            fn prune_stale_never_orphans_edges_or_evicts_in_window_records_and_is_idempotent(
+                ops in prop::collection::vec(prune_stale_op_strategy(), 1..40),
+                retention_days in 1u64..30,
+            ) {
+                let mut graph = KnowledgeGraphSnapshot::new(3_600);
+                let mut now_ms: i64 = 0;
+                let mut node_counter: u64 = 0;
+                let mut edge_counter: u64 = 0;
+
+                for op in ops {
+                    match op {
+                        PruneStaleOp::InsertNode { last_observed_offset_ms } => {
+                            node_counter += 1;
+                            let node_id = format!("node-{node_counter}");
+                            let last_observed_at_ms = now_ms.saturating_add(last_observed_offset_ms);
+                            graph.nodes.push(synthetic_entity_node(node_id, last_observed_at_ms));
+                        }
+                        PruneStaleOp::InsertEdge { from_seed, to_seed, last_observed_offset_ms } => {
+                            if graph.nodes.is_empty() {
+                                continue;
+                            }
+                            let from = graph.nodes[from_seed % graph.nodes.len()].node_id().to_string();
+                            let to = graph.nodes[to_seed % graph.nodes.len()].node_id().to_string();
+                            edge_counter += 1;
+                            let edge_id = format!("edge-{edge_counter}");
+                            let last_observed_at_ms = now_ms.saturating_add(last_observed_offset_ms);
+                            graph.edges.push(synthetic_causal_edge(edge_id, from, to, last_observed_at_ms));
+                        }
+                        PruneStaleOp::AdvanceClock { delta_ms } => {
+                            now_ms = now_ms.saturating_add(delta_ms);
+                        }
+                        PruneStaleOp::Prune => {
+                            let cutoff_ms = retention_cutoff_ms(now_ms, retention_days);
+
+                            let must_survive_nodes: BTreeSet<String> = graph
+                                .nodes
+                                .iter()
+                                .filter(|node| node.last_observed_at_ms() >= cutoff_ms)
+                                .map(|node| node.node_id().to_string())
+                                .collect();
+                            let must_survive_edges: BTreeSet<String> = graph
+                                .edges
+                                .iter()
+                                .filter(|edge| {
+                                    edge.last_observed_at_ms() >= cutoff_ms
+                                        && must_survive_nodes.contains(edge.from_node_id())
+                                        && must_survive_nodes.contains(edge.to_node_id())
+                                })
+                                .map(|edge| edge.edge_id().to_string())
+                                .collect();
+
+                            graph.prune_stale(now_ms, retention_days);
+
+                            let post_node_ids: BTreeSet<String> =
+                                graph.nodes.iter().map(|node| node.node_id().to_string()).collect();
+                            let post_edge_ids: BTreeSet<String> =
+                                graph.edges.iter().map(|edge| edge.edge_id().to_string()).collect();
+
+                            // (a) no orphan edges.
+                            for edge in &graph.edges {
+                                prop_assert!(post_node_ids.contains(edge.from_node_id()));
+                                prop_assert!(post_node_ids.contains(edge.to_node_id()));
+                            }
+
+                            // (b) in-window records survive.
+                            for node_id in &must_survive_nodes {
+                                prop_assert!(post_node_ids.contains(node_id));
+                            }
+                            for edge_id in &must_survive_edges {
+                                prop_assert!(post_edge_ids.contains(edge_id));
+                            }
+
+                            // (c) idempotent: an immediate second prune changes nothing.
+                            let nodes_before_second = graph.nodes.len();
+                            let edges_before_second = graph.edges.len();
+                            let second_changed = graph.prune_stale(now_ms, retention_days);
+                            prop_assert!(!second_changed);
+                            prop_assert_eq!(graph.nodes.len(), nodes_before_second);
+                            prop_assert_eq!(graph.edges.len(), edges_before_second);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// GRAPH-05 soak test. One synthetic event lands every
+        /// `SOAK_EVENT_STEP_MS` of simulated clock time.
+        const SOAK_EVENT_STEP_MS: i64 = 1_000;
+
+        /// Deliberately tight (1 day) so a `SOAK_EVENT_COUNT`-event soak --
+        /// which spans `SOAK_EVENT_COUNT * SOAK_EVENT_STEP_MS` ==
+        /// 100_000_000ms =~ 27.8h of simulated time -- outgrows the window
+        /// partway through and forces `prune_stale` to actually evict
+        /// records, not merely to run.
+        const SOAK_RETENTION_DAYS: u64 = 1;
+
+        const SOAK_EVENT_COUNT: usize = 100_000;
+
+        /// GC sweep cadence during the soak, mirroring
+        /// `SphinxAgent::tick()` calling `prune_stale` once per batch of
+        /// processed pheromones rather than once per individual record.
+        const SOAK_PRUNE_INTERVAL: usize = 1_000;
+
+        /// Upper bound on how many events can have a `last_observed_at_ms`
+        /// inside a `SOAK_RETENTION_DAYS`-day window when events land one
+        /// per `SOAK_EVENT_STEP_MS`: `window_ms / step_ms`, +1 for the
+        /// event that lands exactly on the inclusive cutoff boundary.
+        /// = 1 * 86_400_000 / 1_000 + 1 = 86_401.
+        const SOAK_MAX_EVENTS_IN_WINDOW: usize =
+            (SOAK_RETENTION_DAYS as usize * 86_400_000 / SOAK_EVENT_STEP_MS as usize) + 1;
+
+        /// Each soak event inserts exactly one new node (this event's
+        /// entity) and one new edge (chaining it to the immediately
+        /// preceding event's node), so live (node, edge) pairs can never
+        /// exceed `SOAK_MAX_EVENTS_IN_WINDOW` once GC has run: surviving
+        /// edges <= surviving nodes <= `SOAK_MAX_EVENTS_IN_WINDOW`. The
+        /// soak calls `prune_stale` once more right after the final event,
+        /// so no periodic-sweep slop remains by the time the ceiling is
+        /// checked -- `+ 64` is pure boundary-rounding headroom, not slack
+        /// the test relies on to pass. = 2 * 86_401 + 64 = 172_866.
+        const SOAK_GRAPH_SIZE_CEILING: usize = 2 * SOAK_MAX_EVENTS_IN_WINDOW + 64;
+
+        /// GRAPH-05. Replays `SOAK_EVENT_COUNT` (100k) synthetic events
+        /// directly against `KnowledgeGraphSnapshot`'s node/edge vectors and
+        /// its real `prune_stale` GC, sweeping periodically the way
+        /// `SphinxAgent::tick()` calls `prune_stale` once per batch --
+        /// **not** through the full `SphinxAgent::tick()` /
+        /// `FileKnowledgeGraphStore::persist_snapshot` pipeline, which does
+        /// one-file-per-node/edge disk I/O on every changed tick and would
+        /// make a 100k-event run far too slow for the test lane. This is a
+        /// representative reduction: it drives the exact same `prune_stale`
+        /// GC production relies on, just without the persistence
+        /// side-effects that path also triggers.
+        #[test]
+        fn prune_stale_keeps_graph_size_bounded_under_a_100k_event_soak() {
+            let mut graph = KnowledgeGraphSnapshot::new(3_600);
+            let mut now_ms: i64 = 0;
+            let mut previous_node_id: Option<String> = None;
+
+            for event_index in 0..SOAK_EVENT_COUNT {
+                now_ms = now_ms.saturating_add(SOAK_EVENT_STEP_MS);
+                let node_id = format!("soak-node-{event_index}");
+                graph
+                    .nodes
+                    .push(synthetic_entity_node(node_id.clone(), now_ms));
+                if let Some(previous) = previous_node_id.take() {
+                    let edge_id = format!("soak-edge-{event_index}");
+                    graph.edges.push(synthetic_causal_edge(
+                        edge_id,
+                        previous,
+                        node_id.clone(),
+                        now_ms,
+                    ));
+                }
+                previous_node_id = Some(node_id);
+
+                if (event_index + 1) % SOAK_PRUNE_INTERVAL == 0 {
+                    graph.prune_stale(now_ms, SOAK_RETENTION_DAYS);
+                }
+            }
+            // Final sweep: removes any in-flight slop left over from the
+            // last partial `SOAK_PRUNE_INTERVAL` batch before the ceiling is
+            // checked.
+            graph.prune_stale(now_ms, SOAK_RETENTION_DAYS);
+
+            let total_size = graph.nodes.len() + graph.edges.len();
+            assert!(
+                total_size <= SOAK_GRAPH_SIZE_CEILING,
+                "post-GC graph size {total_size} exceeded the GRAPH-05 ceiling \
+                 {SOAK_GRAPH_SIZE_CEILING} -- prune_stale is not bounding growth under \
+                 sustained load"
+            );
+        }
+
+        /// GRAPH-06, part 1: the belt-and-suspenders guard itself. Memory
+        /// enabled + `knowledge_retention_days == 0` is exactly the
+        /// combination `MemoryConfig::validate()` already hard-rejects
+        /// (`swarm-core/src/config/state.rs`); reaching
+        /// `SphinxAgent::tick()` with it anyway (a config that bypassed
+        /// validation) must be loud, not a silent `prune_stale` no-op.
+        #[test]
+        fn warn_if_retention_footgun_reachable_panics_when_memory_enabled_and_retention_is_zero() {
+            let result = std::panic::catch_unwind(|| {
+                SphinxAgent::warn_if_retention_footgun_reachable(true, 0);
+            });
+            assert!(
+                result.is_err(),
+                "GRAPH-06: the defense-in-depth guard must panic (debug_assert) rather than \
+                 silently no-op when memory is enabled and knowledge_retention_days is 0"
+            );
+        }
+
+        /// GRAPH-06, part 2: the guard must stay inert for every
+        /// legitimate combination -- memory disabled (retention_days == 0
+        /// is then a harmless no-op nobody expects GC from), and any
+        /// positive retention window regardless of the memory-enabled
+        /// flag. This is what keeps the guard from becoming a new footgun
+        /// of its own.
+        #[test]
+        fn warn_if_retention_footgun_reachable_is_inert_for_every_legitimate_combination() {
+            SphinxAgent::warn_if_retention_footgun_reachable(false, 0);
+            SphinxAgent::warn_if_retention_footgun_reachable(true, 90);
+            SphinxAgent::warn_if_retention_footgun_reachable(false, 90);
+        }
+
+        /// GRAPH-06, part 3: the runtime path itself, exercised end to end.
+        /// Builds a `SwarmConfig` the way `memory_requires_positive_retention_days_when_enabled`
+        /// (`swarm-core/src/config/tests.rs`) proves `SwarmConfig::validate()`
+        /// would reject -- `memory.enabled = true` with
+        /// `knowledge_retention_days = 0` -- but hands it directly to
+        /// `SphinxAgent::new_with_signing_key` without ever calling
+        /// `validate()`, exactly reproducing a config that bypassed that
+        /// gate. `tick()` must not silently no-op `prune_stale` here: it
+        /// must panic loudly instead.
+        #[tokio::test]
+        #[should_panic(
+            expected = "knowledge_retention_days == 0 reached SphinxAgent::tick() with memory.enabled"
+        )]
+        async fn sphinx_agent_tick_closes_the_graph_06_footgun_loudly_instead_of_silently_no_opping()
+         {
+            let root = temp_root("retention-footgun");
+            let mut config = load_config(config_path()).unwrap();
+            configure_memory(&mut config, &root);
+            // The footgun: this is the exact combination `MemoryConfig::validate()`
+            // rejects -- reached here only because `validate()` was never called.
+            config.memory.knowledge_retention_days = 0;
+
+            let mut agent = SphinxAgent::new_with_signing_key(
+                AgentId::new("sphinx", "primary"),
+                test_signing_key(),
+                config_path(),
+                config.clone(),
+                substrate(&config),
+            )
+            .expect("sphinx agent should initialize");
+
+            let _ = agent.tick(&env(Vec::new(), 1_800_000_000)).await;
+        }
     }
 }

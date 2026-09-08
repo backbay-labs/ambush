@@ -1299,7 +1299,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** Deepen the existing four-graph knowledge substrate into real OS-level provenance, reconstruct kill chains across hunts, migrate correlation off pairwise heuristics onto graph traversal, and cut false positives with dependency-aware scoring, without either lane ever gating the critical path.
 **Executable phases:** 296-299
 
-- [ ] **Phase 296: Provenance Graph Substrate** - Add real causal nodes and edges, bounded-hop path queries with a hub-degree cap, and proven retention bounds. (GRAPH-01, GRAPH-04)
+- [x] **Phase 296: Provenance Graph Substrate** - Add real causal nodes and edges, bounded-hop path queries with a hub-degree cap, and proven retention bounds. (GRAPH-01, GRAPH-04) — Complete 2026-09-08
 - [ ] **Phase 297: Kill-Chain Reconstruction** - Reconstruct multi-stage chains mapped to declared kill-chain stages, with narration. (CHAIN-01, CHAIN-03)
 - [ ] **Phase 298: Cross-Hunt Correlation** - Migrate correlation onto graph traversal and make incidents restart-durable. (XHUNT-01, XHUNT-03)
 - [ ] **Phase 299: Dependency-Aware Triage** - Path-rarity scoring hitting a measured false-positive reduction target. (TRIAGE-01, TRIAGE-03)
@@ -1309,13 +1309,13 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 **Goal:** The four-graph model already exists but `CausalRelation` has only two variants, so the causal graph cannot express file writes, execution, DNS, or credential access. Deepen it, and bound its growth before anything traverses it.
 **Requirements:** GRAPH-01, GRAPH-02, GRAPH-03, GRAPH-04, GRAPH-05, GRAPH-06
 **Depends on:** v1.81 milestone complete
-**Status:** Not started
-**Plans:** TBD
+**Status:** Complete (2026-09-08, commit range `0baa0ef45..faa5d9dae`) — the FIRST of four phases of the v1.82 Provenance Memory And Correlation milestone. v1.82 is NOT complete; Phases 297/298/299 remain.
+**Plans:** 296-01-PLAN.md
 **Success Criteria**:
-1. Node and causal-relation variants are added with at least 7 new unit tests, and serialization round-trips for the extended enums.
-2. Bounded-hop path queries return correct paths on a 10k-node fixture within a fixed wall-clock ceiling, with a hub-degree cap preventing high-degree nodes from linking unrelated hunts.
-3. A property test over 200+ randomized prune sequences proves no orphaned edges, no premature deletion, and idempotence.
-4. A 100k-event soak keeps post-GC node and edge count under a fixed ceiling, and config validation rejects a zero retention window while memory is enabled.
+1. Node and causal-relation variants are added with at least 7 new unit tests, and serialization round-trips for the extended enums. — met: `0baa0ef45` (+ comment `69b1a7bef`). `ProcessNode`/`FileNode`/`NetworkFlowNode` (GRAPH-01) and `FileWrite`/`FileExecute`/`DnsResolution`/`CredentialAccess` (GRAPH-02) added to `KnowledgeGraphNode`/`CausalRelation` with 6 new unit tests plus one proving the feature is opt-in (7 total, meeting the floor); all new variants derive the same `Serialize`/`Deserialize` as the existing enum members and round-trip through the unchanged `persist_snapshot()` path, verified by a new persist-across-restart test. **CAVEAT — producer-wiring gap:** the new edges pivot on raw `pid`/`process_key` (and, for `DnsResolution`, a resolved IP) that no current normalized `swarm_core::telemetry` event (`ProcessStartEvent`/`NetworkConnectEvent`/`FilePersistenceEvent`/`DnsQueryEvent`) carries — those carry `process_name`, and `DnsQueryEvent` has no resolved-IP field at all. The model and emission logic are correct and tested against synthetic fixtures; they will not fire on real production telemetry until producers are wired to populate the raw fields, likely alongside Phase 297.
+2. Bounded-hop path queries return correct paths on a 10k-node fixture within a fixed wall-clock ceiling, with a hub-degree cap preventing high-degree nodes from linking unrelated hunts. — met: `72c9c2156`. `KnowledgeGraphSnapshot::provenance_paths(from, to, max_hops)` is a BFS with parent-pointer reconstruction, undirected by design (documented); `PROVENANCE_HUB_DEGREE_CAP = 32` gates expansion (not reachability) of any node encountered after the initial `from`. The load-bearing security test builds two subgraphs bridged only by an over-cap hub and proves the bridge is blocked while legitimate same-side and hub-as-endpoint traversal still work. `CorrelationEngine::graph_provenance_link` is the sole traversal consumer, a thin delegate-only pass-through — confirmed by review to be the only graph-traversal code path in the file.
+3. A property test over 200+ randomized prune sequences proves no orphaned edges, no premature deletion, and idempotence. — met: `faa5d9dae`. `prune_stale_never_orphans_edges_or_evicts_in_window_records_and_is_idempotent` runs 256 randomized `InsertNode`/`InsertEdge`/`AdvanceClock`/`Prune` sequences (weighted, 1-40 ops each) against an independently re-derived retention-cutoff oracle. Reviewer traced non-vacuousness directly — independent node/edge timestamp sampling makes the orphan-guard-removed shape genuinely reachable — and confirmed all 256 cases pass with no defect found in the pre-existing `prune_stale`.
+4. A 100k-event soak keeps post-GC node and edge count under a fixed ceiling, and config validation rejects a zero retention window while memory is enabled. — met: `faa5d9dae`. The soak replays 100,000 events directly against the real, unmodified `prune_stale` (persistence side-effects skipped deliberately to keep the test lane fast — same GC function and call pattern), asserting a post-GC ceiling of 172,866 against an unpruned total of 199,999; reviewer independently re-derived the arithmetic and confirmed real headroom of only ~65 above the ~172,801 actual survivors. The pre-existing hard config reject (`MemoryConfig::validate()`) is unchanged and still fails closed on `knowledge_retention_days == 0` while `memory.enabled`; a new `SphinxAgent::warn_if_retention_footgun_reachable` guard in `tick()` adds defense-in-depth (`debug_assert!` + unconditional `tracing::warn!`) in case that config path is ever bypassed. LINE-SLIP RECORDED: the requirement text's cited `sphinx_agent.rs:1097` was, at the pre-phase base commit, inside the unrelated `attack_technique_for_node` function, not the retention/prune site — the substantive target (the `prune_stale`/`tick()` no-op path) is what this criterion closes regardless.
 
 ### Phase 297: Kill-Chain Reconstruction
 
@@ -1914,7 +1914,7 @@ journal poison `a70d5f191`; SIEM retry over-scoping `f289573ea`). Accepted 2026-
 | 293. Kani Bounded Model Checking | v1.81 | 1/1 | Complete | 2026-09-08 |
 | 294. Named Safety Properties And Partition-Lease Model | v1.81 | 1/1 | Complete | 294-01 |
 | 295. Z3-Backed Promotion Gate | v1.81 | - | Superseded by 322 | - |
-| 296. Provenance Graph Substrate | v1.82 | 0/TBD | Not started | - |
+| 296. Provenance Graph Substrate | v1.82 | 1/1 | Complete | 296-01 |
 | 297. Kill-Chain Reconstruction | v1.82 | 0/TBD | Not started | - |
 | 298. Cross-Hunt Correlation | v1.82 | 0/TBD | Not started | - |
 | 299. Dependency-Aware Triage | v1.82 | 0/TBD | Not started | - |

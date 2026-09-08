@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::sphinx_agent::{KnowledgeGraphSnapshot, ProvenancePath};
 use swarm_core::config::CorrelationConfig;
 use swarm_spine::{
     CorrelatedIncident, IncidentEvidenceLink, IncidentGraphDimension, IncidentLookup,
@@ -94,6 +95,31 @@ impl CorrelationEngine {
         let incident = self.assemble_incident_at(&seed_lookup.bundle, &candidates, created_at_ms);
         let record = incidents.persist(&incident)?;
         Ok(Some(CorrelationOutcome { record, incident }))
+    }
+
+    /// A scoped, bounded-hop provenance lookup backed by the knowledge
+    /// graph (GRAPH-03's `CorrelationEngine` coupling): is `from_node_id`
+    /// connected to `to_node_id` within `max_hops`, subject to the graph's
+    /// hub-degree cap? This calls `KnowledgeGraphSnapshot::provenance_paths`
+    /// directly — the graph's SOLE traversal read path — rather than
+    /// re-walking `graph.edges` itself.
+    ///
+    /// This is deliberately narrow: a lookup the rule-based scoring in
+    /// `assemble_incident_at`/`weighted_score` can consult (e.g. to check
+    /// whether a candidate pair's shared keys correspond to an actual
+    /// bounded-hop graph path before trusting them), not a replacement for
+    /// that scoring. Migrating `correlate_hunt_at`'s correlation logic to
+    /// read the graph as its primary evidence source is phase 298's
+    /// cross-hunt correlation work (XHUNT-01); this is only the coupling
+    /// GRAPH-03 names.
+    pub fn graph_provenance_link(
+        &self,
+        graph: &KnowledgeGraphSnapshot,
+        from_node_id: &str,
+        to_node_id: &str,
+        max_hops: usize,
+    ) -> Vec<ProvenancePath> {
+        graph.provenance_paths(from_node_id, to_node_id, max_hops)
     }
 
     pub fn load_incident_by_hunt_id<Incidents>(
@@ -553,6 +579,7 @@ fn now_ms() -> i64 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::CorrelationEngine;
+    use crate::sphinx_agent::{EntityEdge, KnowledgeGraphEdge, KnowledgeGraphSnapshot};
     use swarm_core::config::{BundleStoreConfig, CorrelationConfig};
     use swarm_core::pheromone::ThreatClass;
     use swarm_core::types::Severity;
@@ -854,5 +881,40 @@ mod tests {
                 .contains("requires at least one entity or causal link")
         );
         assert!(rejected.reason.contains("strategy:summary_investigator"));
+    }
+
+    /// GRAPH-03's `CorrelationEngine` coupling: `graph_provenance_link`
+    /// must be a genuine pass-through to `KnowledgeGraphSnapshot::provenance_paths`
+    /// (the graph's sole traversal API), not a second, independent walk of
+    /// the graph's edges.
+    #[test]
+    fn graph_provenance_link_goes_through_provenance_paths() {
+        let mut graph = KnowledgeGraphSnapshot::new(3_600);
+        graph.edges.push(KnowledgeGraphEdge::Entity(EntityEdge {
+            edge_id: "e1".to_string(),
+            from_node_id: "hunt-a".to_string(),
+            to_node_id: "hunt-b".to_string(),
+            role: "test".to_string(),
+            first_observed_at_ms: 0,
+            last_observed_at_ms: 0,
+            occurrence_count: 1,
+        }));
+
+        let engine = CorrelationEngine::new(config());
+
+        let via_engine = engine.graph_provenance_link(&graph, "hunt-a", "hunt-b", 2);
+        let direct = graph.provenance_paths("hunt-a", "hunt-b", 2);
+
+        assert_eq!(via_engine, direct);
+        assert_eq!(via_engine.len(), 1);
+        assert_eq!(via_engine[0].node_ids, vec!["hunt-a", "hunt-b"]);
+
+        // And the lookup respects max_hops like any other provenance_paths
+        // call -- it is not special-cased.
+        assert!(
+            engine
+                .graph_provenance_link(&graph, "hunt-a", "hunt-b", 0)
+                .is_empty()
+        );
     }
 }
