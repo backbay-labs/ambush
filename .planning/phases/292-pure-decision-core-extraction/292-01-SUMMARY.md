@@ -54,6 +54,22 @@ implementation-task reviews came back clean (0 Critical / 0 Important).
   `.planning/ROADMAP.md`, and `.planning/STATE.md` updated to record Phase 292 complete and the
   DCORE-01..05 satisfaction, with STATE.md's frontmatter and body reconciled so neither
   contradicts the other or REQUIREMENTS/ROADMAP.
+- **Severity predicates extracted, completing SC1 (`0f3fa0207`):** a whole-branch
+  review found Success Criterion 1 enumerates a `severity` predicate the pure core should hold,
+  but the severity gating still lived inline in `static_gate::evaluate`. The three severity
+  decisions — the `static.minimum_severity` and `static.deploy_decoy_min_severity` floors and
+  the `static.human_gate` hold — were lifted into `formal_core` as `severity_floor_denial`
+  (both floors, in their exact original order and with identical rule names + reason strings)
+  and `human_gate_decision`, together with the `destructive_action` classifier they both read
+  (moved out of `StaticApprovalGate`, leaving no duplicate body behind — `evaluate` now
+  delegates to the pure functions in the identical order: floor denials → scope rate limit →
+  human-gate hold → default allow). The `PolicyHumanGateOnDestructiveAction` invariant marker
+  and its `docs/assurance/MAPPING.md` row moved with the human gate to
+  `formal_core::human_gate_decision`; `check-mapping.sh` and `check-negative-registry.sh` stay
+  green (the negative test still asserts `RequireHuman`). No verdict changes for any input — all
+  pre-existing `static_gate` tests (incl. `low_severity_isolation_is_denied`, the human-gate and
+  deploy_decoy tests) pass UNCHANGED, plus new `formal_core` unit tests for each predicate. This
+  makes SC1 literally true and gives phase 293's Kani severity-gate harness a pure surface.
 
 ## The functional-core / imperative-shell deviation, and why it is correct
 
